@@ -1,0 +1,11 @@
+[package]
+name = "simjig-bits"
+description = "2-state and 4-state bit-vector value types with SystemVerilog semantics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "svtypes"
+description = "Type IR generated from elaborated SystemVerilog (Verilator JSON front end)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

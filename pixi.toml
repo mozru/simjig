@@ -1,0 +1,14 @@
+
+# Non-Rust tools, locked for every platform in pixi.lock. Rust itself is pinned by
+# rust-toolchain.toml. Verilator generates C++ that is compiled on every model build, so
+# the C++ compiler is pinned here too.
+[workspace]
+channels = ["conda-forge"]
+name = "simjig"
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
+
+[dependencies]
+verilator = "==5.52"
+cxx-compiler = ">=2.0.0,<3"
+ccache = ">=4.14.1,<5"
+make = ">=4.4.1,<5"

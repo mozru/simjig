@@ -1,0 +1,60 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+svtypes = { path = "crates/svtypes" }
+simjig-bits = { path = "crates/simjig-bits" }
+simjig-build = { path = "crates/simjig-build" }
+simjig-macros = { path = "crates/simjig-macros" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+todo = "warn"
+clone_on_ref_ptr = "warn"
+map_err_ignore = "warn"
+let_underscore_must_use = "warn"
+rc_buffer = "warn"
+# Too noisy: add #[must_use] where it matters.
+must_use_candidate = "allow"
+# Re-enable once the public facade crate has real APIs.
+missing_errors_doc = "allow"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.build-override]
+opt-level = 3
+[profile.test]
+debug = "line-tables-only"

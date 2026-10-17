@@ -1,0 +1,3 @@
+[default.extend-words]
+# HDL vocabulary that typos flags as misspellings.
+inout = "inout"

@@ -1,0 +1,16 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "testbenches use simulation time, not wall clock" },
+  { path = "std::time::Instant::now", reason = "non-deterministic; use SimTime" },
+]
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "random iteration order can leak into output or scheduling; use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "random iteration order; use BTreeSet" },
+]
+# Domain words that are not code identifiers ("..", keeps clippy defaults).
+doc-valid-idents = ["SystemVerilog", "SystemRDL", "PeakRDL", ".."]
+# Constitution rule 6: functions stay at or under 70 lines.
+too-many-lines-threshold = 70

@@ -1,0 +1,8 @@
+/target
+junit.xml
+*.fst
+*.vcd
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+.pixi/

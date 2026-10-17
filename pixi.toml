@@ -27,6 +27,7 @@ cocotb = "==2.1.0"
 
 [feature.conformance.tasks]
 duts-smoke = { cmd = "python tests/duts/smoke/run.py", description = "Build every shared DUT and run its cocotb smoke test" }
+conformance-regen = { cmd = "python tests/conformance/regen.py", description = "Regenerate the cocotb goldens in tests/conformance/golden" }
 
 [environments]
 conformance = { features = ["conformance"] }

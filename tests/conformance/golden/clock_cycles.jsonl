@@ -1,0 +1,9 @@
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"rst","value":1}
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"en","value":1}
+{"time":10000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"rst","value":0}
+{"time":35000,"phase":"active","trigger":"ClockCycles(clk,3)","task":"main","op":"read","signal":"clk","value":1}
+{"time":35000,"phase":"active","trigger":"ClockCycles(clk,3)","task":"main","op":"read","signal":"count","value":2}
+{"time":50000,"phase":"active","trigger":"ClockCycles(clk,2,falling)","task":"main","op":"read","signal":"clk","value":0}
+{"time":50000,"phase":"active","trigger":"ClockCycles(clk,2,falling)","task":"main","op":"read","signal":"count","value":4}
+{"time":55000,"phase":"active","trigger":"ClockCycles(clk,1)","task":"main","op":"read","signal":"clk","value":1}
+{"time":55000,"phase":"active","trigger":"ClockCycles(clk,1)","task":"main","op":"read","signal":"count","value":4}

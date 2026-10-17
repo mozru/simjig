@@ -37,8 +37,8 @@ session) merges branches. Follow these rules exactly.
 
 ## Done means
 - `pixi run cargo xtask ci` passes in your worktree.
-- Commits are small and logical, and every commit builds. Each message ends with:
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Commits are small and logical, and every commit builds. **No AI attribution** in commit
+  messages (no `Co-Authored-By: Claude` trailer, no "Generated with" line).
   Commit to your branch only. Never push, rebase main or merge.
 - Constitution rule 1: every behaviour has a test that would fail without it.
 - **Final reply** (≤ 400 words):

@@ -15,3 +15,18 @@ make = ">=4.4.1,<5"
 
 [tasks]
 duts-lint = { cmd = "bash tests/duts/lint.sh", description = "Lint every design in tests/duts with Verilator -Wall" }
+
+# Golden-reference environment for the scheduler conformance suite (tests/conformance).
+# Kept out of the default environment: only `pixi run -e conformance ...` installs Python.
+# cocotb comes from PyPI because conda-forge builds it for linux-64 only.
+[feature.conformance.dependencies]
+python = "3.12.*"
+
+[feature.conformance.pypi-dependencies]
+cocotb = "==2.1.0"
+
+[feature.conformance.tasks]
+duts-smoke = { cmd = "python tests/duts/smoke/run.py", description = "Build every shared DUT and run its cocotb smoke test" }
+
+[environments]
+conformance = { features = ["conformance"] }

@@ -14,6 +14,7 @@ svtypes = { path = "crates/svtypes" }
 simjig-bits = { path = "crates/simjig-bits" }
 simjig-build = { path = "crates/simjig-build" }
 simjig-macros = { path = "crates/simjig-macros" }
+proptest = "1.12.0"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -8,6 +8,10 @@ Rust style.
 - `cargo xtask ci`: the full gate (the same one CI runs). It must pass before you hand off.
 - `cargo nextest run -p <crate>` while iterating.
 
+## Process
+Every stage passes review cycles before the next starts (`docs/agents/REVIEW.md`). Move
+on only when the reviews return nits, not bugs or risks.
+
 ## Constitution
 Priorities, in order: correctness > determinism/debuggability > performance > ergonomics.
 Name the trade-off when two of them conflict.

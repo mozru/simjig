@@ -10,6 +10,19 @@ Sources: `proposal-A.md` (systems, TigerStyle), `proposal-B.md` (Rust library) a
 `proposal-C.md` (verification tooling), written independently from `BRIEF.md`. This file
 is the decision; the proposals remain as the rationale archive.
 
+## 0. Scheduler semantics: the conformance goldens are normative
+`tests/conformance/README.md` ("Observed semantics") and `golden/*.jsonl` (cocotb 2.1.0 on
+Verilator 5.052) **override** the scheduler description below wherever they differ:
+- Timers due at t resume before that time step's clock edges.
+- Edges on testbench-driven clocks see the **pre-edge** state. New flop values are visible
+  from ReadOnly.
+- Edges on design-driven signals see post-eval values.
+- Writes are deposits applied after the next eval. A write right after `RisingEdge` is not
+  captured by that edge.
+- Within a delta the last write wins. `WriteConflict` applies only to two different tasks
+  writing different values.
+- At coincident edges, waiters wake in the order their triggers were armed.
+
 ## 1. Where all three agreed (adopted as-is)
 - **Signal handles are `Copy` ids** (model, generation, slot), with the direction in the
   type. They are resolved through the running kernel. No Rust reference to model memory

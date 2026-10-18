@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A DUT name claimed by an earlier DUT that failed reads as ``already claimed by an
+  earlier DUT (which failed)``, not ``already built``, when a corrected configuration
+  of the same name (or a name differing only in case) is refused.
 - A `.param` that a bound interface also declares (`WIDTH` of `skid_buffer` and of its
   `stream_if` ports) reaches the interface too: `.param("WIDTH", 16)` with
   `.bind_iface("up", "stream_if.sink")` now gives the interface `WIDTH` 16, not its

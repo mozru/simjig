@@ -918,6 +918,7 @@ impl Dut {
                 emit::stub_failed(&env.out_dir, &name, e);
             }
         })?;
+        script::mark_built(env, &built.prefix);
         built.directives.extend(emit::cfg_directives(&name, true));
         Ok(built)
     }

@@ -633,7 +633,10 @@ fn a_dut_failing_validation_still_claims_its_name() {
         .unwrap_err()
         .to_string();
     assert!(
-        e.contains("already built with a different configuration"),
+        e.contains(
+            "a DUT of this name was already claimed by an earlier DUT (which failed) with a \
+             different configuration"
+        ),
         "{e}"
     );
     let e = Dut::new("Counter")
@@ -643,7 +646,13 @@ fn a_dut_failing_validation_still_claims_its_name() {
         .map(|_| ())
         .unwrap_err()
         .to_string();
-    assert!(e.contains("which differs only in case"), "{e}");
+    assert!(
+        e.contains(
+            "an earlier DUT of this build script (which failed) already claimed the name \
+             `counter`, which differs only in case"
+        ),
+        "{e}"
+    );
     assert_eq!(generated(&s, "counter"), stub);
 }
 

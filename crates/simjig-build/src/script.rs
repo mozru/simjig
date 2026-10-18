@@ -36,6 +36,9 @@ struct Model {
     dpi_exports: Vec<String>,
     /// For a model that uses covergroups: whether it was built with `--coverage`.
     covergroup_coverage: Option<bool>,
+    /// Whether its build succeeded ([`mark_built`]); a claim alone is a DUT that failed,
+    /// or one still building.
+    built: bool,
 }
 
 static BUILT: Mutex<Vec<Model>> = Mutex::new(Vec::new());
@@ -88,10 +91,15 @@ pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Re
         return Err(config_error(
             config,
             format!(
-                "this build script already built a DUT named `{}`, which differs only in \
-                 case: both would generate `OUT_DIR/simjig/{}.rs` on a case-insensitive \
-                 filesystem; rename one",
-                m.name, config.name
+                "{} `{}`, which differs only in case: both would generate \
+                 `OUT_DIR/simjig/{}.rs` on a case-insensitive filesystem; rename one",
+                if m.built {
+                    "this build script already built a DUT named"
+                } else {
+                    "an earlier DUT of this build script (which failed) already claimed the name"
+                },
+                m.name,
+                config.name
             ),
         ));
     }
@@ -101,9 +109,15 @@ pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Re
     {
         Some(m) if m.config != *config => Err(config_error(
             config,
-            "a DUT of this name was already built with a different configuration in this \
-             build script; give each configuration its own name"
-                .to_owned(),
+            format!(
+                "a DUT of this name was already {} with a different configuration in this \
+                 build script; give each configuration its own name",
+                if m.built {
+                    "built"
+                } else {
+                    "claimed by an earlier DUT (which failed)"
+                }
+            ),
         )),
         Some(_) => Ok(()),
         None => {
@@ -114,9 +128,17 @@ pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Re
                 prefix: prefix.to_owned(),
                 dpi_exports: Vec::new(),
                 covergroup_coverage: None,
+                built: false,
             });
             Ok(())
         }
+    }
+}
+
+/// Records that the model `prefix` claimed built successfully.
+pub(crate) fn mark_built(env: &BuildEnv, prefix: &str) {
+    if let Some(m) = this(&mut built(), env, prefix) {
+        m.built = true;
     }
 }
 

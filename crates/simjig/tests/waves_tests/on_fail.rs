@@ -264,10 +264,12 @@ fn simjig_waves_window_traces_the_given_span_of_a_passing_run() {
     );
 }
 
+/// `SIMJIG_WAVES` asks for this run's replay, so it replays even a run no model of which
+/// can trace: the replay is still the determinism check.
 #[test]
 fn a_replay_that_ends_differently_is_reported_as_non_determinism() {
     let test = "on_fail::depends_on_the_wall_clock";
-    let (output, dir) = run_child(test, "nondet", &[("SIMJIG_WAVES_ON_FAIL", "1")]);
+    let (output, dir) = run_child(test, "nondet", &[("SIMJIG_WAVES", "1")]);
     let err = stderr(&output);
     assert!(!output.status.success(), "{err}");
     assert!(err.contains("replay:   NON-DETERMINISTIC"), "{err}");
@@ -284,6 +286,23 @@ fn a_replay_that_ends_differently_is_reported_as_non_determinism() {
         replay["failure"]["time"]["ticks"],
         summary(&dir)["failure"]["time"]["ticks"]
     );
+}
+
+/// `SIMJIG_WAVES_ON_FAIL` (set for a whole CI run) replays a failure only for its waves:
+/// a run no model of which can trace is not replayed, and the report says why it has none.
+#[test]
+fn waves_on_fail_does_not_replay_a_run_that_cannot_trace() {
+    let test = "on_fail::depends_on_the_wall_clock";
+    let (output, dir) = run_child(test, "no-trace", &[("SIMJIG_WAVES_ON_FAIL", "1")]);
+    let err = stderr(&output);
+    assert!(!output.status.success(), "{err}");
+    assert!(
+        err.contains("waves:    none: no model of this test can trace"),
+        "{err}"
+    );
+    assert!(!err.contains("replay:"), "{err}");
+    assert!(dir.join("summary.json").is_file(), "{err}");
+    assert!(!dir.join("replay").exists(), "nothing was replayed");
 }
 
 /// The `.gtkw` file's `[dumpfile]`.

@@ -21,7 +21,7 @@ use super::replay::{self, Original, TRACE_FROM_VAR, TRACE_TO_VAR, TRACE_VAR};
 use super::report::{AppliedTimeout, FailureReport, RunIdentity};
 use super::rundir::{self, Json, Summary};
 use super::seed::{Seed, SeedSource, parse_seed};
-use super::waves::{RunEnd, WavesReplay, WavesRequest};
+use super::waves::{RunEnd, WavesReplay, WavesRequest, WavesWhen};
 
 /// A test's simulation-time budget, as written in `#[simjig::test(timeout = "2ms")]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -490,7 +490,7 @@ where
     }
     let waves = env
         .waves
-        .filter(|w| w.applies(outcome.failure.is_some()))
+        .filter(|w| w.applies(outcome.failure.is_some()) && worth_replaying(w, &outcome))
         .map(|request| replay_with_waves(meta, &env, &outcome, &request));
     if let Some(mut report) = outcome.failure {
         report.waves = waves;
@@ -504,6 +504,17 @@ where
     }
     if let Some(waves) = &waves {
         report_passing_replay(waves);
+    }
+}
+
+/// Whether to replay a run `request` applies to. `SIMJIG_WAVES_ON_FAIL` is set for whole CI
+/// runs and asks only for waves, so a failure none of whose models can trace is not
+/// replayed (its report says why it has no waves). `SIMJIG_WAVES` asks for this run's
+/// replay, which is also the determinism check, so it replays whatever the models.
+fn worth_replaying(request: &WavesRequest, outcome: &TestOutcome) -> bool {
+    match request.when {
+        WavesWhen::Always => true,
+        WavesWhen::OnFailure => outcome.failure.as_ref().is_some_and(|f| f.can_trace),
     }
 }
 

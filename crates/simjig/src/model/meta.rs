@@ -419,7 +419,10 @@ mod tests {
         assert!(text.contains("`Vcounter`"), "{text}");
         let help = e.help().expect("a setup error");
         assert!(help.starts_with("rebuild"), "{help}");
-        assert!(!text.contains("rebuild"), "the advice is the help's: {text}");
+        assert!(
+            !text.contains("rebuild"),
+            "the advice is the help's: {text}"
+        );
     }
 
     #[test]

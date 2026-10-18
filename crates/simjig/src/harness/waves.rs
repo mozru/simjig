@@ -15,7 +15,9 @@
 //! - `SIMJIG_WAVES=window:<t0>..<t1>`: the same, with waves from `t0` to `t1` (`2us`,
 //!   `1500ns`, `0`; either end may be left out).
 //! - `SIMJIG_WAVES_ON_FAIL=1`: replay with the default window after a failure only (meant to
-//!   stay on in CI). `SIMJIG_WAVES` wins when both are set.
+//!   stay on in CI), and only when a model of the test can trace: it asks for waves, so a
+//!   run that cannot have any is not replayed. `SIMJIG_WAVES` replays any run, as its
+//!   determinism check too, and wins when both are set.
 //! - `0` or an empty value turns either off.
 
 use std::fmt;

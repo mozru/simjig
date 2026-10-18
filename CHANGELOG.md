@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `with_timeout(..).await?` works in a test returning `simjig::Result`: `Failure`
+  implements `From<Elapsed>`, as the new `FailureKind::Timeout { after }`, a failure of
+  the awaiting task at the time the timeout elapsed. Breaking: `Elapsed` is
+  `#[non_exhaustive]` and also carries `at` and `precision`, and its `Display` prints the
+  timeout in physical units (`timed out after 400 us`, was `400000000 ticks`).
 - A `Task` handle dropped before its task ran no longer masks the test's own error:
   dropped in the poll in which `main` returns (an early `return`, or `?` with the test's
   error, including a `run_from_checkpoint` refusal), it no longer fails the run, which

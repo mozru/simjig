@@ -8,7 +8,7 @@ use std::fmt;
 use std::panic::Location;
 use std::sync::{Mutex, PoisonError};
 
-use super::time::{Precision, SimTime};
+use super::time::{Precision, SimDuration, SimTime};
 
 /// A source position (`file:line:column`) that a failure points at: the user's call that
 /// broke a rule, or the line that panicked.
@@ -203,6 +203,12 @@ pub enum FailureKind {
         /// Every task that was still waiting, and on what.
         blocked: Vec<BlockedTask>,
     },
+    /// A [`with_timeout`](crate::with_timeout) ran out of time and the test returned its
+    /// [`Elapsed`](crate::Elapsed) as a failure (`with_timeout(..).await?`).
+    Timeout {
+        /// The timeout that elapsed.
+        after: SimDuration,
+    },
 }
 
 impl FailureKind {
@@ -222,6 +228,7 @@ impl FailureKind {
             Self::Setup { .. } => "Setup",
             Self::DesignFinished => "DesignFinished",
             Self::TimeLimit { .. } => "TimeLimit",
+            Self::Timeout { .. } => "Timeout",
         }
     }
 
@@ -263,6 +270,10 @@ impl FailureKind {
             Self::TimeLimit { .. } => {
                 "the test ran too long; a listed task is probably waiting for something that \
                  never happens"
+            }
+            Self::Timeout { .. } => {
+                "what the task awaited did not happen within the timeout; check that it is \
+                 driven, or give it longer"
             }
         }
     }

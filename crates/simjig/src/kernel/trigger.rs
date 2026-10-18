@@ -32,11 +32,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use super::combinator::{Fork, MaybeDone};
+use super::failure::{Failure, FailureKind};
 use super::panics;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
 use super::tasks;
-use super::time::{SimDuration, SimTime};
+use super::time::{Precision, SimDuration, SimTime};
 use super::waits::{EdgeKind, Registration, WaitOn};
 
 /// Shared poll logic: register on first poll, then complete once fired.
@@ -340,19 +341,46 @@ pub fn now() -> SimTime {
 }
 
 /// [`with_timeout`] ran out of time.
+///
+/// It converts into a [`Failure`] ([`FailureKind::Timeout`]), so `with_timeout(..).await?`
+/// works in a test returning [`simjig::Result`](crate::Result).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Elapsed {
     /// The timeout that elapsed.
     pub after: SimDuration,
+    /// When it elapsed.
+    pub at: SimTime,
+    /// The design's precision, to print `after` and `at` in physical units.
+    pub precision: Precision,
 }
 
 impl fmt::Display for Elapsed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "timed out after {} ticks", self.after.ticks())
+        let after = SimTime(self.after.ticks()).display(self.precision);
+        write!(f, "timed out after {after}")
     }
 }
 
 impl std::error::Error for Elapsed {}
+
+impl From<Elapsed> for Failure {
+    /// A failure of the task converting it (the one that awaited [`with_timeout`], for `?`).
+    fn from(e: Elapsed) -> Self {
+        let task = state::try_current("Failure::from(Elapsed)", |k| {
+            k.current.get().map(|key| k.task_name(key))
+        })
+        .flatten();
+        Self {
+            kind: FailureKind::Timeout { after: e.after },
+            time: e.at,
+            precision: e.precision,
+            task,
+            location: None,
+            message: e.to_string(),
+        }
+    }
+}
 
 /// Runs `future` for at most `duration`; on timeout it is cancelled (dropped).
 ///
@@ -385,7 +413,12 @@ pub async fn with_timeout<T>(
     let decided = std::future::poll_fn(|cx| fork.poll([&mut timer, &mut inner], cx)).await;
     drop(fork);
     if decided == 0 {
-        Err(Elapsed { after: duration })
+        let (at, precision) = state::with_current("with_timeout", |k| (k.now.get(), k.precision));
+        Err(Elapsed {
+            after: duration,
+            at,
+            precision,
+        })
     } else {
         Ok(inner.take())
     }

@@ -468,3 +468,37 @@ fn a_run_nested_inside_a_combinator_operand_is_refused_by_name() {
         "{f}"
     );
 }
+
+/// `with_timeout(..).await?` in a body returning `simjig::Result`: the `Elapsed` becomes a
+/// `Timeout` failure of the awaiting task, printed in physical units.
+#[test]
+fn an_elapsed_timeout_converts_into_a_failure_of_the_awaiting_task() {
+    let mut d = dut();
+    let out = d
+        .sim
+        .run(async {
+            Timer::new(ticks(5)).await;
+            simjig::scope("waiter", async {
+                let never = Event::new("never");
+                simjig::with_timeout(ticks(400_000), never.wait()).await?;
+                simjig::Result::Ok(())
+            })
+            .await
+        })
+        .unwrap();
+    let f: simjig::Failure = out.unwrap_err();
+    assert_eq!(
+        f.kind,
+        FailureKind::Timeout {
+            after: ticks(400_000)
+        }
+    );
+    assert_eq!(f.time, SimTime(400_005));
+    assert_eq!(f.task.as_deref(), Some("main.waiter"));
+    assert_eq!(f.message, "timed out after 400 us");
+    assert!(
+        f.to_string().contains("simjig Timeout at t=400005 ns"),
+        "{f}"
+    );
+    assert_clean(&d.sim);
+}

@@ -13,8 +13,13 @@
 //!   `simjig_rt.cpp` form one archive, shared by every model;
 //! - each model's generated sources plus its shim form a second archive.
 //!
+//! The DPI test models go through `simjig_build` instead (`build_dpi.rs`).
+//!
 //! If Verilator is missing, the script still succeeds (so the library builds anywhere) and
 //! the test fails with the reason instead of being skipped.
+
+#[path = "build_dpi.rs"]
+mod build_dpi;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -115,6 +120,22 @@ fn main() {
             let err = err.replace('\n', " ");
             println!("cargo::warning=simjig C ABI test models not built: {err}");
             println!("cargo::rustc-env=SIMJIG_ABI_MODELS_ERROR={err}");
+        }
+    }
+    println!("cargo::rustc-check-cfg=cfg(simjig_dpi_models)");
+    println!("cargo::rerun-if-changed=build_dpi.rs");
+    println!("cargo::rerun-if-changed=tests/dpi_tests/dpi_types.sv");
+    match build_dpi::build() {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            println!("cargo::rustc-cfg=simjig_dpi_models");
+        }
+        Err(err) => {
+            let err = err.replace('\n', " ");
+            println!("cargo::warning=simjig DPI test models not built: {err}");
+            println!("cargo::rustc-env=SIMJIG_DPI_MODELS_ERROR={err}");
         }
     }
 }

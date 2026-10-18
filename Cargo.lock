@@ -498,6 +498,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "simjig-bits",
+ "simjig-build",
  "simjig-macros",
  "trybuild",
 ]

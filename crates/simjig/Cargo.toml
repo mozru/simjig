@@ -22,3 +22,4 @@ trybuild.workspace = true
 
 [build-dependencies]
 cc.workspace = true
+simjig-build.workspace = true

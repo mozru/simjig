@@ -20,13 +20,16 @@
 //! When a fork branch failed the test (`Branches::into_values`), the test fails at the
 //! checkpoint's time, but the branch ran on past it: its files are listed first and their
 //! marker is at the branch's own failure. The trace is never cut at the checkpoint (a
-//! default window runs to the end of every process).
+//! default window runs to the end of every process). A branch whose child died without a
+//! report (a signal) has no failure time and an unfinished file (its trace was never
+//! closed, so it is often empty): that file is listed last, labelled as incomplete, with no
+//! marker, and without a `gtkwave` command when it has no FST header.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::fork::FailedBranch;
+use crate::fork::{BranchEnd, FailedBranch};
 use crate::{Precision, SimTime};
 
 use super::report::RunIdentity;
@@ -84,9 +87,9 @@ pub(crate) fn replay(exe: &Path, original: &Original<'_>, request: &WavesRequest
         .into_iter()
         .map(|w| waves_file(original, from, w))
         .collect();
-    files.sort_by(|a, b| {
-        (!a.failing_branch, &a.branch, a.model).cmp(&(!b.failing_branch, &b.branch, b.model))
-    });
+    // Readable files first, the failing branch's leading; a dead branch's file last.
+    let order = |f: &WavesFile| (f.died.is_some(), !f.failing_branch);
+    files.sort_by(|a, b| (order(a), &a.branch, a.model).cmp(&(order(b), &b.branch, b.model)));
     WavesReplay {
         files,
         from,
@@ -101,26 +104,49 @@ fn waves_file(original: &Original<'_>, from: SimTime, written: Written) -> Waves
     let failing = original
         .failed_branch
         .filter(|b| written.branch.first() == Some(&b.index));
-    let marker = failing
-        .and_then(|b| b.time)
-        .unwrap_or(original.target)
-        .max(from);
-    let path = written.fst.with_extension("gtkw");
-    let title = format!(
-        "simjig: {} seed={} (marker: t={})",
-        original.run.test,
-        original.run.seed,
-        marker.display(original.precision)
-    );
-    let text = gtkw(&written.fst, &title, from, marker, &original.signals);
+    let (marker, died) = match failing.map(|b| b.end) {
+        Some(BranchEnd::Died(exit)) => (None, Some(exit)),
+        Some(BranchEnd::Failed(time)) => (Some(time.max(from)), None),
+        None => (Some(original.target.max(from)), None),
+    };
+    let save = |marker: Option<SimTime>| {
+        let path = written.fst.with_extension("gtkw");
+        let title = match marker {
+            Some(m) => format!(" (marker: t={})", m.display(original.precision)),
+            None => String::new(),
+        };
+        let title = format!(
+            "simjig: {} seed={}{title}",
+            original.run.test, original.run.seed
+        );
+        let to = marker.unwrap_or(original.target).max(from);
+        let text = gtkw(&written.fst, &title, from, to, marker, &original.signals);
+        fs::write(&path, text).ok().map(|()| path)
+    };
     WavesFile {
-        gtkw: fs::write(&path, text).ok().map(|()| path),
+        gtkw: has_fst_header(&written.fst).then(|| save(marker)).flatten(),
         fst: written.fst,
         model: written.model,
         branch: written.branch,
         marker,
         failing_branch: failing.is_some(),
+        died,
     }
+}
+
+/// Whether `fst` starts with an FST header block (`FST_BL_HDR`, type 0, then its length as
+/// a big-endian `u64`, all of it in the file): a viewer can open it. A trace whose process
+/// died before closing it may have none (it is empty, or holds only buffered blocks).
+fn has_fst_header(fst: &Path) -> bool {
+    let Ok(bytes) = fs::read(fst) else {
+        return false;
+    };
+    let length = bytes
+        .get(1..9)
+        .and_then(|b| <[u8; 8]>::try_from(b).ok())
+        .map(u64::from_be_bytes);
+    bytes.first() == Some(&0)
+        && length.is_some_and(|len| len >= 8 && usize::try_from(len).is_ok_and(|l| l < bytes.len()))
 }
 
 /// Runs the child and moves its results into the run directory; returns how it ended and
@@ -316,5 +342,26 @@ mod tests {
         ] {
             assert_eq!(trace_identity(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn only_a_file_starting_with_a_whole_header_block_has_a_header() {
+        let dir = std::env::temp_dir().join(format!("simjig-hdr-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut whole = vec![0];
+        whole.extend(16u64.to_be_bytes());
+        whole.extend([0; 8]);
+        for (name, bytes, expect) in [
+            ("empty", Vec::new(), false),
+            ("whole", whole.clone(), true),
+            ("cut", whole[..12].to_vec(), false),
+            ("value-changes", [&[1], &whole[1..]].concat(), false),
+        ] {
+            let path = dir.join(name);
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(has_fst_header(&path), expect, "{name}");
+        }
+        assert!(!has_fst_header(&dir.join("missing")));
+        fs::remove_dir_all(&dir).ok();
     }
 }

@@ -27,7 +27,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::fork::FailedBranch;
+use crate::fork::{BranchEnd, FailedBranch};
 use crate::kernel::recorder::Fnv;
 use crate::{BlockedTask, Failure, FailureKind, Precision, SimDuration, SimTime};
 
@@ -338,12 +338,15 @@ impl fmt::Display for FailureReport {
         let when = match self.failed_branch {
             Some(FailedBranch {
                 index,
-                time: Some(failed),
+                end: BranchEnd::Failed(failed),
             }) => format!(
                 "t={} in fork branch {index} (checkpoint t={time})",
                 failed.display(self.precision)
             ),
-            Some(FailedBranch { index, time: None }) => {
+            Some(FailedBranch {
+                index,
+                end: BranchEnd::Died(_),
+            }) => {
                 format!("t={time} (checkpoint; fork branch {index} died)")
             }
             None => format!("t={time}"),

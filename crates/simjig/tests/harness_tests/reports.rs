@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use simjig::fork;
 use simjig::{
     AppliedTimeout, BlockedTask, Failure, FailureKind, FailureReport, Precision, RunIdentity, Seed,
     SeedSource, SimDuration, SimTime, Verdict, WavesFile, WavesReplay,
@@ -275,8 +276,9 @@ fn a_replay_lists_every_waves_file_with_the_failing_branch_first() {
             gtkw: Some(PathBuf::from(format!("/runs/r/{name}.gtkw"))),
             model,
             branch,
-            marker: SimTime(marker),
+            marker: Some(SimTime(marker)),
             failing_branch: failing,
+            died: None,
         };
     report.waves = Some(WavesReplay {
         files: vec![
@@ -291,4 +293,50 @@ fn a_replay_lists_every_waves_file_with_the_failing_branch_first() {
         verdict: Verdict::Reproduced,
     });
     insta::assert_snapshot!(report.to_string());
+}
+
+/// A branch whose child died has no failure time: its file is listed last (the replay
+/// sorts it there), labelled incomplete, with no marker, and here (no FST header) with no
+/// `gtkwave` command.
+#[test]
+fn the_file_of_a_dead_fork_branch_is_labelled_incomplete() {
+    let f = failure(
+        FailureKind::TaskPanic {
+            message: "1 of 2 fork branches failed".into(),
+        },
+        Some("main"),
+        "panicked: 1 of 2 fork branches failed",
+    );
+    let mut report = FailureReport::new(&f, run(), None, None);
+    let readable = |name: &str, branch: Vec<usize>| WavesFile {
+        fst: PathBuf::from(format!("/runs/r/{name}.fst")),
+        gtkw: Some(PathBuf::from(format!("/runs/r/{name}.gtkw"))),
+        model: 0,
+        branch,
+        marker: Some(SimTime(1250)),
+        failing_branch: false,
+        died: None,
+    };
+    report.waves = Some(WavesReplay {
+        files: vec![
+            readable("waves", vec![]),
+            readable("waves.branch-0", vec![0]),
+            WavesFile {
+                fst: PathBuf::from("/runs/r/waves.branch-1.fst"),
+                gtkw: None,
+                model: 0,
+                branch: vec![1],
+                marker: None,
+                failing_branch: true,
+                died: Some(fork::ChildExit::Signaled(6)),
+            },
+        ],
+        from: SimTime(250),
+        to: None,
+        precision: Precision::NS,
+        verdict: Verdict::Reproduced,
+    });
+    let text = report.to_string();
+    assert!(!text.contains("failed at"), "{text}");
+    insta::assert_snapshot!(text);
 }

@@ -246,3 +246,11 @@ the public API, the generated code or simulation semantics.
   `counter.count (model 0) vs counter.count (model 1)` when the names are equal.
 - `simjig-build`: a failed Verilator run whose stderr has STMTDLY or NOTIMING ends with a
   hint to add `.timing(true)`.
+
+#### Stage 3 review cycle 3 fixes
+- Waves of a fork branch whose child died without a report (a signal): its file is
+  labelled `died (killed by signal <n>); file incomplete`, listed after the readable
+  files, has no marker (it used to be put at the checkpoint and labelled "failed at"),
+  and gets no `.gtkw` or `gtkwave` command when the FST has no header. `WavesFile`:
+  `marker` becomes `Option<SimTime>`; new field `died: Option<fork::ChildExit>`.
+  `fork::ChildExit` implements `Display` (`killed by signal 6`, `exited with code 1`).

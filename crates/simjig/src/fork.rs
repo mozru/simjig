@@ -245,6 +245,16 @@ pub enum ChildExit {
     Signaled(i32),
 }
 
+/// `exited with code <c>` or `killed by signal <s>`.
+impl fmt::Display for ChildExit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exited(code) => write!(f, "exited with code {code}"),
+            Self::Signaled(signal) => write!(f, "killed by signal {signal}"),
+        }
+    }
+}
+
 /// Why a branch has no value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BranchError {
@@ -267,16 +277,9 @@ impl fmt::Display for BranchFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.error {
             BranchError::Failed(failure) => write!(f, "{} failed: {}", self.branch, failure.text),
-            BranchError::Died(ChildExit::Signaled(signal)) => write!(
-                f,
-                "{} died without a report: killed by signal {signal}",
-                self.branch
-            ),
-            BranchError::Died(ChildExit::Exited(code)) => write!(
-                f,
-                "{} died without a report: exited with code {code}",
-                self.branch
-            ),
+            BranchError::Died(exit) => {
+                write!(f, "{} died without a report: {exit}", self.branch)
+            }
         }
     }
 }
@@ -364,13 +367,13 @@ impl<T> Branches<T> {
     #[track_caller]
     pub fn into_values(self) -> Vec<T> {
         if let Some(first) = self.failures().next() {
-            let time = match &first.error {
-                BranchError::Failed(failure) => Some(failure.time),
-                BranchError::Died(_) => None,
+            let end = match &first.error {
+                BranchError::Failed(failure) => BranchEnd::Failed(failure.time),
+                BranchError::Died(exit) => BranchEnd::Died(*exit),
             };
             FAILED_BRANCH.set(Some(FailedBranch {
                 index: first.branch.index,
-                time,
+                end,
             }));
         }
         let failures: Vec<String> = self.failures().map(|f| f.to_string()).collect();
@@ -395,8 +398,18 @@ impl<T> Branches<T> {
 pub(crate) struct FailedBranch {
     /// The branch's index.
     pub(crate) index: usize,
-    /// When it failed, if its child reported a failure (not for a child that died).
-    pub(crate) time: Option<SimTime>,
+    /// How it ended.
+    pub(crate) end: BranchEnd,
+}
+
+/// How the failed branch of a [`FailedBranch`] ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BranchEnd {
+    /// Its child reported a failure at this time.
+    Failed(SimTime),
+    /// Its child died without a report: there is no failure time, and its trace was never
+    /// finished (the child's `at_child_exit` hooks did not run).
+    Died(ChildExit),
 }
 
 thread_local! {

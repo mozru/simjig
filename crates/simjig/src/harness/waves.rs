@@ -23,6 +23,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::fork::ChildExit;
 use crate::{FailureKind, Precision, SimDuration, SimTime, TimeUnit};
 
 /// When the harness replays a run with waves.
@@ -268,7 +269,8 @@ pub struct WavesReplay {
     /// Every FST file the replay wrote, moved into the run directory: one per model
     /// (`waves.fst`, `waves.model-<i>.fst`) and per fork branch of each
     /// (`waves[.model-<i>].branch-<j>.fst`). The files of a failing fork branch come first,
-    /// then the rest in (branch, model) order; empty if no model could trace.
+    /// then the rest in (branch, model) order, and last those of a failing branch whose
+    /// child died (unfinished); empty if no model could trace.
     pub files: Vec<WavesFile>,
     /// The traced span: from, and to (`None`: the end of the run).
     pub from: SimTime,
@@ -293,10 +295,14 @@ pub struct WavesFile {
     /// of a checkpoint, `[j, k]` for branch `k` of a checkpoint inside branch `j`.
     pub branch: Vec<usize>,
     /// Where the save file's marker is: the failure (the failing branch's own failure, in
-    /// its files), or the end of a passing run.
-    pub marker: SimTime,
+    /// its files), or the end of a passing run. `None` in the files of a failing branch
+    /// whose child died ([`died`](Self::died)): it has no failure time.
+    pub marker: Option<SimTime>,
     /// Whether this is a file of the fork branch whose failure failed the test.
     pub failing_branch: bool,
+    /// For a file of the failing branch, if its child died without a report (a signal, a
+    /// crash in the model): how. Such a file was never finished, and may be empty.
+    pub died: Option<ChildExit>,
 }
 
 impl WavesFile {
@@ -310,8 +316,12 @@ impl WavesFile {
             let path: Vec<String> = self.branch.iter().map(ToString::to_string).collect();
             parts.push(format!("fork branch {}", path.join(".")));
         }
-        if self.failing_branch {
-            parts.push(format!("failed at t={}", self.marker.display(precision)));
+        match (self.died, self.marker) {
+            (Some(exit), _) => parts.push(format!("died ({exit}); file incomplete")),
+            (None, Some(marker)) if self.failing_branch => {
+                parts.push(format!("failed at t={}", marker.display(precision)));
+            }
+            (None, _) => {}
         }
         (!parts.is_empty()).then(|| parts.join(", "))
     }
@@ -430,8 +440,8 @@ pub(crate) fn failing_signals(kind: &FailureKind) -> Vec<String> {
     }
 }
 
-/// A `GTKWave` save file for `fst`: the view starts at `from` and spans `from..marker` (at
-/// least a tick), the primary marker is at `marker` (the failure), and `signals` (kernel
+/// A `GTKWave` save file for `fst`: the view spans `from..to` (at least a tick), the primary
+/// marker is at `marker` (the failure; `-1`, none, without one), and `signals` (kernel
 /// names such as `counter.count`) are shown under Verilator's `TOP` scope.
 ///
 /// Save-file times are in the dump's own ticks. `GTKWave`'s zoom is the base-2 logarithm of
@@ -441,10 +451,11 @@ pub(crate) fn gtkw(
     fst: &std::path::Path,
     title: &str,
     from: SimTime,
-    marker: SimTime,
+    to: SimTime,
+    marker: Option<SimTime>,
     signals: &[String],
 ) -> String {
-    let span = marker.ticks().saturating_sub(from.ticks()).max(1);
+    let span = to.ticks().saturating_sub(from.ticks()).max(1);
     #[expect(
         clippy::cast_precision_loss,
         reason = "a zoom level only needs a few significant digits"
@@ -454,7 +465,7 @@ pub(crate) fn gtkw(
         "[*] {title}\n[dumpfile] \"{}\"\n[timestart] {}\n*{zoom:.6} {} {}\n",
         fst.display(),
         from.ticks(),
-        marker.ticks(),
+        marker.map_or_else(|| "-1".to_owned(), |m| m.ticks().to_string()),
         ["-1"; 26].join(" ")
     );
     for signal in signals {
@@ -587,6 +598,7 @@ mod tests {
             "t",
             SimTime(9_000),
             SimTime(10_000),
+            Some(SimTime(10_000)),
             &["counter.en".to_owned()],
         );
         let lines: Vec<&str> = text.lines().collect();
@@ -598,5 +610,24 @@ mod tests {
             ("*0.000000", "10000", 28)
         );
         assert_eq!(&lines[4..], ["@28", "TOP.counter.en"]);
+    }
+
+    #[test]
+    fn a_save_file_without_a_failure_has_no_marker() {
+        let text = gtkw(
+            std::path::Path::new("/r/waves.branch-1.fst"),
+            "t",
+            SimTime(0),
+            SimTime(1_000),
+            None,
+            &[],
+        );
+        let marker: Vec<&str> = text
+            .lines()
+            .nth(3)
+            .expect("a marker line")
+            .split(' ')
+            .collect();
+        assert_eq!((marker[1], marker.len()), ("-1", 28));
     }
 }

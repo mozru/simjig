@@ -407,3 +407,81 @@ fn a_failing_fork_branch_gets_the_waves_of_its_own_span() {
         );
     }
 }
+
+/// Forks two branches after 100 cycles (t = 1000 ns): branch 0 passes, branch 1 aborts 50
+/// cycles later, so its child dies by `SIGABRT` without a report or a finished trace.
+#[simjig::test(timeout = "10us")]
+#[ignore = "fails on purpose; run by the tests below in a child process"]
+async fn a_branch_aborts(ctx: &TestCtx, dut: counter_fst::Dut) {
+    clock(dut.clk, ns(10)).start();
+    dut.rst.set(1);
+    dut.en.set(1);
+    dut.clk.falling().await;
+    dut.rst.set(0);
+    for _ in 0..100 {
+        dut.clk.rising().await;
+    }
+    let branches = fork::run_from_checkpoint(ctx.seed(), 2, |branch| async move {
+        for _ in 0..5 + 45 * branch.index() {
+            dut.clk.rising().await;
+        }
+        if branch.index() == 1 {
+            std::process::abort();
+        }
+        Ok(())
+    })
+    .await
+    .expect("forks");
+    branches.into_values();
+}
+
+/// A branch killed by a signal has no failure time: its file is labelled as the dead
+/// child's, incomplete, listed after the readable files, with no marker at the checkpoint
+/// (where nothing failed) and no `gtkwave` command for a file without an FST header.
+#[test]
+fn a_fork_branch_killed_by_a_signal_is_listed_last_as_incomplete() {
+    let test = "on_fail::a_branch_aborts";
+    let (output, dir) = run_child(test, "branch-abort", &[("SIMJIG_WAVES_ON_FAIL", "1")]);
+    let err = stderr(&output);
+    assert!(!output.status.success(), "{err}");
+    assert!(err.contains("replay:   reproduced"), "{err}");
+    let report = &err[err.find("  waves:").unwrap_or_else(|| panic!("{err}"))..];
+    let waves: Vec<&str> = report
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with("replay:"))
+        .collect();
+    let died = dir.join("waves.branch-1.fst");
+    assert_eq!(waves.len(), 3, "{err}");
+    assert!(
+        waves[0].contains(&dir.join("waves.fst").display().to_string()),
+        "a readable file comes first:\n{err}"
+    );
+    let last = waves[2];
+    assert!(
+        last.contains(&format!(
+            "{} (fork branch 1, died (killed by signal 6); file incomplete)",
+            died.display()
+        )),
+        "the dead branch's file comes last, labelled:\n{err}"
+    );
+    assert!(
+        !err.contains("failed at"),
+        "nothing failed at the checkpoint:\n{err}"
+    );
+    let gtkw = dir.join("waves.branch-1.gtkw");
+    let bytes = std::fs::read(&died).expect("the dead branch's file exists");
+    if bytes.first() == Some(&0) {
+        let save = std::fs::read_to_string(&gtkw).expect("a .gtkw for a file with a header");
+        let marker = save
+            .lines()
+            .find(|l| l.starts_with('*'))
+            .and_then(|l| l.split(' ').nth(1));
+        assert_eq!(marker, Some("-1"), "no marker:\n{save}");
+    } else {
+        assert!(
+            !last.contains("gtkwave"),
+            "no header, no viewer command:\n{err}"
+        );
+        assert!(!gtkw.exists(), "no save file for a file without a header");
+    }
+}

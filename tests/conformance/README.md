@@ -177,12 +177,43 @@ Every edge, Timer and ReadOnly observation is identical in the two modes.
 - Both clocks' new values are applied together, before either edge trigger fires. Each
   task woken at a coincident edge sees **both** clocks high and both domains' flops
   pre-edge (`two_clocks` at 75 and 105 ns).
-- Wake order at a coincident edge is **not** clock-declaration order. The `wclk` clock
-  was started first, yet the `rclk` waiters (including the `Combine` that completes on
-  `rclk`) ran before the `wclk` waiter at 75 and 105 ns. This is consistent with cocotb
-  firing value-change callbacks in the order their triggers were primed, oldest first. The
-  `rclk` trigger was primed at 60 ns; the `wclk` trigger was re-primed at 65 ns after
-  firing. This explanation is a hypothesis; only the order itself is in the golden.
+- Wake order at a coincident edge is **not** clock-declaration order: the clock whose
+  trigger was primed first (oldest) wakes its tasks first. In `two_clocks` the `wclk`
+  clock was started first, yet the `rclk` waiters (including the `Combine` that completes
+  on `rclk`) ran before the `wclk` waiter at 75 and 105 ns: the `rclk` trigger was primed
+  at 60 ns, the `wclk` trigger re-primed at 65 ns after firing. See "Callback order".
+
+### Callback order
+cocotb 2.1 keeps **one trigger per (signal, edge kind)**: `RisingEdge(s)`,
+`FallingEdge(s)` and `ValueChange(s)` are three triggers, each backed by its own VPI
+value-change callback, registered when the trigger's first waiter arrives ("primed") and
+removed when it fires or its last waiter leaves. Verilator's `callValueCbs`
+(`verilated_vpi.cpp`) walks the callbacks in registration order, skipping those added
+during the walk, and each callback compares the signal with its own copy of the value,
+taken when it was registered. cocotb's `GPITrigger._react` runs the whole event loop
+inside each callback. Hence, for one comparison (after an eval and the write
+application that follows it):
+- **Triggers fire one at a time, oldest-primed first**, and every task one wakes (and
+  every task those wake, such as an `Event` waiter) runs before the next trigger fires
+  (`coincident_join`, `changed_join`, `written_join`, `edge_kinds` at 15 ns: the
+  `Event.wait()` task runs between the two triggers' waiters). Within a trigger, waiters
+  resume in the order they started waiting.
+- A task woken by one trigger that then awaits a trigger that **another task already
+  waits on**, and which has not fired yet in this walk, **joins it** and resumes in the
+  same walk (`coincident_join` 15 ns, `changed_join` and `written_join` 2 ns,
+  `edge_kinds` 15 ns).
+- If **nobody else waits** on that trigger, the task primes it afresh: its callback
+  snapshots the value that already changed and waits for the next change
+  (`coincident_join` 55 ns, `changed_join` and `written_join` 6 ns, `edge_kinds` 35 ns,
+  where `RisingEdge(clk)` is primed from a `ValueChange(clk)` wake at a rising edge). The
+  same holds for a trigger that **already fired** in this walk: its waiters re-prime it,
+  last in the order (`coincident_join` 85 ns).
+- `ClockCycles(s, n)` awaits the one `RisingEdge(s)` trigger `n` times, inline in the
+  awaiting task, so it joins like a plain `RisingEdge` (`edge_kinds` 45 ns).
+
+simjig mirrors this with one wait group per (signal, edge kind), ordered by the
+registration that primed it (`kernel::waits`, "Value-change groups"), and a walk that runs
+tasks to quiescence after each group that fires (`kernel::sched::fire_value_changes`).
 
 ### Further rules, confirmed but not in a golden
 Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel_tests`).

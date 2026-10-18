@@ -17,6 +17,16 @@ the public API, the generated code or simulation semantics.
   each followed by every task it makes ready (and every task those wake), as cocotb runs
   its event loop after each Timer callback. Before, all of them woke together and tasks
   they woke ran after the last Timer task.
+- Scheduler: value changes fire one (signal, edge kind) group at a time, oldest-primed
+  first, each followed by every task it makes ready, as cocotb runs one VPI value-change
+  callback at a time with its event loop inside each (README "Callback order"; goldens
+  `coincident_join`, `changed_join`, `written_join`, `edge_kinds`). A task woken by one
+  change that awaits a signal whose group another task already waits on, and which has
+  not fired yet, now resumes in the same delta (it used to wait for the next change), and
+  tasks those wakes make ready run before the next group's waiters. `rising`, `falling`
+  and `changed` on one signal are separate groups. Wake order at one delta changes from
+  global registration order to priming order; trace hashes of runs where that differs
+  change.
 - `with_timeout` breaks ties as cocotb 2.1 does (golden `timeout_ties`): the timeout's
   Timer registers before the future's triggers and is checked first, so a `Timer`,
   edge or `cycles` due exactly at the timeout now times out (a future's own `Timer` used

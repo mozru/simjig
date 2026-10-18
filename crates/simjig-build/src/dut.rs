@@ -788,14 +788,21 @@ impl Dut {
     /// same before and during the build.
     ///
     /// A second call appends to the first (unlike [`Dut::param`], which replaces): a sweep
-    /// member's `base().sources(["rtl/extra.sv"])` adds a file. A path already added is
+    /// member's `base().sources(["rtl/extra.sv"])` adds a file. A file already added is
     /// skipped (a file passed twice would define its modules twice), so the order is
-    /// each path's first call. To give one member other RTL, pass the sources to the
-    /// base configuration as an argument (`|name, rtl: &str| Dut::new(name).sources([rtl])`)
-    /// rather than adding them after.
+    /// each file's first call. Two paths are one file when they canonicalize alike
+    /// (`rtl/../rtl/a.sv`, a symlink), but the path is kept as named, so the model's key
+    /// does not depend on where the file resolves to. Only `.sources` is deduplicated: a
+    /// file also named in a [`Dut::file_list`] reaches Verilator twice. To give one member
+    /// other RTL, pass the sources to the base configuration as an argument
+    /// (`|name, rtl: &str| Dut::new(name).sources([rtl])`) rather than adding them after.
     pub fn sources(mut self, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Self {
+        let file = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let mut added: Vec<PathBuf> = self.config.sources.iter().map(|p| file(p)).collect();
         for path in paths.into_iter().map(absolute) {
-            if !self.config.sources.contains(&path) {
+            let canonical = file(&path);
+            if !added.contains(&canonical) {
+                added.push(canonical);
                 self.config.sources.push(path);
             }
         }
@@ -1777,6 +1784,26 @@ mod tests {
                 .config()
                 .prefix(),
             "the same model as adding each once"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_source_reached_by_another_path_is_kept_once_as_first_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("a.sv"), "module a; endmodule\n").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::os::unix::fs::symlink(root.join("a.sv"), root.join("link.sv")).unwrap();
+        let named = root.join("a.sv");
+        let d = Dut::new("t").sources([named.clone(), root.join("sub/../a.sv")]);
+        let d = d.sources([root.join("link.sv")]);
+        // As named, not canonicalized (macOS temp dirs are symlinks: /var -> /private/var).
+        assert_eq!(d.config().sources, [absolute(&named)]);
+        assert_eq!(
+            d.config().prefix(),
+            Dut::new("t").sources([named]).config().prefix(),
+            "the same key as naming the file once"
         );
     }
 

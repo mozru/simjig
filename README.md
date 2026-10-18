@@ -467,8 +467,9 @@ Sweep::new("sync_fifo")
 ```
 
 A member can change its base configuration: `.param` again replaces the value (the last
-call wins), but `.sources` again appends (a path already added is skipped). To give one
-member other RTL, make the sources an argument of the closure
+call wins), but `.sources` again appends (a file already added, by any path, is
+skipped; a file also in a `.file_list` is not). To give one member other RTL, make the
+sources an argument of the closure
 (`|name: &str, rtl: &str| Dut::new(name).sources([rtl])..`) rather than adding them
 after.
 

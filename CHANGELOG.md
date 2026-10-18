@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `Dut::sources` recognizes a file already added under another path (`rtl/../rtl/a.sv`,
+  a symlink) by its canonical path, and keeps the path as first named, so the model's
+  cache key is unchanged for unchanged input. Its docs say that a file named both in a
+  `.file_list` and in `.sources` is not deduplicated.
 - README: a "Project layout" section with the recommended `Cargo.toml` (lint table),
   `build.rs`, `src/lib.rs` and test file, which `xtask`'s
   `the_readme_project_layout_is_the_quickstart` checks against `examples/quickstart`;

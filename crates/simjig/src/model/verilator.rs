@@ -336,7 +336,7 @@ fn print_line(text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::abi::Status;
+    use super::super::abi::{ModelVtable, Status};
     use super::super::meta::{SignalMeta, Vtable};
     use super::super::raw::fake::{self, STATE};
     use super::*;
@@ -416,6 +416,37 @@ mod tests {
         STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Error as u32, c"bad")));
         assert!(model.eval().is_err());
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
+    }
+
+    /// A table from an older header is rejected on its size before any other field (here
+    /// the prefix, which names another model) is read.
+    #[test]
+    fn a_shorter_vtable_is_rejected_before_its_prefix_is_read() {
+        fn short() -> Vtable {
+            thread_local! {
+                static VT: Vtable = Vtable::leak(ModelVtable {
+                    size: 136,
+                    prefix: c"Vother".as_ptr(),
+                    ..fake::vtable()
+                });
+            }
+            VT.with(|vt| *vt)
+        }
+        static SHORT: ModelMeta = ModelMeta {
+            vtable: short,
+            ..FAKE
+        };
+        fake::reset();
+        let err = VerilatorModel::load(&SHORT, &[]).unwrap_err();
+        assert_eq!(
+            err,
+            LoadError::VtableSize {
+                prefix: "Vfake",
+                model: 136,
+                runtime: 192
+            }
+        );
+        assert_eq!(counts(), (0, 0, 0), "nothing was created");
     }
 
     #[test]

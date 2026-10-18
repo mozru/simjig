@@ -24,9 +24,11 @@ the public API, the generated code or simulation semantics.
 - `cargo simjig show <dut> [-p <package>] [--path]` prints the module that
   `include_dut!(<dut>)` includes, or its path under `target/`. The README has a section
   on the generated names (suffixes, enum prefixes, keywords, collisions).
-- An integer compares equal to a `Bits<N>`, `WideBits` or `Bit` from the left too
-  (`PartialEq<Bits<N>> for u8 ... u128, i8 ... i128, usize, isize`, and `bool == Bit`),
-  so `assert_eq!(4, x.get())` compiles. A negative integer equals no value.
+- An integer literal compares equal to a `Bits<N>`, `WideBits` or `Bit` from the left too
+  (`PartialEq<Bits<N>> for u128`), so `assert_eq!(4, x.get())` compiles. Only `u128`:
+  an impl for another integer type (`u32`, `usize`, ...) or `bool` makes
+  `n == "3".parse().unwrap()` and `assert_eq!(total, xs.iter().sum())` ambiguous (E0283)
+  in every crate linking simjig, so a typed `n_u8 == x` is written `x == u128::from(n_u8)`.
 - A model that fails to verilate only because of lint warnings gets a `hint:` naming the
   waivers: a `lint_off` comment, `.verilator_args(["-Wno-<CODE>"])`, or
   `.verilator_args(["-Wno-fatal"])`.

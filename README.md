@@ -83,7 +83,7 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `task.cancel()` | `task.cancel()`, or drop the `Task` |
 | `await First(a, b)` | `first!(a, b)` (same output type; ties go to the leftmost) |
 | `await Combine(a, b)` | `join!(a, b)` (a tuple of the outputs) |
-| `await with_timeout(x, 10, "ns")`, `SimTimeoutError` | `with_timeout(ns(10), x).await`, `Err(Elapsed)` |
+| `await with_timeout(x, 10, "ns")`, `SimTimeoutError` | `with_timeout(ns(10), x).await` (`&mut task` for a Task that must keep running), `Err(Elapsed)` |
 | `dut.x.value = 5` | `dut.x.set(5)` |
 | `int(dut.x.value)`, `bool(dut.x.value)` | `dut.x.get().to_u128()`, `dut.bit.get().to_bool()` |
 | `get_sim_time("ns")` | `simjig::now()`; print it with `now().display(ctx.precision())` (`1250 ns`) |
@@ -112,12 +112,16 @@ What to keep in mind:
   instead of hanging: more than `DELTA_MAX` (64) evals between `ReadWrite` rounds, or more
   than `READ_WRITE_MAX` (10 000) `ReadWrite` rounds that wake a task (cocotb loops forever).
 - **A timeout is a value**, `Err(Elapsed)`, not an exception: handle it or `.unwrap()` it.
-- **Known differences** (`tests/conformance/README.md`, "Known differences from
-  cocotb"): a zero-tick `Timer` fails when it is awaited, not when it is built; and the
-  operands of `first!`, `join!` and `with_timeout` run in the caller, not each in its own
-  task, so code between two awaits *inside* an operand may run earlier or later relative
-  to other tasks woken by the same trigger (the caller itself resumes where cocotb's
-  does).
+- **Known differences** (full list with tests: `tests/conformance/README.md`, "Known
+  differences from cocotb"):
+  - **A `Task` passed by value to `first!`/`join!`/`with_timeout` is cancelled** when the
+    combinator drops it (timeout or losing); cocotb keeps it running. Pass `&mut task` to
+    keep it running.
+  - **Cancellation cleanup** (`Drop`) runs when an operand is cancelled, one scheduling hop
+    before cocotb's `finally` block would.
+  - **A `Lock` or `Queue` grant that lands on a cancelled `first!` loser is passed on** to
+    the next waiter; cocotb keeps the lock held or loses the item.
+  - **A zero-tick `Timer`** fails when it is awaited, not when it is built.
 
 ## Beyond one clocked DUT
 

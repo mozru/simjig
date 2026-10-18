@@ -720,6 +720,57 @@ mod tests {
         assert_eq!(calls(), ["eval", "eval", "dump 0", "eval", "destroy"]);
     }
 
+    /// In a fork child, a healthy trace moves to the branch's file and is closed there at
+    /// exit, its last timestep dumped first.
+    #[test]
+    fn a_fork_child_reopens_the_trace_and_closes_it_at_exit() {
+        let mut model = traced(&TraceOptions::new("w.fst"));
+        steps(&mut model, &[0, 10]);
+        assert_eq!(crate::fork::run_child_hooks_in_place(1), Ok(()));
+        let calls_ = calls();
+        assert_eq!(
+            calls_[calls_.len() - 3..],
+            ["reopen w.branch-1.fst", "dump 10", "close"]
+        );
+    }
+
+    /// A trace that stopped before the fork (a DPI failure stops it; a FATAL leaves its
+    /// closing to `destroy`) is not reopened in a child, and so still holds the inherited
+    /// writer, which shares the parent's descriptor: the child must neither close it nor
+    /// destroy the model, either of which writes the parent's file.
+    #[test]
+    fn a_fork_child_never_finishes_a_trace_it_did_not_reopen() {
+        for poison in [Tracer::stop, Tracer::poisoned] {
+            let mut model = traced(&TraceOptions::new("w.fst"));
+            steps(&mut model, &[0]);
+            poison(model.tracer.as_ref().expect("traced"));
+            drop(calls());
+            assert_eq!(crate::fork::run_child_hooks_in_place(0), Ok(()));
+            assert_eq!(calls(), Vec::<String>::new());
+            // A child never drops its models; this is the parent's own teardown.
+            drop(model);
+        }
+    }
+
+    /// A reopen that fails fails the branch, and leaves Rust nothing to close: whatever the
+    /// C side still holds is the inherited writer.
+    #[test]
+    fn a_failed_reopen_leaves_no_file_to_close() {
+        let mut model = traced(&TraceOptions::new("w.fst"));
+        steps(&mut model, &[0]);
+        drop(calls());
+        STATE.with_borrow_mut(|s| s.trace_statuses.push_back(Status::IoError));
+        let err = crate::fork::run_child_hooks_in_place(0).unwrap_err();
+        assert!(err.contains("w.branch-0.fst"), "{err}");
+        assert_eq!(calls(), ["reopen w.branch-0.fst"]);
+        model.tracer.as_ref().expect("traced").close();
+        assert_eq!(
+            calls(),
+            Vec::<String>::new(),
+            "no close after a failed reopen"
+        );
+    }
+
     #[test]
     fn the_trace_closes_after_its_end_time() {
         let mut model = traced(&TraceOptions::new("w.fst").end(SimTime(10)));

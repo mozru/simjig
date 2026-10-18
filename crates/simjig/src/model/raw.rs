@@ -563,6 +563,12 @@ pub(crate) mod fake {
         traced("close".to_owned())
     }
 
+    extern "C" fn rec_reopen(_h: *mut Handle, path: *const std::ffi::c_char) -> i32 {
+        // SAFETY: the caller passes a NUL-terminated string valid for the call.
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        traced(format!("reopen {path}"))
+    }
+
     extern "C" fn set_time(_h: *mut Handle, _t: u64) {}
 
     extern "C" fn events_pending(_h: *mut Handle) -> u32 {
@@ -677,6 +683,7 @@ pub(crate) mod fake {
             trace_dump: rec_dump,
             trace_flush: rec_flush,
             trace_close: rec_close,
+            trace_reopen: rec_reopen,
             ..vtable()
         }
     }

@@ -32,7 +32,9 @@
 //! next to it (`trace_reopen`; docs/notes/tracecov.md), so the parent's file is never
 //! written by a child, and it ends that file (last sample, header) before the child exits.
 //! A child never drops its models, so a model the branch poisoned with a `$fatal` (whose C
-//! side refuses `trace_close`) is destroyed there instead, which closes its trace.
+//! side refuses `trace_close`) is destroyed there instead, which closes its trace. A trace
+//! the child did not reopen (it had stopped before the fork, or the reopen failed) still
+//! holds the inherited writer, so it is never closed or destroyed in the child.
 //! The parent does not flush before forking (see `fork_hook`).
 //!
 //! # Window
@@ -317,26 +319,44 @@ impl TraceState {
     }
 
     /// In a fork child: continues the waves in the branch's own file.
+    ///
+    /// Unless this succeeds, whatever writer the C side still holds is the inherited one,
+    /// sharing the parent's descriptor and offset: the trace then forgets its file (no
+    /// close, no `destroy` at exit), so the child never writes the parent's waves.
     fn reopen(&mut self, index: usize) -> Result<(), String> {
         if !self.sampling {
+            self.forget_inherited();
             return Ok(());
         }
         let file = branch_path(&self.path, index);
-        let c_path = CString::new(file.as_os_str().as_encoded_bytes())
-            .map_err(|_nul| format!("{} contains a NUL byte", file.display()))?;
+        let Ok(c_path) = CString::new(file.as_os_str().as_encoded_bytes()) else {
+            self.forget_inherited();
+            return Err(format!("{} contains a NUL byte", file.display()));
+        };
         match self.port.reopen(&c_path).map(Status::try_from) {
-            None | Some(Ok(Status::Ok)) => {
+            Some(Ok(Status::Ok)) => {
                 self.path = file;
                 Ok(())
             }
+            // The model is gone, and its trace with it.
+            None => {
+                self.forget_inherited();
+                Ok(())
+            }
             Some(other) => {
-                self.sampling = false;
+                self.forget_inherited();
                 Err(format!(
                     "continuing the trace in {} returned {other:?}",
                     file.display()
                 ))
             }
         }
+    }
+
+    /// Stops the trace without closing it: its file is the parent's.
+    fn forget_inherited(&mut self) {
+        self.sampling = false;
+        self.file_open = false;
     }
 }
 

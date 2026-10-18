@@ -31,7 +31,7 @@ use super::failure::FailureKind;
 use super::panics;
 use super::recorder::TraceKind;
 use super::slab::{Key, Slab};
-use super::state::{self, Kernel};
+use super::state::{self, Kernel, Phase};
 use super::waits::{ListKind, Registration, WaitOn};
 use super::waker::{self, MAX_TASK_INDEX};
 
@@ -65,6 +65,8 @@ struct TaskEntry {
     future: Option<BoxFuture>,
     result: Option<Box<dyn Any>>,
     has_handle: bool,
+    /// Whether the future was polled at least once.
+    polled: bool,
     cancel_requested: bool,
     detached: Vec<Key>,
     /// Wait list the handle registers on to learn of completion.
@@ -147,6 +149,32 @@ impl ReadyQueue {
 /// already queued. The returned handle owns it: drop the handle to cancel the task, await
 /// it for the result, or [`detach`](Task::detach) it.
 ///
+/// # Fire and forget
+/// cocotb's `cocotb.start_soon(monitor())` keeps running on its own; here that is
+/// `spawn(..).detach()`. Dropping the handle instead, as `let _ = spawn(..)` does,
+/// cancels the task before it ever runs; the kernel prints a warning and records a
+/// [`TraceKind::DroppedUnpolled`](crate::TraceKind::DroppedUnpolled) when that happens.
+///
+/// ```
+/// use simjig::{FakeModel, Precision, Sim, Timer, SimDuration, spawn};
+///
+/// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
+/// let ticks = sim.run(async {
+///     let count = std::rc::Rc::new(std::cell::Cell::new(0));
+///     let seen = std::rc::Rc::clone(&count);
+///     spawn("monitor", async move {
+///         loop {
+///             Timer::new(SimDuration::from_ticks(1)).await;
+///             seen.set(seen.get() + 1);
+///         }
+///     })
+///     .detach(); // runs until main returns
+///     Timer::new(SimDuration::from_ticks(5)).await;
+///     count.get()
+/// });
+/// assert_eq!(ticks.unwrap(), 4);
+/// ```
+///
 /// # Panics
 /// Outside [`Sim::run`](crate::Sim::run), or if 65 536 tasks are alive at once.
 #[track_caller]
@@ -197,6 +225,7 @@ pub(crate) fn spawn_in<T: 'static>(
         future: Some(wrapped),
         result: None,
         has_handle: true,
+        polled: false,
         cancel_requested: false,
         detached: Vec::new(),
         join,
@@ -313,8 +342,8 @@ impl<T: 'static> Task<T> {
     }
 
     /// Cancels the task now: its future is dropped, running its `Drop` cleanup.
-    pub fn cancel(self) {
-        drop(self);
+    pub fn cancel(mut self) {
+        self.release(Release::Cancel);
     }
 
     pub(crate) const fn key(&self) -> Option<Key> {
@@ -374,26 +403,76 @@ impl<T: 'static> Future for Task<T> {
     }
 }
 
-impl<T> Drop for Task<T> {
-    fn drop(&mut self) {
+/// Why a handle lets go of its task.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Release {
+    /// [`Task::cancel`]: deliberate.
+    Cancel,
+    /// The handle was dropped; cancelling a task that never ran is probably a mistake.
+    Drop,
+}
+
+impl<T> Task<T> {
+    /// Gives up the handle: frees a finished task, cancels a running one.
+    fn release(&mut self, why: Release) {
         self.join = None;
         let Some(key) = self.key.take() else { return };
         state::with_sim(self.sim_gen, |k| {
-            let done = {
+            let (done, never_ran) = {
                 let mut tasks = k.tasks.borrow_mut();
                 let Some(entry) = tasks.slab.get_mut(key) else {
                     return;
                 };
                 entry.has_handle = false;
-                entry.state == TaskState::Done
+                (entry.state == TaskState::Done, !entry.polled)
             };
             if done {
                 free_task(k, key);
-            } else {
-                cancel_task(k, key);
+                return;
             }
+            if why == Release::Drop && never_ran && !cascading(k) {
+                dropped_unpolled(k, key);
+            }
+            cancel_task(k, key);
         });
     }
+}
+
+impl<T> Drop for Task<T> {
+    fn drop(&mut self) {
+        self.release(Release::Drop);
+    }
+}
+
+/// Whether a handle drop is a side effect of a larger cancellation rather than the
+/// testbench's own choice: the run is ending, the dropping task is itself being
+/// cancelled (its locals go with it), or a panic is unwinding.
+fn cascading(k: &Kernel) -> bool {
+    let owner_cancelled = k.current.get().is_some_and(|c| {
+        k.tasks
+            .borrow()
+            .slab
+            .get(c)
+            .is_some_and(|e| e.state == TaskState::Cancelling)
+    });
+    k.phase.get() == Phase::Ended || owner_cancelled || std::thread::panicking()
+}
+
+/// Records and reports a task cancelled by dropping its handle before it ever ran.
+///
+/// A warning rather than a failure: dropping a fresh handle is also how a testbench
+/// abandons work it no longer needs (the loser of a race, a request made moot), and
+/// cancelling by drop is the one cancellation mechanism (DECISION §1). The warning names
+/// the fix for the common mistake; the trace record keeps it visible in run directories.
+#[cold]
+fn dropped_unpolled(k: &Kernel, key: Key) {
+    k.record(TraceKind::DroppedUnpolled, Some(key), 0, 0);
+    eprintln!(
+        "simjig: warning: task `{}` was cancelled before it ever ran, because its Task handle \
+         was dropped (as `let _ = spawn(..)` does); await the handle, keep it, or call \
+         .detach() to let the task run on its own",
+        k.task_name(key)
+    );
 }
 
 /// Removes a task's entry and its join list; its future must already be gone.
@@ -521,6 +600,7 @@ fn poll_task(k: &Kernel, key: Key) {
             return;
         }
         entry.state = TaskState::Polling;
+        entry.polled = true;
         entry.future.take()
     };
     let Some(mut future) = future else { return };

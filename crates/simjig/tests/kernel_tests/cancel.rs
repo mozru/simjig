@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simjig::{Timer, rising, scope, spawn, with_timeout};
+use simjig::{Timer, TraceKind, rising, scope, spawn, with_timeout};
 
 use super::{assert_clean, clocked, dut, ticks};
 
@@ -239,5 +239,30 @@ fn a_cleanup_panic_while_unwinding_does_not_mask_the_first_panic() {
     let location = f.location.unwrap();
     assert!(location.file().ends_with("cancel.rs"), "{f}");
     assert_eq!(location.line(), line!() - 7, "the `panic!` line: {f}");
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn a_handle_dropped_before_its_task_ever_ran_is_recorded() {
+    let mut d = dut();
+    let ran = Rc::new(RefCell::new(false));
+    let flag = Rc::clone(&ran);
+    d.sim
+        .run(async move {
+            // The classic mistake: `let _ = spawn(..)` cancels the task at once.
+            drop(spawn("lost", async move { *flag.borrow_mut() = true }));
+            // An explicit cancel is deliberate and is not recorded.
+            spawn("cancelled", async {}).cancel();
+            Timer::new(ticks(1)).await;
+        })
+        .unwrap();
+    assert!(!*ran.borrow(), "the dropped task never ran");
+    let dropped: Vec<_> = d
+        .sim
+        .recent_trace()
+        .into_iter()
+        .filter(|r| r.kind == TraceKind::DroppedUnpolled)
+        .collect();
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
     assert_clean(&d.sim);
 }

@@ -109,6 +109,40 @@ fn next_time_step_resumes_at_the_next_scheduled_time_before_timers() {
 }
 
 #[test]
+fn each_timer_runs_what_it_wakes_before_the_next_timer_due_then() {
+    // `old` and `young` both wait until t=5, `old`'s Timer registered first. cocotb runs
+    // its event loop after each Timer callback, so `woken` (set off by `old`) runs before
+    // `young` (golden timeout_ties, the pre-armed task at 54.999 ns).
+    let mut d = dut();
+    let trace: Trace = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let event = Rc::new(simjig::Event::new("go"));
+            let (t1, t2, t3) = (Rc::clone(&t), Rc::clone(&t), Rc::clone(&t));
+            let e = Rc::clone(&event);
+            let woken = spawn("woken", async move {
+                e.wait().await;
+                push(&t1, "woken");
+            });
+            let e = Rc::clone(&event);
+            let old = spawn("old", async move {
+                Timer::new(ticks(5)).await;
+                push(&t2, "old");
+                e.set();
+            });
+            yield_now().await; // `woken` and `old` register first
+            let young = spawn("young", async move {
+                Timer::new(ticks(5)).await;
+                push(&t3, "young");
+            });
+            simjig::join!(woken, old, young);
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["old", "woken", "young"]);
+}
+
+#[test]
 fn yield_now_lets_ready_tasks_run_first() {
     let mut d = dut();
     let trace: Trace = Rc::default();

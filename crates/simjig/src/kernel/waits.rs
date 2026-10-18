@@ -218,10 +218,21 @@ impl WaitTable {
         }
     }
 
-    /// Fires timers due at `t`.
-    pub(crate) fn fire_time(&mut self, t: SimTime, out: &mut Vec<Wake>) {
-        let due = self.wheel.remove(&t).unwrap_or_default();
-        self.fire_all(due, out);
+    /// Fires the oldest timer due at `t`; returns whether there was one.
+    ///
+    /// One at a time, because cocotb runs every task a Timer callback wakes, and every task
+    /// those wake, before the next Timer callback: see `sched::step`.
+    pub(crate) fn fire_next_timer(&mut self, t: SimTime, out: &mut Vec<Wake>) -> bool {
+        let Some(due) = self.wheel.get_mut(&t) else {
+            return false;
+        };
+        // Registration order: a timer is appended when registered, so the oldest is first.
+        let key = due.remove(0);
+        if due.is_empty() {
+            self.wheel.remove(&t);
+        }
+        self.fire(key, out);
+        true
     }
 
     pub(crate) fn fire_next_step(&mut self, out: &mut Vec<Wake>) {

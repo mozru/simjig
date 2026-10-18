@@ -5,9 +5,10 @@
 //! goldens in `tests/conformance/` and overriding DECISION §1 where they differ:
 //!
 //! 1. **Timed region.** Set the model's time. Wake `NextTimeStep` waiters and run tasks;
-//!    then wake `Timer`s due now, log the kernel clocks' edges due now (declaration order,
-//!    as writes by the clock), and run tasks. Timer tasks therefore see the state *before*
-//!    this timestep's clock edges, and a trigger they arm still catches those edges.
+//!    then log the kernel clocks' edges due now (declaration order, as writes by the
+//!    clock), and wake the `Timer`s due now one at a time, in registration order, running
+//!    tasks after each. Timer tasks therefore see the state *before* this timestep's clock
+//!    edges, and a trigger they arm still catches those edges.
 //! 2. **Delta loop.** Repeat: `eval`; apply the write log (deposits); compare watched
 //!    slots against their values at the previous comparison and wake their waiters in
 //!    registration order; run tasks. Stop after an iteration that applied no write.
@@ -75,6 +76,13 @@ fn wake_from(k: &Kernel, fire: impl FnOnce(&mut WaitTable, &mut Vec<Wake>)) {
     wake_sorted(wakes);
 }
 
+/// Fires the oldest Timer due at `t`; returns whether there was one.
+fn fire_next_timer(k: &Kernel, t: SimTime) -> bool {
+    let mut fired = false;
+    wake_from(k, |w, out| fired = w.fire_next_timer(t, out));
+    fired
+}
+
 /// Runs timesteps until the main task completes, a failure is recorded, or time cannot
 /// advance.
 pub(crate) fn run_loop(k: &Kernel, limit: Option<SimTime>) {
@@ -130,7 +138,8 @@ fn step(k: &Kernel) {
 
     wake_from(k, WaitTable::fire_next_step);
     run_ready(k);
-    wake_from(k, |w, out| w.fire_time(t, out));
+    // The edges are logged before any Timer task runs, so a clock stopped or written in one
+    // still has its edge at `t`, after the deposit-order rules of the write log.
     let edges: Vec<(u32, u32)> = k
         .clocks
         .borrow_mut()
@@ -142,6 +151,13 @@ fn step(k: &Kernel) {
         .collect();
     for (slot, level) in edges {
         signal::write(k, slot, &[level], Writer::Clock, None);
+    }
+    // One Timer at a time, each followed by every task it makes ready (cocotb runs its
+    // event loop after each GPI callback). So a task woken by an older Timer, and any task
+    // it wakes in turn, runs before the waiter of a younger Timer due at the same time:
+    // `with_timeout` relies on it to break ties as cocotb does.
+    while !stopped(k) && fire_next_timer(k, t) {
+        run_ready(k);
     }
     run_ready(k);
 

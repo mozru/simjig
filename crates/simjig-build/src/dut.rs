@@ -498,8 +498,11 @@ impl Dut {
     /// (`counter.u_core.state`); `module` is the module that declares the variable and
     /// `ty` its type, because the type IR has no types of internal variables to look them
     /// up in. The build checks the path, module and access against the IR and the width
-    /// against Verilator's scope table. Paths through generate blocks (`top.g[0].u.x`) are
-    /// not supported yet.
+    /// against Verilator's scope table. A path enters a generate block by the name
+    /// Verilator gives its scope: the label (`top.g_x.u.x`), `genblk<N>` for an unnamed
+    /// block (`top.genblk2.u.x`, IEEE 1800-2023 §27.6), or `label[i]` for one iteration
+    /// of a generate-for loop (`top.g[0].u.x`). Paths through instance arrays are not
+    /// supported.
     pub fn probe(
         mut self,
         path: impl Into<String>,

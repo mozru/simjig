@@ -21,6 +21,9 @@ the public API, the generated code or simulation semantics.
   generate_blocks }`, named as Verilator names the scope: `g_x`, `genblk2`, `g[0]`) and
   `Instance::array` (an instance array), each omitted from the JSON when empty or false.
   Every IR hash, and so every generated `IR_HASH`/`kIrHash`, changes once.
+- Probe paths may go through generate blocks (`top.g_x.u.x`, `top.genblk2.u.x`,
+  `top.g[0].u.x`); naming a generate-for loop without an index, or an instance array, is
+  a `codegen::Error::Config` that names the fix.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

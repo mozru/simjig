@@ -279,3 +279,41 @@ fn probes_of_an_interface_ported_dut_bind_at_create() {
         "r:simjig_wrap_iface_top.out_bus_data:beef",
     ]);
 }
+
+/// Probes through generate blocks bind at create: a named and an unnamed generate-if
+/// (`genblk2`, IEEE 1800-2023 §27.6), a generate-for iteration (`g[1]`), and a variable of
+/// the loop body, which belongs to the enclosing module.
+#[test]
+fn probes_through_generate_blocks_bind_at_create() {
+    let sv = format!(
+        "module leaf(input logic clk, input logic [7:0] d, output logic [7:0] q);\n\
+         {SMALL_LEAF}\nendmodule\n\
+         module top(input logic clk, input logic [7:0] d, output logic [7:0] q0,\n\
+         output logic [7:0] q1, output logic [7:0] q2);\n\
+         if (1) begin : g_x\n leaf u(.clk, .d, .q(q0));\n end\n\
+         if (1) begin\n leaf u(.clk, .d, .q(q1));\n end\n\
+         for (genvar i = 0; i < 2; i++) begin : g\n logic [7:0] t;\n\
+         if (i == 1) begin : one\n leaf u(.clk, .d, .q(q2));\n end\n end\n\
+         endmodule\n"
+    );
+    let probes = vec![
+        rw_probe("top.g_x.u.x", "leaf", 8),
+        rw_probe("top.genblk2.u.x", "leaf", 8),
+        rw_probe("top.g[1].one.u.x", "leaf", 8),
+        rw_probe("top.g[0].t", "top", 8),
+    ];
+    let case = sv_case("generate", &sv, probes);
+    let lowered = lower(&case.design, &case.config).unwrap();
+    let driver = build_driver(&case, &lowered, &opts("Vgenerate"), &[]);
+    driver.check(&[
+        "w:top.g_x.u.x:11",
+        "w:top.genblk2.u.x:22",
+        "w:top.g[1].one.u.x:33",
+        "w:top.g[0].t:44",
+        "e",
+        "r:top.q0:11",
+        "r:top.q1:22",
+        "r:top.q2:33",
+        "r:top.g[0].t:44",
+    ]);
+}

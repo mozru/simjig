@@ -11,18 +11,20 @@
 //!
 //! Type names are decided in [`types`], identifier rules in [`names`](super::names).
 
+mod path;
 mod sv;
 mod types;
 mod wrapper;
 
-use svtypes::ir::{Design, Module, Param, ParamValue, Storage, TypeId, TypeKind, VariableKind};
+use svtypes::ir::{Design, Param, ParamValue, Storage, TypeId, TypeKind};
 use svtypes::width::packed_storage;
 
+use self::path::check_probe_path;
 use self::sv::{LayoutSpeller, nameable};
 use self::types::{Root, Types, Use, bits, lower_types};
 use self::wrapper::dut_module;
 pub use self::wrapper::{DUT_INSTANCE, elab_module, lower_wrapper, wrapper_module};
-use super::names::{Namespace, camel, closest, screaming, snake};
+use super::names::{Namespace, camel, screaming, snake};
 use super::{
     Access, Bundle, BundleMember, CodegenConfig, Const, ConstGroup, ConstValue, DutField, Error,
     ItemKind, Layout, LayoutCheck, LayoutMember, LayoutValue, Lowered, Probe, ProbeAccess,
@@ -310,35 +312,16 @@ fn lower_probe(
 ) -> Result<(Signal, String), Error> {
     let item = || format!("probe {}", probe.path);
     let segments: Vec<&str> = probe.path.split('.').collect();
-    let (what, dut) = match wrapper {
-        Some(w) => ("the DUT", w.dut.as_str()),
-        None => ("the top module", design.top_module().orig_name.as_str()),
-    };
-    if segments.len() < 2 || segments[0] != dut {
-        return Err(Error::config(
-            item(),
-            format!("the path must start with {what} `{dut}`, e.g. `{dut}.u_core.state`"),
-        ));
-    }
-    if let Some(bad) = segments.iter().find(|s| !is_simple_ident(s)) {
-        return Err(Error::config(
-            item(),
-            format!("`{bad}` is not a plain identifier"),
-        ));
-    }
-    if !design.modules.iter().any(|m| m.orig_name == probe.module) {
-        return Err(Error::config(
-            item(),
-            format!("no module `{}` in the design", probe.module),
-        ));
-    }
     check_probe_path(design, probe, &segments, wrapper)
         .map_err(|why| Error::config(item(), why))?;
     let (ty, width) = match (probe_type(design, probe)?, &probe.ty) {
         (Some(id), _) => (types.rust(design, id), design.ty(id).width.unwrap_or(0)),
         (None, ProbeType::Bits { width }) => (bits(*width), *width),
         (None, ProbeType::Named(_)) => {
-            return Err(Error::config(item(), "internal: unresolved type"));
+            return Err(Error::config(
+                format!("probe {}", probe.path),
+                "internal: unresolved type",
+            ));
         }
     };
     if width == 0 {
@@ -372,75 +355,6 @@ fn lower_probe(
         },
     };
     Ok((signal, segments[1..].join("_")))
-}
-
-/// Walks a probe's path through the IR's instance tree and checks the variable at its end,
-/// so a mistyped instance or variable, a wrong declaring module or a writable parameter
-/// fails here, before verilation, with a suggestion. `segments` is the path split at `.`
-/// (already checked to start with the DUT and to be plain identifiers). The width is
-/// checked after verilation, against Verilator's scope table (the IR has no types for
-/// internal variables).
-fn check_probe_path(
-    design: &Design,
-    probe: &Probe,
-    segments: &[&str],
-    wrapper: Option<&Wrapper>,
-) -> Result<(), String> {
-    let mut module: &Module = design.top_module();
-    if wrapper.is_some() {
-        let dut = module.instances.iter().find(|i| i.name == DUT_INSTANCE);
-        module = dut.map_or(module, |i| design.module(i.module));
-    }
-    let (var, instances) = segments[1..].split_last().unwrap_or((&"", &[]));
-    for (depth, name) in instances.iter().enumerate() {
-        let here = segments[..=depth].join(".");
-        let Some(inst) = module.instances.iter().find(|i| i.name == *name) else {
-            let hint = closest(name, module.instances.iter().map(|i| i.name.as_str()))
-                .map(|c| format!("; did you mean `{c}`?"))
-                .unwrap_or_default();
-            return Err(format!(
-                "no instance `{name}` in `{here}` (a `{}`){hint}",
-                module.orig_name
-            ));
-        };
-        module = design.module(inst.module);
-    }
-    let scope = segments[..segments.len() - 1].join(".");
-    if module.orig_name != probe.module {
-        return Err(format!(
-            "`{scope}` is an instance of `{}`, not of `{}` as the probe declares; pass `\"{}\"` \
-             as the probe's module",
-            module.orig_name, probe.module, module.orig_name
-        ));
-    }
-    let Some(v) = module.variables.iter().find(|v| v.name == *var) else {
-        let hint = closest(var, module.variables.iter().map(|v| v.name.as_str()))
-            .map(|c| format!("; did you mean `{c}`?"))
-            .unwrap_or_default();
-        return Err(format!(
-            "no variable `{var}` in `{}` (the module of `{scope}`){hint}",
-            module.orig_name
-        ));
-    };
-    let constant = match v.kind {
-        VariableKind::Signal => None,
-        VariableKind::Parameter => Some("parameter"),
-        VariableKind::Localparam => Some("localparam"),
-    };
-    if let (Some(what), ProbeAccess::ReadWrite) = (constant, probe.access) {
-        return Err(format!(
-            "`{var}` is a {what} of `{}`, a constant Verilator keeps in read-only storage; \
-             probe it with `ProbeAccess::Read`",
-            module.orig_name
-        ));
-    }
-    Ok(())
-}
-
-/// `[A-Za-z_][A-Za-z0-9_]*`.
-fn is_simple_ident(s: &str) -> bool {
-    s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Package parameters, one group per package that has any.
@@ -675,10 +589,5 @@ mod tests {
         assert_eq!(real_literal("3").as_deref(), Some("3.0"));
         assert_eq!(real_literal("1e-3").as_deref(), Some("1e-3"));
         assert_eq!(real_literal("inf"), None);
-    }
-
-    #[test]
-    fn probe_segments_are_plain_identifiers() {
-        assert!(is_simple_ident("_x1") && !is_simple_ident("1x") && !is_simple_ident("a$b"));
     }
 }

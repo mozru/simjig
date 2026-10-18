@@ -603,18 +603,13 @@ impl Dut {
             generated.push(cache.store_input(g)?);
         }
         let args = self.config.verilator_args(&prefix, &ir.top, &generated);
-        let model = cache.verilate(&verilator, &args, &self.config.include_dirs)?;
-        let header_ports =
-            header::read_header_ports(&verilator::output_file(&model.obj_dir, &prefix, ".h"))?;
-        header::check_ports(&header_ports, &placed.ports)?;
-        crate::syms::check_probes(&self.config.name, &model.obj_dir, &prefix, &placed.probes)?;
-        let dpi_header = verilator::output_file(&model.obj_dir, &prefix, "__Dpi.h");
-        script::claim_dpi_exports(
-            env,
-            &self.config,
-            &prefix,
-            header::read_dpi_exports(&dpi_header)?,
+        let model = cache.verilate(
+            &self.config.name,
+            &verilator,
+            &args,
+            &self.config.include_dirs,
         )?;
+        let header_ports = check_model(env, &self.config, &prefix, &model.obj_dir, &placed)?;
         let mut directives = compile::compile(&compile::Inputs {
             env,
             config: &self.config,
@@ -625,14 +620,12 @@ impl Dut {
             recipe: &self.recipe,
             model_sources: &placed.model_sources,
         })?;
-        let generated_inputs = cache.root().join("inputs");
-        let deps: Vec<PathBuf> = model
-            .deps
-            .iter()
-            .filter(|d| !d.starts_with(&generated_inputs))
-            .cloned()
-            .collect();
-        directives.extend(rerun_directives(&verilator, &deps, &self.recipe));
+        directives.extend(rerun_directives(
+            &verilator,
+            &model.deps,
+            &cache.root().join("inputs"),
+            &self.recipe,
+        ));
         if verilator.untested {
             directives.push(format!(
                 "cargo::warning=simjig: {} is not a supported Verilator (supported: {}); \
@@ -654,6 +647,24 @@ impl Dut {
     }
 }
 
+/// Checks the verilated model against what the emitter placed: the header's ports, each
+/// probe against the scope table (`syms`), and the DPI exports against the other DUTs of
+/// this build script. Returns the header's ports.
+fn check_model(
+    env: &BuildEnv,
+    config: &DutConfig,
+    prefix: &str,
+    obj_dir: &Path,
+    placed: &emit::Placed,
+) -> Result<Vec<HeaderPort>, Error> {
+    let header_ports = header::read_header_ports(&verilator::output_file(obj_dir, prefix, ".h"))?;
+    header::check_ports(&header_ports, &placed.ports)?;
+    crate::syms::check_probes(&config.name, obj_dir, prefix, &placed.probes)?;
+    let dpi_header = verilator::output_file(obj_dir, prefix, "__Dpi.h");
+    script::claim_dpi_exports(env, config, prefix, header::read_dpi_exports(&dpi_header)?)?;
+    Ok(header_ports)
+}
+
 /// `std::path::absolute` fails only on an empty path, which `validate` then rejects.
 fn absolute(p: impl AsRef<Path>) -> PathBuf {
     let p = p.as_ref();
@@ -664,13 +675,18 @@ fn absolute(p: impl AsRef<Path>) -> PathBuf {
 /// (replaced in place by an upgrade, while `PATH` stays the same) and the tracked
 /// variables.
 ///
-/// `deps` must not list the generated inputs in the cache's `inputs/` (the `.vlt`, the
-/// wrapper, stored `verilator_input`s): they derive from the configuration and the
-/// sources, which are tracked already, and this run may have just written them, after
-/// the build script started, which Cargo would take as a change on the next build.
-fn rerun_directives(verilator: &Verilator, deps: &[PathBuf], recipe: &CppRecipe) -> Vec<String> {
+/// The `deps` under `generated` (the cache's `inputs/`: the `.vlt`, the wrapper, stored
+/// `verilator_input`s) are left out: they derive from the configuration and the sources,
+/// which are tracked already, and this run may have just written them, after the build
+/// script started, which Cargo would take as a change on the next build.
+fn rerun_directives(
+    verilator: &Verilator,
+    deps: &[PathBuf],
+    generated: &Path,
+    recipe: &CppRecipe,
+) -> Vec<String> {
     let files = std::iter::once(&verilator.exe)
-        .chain(deps)
+        .chain(deps.iter().filter(|d| !d.starts_with(generated)))
         .chain(&recipe.global_sources)
         .chain(&recipe.model_sources)
         .chain(&recipe.include_dirs);
@@ -709,7 +725,18 @@ mod tests {
             verilator_root: None,
             untested: false,
         };
-        let reruns = rerun_directives(&verilator, &[], &CppRecipe::default());
+        let stored = PathBuf::from("/c/inputs/ab/V.vlt");
+        let reruns = rerun_directives(
+            &verilator,
+            &[stored.clone(), PathBuf::from("/r/a.sv")],
+            Path::new("/c/inputs"),
+            &CppRecipe::default(),
+        );
+        assert!(reruns.contains(&"cargo::rerun-if-changed=/r/a.sv".to_owned()));
+        assert!(
+            !reruns.contains(&format!("cargo::rerun-if-changed={}", stored.display())),
+            "stored generated inputs are not reruns: {reruns:?}"
+        );
         assert!(reruns.contains(&"cargo::rerun-if-changed=/opt/v/bin/verilator".to_owned()));
         assert!(reruns.contains(&"cargo::rerun-if-env-changed=SIMJIG_VERILATOR".to_owned()));
         assert!(

@@ -49,3 +49,6 @@ the public API, the generated code or simulation semantics.
   `<file>:<line>:<col>: <message> (Verilator <version> JSON at <path>)`. A type error
   reached from a port names the port and its declaration, and an unpacked struct or union
   port says to declare the type `packed`.
+- `Error::Command` leads with what the run was for (new field `what`, e.g. ``JSON pass for
+  DUT `shreg` ``, ``verilating DUT `x` ``) and ends with the command line; its `status` is
+  now the exit code (`Option<i32>`, `None` for a signal) instead of a string.

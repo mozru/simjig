@@ -242,7 +242,8 @@ pub(crate) fn layout_check(
     })?;
     let mut cmd = verilator.command();
     cmd.args(layout_check_args(config, generated, &check.module, &file));
-    verilator::run(&mut cmd).map(|_| ())
+    let what = format!("the layout check of DUT `{}`", config.name);
+    verilator::run(&mut cmd, &what).map(|_| ())
 }
 
 fn layout_check_args(

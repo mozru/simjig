@@ -91,8 +91,10 @@ impl Cache {
     }
 
     /// Returns Verilator's output for `args`, running Verilator only on a miss.
+    /// `dut` names the DUT in a failure message.
     pub(crate) fn verilate(
         &self,
+        dut: &str,
         verilator: &Verilator,
         args: &[String],
         include_dirs: &[PathBuf],
@@ -116,7 +118,7 @@ impl Cache {
         let obj = work.join("obj");
         let mut cmd = verilator.command();
         cmd.arg("-Mdir").arg(&obj).args(args);
-        if let Err(e) = verilator::run(&mut cmd) {
+        if let Err(e) = verilator::run(&mut cmd, &format!("verilating DUT `{dut}`")) {
             remove_best_effort(&work);
             return Err(e);
         }

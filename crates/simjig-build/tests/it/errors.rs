@@ -30,11 +30,15 @@ fn verilator_errors_name_the_command_and_file() {
     );
     assert!(stderr.contains("%Error"), "{stderr}");
     assert_eq!(path.as_deref(), Some(broken.as_path()));
+    let msg = err.to_string();
     assert!(
-        err.to_string()
-            .contains(&format!("on `{}`", broken.display())),
-        "{err}"
+        msg.starts_with(&format!(
+            "JSON pass for DUT `broken` failed (exit status: 1) on `{}`",
+            broken.display()
+        )),
+        "{msg}"
     );
+    assert!(msg.ends_with(&format!("\ncommand: {command}")), "{msg}");
 
     let models = s.path().join("cache/models");
     assert_eq!(

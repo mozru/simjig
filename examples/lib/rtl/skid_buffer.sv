@@ -10,6 +10,14 @@
 // - load, skid full:  skid -> out (up.ready was low, so nothing is taken from up);
 // - load, skid empty: up -> out when up.valid, else out empties;
 // - no load: a beat taken from up (up.valid && up.ready) goes into the skid.
+//
+// Reset (`rst`, synchronous, active high) empties both registers and beats the load and
+// the skid write at the same edge. `up.ready` is not gated by `rst`: from the first reset
+// edge on, the skid is empty, so `up.ready` reads high while `rst` is still high, and a
+// beat `up` offers at a reset edge looks taken but is discarded. A source must therefore
+// be reset with the buffer (the same `rst`) or ignore handshakes while `rst` is high.
+// Gating `up.ready` with `rst` would hide this, at the cost of a combinational path from
+// `rst` to an output that every other path here avoids.
 module skid_buffer #(
     parameter int WIDTH = 8
 ) (

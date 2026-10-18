@@ -77,6 +77,15 @@ A full FIFO takes a push only in a cycle that also pops; an empty FIFO ignores a
 one `Fifo<T>` struct, so one driver, monitor and model serve both. The monitor's model
 honours `rst` too: a reset edge discards its entries, so any test may reset mid-run.
 
+**To test a plain FIFO of your own, copy `tests/sync_fifo.rs`.** `Fifo<T>` and the
+`Payload` bound are there only because this crate builds two models of one FIFO: with one
+model, use its `Dut` handles directly and its payload type in `Model`, and keep the rest
+(the monitor, `reset`, `cycle`, the producer and consumer). `tests/async_fifo.rs` is the
+one to copy for a dual-clock FIFO.
+
+While `empty`, an FWFT `rd_data` is stale and means nothing; a registered `rd_data` reads
+0 from a reset until the first pop. Reset beats a `push` or `pop` at the same edge.
+
 | Test | Checks |
 |---|---|
 | `random_traffic_matches_the_model`, `random_items_match_the_model` | 2000 cycles of bursty pushes and pops against the model (`count`, `full`, `empty`, `rd` every edge); then a drain; every corner reached (full, empty, a dropped push, push with pop while full) |
@@ -94,6 +103,10 @@ honours `rst` too: a reset edge discards its entries, so any test may reset mid-
 cuts every combinational path between its sides, moving one beat per cycle while `down`
 is ready. Its ports are `stream_if` modports (`rtl/stream_if.sv`): `up` is a
 `stream_if.sink`, `down` a `stream_if.source`.
+
+Reset beats a load at the same edge, but `up.ready` is not gated by it: it reads high
+while `rst` is high, so a source must share the buffer's reset (or ignore handshakes
+during it); `rtl/skid_buffer.sv` says why.
 
 A Verilator top cannot have interface ports, so `build.rs` binds each port to an
 interface instance in the generated wrapper. `stream_if` has its own `WIDTH` parameter,
@@ -141,7 +154,8 @@ an `In<Bit>` the testbench writes, `dut.up.ready` an `Out<Bit>` it reads.
   priority pointer. At each edge with a grant the pointer moves just past the winner.
 - `hold`: while high, the pointer stays on the winner, so the current grantee keeps the
   grant for as long as it requests (a lock for multi-cycle transfers).
-- Synchronous, active-low `rst_n` points the priority at requester 0.
+- Synchronous, active-low `rst_n` points the priority at requester 0. `gnt` is not
+  gated by it: requesters must ignore `gnt` while `rst_n` is low.
 
 The testbench's monitor checks every cycle that `gnt` is one-hot or zero, goes only to a
 requester and is non-zero whenever something requests, and compares it with a Rust model
@@ -173,8 +187,9 @@ of the pointer (`PointerModel`). The tests add:
   inconsistent: `wrst_n` alone zeroes the write pointer while the read pointer keeps its
   value, `rempty` drops once the zero crosses, and the read side pops entries nobody
   wrote. With both asserted, both sides are empty from the moment the second falls.
-- `wfull` and `rempty` are pessimistic: each sees the other side's pointer three of its
-  own edges after it moved.
+- `wfull` and `rempty` are pessimistic: each rises at once on its own side, and falls
+  at the third edge of its own clock after the other side's pointer moved (two
+  synchronizer flops, then the flag's flop). While `rempty`, `rdata` is stale.
 
 The testbench starts two kernel clocks with unrelated periods and resets the FIFO with
 `reset_both`: both resets fall at once, and each rises at a falling edge of its own clock
@@ -182,8 +197,10 @@ The testbench starts two kernel clocks with unrelated periods and resets the FIF
 with random stall runs, and a write monitor and a read monitor around a scoreboard
 `Queue` with room for exactly `DEPTH` entries. A write accepted on a full FIFO overflows
 the scoreboard; a read on an empty one finds it empty; every read is checked for order and
-data, and the test waits (under `with_timeout`) until all 1000 items are read. A reset
-empties the scoreboard, as it empties the FIFO.
+data. The test ends (under `with_timeout`) once the writer has written its 1000 items and
+the scoreboard is empty, and checks that every accepted write was either read back or
+discarded by a reset (`reads + flushed == writes`): a reset empties the scoreboard, as it
+empties the FIFO.
 
 These tests are 2-state and zero-delay: a synchronizer never goes metastable and a
 pointer is never sampled mid-change, so they check the protocol (order, loss, both flags'

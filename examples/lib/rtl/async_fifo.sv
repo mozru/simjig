@@ -6,22 +6,32 @@
 // pointers differing only in their top two Gray bits is full. A Gray pointer changes one
 // bit per increment, so a synchronizer that samples it mid-change sees either the old or
 // the new value, never a mix. The crossed pointer is therefore stale but never wrong:
-// `wfull` and `rempty` are pessimistic (they may stay asserted a few cycles after the
-// other side made room or wrote) and never optimistic.
+// `wfull` and `rempty` are pessimistic and never optimistic.
+//
+// Flag latency, in edges of the flag's own clock:
+// - a flag rises at once: `wfull` after the `wclk` edge of the write that fills the FIFO,
+//   `rempty` after the `rclk` edge of the read that empties it;
+// - a flag falls at the 3rd edge after the other side moved (two synchronizer flops, then
+//   the flag's flop): `rempty` at the 3rd `rclk` edge after the `wclk` edge of a write,
+//   `wfull` at the 3rd `wclk` edge after the `rclk` edge of a read (with no edges of the
+//   two clocks at the same instant). In silicon a synchronizer may resolve one edge
+//   later, so 3 or 4; in this 2-state model it is always 3.
 //
 // Write side (`wclk`): a write happens at a rising edge with `winc && !wfull`.
 // Read side (`rclk`): `rdata` shows the oldest entry while `!rempty` (first-word
-// fall-through); `rinc && !rempty` at a rising edge pops it.
+// fall-through); `rinc && !rempty` at a rising edge pops it. While `rempty`, `rdata` is
+// stale (the slot the next write fills) and means nothing; the memory is not reset.
 //
-// Reset: each side has its own asynchronous, active-low reset (`wrst_n`, `rrst_n`). The
-// two must be asserted together (their low periods overlap), as in Cummings' design, and
-// each released synchronously to its own clock. Each reset clears its own pointer and the
-// synchronizer that carries the other side's pointer in, so one reset alone leaves the
-// pointers inconsistent: `wrst_n` alone zeroes the write pointer while the read pointer
-// keeps its value, so once the zero crosses over `rempty` drops (unless the read pointer
-// happened to be zero) and the read side pops entries nobody wrote. With both low together,
-// both pointers and both synchronizers are zero, and both sides are empty from the moment
-// the second reset falls until the first write.
+// Reset: each side has its own asynchronous, active-low reset (`wrst_n`, `rrst_n`), which
+// clears its side's pointer, flag and synchronizer the instant it falls, with no clock
+// edge. The two must be asserted together (their low periods overlap), as in Cummings'
+// design, and each released synchronously to its own clock. Each reset clears its own
+// pointer and the synchronizer that carries the other side's pointer in, so one reset
+// alone leaves the pointers inconsistent: `wrst_n` alone zeroes the write pointer while
+// the read pointer keeps its value, so once the zero crosses over `rempty` drops (unless
+// the read pointer happened to be zero) and the read side pops entries nobody wrote. With
+// both low together, both pointers and both synchronizers are zero, and both sides are
+// empty from the moment the second reset falls until the first write.
 module async_fifo #(
     parameter int unsigned WIDTH = 8,
     parameter int unsigned DEPTH = 16  // a power of 2, at least 2

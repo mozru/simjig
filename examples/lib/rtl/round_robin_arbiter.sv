@@ -8,7 +8,11 @@
 // current grantee keeps the grant for as long as it requests (a lock for multi-cycle
 // transfers).
 //
-// Reset is synchronous and active low; it points the priority at requester 0.
+// Reset is synchronous and active low; it points the priority at requester 0, and beats
+// a grant (and `hold`) at the same edge. `gnt` is not gated by `rst_n`: it stays live
+// during reset, granting from the pointer as it is (from 0 after the first reset edge),
+// while the pointer does not move. A requester must ignore `gnt` while `rst_n` is low;
+// gating it would put `rst_n` on the combinational `req`-to-`gnt` path.
 module round_robin_arbiter #(
     parameter int unsigned N = 4
 ) (

@@ -8,8 +8,11 @@
 //   elaboration with `$fatal` (IEEE 1800-2023 §20.11), which Verilator 5.052 reports as
 //   a USERFATAL warning: fatal unless the build passes `-Wno-fatal`.
 // - FWFT: first-word fall-through. 1: `rd_data` shows the head entry whenever `!empty`,
-//   and `pop` consumes it. 0: `rd_data` is a register loaded by a pop, so the entry a pop
-//   removes appears on `rd_data` after that clock edge and holds until the next pop.
+//   and `pop` consumes it; while `empty` it is stale (the slot the next push will write:
+//   an old entry, or never written) and means nothing. 0: `rd_data` is a register loaded
+//   by a pop, so the entry a pop removes appears on `rd_data` after that clock edge and
+//   holds until the next pop; reset clears it to zero, so it reads 0 from the reset edge
+//   until the first pop.
 //
 // Handshake, sampled at posedge clk:
 // - a push is taken when `push && (!full || pop)`: a full FIFO takes a push in the same
@@ -17,6 +20,9 @@
 // - a pop is taken when `pop && !empty`: an empty FIFO ignores it, even with a push in
 //   the same cycle (an entry is never pushed and popped in one cycle).
 // `count`, `full` and `empty` are registered state, never combinational from push/pop.
+//
+// Reset (`rst`, synchronous, active high) beats push and pop: at a reset edge both are
+// ignored, whatever their values, and the FIFO is empty after it.
 module sync_fifo #(
     parameter int WIDTH = 8,
     parameter int DEPTH = 4,

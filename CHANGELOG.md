@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Linux: models link. The build script now also emits `-lm`, `-lpthread` and (GNU
+  targets) `-lgcc` after the C++ standard library; before, every test that linked a
+  model failed on Linux with `undefined reference to symbol 'exp2@@GLIBC_2.17'`, and on
+  aarch64 then with `undefined reference to '__aarch64_ldadd4_acq_rel'`. No change on
+  macOS.
 - `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
   `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
   refused; `--threads 2147483648` is negative and left to Verilator's own error.

@@ -338,9 +338,16 @@ impl std::error::Error for Elapsed {}
 
 /// Runs `future` for at most `duration`; on timeout it is dropped (cancelled).
 ///
-/// A timeout due at the same time as the event the future waits for wins, because timers
-/// resume before that timestep's edges (cocotb behaves the same). If both are ready in
-/// the same poll, the future wins.
+/// Ties break as in cocotb 2.1, whose `with_timeout` is `select(Timer(timeout), trigger)`
+/// with the timeout's Timer armed first (golden `timeout_ties`):
+/// - the timeout's Timer registers before anything `future` waits on, and Timers due at
+///   the same time fire one at a time in registration order, so a `Timer` (inline, or in a
+///   task spawned just before) due when the timeout is loses to it;
+/// - Timers resume before that timestep's edges, so an edge or `cycles` due when the
+///   timeout is loses too;
+/// - a spawned task whose own Timer was registered *before* the timeout's finishes first
+///   (it runs, with what it wakes, before the timeout's Timer fires), so its result wins;
+/// - if both are ready in the same poll, the timeout wins.
 ///
 /// # Errors
 /// [`Elapsed`] if the timeout expired first.
@@ -354,13 +361,11 @@ pub async fn with_timeout<T>(
     let mut future = pin!(future);
     let mut timer = pin!(Timer::new(duration));
     std::future::poll_fn(|cx| {
-        if let Poll::Ready(v) = future.as_mut().poll(cx) {
-            return Poll::Ready(Ok(v));
-        }
+        // The timer first, so it registers before anything `future` waits on: see above.
         if timer.as_mut().poll(cx).is_ready() {
             return Poll::Ready(Err(Elapsed { after: duration }));
         }
-        Poll::Pending
+        future.as_mut().poll(cx).map(Ok)
     })
     .await
 }

@@ -17,3 +17,8 @@ the public API, the generated code or simulation semantics.
   each followed by every task it makes ready (and every task those wake), as cocotb runs
   its event loop after each Timer callback. Before, all of them woke together and tasks
   they woke ran after the last Timer task.
+- `with_timeout` breaks ties as cocotb 2.1 does (golden `timeout_ties`): the timeout's
+  Timer registers before the future's triggers and is checked first, so a `Timer`,
+  edge or `cycles` due exactly at the timeout now times out (a future's own `Timer` used
+  to win); a spawned task whose `Timer` was registered before the call still returns its
+  result.

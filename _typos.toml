@@ -1,6 +1,7 @@
 [default.extend-words]
 # HDL vocabulary that typos flags as misspellings.
 inout = "inout"
+dout = "dout"
 
 [files]
 # Verilator output committed as fixtures: its short node ids ("(ND)") are not words.

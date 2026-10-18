@@ -418,3 +418,23 @@ fn a_fields_trait_reads_and_builds_each_members_struct() {
     let one: bt::bt_a::Beat = <bt::bt_a::Beat as bt::BeatFields>::new(1, 0);
     assert_eq!(one.data, Bits::new(1));
 }
+
+/// A fields trait's associated type is not named like one of its supertraits'
+/// (`Packed::Raw`): `Self::Raw` would be ambiguous (E0221) and the sweep would not compile.
+#[test]
+fn a_fields_traits_types_are_not_named_like_a_supertraits() {
+    let (sweep, _) = files(
+        "fn",
+        &[
+            cases::nested_fields_member("fn_a", 8),
+            cases::nested_fields_member("fn_b", 16),
+        ],
+    );
+    let rw = sweep
+        .fields_traits
+        .iter()
+        .find(|f| f.name == "RwFields")
+        .unwrap();
+    let names: Vec<&str> = rw.types.iter().map(|a| a.name.as_str()).collect();
+    assert!(!names.contains(&"Raw"), "{names:?}");
+}

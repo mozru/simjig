@@ -28,7 +28,8 @@
 //!   types built like the signals' (concrete or associated);
 //! - **method names**: a trait method named like one of its supertraits' (`clone`, `fmt`;
 //!   for a fields trait also `Value`'s, `new` and another field's setter) gets `_`
-//!   appended (`clone_`), and its docs say so;
+//!   appended (`clone_`), and its docs say so; a fields trait's associated type named
+//!   like a supertrait's (`Packed::Raw`) is numbered (`Raw2`);
 //! - **runtime traits**: `Value`, `Vector` and `Packed`, re-exported by the sweep module
 //!   unless a shared type has the name, so a generic body's `use <sweep>::*;` brings every
 //!   bound into scope.
@@ -316,6 +317,10 @@ const VALUE_METHODS: &[&str] = &[
     "new",
 ];
 
+/// The associated types a [`FieldsTrait`] has from its supertraits (`Packed::Raw`, through
+/// `Value`): a field type of that name would make `Self::Raw` ambiguous (E0221).
+const VALUE_TYPES: &[&str] = &["Raw"];
+
 /// A field's method name: its own, or with `_` appended when it would be one of `taken`.
 fn method_name(field: &str, taken: &[&str]) -> String {
     if taken.contains(&field) {
@@ -530,7 +535,7 @@ impl<'a> Builder<'a> {
             .collect();
         let mut taken: Vec<&str> = VALUE_METHODS.to_vec();
         taken.extend(setters.iter().map(String::as_str));
-        let mut assoc = Namespace::default();
+        let mut assoc = Namespace::with_reserved(VALUE_TYPES);
         for (i, field) in first.iter().enumerate() {
             let field_raw: Vec<&'a RustType> = structs.iter().map(|(_, f)| &f[i].ty).collect();
             let ty = match self.typed(owners, &field_raw, &field.name) {

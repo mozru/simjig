@@ -337,3 +337,21 @@ pub fn all() -> Vec<Case> {
     cases.extend([struct_pipe(), iface_top(), producer(), wide()]);
     cases
 }
+
+/// `cases/sweep_fields`' `fn_top` at `W`.
+pub fn nested_fields_member(name: &str, w: u32) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/sweep_fields/design.sv")];
+    let design = json_pass(&JsonPassOpts {
+        sources: sources.clone(),
+        top: "fn_top".to_owned(),
+        params: vec![("W".into(), w.to_string())],
+        ..JsonPassOpts::default()
+    })
+    .unwrap_or_else(|e| panic!("{name}: {e}"));
+    Case {
+        name: name.to_owned(),
+        design,
+        config: CodegenConfig::default(),
+        sources,
+    }
+}

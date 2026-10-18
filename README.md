@@ -251,6 +251,63 @@ Verilator 5.052 does not check interfaces. Add the `timeunit`, or give the rest 
 `.verilator_args(["--timescale", "1ns/1ps"])`. The wrapper simjig generates for a DUT
 with interface ports is exempt: it takes the design's unit.
 
+### A parameter sweep
+Each build of one top is its own DUT (`Dut::new("pkt_small")...param("MAX_LEN", 4)`,
+`Dut::new("pkt_big")...param("MAX_LEN", 64)`), with its own generated module: its
+`Dut`, struct and enum types are distinct Rust types, even where they are equal in
+SystemVerilog. To write each test once, write it against a small trait of your own,
+implement the trait for each configuration's `Dut` (a short `macro_rules!` that holds
+only the impl), and keep one `#[simjig::test]` line per configuration. A failure then
+points at the generic test body, not at a macro call:
+
+```rust
+use simjig::bits::{Bit, Bits};
+use simjig::{In, Out};
+
+simjig::include_dut!(pkt_small);
+simjig::include_dut!(pkt_big);
+
+/// The signals whose types are the same in every configuration.
+#[derive(Clone, Copy)]
+struct Ports { clk: In<Bit>, valid: In<Bit>, data: In<Bits<8>>, hdr_valid: Out<Bit> }
+
+trait Parser: Copy + 'static {
+    const MAX_LEN: u32;
+    fn ports(self) -> Ports;
+    /// `hdr`'s struct type is generated per configuration: read it here.
+    fn hdr_len(self) -> u8;
+}
+
+macro_rules! parser {
+    ($m:ident) => {
+        impl Parser for $m::Dut {
+            const MAX_LEN: u32 = $m::Dut::MAX_LEN as u32;
+            fn ports(self) -> Ports {
+                Ports { clk: self.clk, valid: self.r#in.valid, data: self.r#in.data, hdr_valid: self.hdr_valid }
+            }
+            fn hdr_len(self) -> u8 { self.hdr.get().len.to_u128() as u8 }
+        }
+    };
+}
+parser!(pkt_small);
+parser!(pkt_big);
+
+async fn header_is_read<D: Parser>(dut: D) {
+    let p = dut.ports();
+    // ... drive p.valid and p.data on p.clk ...
+    assert_eq!(dut.hdr_len(), 3, "MAX_LEN {}", D::MAX_LEN); // a failure points here
+}
+
+#[simjig::test]
+async fn small_header(dut: pkt_small::Dut) { header_is_read(dut).await }
+#[simjig::test]
+async fn big_header(dut: pkt_big::Dut) { header_is_read(dut).await }
+```
+
+A port whose width follows a parameter (`logic [N-1:0]`) has a different `Bits<N>` per
+configuration: read it in the trait too (`fn count(self) -> u128`), or give the trait an
+associated type.
+
 ### Waves on failure
 A run is never traced while it first runs. When waves are asked for, the harness replays
 the test with the same seed in a child process, traces the last part of the run, checks

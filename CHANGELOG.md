@@ -4,6 +4,8 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- README: "A parameter sweep", writing each test once against a user trait
+  implemented for each configuration's `Dut`.
 - `simjig::now_display()` prints the current time in physical units without the
   precision (`now().display(ctx.precision())` needed `ctx`), and `simjig::log!(..)`
   prints a `format!` line prefixed with it and the running task:

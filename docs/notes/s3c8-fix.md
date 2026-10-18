@@ -49,3 +49,27 @@ The excerpt leads with every `%Error` line (at most 40) when the stderr is longe
 error, for scripts that print only `e.to_string().lines().next()`. The lint hint keyed
 off "no `%Error` except `Exiting due to .. warning(s)`", and `.. 1 error(s), N
 warning(s)` also ends in `warning(s)`: fixed (`error::is_error_line`).
+
+## Parameter sweeps: why documentation (c), not shared types (a) or a trait (b)
+- (b) A generated per-top trait (`PktParserPorts`) cannot have one signature per port:
+  a struct or enum port's type is generated per DUT (`pkt_small::Hdr`, `pkt_big::Hdr`),
+  and a parameter-sized port is `Bits<4>` in one and `Bits<64>` in another, so most
+  methods need associated types (`type Hdr: Packed`), and the interface bundles too.
+  The trait's shape would change with every parameter that reaches a width, which is
+  a new public abstraction in the generated code whose stability we cannot promise, plus
+  a naming rule for the trait and a home for it (each DUT's module is included
+  separately, so neither owns it).
+- (a) Shared package types need the generated modules of one build script to agree
+  across DUTs: compare the type IR of every DUT of a top, emit a third module both
+  include, change `include_dut!` (or add a second macro) so the shared module is
+  included once per crate, and keep `cargo simjig show`, the IR hash and the layout
+  check per DUT. That is a change to the generated code's layout and to the
+  include contract, larger than the reviewer's problem warrants, and it helps only when
+  the types are identical (the brief's own condition), not a width that follows a
+  parameter.
+- (c) The README's "A parameter sweep" shows a user trait implemented per `Dut` by a
+  macro that holds only the impl, generic test bodies, and one `#[simjig::test]` per
+  configuration: failure locations point at the generic body. Checked by compiling and
+  running it against the reviewer's two-config parser (both tests pass; a deliberately
+  wrong stimulus failed at `sweep.rs:66`, the generic body). Revisit (a) if sweeps
+  with many shared types become common.

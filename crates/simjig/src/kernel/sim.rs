@@ -247,6 +247,8 @@ impl Sim {
         let mut main = tasks::spawn_in(&k, None, "main", main, Location::caller());
         k.main.set(main.key());
         sched::run_loop(&k, self.time_limit);
+        // Handles are dropped inside polls, which settle them; this is a backstop.
+        tasks::settle_unrun_drops(&k, None);
         let result = main.take_result(&k);
         k.phase.set(Phase::Ended);
         drop(main);

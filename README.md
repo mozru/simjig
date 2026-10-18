@@ -132,7 +132,10 @@ What to keep in mind:
   the task in the background (cocotb's `start_soon`; it runs until its parent finishes),
   `.await` the handle, or `.cancel()` it. Only a handle dropped before its task ever ran,
   and never awaited, fails: dropping one whose task has run cancels it, as does a
-  combinator dropping a losing operand.
+  combinator dropping a losing operand. Leaving a handle's scope early (`?`, `return`)
+  drops it too: when that returns from the test's body, the run ends with the body's
+  result (its error, for `?`); anywhere else, `.cancel()` the handle first or spawn it
+  after the checks that may return.
 - **Writes are deposits.** `set` is applied after the next eval, so reading a signal right
   after setting it returns the old value, and a write right after `rising()` is not
   captured by that edge.

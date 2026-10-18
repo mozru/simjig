@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A `Task` handle dropped before its task ran no longer masks the test's own error:
+  dropped in the poll in which `main` returns (an early `return`, or `?` with the test's
+  error, including a `run_from_checkpoint` refusal), it no longer fails the run, which
+  ends with `main`'s result. Anywhere else it still fails as `Setup`, now when the poll
+  ends, naming every handle that poll dropped (with its `spawn` line), saying it was
+  dropped by `let _ = spawn(..)` or by leaving the scope early, and naming the fixes.
 - Breaking: `simjig_build::CacheStatus` and `simjig::SeedSource` are `#[non_exhaustive]`,
   so a `match` on them outside their crate needs a wildcard arm.
 - A model archive compiled from a verilation kept out of the cache (an input edited while

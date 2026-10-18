@@ -28,7 +28,7 @@ use super::models::Models;
 use super::recorder::{Recorder, TraceKind, TraceRecord};
 use super::signal::WriteLog;
 use super::slab::Key;
-use super::tasks::{ReadyQueue, TaskTable, gen16};
+use super::tasks::{ReadyQueue, TaskTable, UnrunDrop, gen16};
 use super::time::{Precision, SimTime};
 use super::waits::WaitTable;
 
@@ -87,6 +87,9 @@ pub(crate) struct Kernel {
     /// A combinator is dropping a cancelled operand: a `Task` handle dropped now is part
     /// of that cancellation, not the testbench's `let _ = spawn(..)` (`tasks::cascading`).
     pub(crate) cancelling_operand: Cell<bool>,
+    /// Handles dropped before their tasks ever ran, during the poll now running; settled
+    /// when it ends (`tasks::settle_unrun_drops`).
+    pub(crate) unrun_drops: RefCell<Vec<UnrunDrop>>,
     pub(crate) waits: RefCell<WaitTable>,
     pub(crate) log: RefCell<WriteLog>,
     /// Kernel clocks, in declaration order (the order coincident edges are logged in).
@@ -191,6 +194,7 @@ impl Kernel {
             main: Cell::new(None),
             main_done: Cell::new(false),
             cancelling_operand: Cell::new(false),
+            unrun_drops: RefCell::new(Vec::new()),
             failure: RefCell::new(None),
             recorder: RefCell::new(Recorder::default()),
             counters: Cell::new(KernelStats::default()),

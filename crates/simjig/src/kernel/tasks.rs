@@ -5,10 +5,12 @@
 //!   the task. Cancellation is *only* dropping its future; cleanup is synchronous `Drop`,
 //!   which may still write signals (through the write log) or release locks.
 //! - Dropping a handle whose task never ran, and which was never awaited, fails the run
-//!   (`FailureKind::Setup`, at the `spawn` call): that is `let _ = spawn(..)`, a driver that
-//!   silently never runs. [`Task::cancel`] is the deliberate form. Drops that are a side
-//!   effect of a larger cancellation are exempt (see `cascading`): a combinator cancelling
-//!   an operand, a task being cancelled, the run ending, a panic unwinding.
+//!   (`FailureKind::Setup`, at the `spawn` call) when the poll that dropped it ends: that is
+//!   `let _ = spawn(..)`, a driver that silently never runs. [`Task::cancel`] is the
+//!   deliberate form. Drops that are a side effect of a larger cancellation are exempt (see
+//!   `cascading`): a combinator cancelling an operand, a task being cancelled, the run
+//!   ending, a panic unwinding; so are drops in the poll in which `main` returns, whose
+//!   result (often the test's own error) ends the run (see `settle_unrun_drops`).
 //! - [`Task::detach`] hands ownership to the task's nearest ancestor that is still running
 //!   (its parent, unless the parent already completed). A task's detached children are
 //!   cancelled when it completes or is cancelled, so no task outlives its scope, even when
@@ -267,7 +269,8 @@ impl ReadyQueue {
 /// cocotb's `cocotb.start_soon(monitor())` keeps running on its own; here that is
 /// `spawn(..).detach()`. Dropping the handle instead, as `let _ = spawn(..)` does,
 /// cancels the task before it ever runs, so the run fails (`FailureKind::Setup`, pointing
-/// at this call) and records a
+/// at this call; not when `main` returns in that same poll, as with an early `return` or
+/// `?`, since the run ends there) and records a
 /// [`TraceKind::DroppedUnpolled`](crate::TraceKind::DroppedUnpolled). To cancel a task on
 /// purpose, call [`Task::cancel`].
 ///
@@ -386,7 +389,8 @@ pub async fn scope<T: 'static>(name: &str, future: impl Future<Output = T> + 'st
 /// it never loses a completed result to someone else.
 ///
 /// Dropping a handle that was never awaited, before its task ever ran, fails the run: the
-/// task would silently never run. Call [`detach`](Self::detach) to run it in the
+/// task would silently never run. The exception is the poll in which `main` returns (an
+/// early `return` or `?` from the test): the run ends there, with `main`'s result. Call [`detach`](Self::detach) to run it in the
 /// background, `.await` it, or [`cancel`](Self::cancel) it.
 #[must_use = "dropping an unawaited Task cancels it before it runs and fails the test \
               (`let _ = spawn(..)` does this); call .detach() to run it in the background, \
@@ -587,31 +591,86 @@ fn cascading(k: &Kernel) -> bool {
         || std::thread::panicking()
 }
 
-/// Fails the run for a task cancelled by dropping its handle before it ever ran.
+/// A handle dropped before its task ever ran, waiting for the end of the poll that dropped
+/// it (`settle_unrun_drops`).
+pub(crate) struct UnrunDrop {
+    name: String,
+    spawned_at: &'static Location<'static>,
+}
+
+/// Notes a task cancelled by dropping its handle before it ever ran; the poll that dropped
+/// it decides, when it ends, whether the run fails (`settle_unrun_drops`).
+#[cold]
+fn dropped_unpolled(k: &Kernel, key: Key, spawned_at: &'static Location<'static>) {
+    k.record(TraceKind::DroppedUnpolled, Some(key), 0, 0);
+    k.unrun_drops.borrow_mut().push(UnrunDrop {
+        name: k.task_name(key),
+        spawned_at,
+    });
+}
+
+/// Ends the poll of `key` (`None`: the end of the run loop): fails the run for the handles it dropped before their tasks
+/// ever ran, all named in one failure, unless that poll returned from `main`.
 ///
 /// A failure, not a warning: the usual cause is `let _ = spawn(..)` (rustc's `must_use`
 /// help suggests it), which cancels a driver or monitor before it does anything, and a
 /// warning on stderr is hidden by test runners that capture output, so the test would pass
 /// without the task (a false pass; correctness over ergonomics, constitution priorities).
-/// Dropping stays the one cancellation mechanism (DECISION §1): [`Task::cancel`] drops the
-/// future the same way, and says it is deliberate. The trace record keeps the event in run
-/// directories.
-#[cold]
-fn dropped_unpolled(k: &Kernel, key: Key, spawned_at: &'static Location<'static>) {
-    k.record(TraceKind::DroppedUnpolled, Some(key), 0, 0);
+///
+/// The exception is the poll in which `main` returns, typically an early `return` or `?`
+/// with the test's own error: that error is the run's result, not a `Setup` failure that
+/// masks it. No pass is false there: the run ends when `main` returns (`run_ready` polls
+/// nothing after it), so a detached task spawned in that poll would not have run either.
+/// Every other task gets no exception: a handle dropped in a child's last poll, had it been
+/// detached, would have run under the child's ancestors.
+///
+/// Waiting for the end of the poll is what lets every handle dropped together be named,
+/// and lets a panic or another failure of the same poll win. Dropping stays the one
+/// cancellation mechanism (DECISION §1): [`Task::cancel`] drops the future the same way,
+/// and says it is deliberate. The trace record keeps every event in run directories.
+pub(crate) fn settle_unrun_drops(k: &Kernel, key: Option<Key>) {
+    let drops = std::mem::take(&mut *k.unrun_drops.borrow_mut());
+    let Some(first) = drops.first() else { return };
+    if key.is_some() && k.main.get() == key && k.main_done.get() {
+        return;
+    }
+    let names: Vec<String> = drops
+        .iter()
+        .map(|d| {
+            format!(
+                "`{}` (spawned at {}:{})",
+                d.name,
+                d.spawned_at.file(),
+                d.spawned_at.line()
+            )
+        })
+        .collect();
+    let (handles, were) = if drops.len() == 1 {
+        ("the Task handle of", "was")
+    } else {
+        ("the Task handles of", "were")
+    };
     let message = format!(
-        "the Task handle of `{}` was dropped before the task ever ran, so it was cancelled \
-         and never ran (`let _ = spawn(..)` does this); the location is its `spawn` call",
-        k.task_name(key)
+        "{handles} {} {were} dropped before {} ran, so it was cancelled: by `let _ = \
+         spawn(..)`, or by leaving the handle's scope early (`?`, `return`, `break`); the \
+         location is the `spawn` call of `{}`",
+        names.join(", "),
+        if drops.len() == 1 {
+            "the task"
+        } else {
+            "the tasks"
+        },
+        first.name,
     );
     k.fail(
         FailureKind::Setup {
             message: message.clone(),
             help: "call .detach() on the handle to run the task in the background, .await it \
-                   for its result, or call .cancel() if cancelling it is intended",
+                   for its result, or call .cancel() if cancelling it is intended (before \
+                   an early return too, or spawn it after the checks that may return)",
         },
-        k.current.get(),
-        Some(spawned_at.into()),
+        key,
+        Some(first.spawned_at.into()),
         message,
     );
 }
@@ -767,6 +826,12 @@ fn poll_task(k: &Kernel, woken: Key) {
     k.current.set(previous);
     k.context.set(context);
     k.route.set(previous_route);
+    finish_poll(k, key, future, outcome);
+    settle_unrun_drops(k, Some(key));
+}
+
+/// Stores, completes or fails the task `key` after a poll returned `outcome`.
+fn finish_poll(k: &Kernel, key: Key, future: BoxFuture, outcome: std::thread::Result<Poll<()>>) {
     match outcome {
         Ok(Poll::Ready(())) => complete_task(k, key, future),
         Ok(Poll::Pending) => {

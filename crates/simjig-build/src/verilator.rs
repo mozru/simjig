@@ -1,13 +1,15 @@
 //! Finding Verilator, checking its version, and running it.
 //!
-//! The version gate ([`svtypes::version::SUPPORTED`], shared with the JSON front end and
-//! `cargo simjig doctor`) exists because simjig decodes Verilator's output and links
-//! against its runtime, whose formats change between releases.
+//! Where to look and which versions to accept are `svtypes::toolchain`'s rule, which
+//! `cargo simjig doctor` applies too. The version gate exists because simjig decodes
+//! Verilator's output and links against its runtime, whose formats change between
+//! releases.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use svtypes::toolchain::{self, Search, Verdict};
 use svtypes::version::VerilatorVersion;
 
 use crate::{BuildEnv, Error};
@@ -27,19 +29,32 @@ pub struct Verilator {
     /// `VERILATOR_ROOT` from the [`BuildEnv`], set for every Verilator run, so the
     /// executable finds the same installation whether or not the process has it.
     pub verilator_root: Option<PathBuf>,
+    /// Not a supported release, accepted because `SIMJIG_UNTESTED_VERILATOR=1`; the
+    /// build warns.
+    pub untested: bool,
 }
 
 impl Verilator {
-    /// Finds Verilator (`SIMJIG_VERILATOR`, then `$VERILATOR_ROOT/bin/verilator`, then
-    /// `PATH`), checks its version and asks it for its include directory.
+    /// Finds Verilator and checks its version by `svtypes::toolchain`'s rule
+    /// (`SIMJIG_VERILATOR`, then `$VERILATOR_ROOT/bin/verilator`, then `PATH`; a
+    /// supported release, or any release with `SIMJIG_UNTESTED_VERILATOR=1`), then asks
+    /// it for its include directory.
     pub fn locate(env: &BuildEnv) -> Result<Self, Error> {
-        let exe = find_exe(env)?;
+        let search = Search {
+            simjig_verilator: env.simjig_verilator.clone(),
+            verilator_root: env.verilator_root.clone(),
+            path: env.path.clone(),
+        };
+        let exe = toolchain::locate(&search).map_err(|e| Error::VerilatorNotFound {
+            searched: e.searched,
+        })?;
         let mut found = Self {
             exe,
             version: VerilatorVersion::new(0, 0),
             version_line: String::new(),
             include_dir: PathBuf::new(),
             verilator_root: env.verilator_root.clone(),
+            untested: false,
         };
         let out = run(found.command().arg("--version"))?;
         let version_line = String::from_utf8_lossy(&out.stdout)
@@ -48,12 +63,17 @@ impl Verilator {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        let version = VerilatorVersion::from_banner(&version_line)
-            .filter(|v| v.is_supported())
-            .ok_or_else(|| Error::UnsupportedVerilator {
-                path: found.exe.clone(),
-                found: version_line.clone(),
-            })?;
+        let (version, untested) = match toolchain::judge(&version_line, env.untested_verilator) {
+            Verdict::Supported(v) => (v, false),
+            Verdict::Untested(v) => (v, true),
+            Verdict::Refused(_) => {
+                return Err(Error::UnsupportedVerilator {
+                    path: found.exe.clone(),
+                    found: version_line,
+                });
+            }
+        };
+        found.untested = untested;
         let root = run(found.command().args(["--getenv", "VERILATOR_ROOT"]))?;
         let root = PathBuf::from(String::from_utf8_lossy(&root.stdout).trim());
         found.version = version;
@@ -76,31 +96,6 @@ impl Verilator {
             .map(|r| (OsString::from("VERILATOR_ROOT"), r.clone().into_os_string()))
             .collect()
     }
-}
-
-fn find_exe(env: &BuildEnv) -> Result<PathBuf, Error> {
-    let mut searched = Vec::new();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.extend(env.simjig_verilator.clone());
-    candidates.extend(env.verilator_root.as_ref().map(|r| r.join("bin/verilator")));
-    // An explicit choice that is wrong must fail, not silently fall through to PATH.
-    if let Some(p) = candidates.first() {
-        return if crate::env::is_executable(p) {
-            Ok(p.clone())
-        } else {
-            Err(Error::VerilatorNotFound {
-                searched: vec![p.clone()],
-            })
-        };
-    }
-    for dir in env.path_dirs() {
-        let p = dir.join("verilator");
-        if crate::env::is_executable(&p) {
-            return Ok(p);
-        }
-        searched.push(p);
-    }
-    Err(Error::VerilatorNotFound { searched })
 }
 
 /// Shell-quotes a command line for error messages, so it can be pasted into a terminal.

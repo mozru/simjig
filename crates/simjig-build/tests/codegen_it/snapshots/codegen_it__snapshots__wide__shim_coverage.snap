@@ -29,9 +29,9 @@ struct Traits {
         SIMJIG_SIGNAL(t, m.out_nib, "wide_top.out_nib", 8, SIMJIG_DIR_OUT, kRead);
         SIMJIG_SIGNAL(t, m.out_mode, "wide_top.out_mode", 3, SIMJIG_DIR_OUT, kRead);
         SIMJIG_SIGNAL(t, m.total, "wide_top.total", 8, SIMJIG_DIR_OUT, kRead);
-        SIMJIG_SIGNAL(t, m.rootp->wide_top__DOT__state, "wide_top.state", 3, SIMJIG_DIR_INTERNAL, kRead);
-        SIMJIG_SIGNAL(t, m.rootp->wide_top__DOT__knob, "wide_top.knob", 8, SIMJIG_DIR_INTERNAL, kReadWrite);
-        SIMJIG_SIGNAL(t, m.rootp->wide_top__DOT__u_acc__DOT__sum, "wide_top.u_acc.sum", 8, SIMJIG_DIR_INTERNAL, kRead);
+        SIMJIG_PROBE(t, m, "wide_top", "state", "wide_top.state", 3, kRead);
+        SIMJIG_PROBE(t, m, "wide_top", "knob", "wide_top.knob", 8, kReadWrite);
+        SIMJIG_PROBE(t, m, "wide_top.u_acc", "sum", "wide_top.u_acc.sum", 8, kRead);
     }
 };
 

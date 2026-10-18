@@ -80,7 +80,20 @@ const CI: &[Step] = &[
         args: &[],
         env: &[],
     },
+    // The C-level tests of the shared runtime (`pixi run cpp-tests`): tracing, coverage
+    // and per-model isolation, which no Rust test reaches.
+    Step {
+        program: "bash",
+        args: &[CPP_TESTS],
+        env: &[],
+    },
 ];
+
+/// `crates/simjig-build/cpp/tests/run.sh`, wherever `cargo xtask` is run from.
+const CPP_TESTS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../crates/simjig-build/cpp/tests/run.sh"
+);
 
 /// Runs `program` with `args` and extra `env`, echoing the command line first.
 fn run(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<(), String> {
@@ -172,6 +185,16 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    #[test]
+    fn ci_runs_the_cpp_tests() {
+        assert!(Path::new(super::CPP_TESTS).is_file());
+        assert!(
+            super::CI
+                .iter()
+                .any(|s| s.program == "bash" && s.args == [super::CPP_TESTS])
+        );
+    }
 
     /// ARCHITECTURE.md: `unsafe` exists only in named modules of `simjig`; every other
     /// crate root (library or binary) forbids it.

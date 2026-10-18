@@ -53,8 +53,11 @@ fn generated_files_reach_out_dir_verilator_and_the_compiler() {
         .out_dir
         .join(format!("simjig/{}_shim.cpp", built.prefix));
     let shim = std::fs::read_to_string(shim).unwrap();
-    // The probe compiled only because the `.vlt` made the member public.
-    assert!(shim.contains("struct_pipe__DOT__s1_valid"), "{shim}");
+    // The probe is found at create in the scope table that the `.vlt` fills.
+    assert!(
+        shim.contains(r#"SIMJIG_PROBE(t, m, "struct_pipe", "s1_valid""#),
+        "{shim}"
+    );
     assert!(exports_vtable(&env.out_dir, &built));
 }
 
@@ -184,4 +187,31 @@ fn ir_ports_rejects_a_zero_width_port() {
         err.contains("`count`") && err.contains("zero-width"),
         "{err}"
     );
+}
+
+/// The shim's `kCoverage` is the coverage Verilator builds: a coverage kind among the
+/// extra arguments turns it on, an option that only tunes coverage does not (its model has
+/// no counters and its link would need `verilated_cov.cpp` for nothing).
+#[test]
+fn shim_coverage_follows_the_extra_arguments() {
+    let rtl = crate::support::fixtures().join("rtl");
+    let design = json_pass(&JsonPassOpts {
+        sources: vec![rtl.join("counter.sv")],
+        include_dirs: vec![rtl.clone()],
+        top: "counter".into(),
+        ..JsonPassOpts::default()
+    })
+    .unwrap();
+    let shim = |args: &[&str]| {
+        let config = Dut::new("counter")
+            .sources([rtl.join("counter.sv")])
+            .top("counter")
+            .verilator_args(args.iter().copied())
+            .config()
+            .clone();
+        codegen_emitter(&design, &config).unwrap().shim_cpp.unwrap()
+    };
+    assert!(shim(&["--coverage-line"]).contains("kCoverage = true;"));
+    assert!(shim(&["--coverage-max-width", "8"]).contains("kCoverage = false;"));
+    assert!(shim(&["--coverage", "--no-coverage"]).contains("kCoverage = false;"));
 }

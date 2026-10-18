@@ -7,7 +7,6 @@
 #include "Vtc_hier__Syms.h"
 #include "Vtc_hier___024root.h"
 #include "Vtc_plain.h"
-#include "Vtc_plain___024root.h"
 #include "Vtc_timing.h"
 #include "simjig_model.h"
 
@@ -44,7 +43,7 @@ struct PlainTraits {
     static constexpr bool kCoverage = false;
     static void bind(Vtc_plain& m, simjig::SignalTable& t) {
         bind_tc(m, t);
-        SIMJIG_SIGNAL(t, m.rootp->tc__DOT__u__DOT__r, "tc.u.r", 1, SIMJIG_DIR_INTERNAL, kRead);
+        SIMJIG_PROBE(t, m, "tc.u", "r", "tc.u.r", 1, kRead);
     }
 };
 
@@ -59,7 +58,7 @@ struct BadProbeTraits {
     static constexpr bool kCoverage = false;
     static void bind(Vtc_plain& m, simjig::SignalTable& t) {
         bind_tc(m, t);
-        SIMJIG_SIGNAL(t, m.rootp->tc__DOT__u__DOT__r, "tc.u.r", 5, SIMJIG_DIR_INTERNAL, kRead);
+        SIMJIG_PROBE(t, m, "tc.u", "r", "tc.u.r", 5, kRead);
     }
 };
 

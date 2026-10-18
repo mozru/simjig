@@ -195,6 +195,42 @@ pub(crate) struct Inputs<'a> {
     pub(crate) model_sources: &'a [PathBuf],
 }
 
+/// The shim and the link were set up for [`DutConfig::features`]; Verilator's own
+/// switches say what it built. They differ only when an argument simjig cannot read (an
+/// option file, `-f`) changed tracing or coverage, and the build then stops here instead
+/// of linking a shim that disagrees with its model.
+fn check_features(config: &DutConfig, mk: &ClassesMk) -> Result<(), Error> {
+    let want = config.features();
+    for (switch, built, wanted, how) in [
+        (
+            "VM_COVERAGE",
+            mk.on("VM_COVERAGE"),
+            want.coverage,
+            "`.coverage(..)` and the \
+          `--coverage*` arguments",
+        ),
+        (
+            "VM_TRACE_FST",
+            mk.on("VM_TRACE_FST"),
+            want.trace_fst,
+            "`.trace_fst(..)`",
+        ),
+    ] {
+        if built != wanted {
+            return Err(Error::Config {
+                dut: config.name.clone(),
+                msg: format!(
+                    "Verilator built the model with {switch} = {}, but {how} say {}; an \
+                     option file (`-f`) must not change tracing or coverage",
+                    u8::from(built),
+                    u8::from(wanted)
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A static library, compiled or found in the cache.
 struct Archive {
     dir: PathBuf,
@@ -207,6 +243,7 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     let mk_path = verilator::output_file(i.obj_dir, i.prefix, "_classes.mk");
     let text = std::fs::read_to_string(&mk_path).map_err(Error::io("reading", &mk_path))?;
     let mk = ClassesMk::parse(&mk_path, &text)?;
+    check_features(i.config, &mk)?;
     if mk.global.iter().any(|c| c == "verilated_covergroup") {
         script::claim_covergroups(i.env, i.config, i.prefix, mk.on("VM_COVERAGE"))?;
     }
@@ -616,6 +653,7 @@ mod tests {
             debug: false,
             path: None,
             verilator_root: None,
+            untested_verilator: false,
             simjig_verilator: None,
             simjig_cache_dir: None,
             simjig_ccache: None,

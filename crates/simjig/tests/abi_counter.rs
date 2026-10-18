@@ -225,8 +225,8 @@ mod with_models {
 
     #[test]
     fn rust_mirror_matches_cpp_layout() {
-        let mut got = [0u32; 8];
-        assert_eq!(simjig_rt_abi_layout(got.as_mut_ptr(), got.len()), 8);
+        let mut got = [0u32; 10];
+        assert_eq!(simjig_rt_abi_layout(got.as_mut_ptr(), got.len()), 10);
         let want = [
             size_of::<ModelVtable>(),
             align_of::<ModelVtable>(),
@@ -236,6 +236,8 @@ mod with_models {
             align_of::<abi::Msg>(),
             size_of::<CreateOpts>(),
             align_of::<CreateOpts>(),
+            size_of::<abi::CovRun>(),
+            align_of::<abi::CovRun>(),
         ]
         .map(|v| u32::try_from(v).unwrap());
         assert_eq!(got, want);
@@ -265,7 +267,7 @@ mod with_models {
             .map(|f| (f.ty.to_owned(), f.name.to_owned(), f.offset, f.size))
             .collect();
         assert_eq!(rust, cpp);
-        assert_eq!(cpp.len(), 47);
+        assert_eq!(cpp.len(), 49);
     }
 
     #[test]

@@ -21,6 +21,8 @@ mod __private;
 #[expect(unreachable_pub, reason = "test helpers written as for a library")]
 mod cases;
 pub mod compile;
+mod coverage;
 mod errors;
+mod probes;
 mod snapshots;
 mod verilator;

@@ -3,11 +3,15 @@
 //! The shim defines the traits struct `simjig::Vtable` needs and exports
 //! `simjig_vtable_<prefix>`. Its signal table is built from the same [`Lowered`] slots as
 //! the Rust `Dut::SIGNALS`, in the same order, so entry `i` of the C table is slot `i`.
-//! `SIMJIG_SIGNAL` statically asserts that each member's C++ type and size match the
-//! width, so a drift between the IR and the Verilated header fails the C++ build. That only
-//! sees the storage class, so `create` also checks every probe's exact width (and address)
-//! against Verilator's `public_flat` metadata and fails with a message naming the probe
-//! (`simjig::check_probe` in `cpp/simjig_rt.cpp`).
+//! Ports are model members: `SIMJIG_SIGNAL` statically asserts that each member's C++
+//! type and size match the width, so a drift between the IR and the Verilated header fails
+//! the C++ build. Probes are not named as C++ members at all: whether Verilator inlines a
+//! module (and so where, and under which name, its variables live) depends on its size,
+//! its uses, classes, metacomments and flags (V3Inline.cpp). `SIMJIG_PROBE` instead finds
+//! each probe at create through the scope table that `public_flat_rd`/`_rw` fills, which
+//! holds the variable's address in every inlining mode, and checks its storage class, its
+//! exact width and that it is packed (`simjig::find_probe` in `cpp/simjig_rt.cpp`). A
+//! mismatch fails create with a message naming the probe.
 //!
 //! [`ShimOptions`] must match the Verilator command line:
 //! - `kTiming` must be true exactly when the model is verilated with `--timing`: the runtime
@@ -15,10 +19,10 @@
 //!   abort the process (`docs/notes/abi.md`, open issue 5). Nothing can check this one.
 //! - `kTraceFst` turns on the trace entries. `simjig_model.h` statically asserts it equals
 //!   the model's `traceCapable`, so a mismatch fails the C++ build.
-//! - `kCoverage` turns on the coverage entries, which read the counter arrays declared in
-//!   `<prefix>___024root.h` and `<prefix>__Syms.h`, so the shim then includes both. Without
-//!   `--coverage` the shim does not compile with it set (no `__Vcoverage` to size), unless the
-//!   design has no coverage points at all.
+//! - `kCoverage` turns on the coverage entries. The shim then includes `<prefix>___024root.h`
+//!   and `<prefix>__Syms.h`, whose types bound the symbol table object in which `cov_runs`
+//!   keeps the counters every point reports (`VL_COVER_INSERT`, `simjig_vl_config.h`). It
+//!   must match the model's `VM_COVERAGE`, which the compile step checks.
 //!
 //! Models built without trace or coverage need neither `verilated_fst_c.cpp` nor
 //! `verilated_cov.cpp` at link time (`docs/notes/tracecov.md`).
@@ -75,14 +79,8 @@ pub fn emit_shim(lowered: &Lowered, opts: &ShimOptions) -> Result<String, Error>
         lowered.top, lowered.producer
     ));
     w.line(format!("#include \"{prefix}.h\""));
-    let probes = lowered
-        .signals
-        .iter()
-        .any(|s| matches!(s.target, SignalTarget::Probe { .. }));
-    if probes || opts.coverage {
-        w.line(format!("#include \"{prefix}___024root.h\""));
-    }
     if opts.coverage {
+        w.line(format!("#include \"{prefix}___024root.h\""));
         w.line(format!("#include \"{prefix}__Syms.h\""));
     }
     w.line("#include \"simjig_model.h\"");
@@ -134,10 +132,6 @@ fn bind_line(s: &Signal) -> Result<String, Error> {
             "unpacked arrays have no simjig_signal descriptor yet (one packed value per entry)",
         ));
     }
-    let member = match &s.target {
-        SignalTarget::Port { cpp_member } => format!("m.{cpp_member}"),
-        SignalTarget::Probe { root_member, .. } => format!("m.rootp->{root_member}"),
-    };
     let (dir, access) = match s.access {
         Access::In => ("SIMJIG_DIR_IN", "kReadWrite"),
         Access::Out => ("SIMJIG_DIR_OUT", "kRead"),
@@ -145,11 +139,20 @@ fn bind_line(s: &Signal) -> Result<String, Error> {
         Access::PublicRd => ("SIMJIG_DIR_INTERNAL", "kRead"),
         Access::PublicRw => ("SIMJIG_DIR_INTERNAL", "kReadWrite"),
     };
-    Ok(format!(
-        "SIMJIG_SIGNAL(t, {member}, {}, {}, {dir}, {access});",
-        c_string(&s.name),
-        s.width
-    ))
+    Ok(match &s.target {
+        SignalTarget::Port { cpp_member } => format!(
+            "SIMJIG_SIGNAL(t, m.{cpp_member}, {}, {}, {dir}, {access});",
+            c_string(&s.name),
+            s.width
+        ),
+        SignalTarget::Probe { scope, var, .. } => format!(
+            "SIMJIG_PROBE(t, m, {}, {}, {}, {}, {access});",
+            c_string(scope),
+            c_string(var),
+            c_string(&s.name),
+            s.width
+        ),
+    })
 }
 
 #[cfg(test)]

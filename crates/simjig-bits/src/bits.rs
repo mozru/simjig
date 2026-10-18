@@ -325,6 +325,19 @@ impl<const N: u32> PartialEq<u128> for Bits<N> {
     }
 }
 
+/// `4 == x` as well as `x == 4`, so `assert_eq!(4, x.get())` compiles: an integer equals a
+/// value when it is the same number (a negative integer equals none).
+macro_rules! int_eq_bits {
+    ($($int:ty)*) => {$(
+        impl<const N: u32> PartialEq<Bits<N>> for $int {
+            fn eq(&self, other: &Bits<N>) -> bool {
+                u128::try_from(*self).is_ok_and(|v| *other == v)
+            }
+        }
+    )*};
+}
+int_eq_bits!(u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize);
+
 impl<const N: u32> PartialOrd<u128> for Bits<N> {
     fn partial_cmp(&self, other: &u128) -> Option<core::cmp::Ordering> {
         Some(self.0.cmp(other))

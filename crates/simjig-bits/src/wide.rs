@@ -219,6 +219,18 @@ impl<const N: u32, const W: usize> PartialEq<u128> for WideBits<N, W> {
     }
 }
 
+/// `4 == x` as well as `x == 4` (see `Bits`).
+macro_rules! int_eq_wide {
+    ($($int:ty)*) => {$(
+        impl<const N: u32, const W: usize> PartialEq<WideBits<N, W>> for $int {
+            fn eq(&self, other: &WideBits<N, W>) -> bool {
+                u128::try_from(*self).is_ok_and(|v| *other == v)
+            }
+        }
+    )*};
+}
+int_eq_wide!(u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize);
+
 impl<const N: u32, const W: usize> PartialOrd<u128> for WideBits<N, W> {
     fn partial_cmp(&self, other: &u128) -> Option<Ordering> {
         Some(self.cmp(&Self::from(*other)))

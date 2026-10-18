@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- An integer compares equal to a `Bits<N>`, `WideBits` or `Bit` from the left too
+  (`PartialEq<Bits<N>> for u8 ... u128, i8 ... i128, usize, isize`, and `bool == Bit`),
+  so `assert_eq!(4, x.get())` compiles. A negative integer equals no value.
 - A model that fails to verilate only because of lint warnings gets a `hint:` naming the
   waivers: a `lint_off` comment, `.verilator_args(["-Wno-<CODE>"])`, or
   `.verilator_args(["-Wno-fatal"])`.

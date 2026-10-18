@@ -66,6 +66,11 @@ pub(crate) fn forget() {
     LAST.set(None);
 }
 
+/// Puts back a location taken with [`take`], for a panic still unwinding.
+pub(crate) fn restore(location: Option<&'static SourceLocation>) {
+    LAST.set(location);
+}
+
 /// The location of the panic that `catch_unwind` just caught, if the hook saw one (a
 /// `resume_unwind` skips the hook).
 pub(crate) fn take() -> Option<&'static SourceLocation> {

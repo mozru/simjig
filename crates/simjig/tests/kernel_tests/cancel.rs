@@ -212,3 +212,32 @@ fn a_panic_in_drop_cleanup_is_a_task_panic() {
     assert!(f.message.contains("cleanup failed"), "{f}");
     assert_clean(&d.sim);
 }
+
+#[test]
+fn a_cleanup_panic_while_unwinding_does_not_mask_the_first_panic() {
+    struct PanicOnDrop;
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("cleanup failed");
+        }
+    }
+    let mut d = dut();
+    let f = d
+        .sim
+        .run(async {
+            let _b = spawn("b", async {
+                let _p = PanicOnDrop;
+                Timer::new(ticks(100)).await;
+            });
+            Timer::new(ticks(1)).await;
+            // Unwinding out of `main` drops `_b`, whose cleanup panics in turn.
+            panic!("main failed");
+        })
+        .unwrap_err();
+    assert_eq!(f.task.as_deref(), Some("main"), "{f}");
+    assert!(f.message.contains("main failed"), "{f}");
+    let location = f.location.unwrap();
+    assert!(location.file().ends_with("cancel.rs"), "{f}");
+    assert_eq!(location.line(), line!() - 7, "the `panic!` line: {f}");
+    assert_clean(&d.sim);
+}

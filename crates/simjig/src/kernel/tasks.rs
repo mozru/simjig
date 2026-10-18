@@ -411,23 +411,39 @@ fn free_task(k: &Kernel, key: Key) {
 }
 
 /// Drops `value` (a future or a result) as task `key`, turning a panic into a failure.
+///
+/// When this runs during another panic's unwinding (a task's poll panicked, and unwinding
+/// drops the handles in its locals), that first panic is the cause. A second panic from
+/// this cleanup is then printed but not recorded, and the first panic's location is kept,
+/// so the failure names the first panic.
 fn drop_guarded<V>(k: &Kernel, key: Key, value: V) {
+    let unwinding = std::thread::panicking();
+    let outer = panics::take();
     let previous = k.current.replace(Some(key));
-    panics::forget();
     let outcome = panic::catch_unwind(AssertUnwindSafe(move || drop(value)));
     k.current.set(previous);
-    if let Err(payload) = outcome {
-        let location = panics::take();
-        let message = format!("panicked while being dropped: {}", panic_message(&*payload));
-        k.fail(
-            FailureKind::TaskPanic {
-                message: message.clone(),
-            },
-            Some(key),
-            location,
-            message,
-        );
+    let location = panics::take();
+    if unwinding {
+        panics::restore(outer);
     }
+    let Err(payload) = outcome else { return };
+    let message = format!("panicked while being dropped: {}", panic_message(&*payload));
+    if unwinding {
+        eprintln!(
+            "simjig: task `{}` {message}, while another panic was unwinding; the first \
+             panic is the one reported",
+            k.task_name(key)
+        );
+        return;
+    }
+    k.fail(
+        FailureKind::TaskPanic {
+            message: message.clone(),
+        },
+        Some(key),
+        location,
+        message,
+    );
 }
 
 /// Cancels a task: drops its future (running its cleanup), then its detached children.

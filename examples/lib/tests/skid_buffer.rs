@@ -187,7 +187,7 @@ fn random_beats(rng: &mut Rng, count: usize) -> Vec<Beat> {
 
 /// Random `valid` and random `ready`: every beat arrives once, in order (the board checks
 /// each), and the backpressure reached both registers.
-#[simjig::test(timeout = "200us")]
+#[simjig::test(init = random, timeout = "200us")]
 async fn random_valid_and_ready_lose_nothing(ctx: &TestCtx, dut: Dut) {
     let board = start(dut).await;
     let beats = random_beats(&mut ctx.rng("beats"), BEATS);
@@ -206,7 +206,7 @@ async fn random_valid_and_ready_lose_nothing(ctx: &TestCtx, dut: Dut) {
 /// empties it (`down.valid` low, `up.ready` high) even with `up.valid` and `down.ready`
 /// both high across it, and random traffic then flows as before. Without a reset from this state, Verilator's
 /// all-zero start would hide a `skid_valid` or `out_valid` that reset does not clear.
-#[simjig::test(timeout = "200us")]
+#[simjig::test(init = random, timeout = "200us")]
 async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: Dut) {
     let board = start(dut).await;
     let mut beats = ctx.rng("beats");
@@ -267,7 +267,7 @@ async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: D
 /// No combinational path: within a cycle, toggling `down.ready` or `up.valid` changes
 /// none of the outputs (`up.ready`, `down.valid`, `down.data`), with the skid empty and
 /// with it full. Each toggle is checked in `ReadOnly`, once the model settled.
-#[simjig::test(timeout = "2us")]
+#[simjig::test(init = random, timeout = "2us")]
 async fn outputs_do_not_follow_inputs_within_a_cycle(dut: Dut) {
     let board = start(dut).await;
     for beat in [0x11, 0x22] {
@@ -319,7 +319,7 @@ async fn toggle_inputs_mid_cycle(dut: Dut) {
 
 /// With `down.ready` held high and a beat offered every cycle, one beat moves per cycle:
 /// `up.ready` never drops, and the last beat leaves `BEATS - 1` edges after the first.
-#[simjig::test(timeout = "20us")]
+#[simjig::test(init = random, timeout = "20us")]
 async fn full_throughput_while_ready_is_high(ctx: &TestCtx, dut: Dut) {
     let board = start(dut).await;
     let beats = random_beats(&mut ctx.rng("beats"), BEATS);
@@ -338,7 +338,7 @@ async fn full_throughput_while_ready_is_high(ctx: &TestCtx, dut: Dut) {
 /// A stalled `down`: the output register takes the first beat and the skid the second;
 /// only then does `up.ready` drop, holding off the third. Released, all three leave in
 /// order, one per cycle, and `up.ready` returns once the skid has emptied.
-#[simjig::test(timeout = "2us")]
+#[simjig::test(init = random, timeout = "2us")]
 async fn a_stall_fills_the_skid_then_drains_in_order(dut: Dut) {
     let board = start(dut).await;
     let beats: Vec<Beat> = [0xa1, 0xb2, 0xc3].map(Bits::new).to_vec();

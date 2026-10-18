@@ -42,6 +42,11 @@ Every testbench here has the same parts:
   if rng.bool() { sb.put(rng.below(256)).await; }             // the driver records each beat
   assert_eq!(dut.q.get().to_u128(), u128::from(sb.get().await)); // the monitor checks in order
   ```
+- **Random initial values.** Every test runs with `#[simjig::test(init = random)]`, so
+  each flop starts from a seed-dependent value instead of Verilator's zero, and a flop
+  that reset does not clear fails the test right after the first reset. With
+  `sync_fifo`'s `rd_ptr <= '0;` deleted, 11 of the 12 `sync_fifo` tests fail (with zeros, 4: only the
+  mid-run reset tests); see `docs/notes/n-xinit.md`.
 - **Directed corner cases** for what random traffic reaches rarely or must be pinned
   exactly (latency, a cycle count).
 - **`with_timeout`** around every wait that should end ("the FIFO drains within 1 us"),

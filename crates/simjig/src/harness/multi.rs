@@ -198,14 +198,22 @@ impl Lockstep {
         }
     }
 
-    /// Also compares the output `reference` with `candidate`, named by the reference's
-    /// signal name.
+    /// Also compares the output `reference` with `candidate`, named by both signals:
+    /// `old.count vs new.count`, or, when the two have one hierarchical name (two builds of
+    /// one top module), `counter.count (model 0) vs counter.count (model 1)`, by their
+    /// models' indices in the test's DUT order.
     #[must_use]
     pub fn output<T>(self, reference: Out<T>, candidate: Out<T>) -> Self
     where
         T: Packed<Raw: RawWords> + PartialEq + fmt::Debug,
     {
-        let name = reference.name();
+        let (r, c) = (reference.name(), candidate.name());
+        let name = if r == c {
+            let (rm, cm) = (reference.raw().model(), candidate.raw().model());
+            format!("{r} (model {rm}) vs {c} (model {cm})")
+        } else {
+            format!("{r} vs {c}")
+        };
         self.compare(&name, move || reference.get(), move || candidate.get())
     }
 

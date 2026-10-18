@@ -57,10 +57,13 @@ async fn a_revision_diverges_from_the_reference_in_lockstep(
     let divergence = divergence.expect("rev2 skips 6");
     assert_eq!(divergence.cycle, 5);
     assert_eq!(divergence.diffs.len(), 1);
-    assert_eq!(divergence.diffs[0].path(), "counter.count");
+    assert_eq!(
+        divergence.diffs[0].path(),
+        "counter.count (model 0) vs counter.count (model 1)"
+    );
     assert!(
         divergence.to_string().contains(&format!(
-            "counter.count: {:?} != {:?}",
+            "counter.count (model 0) vs counter.count (model 1): {:?} != {:?}",
             Bits::<8>::new(6),
             Bits::<8>::new(7)
         )),

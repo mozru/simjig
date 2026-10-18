@@ -46,14 +46,17 @@ async fn a_different_revision_diverges_at_the_first_differing_cycle(
     // Cycle k ends with count k + 1 in the old RTL; rev2 goes 5 -> 7 at cycle 5.
     assert_eq!(divergence.cycle, 5);
     assert_eq!(divergence.diffs.len(), 1);
-    assert_eq!(divergence.diffs[0].path(), "counter.count");
+    assert_eq!(
+        divergence.diffs[0].path(),
+        "counter.count (model 0) vs counter.count (model 1)"
+    );
     let text = divergence.to_string();
     assert!(
         text.starts_with("lockstep divergence at cycle 5 (t="),
         "{text}"
     );
     let expected = format!(
-        "counter.count: {:?} != {:?}",
+        "counter.count (model 0) vs counter.count (model 1): {:?} != {:?}",
         Bits::<8>::new(6),
         Bits::<8>::new(7)
     );

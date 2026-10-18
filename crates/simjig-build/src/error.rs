@@ -167,7 +167,7 @@ impl Error {
                 status,
                 stderr,
             } => Self::Command {
-                what: format!("JSON pass for DUT `{dut}`"),
+                what: format!("parsing DUT `{dut}` (Verilator JSON pass)"),
                 status,
                 path: offending_path(&stderr),
                 stderr: excerpt(&stderr),
@@ -434,7 +434,7 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            "JSON pass for DUT `shreg` failed (exit status: 1) on `/r/shreg.sv`\nstderr:\n\
+            "parsing DUT `shreg` (Verilator JSON pass) failed (exit status: 1) on `/r/shreg.sv`\nstderr:\n\
              %Error: /r/shreg.sv:3:5: syntax error\ncommand: verilator --json-only shreg.sv"
         );
     }

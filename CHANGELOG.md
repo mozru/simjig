@@ -4,6 +4,8 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A failed JSON pass reads "parsing DUT `x` (Verilator JSON pass) failed ..." (was
+  "JSON pass for DUT `x` failed ...").
 - `cycles(clk, n)` takes any integer count (`n: impl TryInto<u64>`: `u32`, `usize`,
   `u64`, and an unsuffixed literal, which falls back to `i32`); a negative count panics
   at the call. It is a plain `fn` returning the future now, so the panic points there.

@@ -165,16 +165,29 @@ of the pointer (`PointerModel`). The tests add:
 - Write side on `wclk`: a write happens at an edge with `winc && !wfull`.
 - Read side on `rclk`: `rdata` shows the oldest entry while `!rempty` (first-word
   fall-through); `rinc && !rempty` pops it.
-- Each side has its own asynchronous, active-low reset (`wrst_n`, `rrst_n`).
+- Each side has its own asynchronous, active-low reset (`wrst_n`, `rrst_n`). **Assert
+  both together** (their low periods must overlap), as in Cummings' design, and release
+  each synchronously to its own clock. Each reset clears its own pointer and the
+  synchronizer that brings the other side's pointer in, so one alone leaves the pointers
+  inconsistent: `wrst_n` alone zeroes the write pointer while the read pointer keeps its
+  value, `rempty` drops once the zero crosses, and the read side pops entries nobody
+  wrote. With both asserted, both sides are empty from the moment the second falls.
 - `wfull` and `rempty` are pessimistic: each sees the other side's pointer three of its
   own edges after it moved.
 
-The testbench starts two kernel clocks with unrelated periods, resets each domain on its
-own clock (`join!` of two `reset_domain` calls), and runs four tasks: a writer and a reader
+The testbench starts two kernel clocks with unrelated periods and resets the FIFO with
+`reset_both`: both resets fall at once, and each rises at a falling edge of its own clock
+(a `join!` of two `release` calls). It then runs four tasks: a writer and a reader
 with random stall runs, and a write monitor and a read monitor around a scoreboard
 `Queue` with room for exactly `DEPTH` entries. A write accepted on a full FIFO overflows
 the scoreboard; a read on an empty one finds it empty; every read is checked for order and
-data, and the test waits (under `with_timeout`) until all 1000 items are read.
+data, and the test waits (under `with_timeout`) until all 1000 items are read. A reset
+empties the scoreboard, as it empties the FIFO.
+
+These tests are 2-state and zero-delay: a synchronizer never goes metastable and a
+pointer is never sampled mid-change, so they check the protocol (order, loss, both flags'
+latency, reset), not the clock-domain crossing. The CDC structure (Gray-coded pointers,
+two-flop synchronizers, no other signal crossing) is verified by review and by CDC lint.
 
 | Test | Clocks (write / read) |
 |---|---|
@@ -182,6 +195,7 @@ data, and the test waits (under `with_timeout`) until all 1000 items are read.
 | `traffic_with_an_11ns_writer_and_a_7ns_reader` | 11 ns / 7 ns; fills up and runs dry |
 | `traffic_with_a_fast_writer_and_a_slow_reader` | 3.1 ns / 29 ns; fills up |
 | `traffic_with_a_slow_writer_and_a_fast_reader` | 29 ns / 3.1 ns; runs dry |
-| `full_after_depth_writes` | directed: exactly `DEPTH` writes before `wfull` |
+| `both_resets_mid_traffic_empty_both_sides` | 7 ns / 11 ns; both resets asserted together mid-traffic, with entries inside and both pointers away from zero: `rempty` high and `wfull` low at once and for two edges of each clock after release; then traffic runs on, every later write read back |
+| `full_after_depth_writes` | directed: exactly `DEPTH` writes before `wfull`, and `rempty` low |
 | `flags_see_the_other_side_three_edges_later` | directed: the synchronizer latency of both flags |
 | `parameters_are_checked_at_elaboration` | `$fatal` on a DEPTH that is not a power of 2 (or below 2), or a WIDTH below 1 |

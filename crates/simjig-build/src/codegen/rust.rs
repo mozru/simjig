@@ -261,7 +261,14 @@ fn emit_bundle(w: &mut Writer, bundle: &Bundle) {
     w.close("}");
 }
 
-fn signal_doc(s: &Signal) -> String {
+/// The DUT module the testbench author wrote: the wrapped one for an interface-ported DUT,
+/// whose model top is the generated wrapper.
+fn dut_module(lowered: &Lowered) -> &str {
+    lowered.wrapper.as_ref().map_or(&lowered.top, |w| &w.dut)
+}
+
+/// A port's doc names it on the user's module (`iface_top.clk`), not on the wrapper.
+fn signal_doc(s: &Signal, lowered: &Lowered) -> String {
     let what = match (&s.target, s.access) {
         (SignalTarget::Port { .. }, Access::In) => "input".to_owned(),
         (SignalTarget::Port { .. }, Access::Out) => "output".to_owned(),
@@ -271,9 +278,12 @@ fn signal_doc(s: &Signal) -> String {
         }
         (SignalTarget::Probe { module, .. }, _) => format!("probe in `{module}`, read-only"),
     };
+    let name = match (&s.target, s.name.strip_prefix(&format!("{}.", lowered.top))) {
+        (SignalTarget::Port { .. }, Some(port)) => format!("{}.{port}", dut_module(lowered)),
+        _ => s.name.clone(),
+    };
     format!(
-        "/// `{}`: {what}, {} bit{}.",
-        s.name,
+        "/// `{name}`: {what}, {} bit{}.",
         s.width,
         if s.width == 1 { "" } else { "s" }
     )
@@ -282,7 +292,7 @@ fn signal_doc(s: &Signal) -> String {
 fn emit_dut(w: &mut Writer, lowered: &Lowered) {
     w.line(format!(
         "/// The signals of model `{}`: its ports in declaration order, then its probes.",
-        lowered.top
+        dut_module(lowered)
     ));
     w.line(derive(&["Clone", "Copy", "Debug"]));
     w.open("pub struct Dut {");
@@ -291,7 +301,7 @@ fn emit_dut(w: &mut Writer, lowered: &Lowered) {
             DutField::Signal { name, slot } => {
                 let s = &lowered.signals[*slot as usize];
                 let (h, _) = handle(s.access);
-                w.line(signal_doc(s));
+                w.line(signal_doc(s, lowered));
                 w.line(format!("pub {name}: {RT}::{h}<{}>,", render(&s.ty)));
             }
             DutField::Bundle { name, bundle, .. } => {

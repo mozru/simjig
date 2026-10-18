@@ -25,10 +25,10 @@ impl BusIfSrc {
     }
 }
 
-/// The signals of model `simjig_wrap_producer`: its ports in declaration order, then its probes.
+/// The signals of model `producer`: its ports in declaration order, then its probes.
 #[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct Dut {
-    /// `simjig_wrap_producer.go`: input, 1 bit.
+    /// `producer.go`: input, 1 bit.
     pub go: ::simjig::__private::In<::simjig::__private::bits::Bit>,
     /// Interface port `bus` (`bus_if.src`).
     pub bus: BusIfSrc,

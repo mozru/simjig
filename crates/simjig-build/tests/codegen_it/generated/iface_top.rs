@@ -135,12 +135,12 @@ impl BusIfSrc {
     }
 }
 
-/// The signals of model `simjig_wrap_iface_top`: its ports in declaration order, then its probes.
+/// The signals of model `iface_top`: its ports in declaration order, then its probes.
 #[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct Dut {
-    /// `simjig_wrap_iface_top.clk`: input, 1 bit.
+    /// `iface_top.clk`: input, 1 bit.
     pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,
-    /// `simjig_wrap_iface_top.rst`: input, 1 bit.
+    /// `iface_top.rst`: input, 1 bit.
     pub rst: ::simjig::__private::In<::simjig::__private::bits::Bit>,
     /// Interface port `in_bus` (`bus_if.dst`).
     pub in_bus: BusIfDst,

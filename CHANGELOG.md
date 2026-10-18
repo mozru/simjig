@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The generated `Dut` docs of an interface-ported DUT name the user's module
+  (`` `iface_top.clk`: input, 1 bit ``), not the generated wrapper
+  (`simjig_wrap_iface_top.clk`). Docs only: the signal names the runtime reports are
+  unchanged. Reviewed snapshot diff: `iface_top__rust`, `producer__rust`.
 - An option refused in a file list or option file ends with the way out for a vendor
   list that is not the user's to edit: ``copy it, delete line N from the copy and build
   from the copy``.

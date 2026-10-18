@@ -57,3 +57,4 @@ One place per concept (constitution rule 6); everything else calls it.
 | Seeds and random streams | `harness::seed`: `Seed` (root seed, test-name seed, Verilator seed), `Seed::rng` (named streams), `Rng` (xoshiro256**) |
 | Stable hashing (FNV-1a 64) | `kernel::recorder::Fnv`: the trace hash, seeds, stream seeds, failure signatures |
 | Checking a model's C vtable before use | `simjig::model::raw::check_vtable` |
+| Scheduler semantics | `tests/conformance/README.md` (normative, DECISION §0) |

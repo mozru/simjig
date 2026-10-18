@@ -17,12 +17,14 @@
 #include "verilated_syms.h"
 
 #include <algorithm>
+#include <functional>
 #include <cerrno>
 #include <stdexcept>
 #include <cstdio>
 #include <cstring>
 #include <utility>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -56,6 +58,44 @@ const char* or_empty(const char* s) { return s != nullptr ? s : ""; }
 }  // namespace
 
 Runtime* active() noexcept { return t_active; }
+
+void note_cov_counter(uint32_t* countp) noexcept {
+    // Points register while the model is constructed, inside create's Scope. A model built
+    // outside simjig has no active runtime and nobody to tell.
+    if (t_active != nullptr) t_active->note_cov_counter(countp);
+}
+
+void Runtime::note_cov_counter(uint32_t* countp) noexcept {
+    try {
+        m_cov_counters.push_back(countp);
+    } catch (...) {
+        m_cov_lost = true;  // out of memory: cov_runs then reports nothing rather than a part
+    }
+}
+
+std::vector<simjig_cov_run> Runtime::cov_runs(const void* begin, size_t size) {
+    std::vector<uint32_t*> seen = std::move(m_cov_counters);
+    m_cov_counters.clear();
+    if (m_cov_lost) return {};
+    const auto* lo = static_cast<const char*>(begin);
+    const auto inside = [lo, size](uint32_t* p) {
+        const auto* c = reinterpret_cast<const char*>(p);
+        return std::less_equal<const char*>{}(lo, c) && std::less<const char*>{}(c, lo + size);
+    };
+    seen.erase(std::remove_if(seen.begin(), seen.end(), [&](uint32_t* p) { return !inside(p); }),
+               seen.end());
+    std::sort(seen.begin(), seen.end(), std::less<uint32_t*>{});
+    seen.erase(std::unique(seen.begin(), seen.end()), seen.end());
+    std::vector<simjig_cov_run> runs;
+    for (uint32_t* p : seen) {
+        if (!runs.empty() && runs.back().counters + runs.back().len == p) {
+            ++runs.back().len;
+        } else {
+            runs.push_back(simjig_cov_run{p, 1});
+        }
+    }
+    return runs;
+}
 
 VlRNG& thread_rng() noexcept {
     // The address of a thread_local is fixed for the thread's lifetime, so it is taken once.
@@ -92,18 +132,58 @@ FileId file_id(const char* path) noexcept {
     return FileId{static_cast<uint64_t>(st.st_dev), static_cast<uint64_t>(st.st_ino), true};
 }
 
-int redirect_to_devnull(const FileId& id) noexcept {
-    if (!id.valid) return 0;
-    const int null_fd = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
-    if (null_fd < 0) return -1;
-    // Descriptors are small integers below the soft limit; cap the scan for "unlimited".
+// The descriptors this process has open, from the kernel's own list: /proc/self/fd on Linux,
+// /dev/fd on macOS (where it lists every descriptor, not just 0-2). Scanning up to
+// RLIMIT_NOFILE instead costs a syscall per possible descriptor (a million with the usual
+// limits) and misses descriptors above a limit lowered after they were opened. Falls back to
+// that scan only if neither directory can be read.
+std::vector<int> open_descriptors() {
+    std::vector<int> fds;
+    for (const char* dir : {"/proc/self/fd", "/dev/fd"}) {
+        DIR* d = ::opendir(dir);
+        if (d == nullptr) continue;
+        const int own = ::dirfd(d);
+        while (const dirent* e = ::readdir(d)) {
+            char* end = nullptr;
+            const long fd = std::strtol(e->d_name, &end, 10);
+            if (end != e->d_name && *end == '\0' && fd != own) fds.push_back(static_cast<int>(fd));
+        }
+        ::closedir(d);
+        return fds;
+    }
     struct rlimit lim{};
     rlim_t max_fd = 1024;
     if (::getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != RLIM_INFINITY) {
         max_fd = std::min<rlim_t>(lim.rlim_cur, 65536);
     }
+    for (int fd = 0; fd < static_cast<int>(max_fd); ++fd) fds.push_back(fd);
+    return fds;
+}
+
+int redirect_to_devnull(const FileId& id) noexcept {
+    if (!id.valid) return 0;
+    std::vector<int> fds;
+    try {
+        fds = open_descriptors();
+    } catch (...) {
+        return -1;
+    }
+    const int null_fd = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
+    if (null_fd < 0) return -1;
+    // dup2 onto a descriptor at or above the soft limit fails (EBADF), and the limit may have
+    // been lowered after the trace was opened: raise it to cover them for the duration.
+    struct rlimit lim{};
+    const bool have_lim = ::getrlimit(RLIMIT_NOFILE, &lim) == 0;
+    const int highest = fds.empty() ? 0 : *std::max_element(fds.begin(), fds.end());
+    const bool raise = have_lim && lim.rlim_cur != RLIM_INFINITY
+                       && static_cast<rlim_t>(highest) >= lim.rlim_cur;
+    if (raise) {
+        struct rlimit wide = lim;
+        wide.rlim_cur = std::min<rlim_t>(static_cast<rlim_t>(highest) + 1, lim.rlim_max);
+        ::setrlimit(RLIMIT_NOFILE, &wide);
+    }
     int moved = 0;
-    for (int fd = 0; fd < static_cast<int>(max_fd); ++fd) {
+    for (const int fd : fds) {
         struct stat st{};
         if (fd == null_fd || ::fstat(fd, &st) != 0) continue;
         if (static_cast<uint64_t>(st.st_dev) == id.dev
@@ -111,6 +191,7 @@ int redirect_to_devnull(const FileId& id) noexcept {
             ++moved;
         }
     }
+    if (raise) ::setrlimit(RLIMIT_NOFILE, &lim);
     ::close(null_fd);
     return moved;
 }
@@ -132,25 +213,33 @@ bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
     return false;
 }
 
-void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s) {
-    const std::string path = or_empty(s.name);
-    const size_t dot = path.rfind('.');
-    const std::string scope_name =
-        std::string{or_empty(model_name)} + "." + (dot == std::string::npos ? "" : path.substr(0, dot));
-    const std::string var_name = dot == std::string::npos ? path : path.substr(dot + 1);
+void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
+                 const char* var, const char* display, uint32_t width) {
+    const std::string scope_name = std::string{or_empty(model_name)} + "." + or_empty(scope);
     const auto fail = [&](const std::string& why) {
-        throw std::runtime_error("simjig: probe '" + path + "': " + why);
+        throw std::runtime_error("simjig: probe '" + std::string{or_empty(display)} + "': " + why);
     };
-    const VerilatedScope* scope = ctx.scopeFind(scope_name.c_str());
-    if (scope == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
-    const VerilatedVar* var = scope->varFind(var_name.c_str());
-    if (var == nullptr) fail("no public variable '" + var_name + "' in scope '" + scope_name + "'");
-    if (var->datap() != s.ptr) fail("bound to a different member than the model's variable");
-    if (var->udims() != 0) fail("the model's variable is an unpacked array");
-    if (var->entBits() != s.width) {
-        fail("the model's variable is " + std::to_string(var->entBits()) + " bits wide, but it is bound as "
-             + std::to_string(s.width) + " bits");
+    const VerilatedScope* s = ctx.scopeFind(scope_name.c_str());
+    if (s == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
+    const VerilatedVar* v = s->varFind(or_empty(var));
+    if (v == nullptr) {
+        fail("no public variable '" + std::string{or_empty(var)} + "' in scope '" + scope_name
+             + "' (a probe inside a hierarchical block, hier_block, is in another model)");
     }
+    if (v->udims() != 0) fail("the model's variable is an unpacked array");
+    if (v->entBits() != static_cast<int>(width)) {
+        fail("the model's variable is " + std::to_string(v->entBits())
+             + " bits wide, but it is bound as " + std::to_string(width) + " bits");
+    }
+    // verilated_sym_props.h: the storage class Verilator chose for the variable.
+    const VerilatedVarType expected = width <= 8    ? VLVT_UINT8
+                                      : width <= 16 ? VLVT_UINT16
+                                      : width <= 32 ? VLVT_UINT32
+                                      : width <= 64 ? VLVT_UINT64
+                                                    : VLVT_WDATA;
+    if (v->vltype() != expected) fail("the model's variable is not stored as a packed vector");
+    if (v->datap() == nullptr) fail("the model's variable has no address");
+    return v->datap();
 }
 
 Runtime::Runtime(const simjig_create_opts* opts, bool coroutines)
@@ -468,7 +557,7 @@ const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
         SIMJIG_FIELD(simjig_model_vtable, trace_open),
         SIMJIG_FIELD(simjig_model_vtable, trace_dump),
         SIMJIG_FIELD(simjig_model_vtable, trace_close),
-        SIMJIG_FIELD(simjig_model_vtable, cov_counters),
+        SIMJIG_FIELD(simjig_model_vtable, cov_runs),
         SIMJIG_FIELD(simjig_model_vtable, features),
         SIMJIG_FIELD(simjig_model_vtable, trace_open_ex),
         SIMJIG_FIELD(simjig_model_vtable, trace_flush),
@@ -498,6 +587,8 @@ const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
         SIMJIG_FIELD(simjig_create_opts, error_limit),
         SIMJIG_FIELD(simjig_create_opts, argc),
         SIMJIG_FIELD(simjig_create_opts, argv),
+        SIMJIG_FIELD(simjig_cov_run, counters),
+        SIMJIG_FIELD(simjig_cov_run, len),
     };
     if (count != nullptr) *count = sizeof(fields) / sizeof(fields[0]);
     return fields;
@@ -510,6 +601,7 @@ size_t simjig_rt_abi_layout(uint32_t* out, size_t cap) {
         sizeof(simjig_signal),       alignof(simjig_signal),
         sizeof(simjig_msg),          alignof(simjig_msg),
         sizeof(simjig_create_opts),  alignof(simjig_create_opts),
+        sizeof(simjig_cov_run),      alignof(simjig_cov_run),
     };
     const size_t n = std::min(cap, sizeof(layout) / sizeof(layout[0]));
     if (out != nullptr) std::copy(layout, layout + n, out);

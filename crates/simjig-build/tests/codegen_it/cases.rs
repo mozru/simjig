@@ -134,7 +134,6 @@ pub fn through_wrapper(name: &str, sources: Vec<PathBuf>, iface: IfaceTop) -> Ca
         config: CodegenConfig {
             probes: Vec::new(),
             iface_top: Some(iface),
-            ..CodegenConfig::default()
         },
         sources,
     }
@@ -199,7 +198,6 @@ pub fn wide() -> Case {
         config: CodegenConfig {
             probes: wide_probes(),
             iface_top: None,
-            ..CodegenConfig::default()
         },
         sources,
     }

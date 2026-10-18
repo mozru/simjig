@@ -210,6 +210,14 @@ impl CreateOpts {
     pub(crate) const SIZE: u32 = size_of::<Self>() as u32;
 }
 
+/// `simjig_cov_run`: `len` live coverage counters.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CovRun {
+    pub(crate) counters: *mut u32,
+    pub(crate) len: usize,
+}
+
 /// `simjig_model_vtable`. Field order and types match the header exactly.
 #[repr(C)]
 #[derive(Debug)]
@@ -231,7 +239,8 @@ pub(crate) struct ModelVtable {
     pub(crate) trace_open: unsafe extern "C" fn(*mut Handle, *const c_char) -> i32,
     pub(crate) trace_dump: unsafe extern "C" fn(*mut Handle, u64) -> i32,
     pub(crate) trace_close: unsafe extern "C" fn(*mut Handle) -> i32,
-    pub(crate) cov_counters: unsafe extern "C" fn(*mut Handle, *mut usize) -> *mut u32,
+    /// `cov_runs`: every coverage counter, as runs of contiguous arrays (`CovRun`).
+    pub(crate) cov_runs: unsafe extern "C" fn(*mut Handle, *mut usize) -> *const CovRun,
     /// `SIMJIG_FEATURE_*` bits.
     pub(crate) features: u64,
     pub(crate) trace_open_ex: unsafe extern "C" fn(*mut Handle, *const c_char, u32, u64) -> i32,
@@ -317,7 +326,7 @@ abi_fields! {
         trace_open @ 104,
         trace_dump @ 112,
         trace_close @ 120,
-        cov_counters @ 128,
+        cov_runs @ 128,
         features @ 136,
         trace_open_ex @ 144,
         trace_flush @ 152,
@@ -353,6 +362,10 @@ abi_fields! {
         error_limit @ 16,
         argc @ 20,
         argv @ 24,
+    }
+    "simjig_cov_run" CovRun = 16 {
+        counters @ 0,
+        len @ 8,
     }
 }
 #[cfg(not(target_pointer_width = "64"))]

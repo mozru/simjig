@@ -4,8 +4,8 @@
 // headers and this file, defines a traits struct and exports the vtable:
 //
 //   #include "Vcounter.h"
-//   #include "Vcounter___024root.h"   // only if public internal signals are bound
-//   #include "Vcounter__Syms.h"        // only with kCoverage (the counter arrays live there)
+//   #include "Vcounter___024root.h"   // only with kCoverage (with __Syms.h: the symbol table type)
+//   #include "Vcounter__Syms.h"        // only with kCoverage
 //   #include "simjig_model.h"
 //   struct CounterTraits {
 //       using Model = Vcounter;
@@ -16,8 +16,8 @@
 //       static constexpr bool kCoverage = false; // verilated with --coverage*? (default false)
 //       static void bind(Vcounter& m, simjig::SignalTable& t) {
 //           SIMJIG_SIGNAL(t, m.clk, "clk", 1, SIMJIG_DIR_IN, SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE);
-//           SIMJIG_SIGNAL(t, m.rootp->counter__DOT__state, "counter.state", 4,
-//                         SIMJIG_DIR_INTERNAL, SIMJIG_ACCESS_READ);
+//           SIMJIG_PROBE(t, m, "counter.u_core", "state", "counter.u_core.state", 4,
+//                        SIMJIG_ACCESS_READ);
 //       }
 //   };
 //   SIMJIG_EXPORT_VTABLE(Vcounter, CounterTraits)
@@ -25,9 +25,12 @@
 // Invariants:
 // - Member addresses are taken once, right after construction, in IR slot order; slot i of the
 //   table has id i. Verilator members never move while the model lives.
-// - Each SIMJIG_SIGNAL statically checks that the member's C++ type is exactly the storage
-//   type Verilator uses for that width (so a width/type drift fails the C++ build, not the
-//   simulation).
+// - Each SIMJIG_SIGNAL (a port) statically checks that the member's C++ type is exactly the
+//   storage type Verilator uses for that width (so a width/type drift fails the C++ build, not
+//   the simulation).
+// - Each SIMJIG_PROBE (an internal public_flat variable) is looked up in Verilator's scope
+//   table, which knows its address whether or not its module was inlined, and is checked
+//   there for storage class, exact width and packing (find_probe); a mismatch fails create.
 // - No model code runs outside simjig::guard().
 // - Trace and coverage code is compiled only for kTraceFst / kCoverage models (`if constexpr`
 //   in templates), so a model without them needs neither verilated_fst_c.cpp nor
@@ -143,35 +146,21 @@ struct ModelHandle final : simjig_handle {
     }
     std::unique_ptr<typename Traits::Model> model;
     SignalTable table;
+    std::vector<simjig_cov_run> cov;  // cov_runs; empty without kCoverage
     std::conditional_t<trace_fst_of<Traits>(), FstTrace<typename Traits::Model>, NoTrace> trace;
 };
 
-// The counters of points Verilator places on the top module object (`rootp->__Vcoverage`),
-// provided that is *every* point: the symbol table's `__Vcoverage` is sized for all of the
-// model's points (V3EmitCSyms), and the top's for those it declares (V3EmitCHeaders), so equal
-// sizes mean nothing lives in a separate module instance (no_inline_module, hierarchical
-// blocks) or in a class/package function. Otherwise {nullptr, 0}: a partial array would make
-// an index mean different points in different builds. docs/notes/tracecov.md has the mapping.
+// The model's symbol table object (V<prefix>__Syms), which holds the root, every module object
+// Verilator did not inline and the table's own counter array as members: the range in which
+// Runtime::cov_runs keeps counters. The model's own vlSymsp is private; its root's copy is
+// public, and a kCoverage shim includes the headers that define both types.
 template <class Model>
-std::pair<uint32_t*, size_t> top_counters(Model& m) {
-    // The model's own vlSymsp is private; its root object's copy is public.
+std::pair<const void*, size_t> syms_object(Model& m) {
     using Root = std::remove_cv_t<std::remove_pointer_t<std::remove_cv_t<decltype(Model::rootp)>>>;
     using Syms = std::remove_pointer_t<std::remove_cv_t<decltype(Root::vlSymsp)>>;
     static_assert(sizeof(Root) > 0 && sizeof(Syms) > 0,
-                  "simjig: a kCoverage shim must include <prefix>__Syms.h");
-    if constexpr (requires(Root& r, Syms& s) {
-                      r.__Vcoverage;
-                      s.__Vcoverage;
-                  }) {
-        using Arr = std::remove_reference_t<decltype(m.rootp->__Vcoverage)>;
-        using All = std::remove_reference_t<decltype(m.rootp->vlSymsp->__Vcoverage)>;
-        static_assert(std::is_same_v<std::remove_all_extents_t<Arr>, uint32_t>,
-                      "simjig: coverage counters must be uint32_t (verilate with --threads 1)");
-        if constexpr (std::extent_v<Arr> == std::extent_v<All>) {
-            return {m.rootp->__Vcoverage, std::extent_v<Arr>};
-        }
-    }
-    return {nullptr, 0};
+                  "simjig: a kCoverage shim must include <prefix>___024root.h and <prefix>__Syms.h");
+    return {m.rootp->vlSymsp, sizeof(Syms)};
 }
 
 template <class Traits>
@@ -223,10 +212,14 @@ struct Vtable final {
             h->rt.reseed(h->rt.context_seed());
             const char* name = opts != nullptr && opts->name != nullptr ? opts->name : "TOP";
             h->model = std::make_unique<Model>(&ctx, name);
-            Traits::bind(*h->model, h->table);
-            for (const simjig_signal& s : h->table.signals()) {
-                if (s.dir == SIMJIG_DIR_INTERNAL) check_probe(ctx, h->model->name(), s);
+            // The constructor registered every coverage point (note_cov_counter).
+            if constexpr (kCoverage) {
+                const auto [syms, size] = syms_object(*h->model);
+                h->cov = h->rt.cov_runs(syms, size);
+            } else {
+                h->rt.cov_runs(nullptr, 0);
             }
+            Traits::bind(*h->model, h->table);
         });
     }
 
@@ -374,13 +367,11 @@ struct Vtable final {
 
     // ---- Coverage (kCoverage only) ------------------------------------------------------
 
-    static uint32_t* cov_counters(simjig_handle* h, size_t* count) noexcept {
-        std::pair<uint32_t*, size_t> counters{nullptr, 0};
-        if constexpr (kCoverage) {
-            if (h != nullptr) counters = top_counters(model(h));
-        }
-        if (count != nullptr) *count = counters.second;
-        return counters.first;
+    static const simjig_cov_run* cov_runs(simjig_handle* h, size_t* count) noexcept {
+        const std::vector<simjig_cov_run>* runs = h != nullptr ? &handle(h)->cov : nullptr;
+        const bool any = runs != nullptr && !runs->empty();
+        if (count != nullptr) *count = any ? runs->size() : 0;
+        return any ? runs->data() : nullptr;
     }
 
     static simjig_status cov_zero(simjig_handle* h) noexcept {
@@ -429,7 +420,7 @@ struct Vtable final {
         &trace_open,
         &trace_dump,
         &trace_close,
-        &cov_counters,
+        &cov_runs,
         kFeatures,
         &trace_open_ex,
         &trace_flush,
@@ -453,6 +444,13 @@ struct Vtable final {
                       "simjig: size of " name_ " does not match its width");                 \
         (table_).add((width_), (dir_), (access_), (name_), static_cast<void*>(&(member_)));  \
     } while (0)
+
+// Binds one probe: the public_flat variable `var_` of scope `<model name>.<scope_>`, found and
+// checked against `width_` at create (simjig::find_probe throws on a mismatch).
+#define SIMJIG_PROBE(table_, model_, scope_, var_, name_, width_, access_)                   \
+    (table_).add((width_), SIMJIG_DIR_INTERNAL, (access_), (name_),                          \
+                 ::simjig::find_probe(*(model_).contextp(), (model_).name(), (scope_), (var_),  \
+                                      (name_), (width_)))
 
 // Exports the model's single C symbol, `simjig_vtable_<PREFIX>`.
 #define SIMJIG_EXPORT_VTABLE(PREFIX, TRAITS)                                     \

@@ -58,7 +58,8 @@ pub enum Error {
     /// The Verilator found is not in the supported-version table
     /// ([`svtypes::version::SUPPORTED`]).
     #[error(
-        "unsupported Verilator at {}: `{found}`; supported versions: {}",
+        "unsupported Verilator at {}: `{found}`; supported versions: {}; install the \
+         pinned one: `pixi install --locked`",
         path.display(),
         svtypes::version::supported_list()
     )]

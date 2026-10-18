@@ -327,8 +327,8 @@ pub(crate) mod fake {
     use std::ptr::{self, NonNull};
 
     use super::super::abi::{
-        ABI_VERSION, ACCESS_READ, ACCESS_WRITE, CreateOpts, Dir, Handle, ModelVtable, Msg, Signal,
-        Status, Storage,
+        ABI_VERSION, ACCESS_READ, ACCESS_WRITE, CovRun, CreateOpts, Dir, Handle, ModelVtable, Msg,
+        Signal, Status, Storage,
     };
 
     /// What the fake model did and will do.
@@ -508,8 +508,10 @@ pub(crate) mod fake {
         Status::Unsupported as i32
     }
 
-    extern "C" fn cov(_h: *mut Handle, _count: *mut usize) -> *mut u32 {
-        ptr::null_mut()
+    extern "C" fn cov_runs(_h: *mut Handle, count: *mut usize) -> *const CovRun {
+        // SAFETY: `count` is the caller's valid out-parameter.
+        unsafe { count.write(0) };
+        ptr::null()
     }
 
     /// The fake's vtable (prefix `Vfake`, IR hash 7).
@@ -532,7 +534,7 @@ pub(crate) mod fake {
             trace_open,
             trace_dump,
             trace_close: unsupported,
-            cov_counters: cov,
+            cov_runs,
             features: 0,
             trace_open_ex,
             trace_flush: unsupported,

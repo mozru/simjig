@@ -76,6 +76,17 @@ public:
     // Barrier: a non-fatal C++ exception escaped model code.
     void on_exception(const char* what) noexcept;
 
+    // Coverage: every counter a point registers (VL_COVER_INSERT, simjig_vl_config.h) is noted
+    // while the model is constructed. cov_runs() then keeps those inside the model's symbol
+    // table object [begin, begin + size), which holds every module object and the table's own
+    // array as members, and drops the rest (Verilator's shared `fake_zero_count` for later
+    // instances of a module, which is a function-local static). The counters are sorted by
+    // address, which is symbol-table member order, deduplicated (an object-local and a
+    // symbol-table counter are each registered once per point) and merged into maximal
+    // contiguous runs. Consumes the noted counters.
+    void note_cov_counter(uint32_t* countp) noexcept;
+    std::vector<simjig_cov_run> cov_runs(const void* begin, size_t size);
+
     // Status after a completed (non-throwing) call; poisons on a deferred fatal.
     simjig_status outcome();
     size_t drain(simjig_msg* out, size_t cap) noexcept;
@@ -92,6 +103,8 @@ private:
     VlRNG m_rng{0};  // reseeded by create (see Vtable::create); VlRNG(0) draws nothing
     std::deque<Record> m_ring;
     std::vector<Record> m_drained;  // backs the string pointers handed out by drain()
+    std::vector<uint32_t*> m_cov_counters;
+    bool m_cov_lost = false;
     size_t m_dropped = 0;
     size_t m_hook_mark = 0;  // m_ring.size() right after the last hook record
     bool m_echo = false;
@@ -133,8 +146,10 @@ struct FileId {
     bool valid = false;
 };
 FileId file_id(const char* path) noexcept;
-// Points every descriptor of this process open on `id` at /dev/null (dup2). Returns how many
-// were redirected, or -1 if /dev/null could not be opened.
+// Points every descriptor of this process open on `id` at /dev/null (dup2). The descriptors
+// come from the kernel's list (/proc/self/fd, /dev/fd), not a scan up to RLIMIT_NOFILE, and the
+// soft limit is raised for the call if one lies above it. Returns how many were redirected, or
+// -1 if /dev/null could not be opened.
 int redirect_to_devnull(const FileId& id) noexcept;
 // Creates (or truncates) `path` for writing and closes it again, so that a writer that cannot
 // report an open failure (fstcpp's std::ofstream) or reports it with a fatal
@@ -142,13 +157,15 @@ int redirect_to_devnull(const FileId& id) noexcept;
 // WARNING naming `what` and the reason, and returns false.
 bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept;
 
-// Checks a probe (a SIMJIG_DIR_INTERNAL signal) against the model's own metadata: the
-// public_flat_rd/_rw variable `<path>` must exist in scope `<model_name>.<path's scope>`,
-// live at `s.ptr`, be packed only, and be exactly `s.width` bits wide. The C++ type check in
-// SIMJIG_SIGNAL only sees the storage class (an 8-bit CData also holds a 5-bit signal), and
-// Verilator's width exists only in these runtime tables (V<prefix>__Syms__Slow.cpp), so the
-// check runs at create. Throws std::runtime_error naming the probe on a mismatch.
-void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s);
+// The address of a probe: the public_flat_rd/_rw variable `var` of scope `<model_name>.<scope>`
+// in the model's scope table (V<prefix>__Syms__Slow.cpp). Verilator registers it there with
+// its real address whether its module was inlined into the root or kept as its own object, so
+// this is the one way to find a probe that does not depend on inlining (V3Inline.cpp in 5.052
+// keeps large multi-use modules, modules with classes and no_inline_module ones apart). The
+// variable must have the storage class Verilator uses for `width`, exactly `width` bits and no
+// unpacked dimension. Throws std::runtime_error naming the probe (`display`) otherwise.
+void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
+                 const char* var, const char* display, uint32_t width);
 
 }  // namespace simjig
 
@@ -190,8 +207,8 @@ void simjig_rt_set_time(simjig_handle* h, uint64_t time);
 size_t simjig_rt_drain_msgs(simjig_handle* h, simjig_msg* out, size_t cap);
 simjig_status simjig_rt_rng_seed(simjig_handle* h, uint64_t seed);
 // The ABI structs' layout as this compiler sees it, for the Rust mirror's tests: writes up to
-// `cap` of {sizeof, alignof} for simjig_model_vtable, simjig_signal, simjig_msg and
-// simjig_create_opts, in that order. Returns the number of values written.
+// `cap` of {sizeof, alignof} for simjig_model_vtable, simjig_signal, simjig_msg,
+// simjig_create_opts and simjig_cov_run, in that order. Returns the number of values written.
 size_t simjig_rt_abi_layout(uint32_t* out, size_t cap);
 
 // One field of a struct in simjig_abi.h, as this compiler lays it out.
@@ -201,8 +218,8 @@ typedef struct simjig_abi_field {
     uint32_t offset;   // offsetof(type, name)
     uint32_t size;     // sizeof the field
 } simjig_abi_field;
-// Every field of simjig_model_vtable, simjig_signal, simjig_msg and simjig_create_opts, in
-// that struct order and in declaration order within each; *count entries, static storage.
+// Every field of simjig_model_vtable, simjig_signal, simjig_msg, simjig_create_opts and
+// simjig_cov_run, in that struct order and in declaration order within each; *count entries, static storage.
 // The Rust mirror's offset_of! asserts are compared against it (docs/notes/tracecov.md).
 const simjig_abi_field* simjig_rt_abi_fields(size_t* count);
 }

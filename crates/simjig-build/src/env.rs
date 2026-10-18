@@ -38,6 +38,9 @@ pub struct BuildEnv {
     pub verilator_root: Option<PathBuf>,
     /// `SIMJIG_VERILATOR`: an explicit `verilator` executable; overrides the search.
     pub simjig_verilator: Option<PathBuf>,
+    /// `SIMJIG_UNTESTED_VERILATOR=1`: accept a Verilator release outside the supported
+    /// table, with a warning (`svtypes::toolchain::judge`).
+    pub untested_verilator: bool,
     /// `SIMJIG_CACHE_DIR`: an explicit cache directory; overrides the default under the
     /// Cargo target directory.
     pub simjig_cache_dir: Option<PathBuf>,
@@ -72,6 +75,7 @@ impl BuildEnv {
     pub const TRACKED_VARS: &'static [&'static str] = &[
         "VERILATOR_ROOT",
         "SIMJIG_VERILATOR",
+        "SIMJIG_UNTESTED_VERILATOR",
         "SIMJIG_CACHE_DIR",
         "SIMJIG_CCACHE",
         "SIMJIG_CXX_OPT",
@@ -101,6 +105,9 @@ impl BuildEnv {
             path: opt("PATH"),
             verilator_root: opt("VERILATOR_ROOT").map(PathBuf::from),
             simjig_verilator: opt("SIMJIG_VERILATOR").map(PathBuf::from),
+            untested_verilator: svtypes::toolchain::allows_untested(
+                std::env::var_os(svtypes::toolchain::UNTESTED_VAR).as_deref(),
+            ),
             simjig_cache_dir: opt("SIMJIG_CACHE_DIR").map(PathBuf::from),
             simjig_ccache: opt("SIMJIG_CCACHE"),
             cxx: opt("CXX"),
@@ -150,7 +157,7 @@ impl BuildEnv {
         self.path_dirs()
             .into_iter()
             .map(|d| d.join(name))
-            .find(|p| is_executable(p))
+            .find(|p| svtypes::toolchain::is_executable(p))
     }
 
     pub(crate) fn path_dirs(&self) -> Vec<PathBuf> {
@@ -186,19 +193,6 @@ fn target_dir_above(out_dir: &Path) -> Option<&Path> {
         .find(|d| d.join("CACHEDIR.TAG").is_file())
 }
 
-pub(crate) fn is_executable(p: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        p.metadata()
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        p.is_file()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +207,7 @@ mod tests {
             path: None,
             verilator_root: None,
             simjig_verilator: None,
+            untested_verilator: false,
             simjig_cache_dir: None,
             simjig_ccache: None,
             cxx: None,

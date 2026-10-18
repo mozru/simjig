@@ -383,10 +383,12 @@ fn hint(stderr: &str) -> Option<String> {
         ));
     }
     only_lint_warnings(stderr).then(|| {
-        "Verilator's lint warnings are fatal by default; fix them, waive one with a \
-         `/* verilator lint_off <CODE> */` comment in the source or \
-         `.verilator_args([\"-Wno-<CODE>\"])` (the code follows `%Warning-`), or make all \
-         warnings non-fatal with `.verilator_args([\"-Wno-fatal\"])` on the `Dut`"
+        "Verilator's lint warnings are fatal by default; fix them, or waive one code with \
+         `.verilator_args([\"-Wno-<CODE>\"])` on the `Dut` or a \
+         `/* verilator lint_off <CODE> */` comment in the source (the code follows \
+         `%Warning-`). `.verilator_args([\"-Wno-fatal\"])` makes every warning non-fatal, \
+         but it also hides width mismatches between an interface and the module bound to \
+         it, which then build with the port extended or truncated"
             .to_owned()
     })
 }
@@ -761,13 +763,19 @@ mod tests {
                       lint_off WIDTHTRUNC */\" and lint_on around source to disable this \
                       message.\n%Error: Exiting due to 1 warning(s)\n";
         let text = failure(warned);
-        for waiver in [
-            "`.verilator_args([\"-Wno-fatal\"])`",
-            "`.verilator_args([\"-Wno-<CODE>\"])`",
-            "lint_off",
-        ] {
-            assert!(text.contains(waiver), "{waiver}: {text}");
-        }
+        // The per-code waivers first; `-Wno-fatal` last, with what it hides.
+        let at = |waiver: &str| {
+            text.find(waiver)
+                .unwrap_or_else(|| panic!("{waiver}: {text}"))
+        };
+        assert!(
+            at("`.verilator_args([\"-Wno-<CODE>\"])`") < at("`.verilator_args([\"-Wno-fatal\"])`")
+        );
+        assert!(at("lint_off") < at("`.verilator_args([\"-Wno-fatal\"])`"));
+        assert!(
+            text.contains("also hides width mismatches between an interface and the module"),
+            "{text}"
+        );
         // Truncated: the warnings, without the closing line.
         assert!(failure("%Warning-WIDTH: /r/d.sv:4:13: w\n").contains("-Wno-fatal"));
         for stderr in [

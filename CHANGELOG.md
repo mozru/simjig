@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The hint for a build that failed on lint warnings recommends waiving the one code
+  (`-Wno-<CODE>`, `lint_off`) first, and says that `-Wno-fatal` also hides width
+  mismatches between an interface and the module bound to it.
 - The dashless `no` forms of on/off options are read like the dashed ones, as 5.052's
   option parser does: `--notiming` and `--notrace` are refused like `--no-timing` and
   `--no-trace`, and `--nocoverage-line` turns line coverage off in

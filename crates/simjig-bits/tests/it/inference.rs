@@ -32,3 +32,16 @@ fn a_literal_on_the_left_still_infers() {
     let from_the_left = 4 == x;
     assert!(from_the_left);
 }
+
+/// The README's advice for a typed expected value: `Bits::new(want)` infers its width from
+/// the left side, so both sides of a failed `assert_eq!` print as `32'h...`.
+#[test]
+fn bits_new_on_the_right_infers_the_width_and_prints_alike() {
+    let got = Bits::<32>::new(0x0a04_a19f);
+    let want: u128 = 0x0a04_a19f;
+    assert_eq!(got, Bits::new(want));
+    assert_eq!(
+        format!("{:?} {:?}", got, Bits::<32>::new(want)),
+        "32'h0a04a19f 32'h0a04a19f"
+    );
+}

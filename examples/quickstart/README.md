@@ -18,7 +18,8 @@ that library does not link it, so the model would be missing (see the glue notes
 `docs/notes/glue.md`). Verilator 5.052 must be on `PATH` (in this repository: `pixi run`).
 
 `[lints] workspace = true` inherits the repository's lints, including `missing_docs`
-(warn), which is why every test file opens with a `//!` comment.
+(warn), which is why `build.rs` and every test file open with a `//!` comment: each is a
+crate of its own. Keep one in each file you add.
 
 ```sh
 pixi run cargo nextest run -p quickstart
@@ -76,6 +77,11 @@ kill it after 2 minutes. nextest reads that file at the root of the Cargo worksp
 keep it there when you copy this directory.
 
 ## When a test fails
+
+A panic in the test (a failed `assert!`) shows twice: first Rust's own `thread '...'
+panicked at ...` line, then simjig's report. The first is kept on purpose: it is where a
+`RUST_BACKTRACE=1` backtrace and any panic hook of your own print, and it is the only
+trace of a panic that escapes the simulation.
 
 It prints one block with the failure, its triage signature and a `repro:` line, for
 example `SIMJIG_SEED=0x… pixi run cargo nextest run -p quickstart -E 'binary(=flop) &

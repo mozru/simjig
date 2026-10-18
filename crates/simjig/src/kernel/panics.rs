@@ -4,7 +4,10 @@
 //! the panic hook. So the kernel chains a hook in front of the existing one: while a
 //! [`Sim::run`](crate::Sim::run) is on this thread's stack, the hook stores the location
 //! of the latest panic in a thread-local, and the task poller takes it right after
-//! `catch_unwind` returns. The previous hook still runs, so panics print as before.
+//! `catch_unwind` returns. The previous hook still runs, so panics print as before, and a
+//! task panic shows twice, the hook's line and then the report: silencing the hook inside
+//! a run would drop `RUST_BACKTRACE` backtraces, the user's own hook, and the only trace
+//! of a panic that escapes `Sim::run` (debuggability over a shorter log).
 //!
 //! A trigger misused by the testbench (say `ReadOnly` awaited in the `ReadOnly` phase)
 //! detects it in `poll`, far from the user's line. [`panic_at`] panics there with the

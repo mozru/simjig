@@ -13,6 +13,7 @@ designs, a build script and tests. Copy it to start a project.
 
 ```rust
 // build.rs
+//! Verilates the flop and links it into this crate's tests.
 fn main() -> Result<(), simjig_build::Error> {
     simjig_build::Dut::new("flop")
         .sources(["rtl/flop.sv"])
@@ -24,6 +25,7 @@ fn main() -> Result<(), simjig_build::Error> {
 
 ```rust
 // tests/flop.rs
+//! The flop captures `d` on the rising edge.
 use simjig::{ReadOnly, clock, ns};
 use simjig_bits::Bit;
 
@@ -52,6 +54,10 @@ pixi run cargo install --locked --path crates/cargo-simjig   # the `cargo simjig
 pixi run cargo simjig doctor   # checks Verilator, the compiler and nextest, with fixes
 pixi run cargo nextest run -p quickstart
 ```
+
+Each file opens with a `//!` line because the repository's lints (`[lints] workspace =
+true`, as in the quickstart) warn on `missing_docs`, and a build script and each test
+file are crates of their own.
 
 `cargo xtask setup` and `cargo install` put their binaries in `~/.cargo/bin`, which must
 be on `PATH`. Run cargo through `pixi run`, so that it finds Verilator. To use simjig
@@ -155,7 +161,10 @@ What to keep in mind:
   enum's constant or packed struct. A literal that does not fit panics, naming the signal
   and its width. A typed integer converts with `u128::from`: `sig.set(u128::from(byte))`
   for a `byte: u8`. Comparisons work the same way: `x.get() == 0x12` and `0x12 == x.get()`
-  infer the literal; a typed integer is compared as `x.get() == u128::from(byte)`.
+  infer the literal; a typed integer is compared as `x.get() == u128::from(byte)`. In an
+  `assert_eq!`, prefer `assert_eq!(x.get(), Bits::new(want))` over
+  `assert_eq!(x.get(), want)`: the width is inferred from the left, and a mismatch prints
+  both sides alike (`32'h0a04a19f` vs `32'h9fa1040a`, not a hex left and a decimal right).
   (`From<u8>` for `Bits<N>`, or `PartialEq<Bits<N>>` for `u8`, would make
   `set(1)` and `assert_eq!(n, xs.iter().sum())` fail to infer, so neither exists.)
 - **Every test has a 10 ms simulation-time budget** (`#[simjig::test(timeout = "...")]`

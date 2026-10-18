@@ -15,6 +15,8 @@
 use std::fmt;
 use std::path::Path;
 
+use svtypes::ir::Storage;
+
 use crate::Error;
 
 /// Port direction as declared in the header.
@@ -28,39 +30,6 @@ pub enum PortDir {
     InOut,
 }
 
-/// The C++ storage type Verilator chose for a port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Storage {
-    /// `CData` (`uint8_t`), 1-8 bits.
-    C8,
-    /// `SData` (`uint16_t`), 9-16 bits.
-    S16,
-    /// `IData` (`uint32_t`), 17-32 bits.
-    I32,
-    /// `QData` (`uint64_t`), 33-64 bits.
-    Q64,
-    /// `VlWide<words>` (32-bit words), 65+ bits.
-    Wide {
-        /// Number of 32-bit words.
-        words: u32,
-    },
-}
-
-impl Storage {
-    /// The storage Verilator uses for a packed value of `width` bits.
-    pub fn for_width(width: u32) -> Self {
-        match width {
-            0..=8 => Self::C8,
-            9..=16 => Self::S16,
-            17..=32 => Self::I32,
-            33..=64 => Self::Q64,
-            _ => Self::Wide {
-                words: width.div_ceil(32),
-            },
-        }
-    }
-}
-
 /// One port declaration from `V<prefix>.h`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HeaderPort {
@@ -72,7 +41,8 @@ pub struct HeaderPort {
     pub msb: u32,
     /// Least significant bit index.
     pub lsb: u32,
-    /// C++ storage type.
+    /// C++ storage type: always a packed one ([`svtypes::width::packed_storage`] of the
+    /// width), since ports without a macro are not listed.
     pub storage: Storage,
 }
 
@@ -144,12 +114,12 @@ fn parse_decl(line: &str) -> Result<HeaderPort, String> {
             .map_err(|_not_a_number| format!("{what} `{a}` is not a number"))
     };
     let (storage, arity) = match suffix {
-        "8" => (Storage::C8, 3),
-        "16" => (Storage::S16, 3),
-        "" => (Storage::I32, 3),
-        "64" => (Storage::Q64, 3),
+        "8" => (Storage::CData, 3),
+        "16" => (Storage::SData, 3),
+        "" => (Storage::IData, 3),
+        "64" => (Storage::QData, 3),
         "W" => (
-            Storage::Wide {
+            Storage::VlWide {
                 words: num(3, "word count")?,
             },
             4,
@@ -261,6 +231,8 @@ fn problem_name(p: &PortProblem) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use svtypes::width::packed_storage;
+
     use super::*;
 
     fn port(name: &str, dir: PortDir, msb: u32, lsb: u32) -> HeaderPort {
@@ -269,7 +241,7 @@ mod tests {
             dir,
             msb,
             lsb,
-            storage: Storage::for_width(msb - lsb + 1),
+            storage: packed_storage(msb - lsb + 1).unwrap(),
         }
     }
 
@@ -281,16 +253,16 @@ mod tests {
                     VlUnpacked<CData/*7:0*/, 4> &arr;\n    VL_UNCOPYABLE(Vx);\n";
         let ports = parse_header_ports(Path::new("V.h"), text).unwrap();
         let want = [
-            ("clk", PortDir::In, 0, 0, Storage::C8),
-            ("count", PortDir::Out, 11, 0, Storage::S16),
-            ("i17", PortDir::In, 16, 0, Storage::I32),
-            ("b", PortDir::InOut, 32, 0, Storage::Q64),
-            ("w", PortDir::Out, 69, 0, Storage::Wide { words: 3 }),
-            ("off", PortDir::Out, 3, 2, Storage::C8),
+            ("clk", PortDir::In, 0, 0, Storage::CData),
+            ("count", PortDir::Out, 11, 0, Storage::SData),
+            ("i17", PortDir::In, 16, 0, Storage::IData),
+            ("b", PortDir::InOut, 32, 0, Storage::QData),
+            ("w", PortDir::Out, 69, 0, Storage::VlWide { words: 3 }),
+            ("off", PortDir::Out, 3, 2, Storage::CData),
         ];
         let got: Vec<_> = ports
             .iter()
-            .map(|p| (p.name.as_str(), p.dir, p.msb, p.lsb, p.storage))
+            .map(|p| (p.name.as_str(), p.dir, p.msb, p.lsb, p.storage.clone()))
             .collect();
         assert_eq!(got, want);
         assert_eq!(ports[5].width(), 2);
@@ -319,21 +291,6 @@ mod tests {
             err("VL_IN8(a,0,0);"),
             "V.h:1: expected `&name` as the first argument in port declaration `VL_IN8(a,0,0);`"
         );
-    }
-
-    #[test]
-    fn storage_boundaries_follow_verilated_types() {
-        let s = Storage::for_width;
-        assert_eq!(
-            [s(1), s(8), s(9), s(16)],
-            [Storage::C8, Storage::C8, Storage::S16, Storage::S16]
-        );
-        assert_eq!(
-            [s(17), s(32), s(33), s(64)],
-            [Storage::I32, Storage::I32, Storage::Q64, Storage::Q64]
-        );
-        assert_eq!(s(65), Storage::Wide { words: 3 });
-        assert_eq!(s(128), Storage::Wide { words: 4 });
     }
 
     #[test]
@@ -370,16 +327,16 @@ mod tests {
         let text = err.to_string();
         assert!(
             text.contains(
-                "`data`: expected In data[7:0] as C8, header declares In data[15:0] as S16"
+                "`data`: expected In data[7:0] as CData, header declares In data[15:0] as SData"
             ),
             "{text}"
         );
         assert!(
-            text.contains("missing from header: expected Out valid[0:0] as C8"),
+            text.contains("missing from header: expected Out valid[0:0] as CData"),
             "{text}"
         );
         assert!(
-            text.contains("not expected: header declares Out extra[3:0] as C8"),
+            text.contains("not expected: header declares Out extra[3:0] as CData"),
             "{text}"
         );
     }

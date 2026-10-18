@@ -2,10 +2,9 @@
 
 use std::path::Path;
 
-use simjig_build::svtypes::ir::Design;
-use simjig_build::{
-    Built, CacheStatus, Dut, DutConfig, Emitted, Error, HeaderPort, PortDir, Storage,
-};
+use simjig_build::svtypes::ir::{Design, Storage};
+use simjig_build::svtypes::width::packed_storage;
+use simjig_build::{Built, CacheStatus, Dut, DutConfig, Emitted, Error, HeaderPort, PortDir};
 
 use crate::support::Sandbox;
 
@@ -32,7 +31,7 @@ fn builds_counter_end_to_end() {
         dir,
         msb,
         lsb: 0,
-        storage: Storage::for_width(msb + 1),
+        storage: packed_storage(msb + 1).unwrap(),
     };
     let want = [
         port("clk", PortDir::In, 0),
@@ -118,7 +117,7 @@ fn wrong_ports(_: &Design, _: &DutConfig) -> Result<Emitted, Error> {
             dir: PortDir::Out,
             msb: 7,
             lsb: 0,
-            storage: Storage::C8,
+            storage: Storage::CData,
         }]),
         ..Emitted::default()
     })
@@ -136,12 +135,12 @@ fn expected_ports_are_checked_against_the_header() {
     assert!(matches!(err, Error::Ports(_)), "{msg}");
     assert!(
         msg.contains(
-            "`count`: expected Out count[7:0] as C8, header declares Out count[11:0] as S16"
+            "`count`: expected Out count[7:0] as CData, header declares Out count[11:0] as SData"
         ),
         "{msg}"
     );
     assert!(
-        msg.contains("not expected: header declares In clk[0:0] as C8"),
+        msg.contains("not expected: header declares In clk[0:0] as CData"),
         "{msg}"
     );
 }

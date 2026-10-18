@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 use simjig_build::svtypes::ir::Design;
+use simjig_build::svtypes::verilator::{JsonPassOpts, json_pass};
 use simjig_build::{
     Built, Dut, DutConfig, Emitted, Error, ProbeAccess, ProbeType, SvModule, codegen_emitter,
     ir_ports,
@@ -140,7 +141,7 @@ fn ir_matches_header(s: &Sandbox, name: &str, sources: &[&Path], top: &str) {
         .top(top)
         .build_in(&s.env())
         .unwrap_or_else(|e| panic!("{name}: {e}"));
-    let mut want = ir_ports(&built.design);
+    let mut want = ir_ports(&built.design).unwrap();
     let mut got = built.header_ports.clone();
     want.sort();
     got.sort();
@@ -162,4 +163,25 @@ fn ir_ports_match_the_header() {
         "struct_pipe",
     );
     ir_matches_header(&s, "wide", &[&dut("wide").join("wide.sv")], "wide");
+}
+
+/// Storage comes from `svtypes::width::packed_storage`, the one storage rule, so a
+/// zero-width port is an error here too rather than a made-up `CData`.
+#[test]
+fn ir_ports_rejects_a_zero_width_port() {
+    let rtl = crate::support::fixtures().join("rtl");
+    let mut design = json_pass(&JsonPassOpts {
+        sources: vec![rtl.join("counter.sv")],
+        include_dirs: vec![rtl],
+        top: "counter".into(),
+        ..JsonPassOpts::default()
+    })
+    .unwrap();
+    let count = design.top_module().ports[2].ty;
+    design.types[count.index()].width = Some(0);
+    let err = ir_ports(&design).unwrap_err().to_string();
+    assert!(
+        err.contains("`count`") && err.contains("zero-width"),
+        "{err}"
+    );
 }

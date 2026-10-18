@@ -3,7 +3,9 @@
 use std::process::Command;
 
 use simjig_build::PortDir::{self, In, InOut, Out};
-use simjig_build::{HeaderPort, Storage, check_ports, read_header_ports};
+use simjig_build::svtypes::ir::Storage;
+use simjig_build::svtypes::width::packed_storage;
+use simjig_build::{HeaderPort, check_ports, read_header_ports};
 
 use crate::support::{Sandbox, fixtures, real_verilator};
 
@@ -22,18 +24,18 @@ fn parses_a_real_verilator_header() {
 
     // Expected values written from the SV declarations in `ports.sv` by hand.
     let want: Vec<(&str, PortDir, u32, u32, Storage)> = vec![
-        ("b1", In, 0, 0, Storage::C8),
-        ("c8", In, 7, 0, Storage::C8),
-        ("s9", In, 8, 0, Storage::S16),
-        ("s16", Out, 15, 0, Storage::S16),
-        ("i17", In, 16, 0, Storage::I32),
-        ("i32", Out, 31, 0, Storage::I32),
-        ("q33", In, 32, 0, Storage::Q64),
-        ("q64", Out, 63, 0, Storage::Q64),
-        ("w65", In, 64, 0, Storage::Wide { words: 3 }),
-        ("w128", Out, 127, 0, Storage::Wide { words: 4 }),
-        ("off", Out, 5, 2, Storage::C8),
-        ("bidir", InOut, 3, 0, Storage::C8),
+        ("b1", In, 0, 0, Storage::CData),
+        ("c8", In, 7, 0, Storage::CData),
+        ("s9", In, 8, 0, Storage::SData),
+        ("s16", Out, 15, 0, Storage::SData),
+        ("i17", In, 16, 0, Storage::IData),
+        ("i32", Out, 31, 0, Storage::IData),
+        ("q33", In, 32, 0, Storage::QData),
+        ("q64", Out, 63, 0, Storage::QData),
+        ("w65", In, 64, 0, Storage::VlWide { words: 3 }),
+        ("w128", Out, 127, 0, Storage::VlWide { words: 4 }),
+        ("off", Out, 5, 2, Storage::CData),
+        ("bidir", InOut, 3, 0, Storage::CData),
     ];
     let expected: Vec<HeaderPort> = want
         .into_iter()
@@ -48,6 +50,6 @@ fn parses_a_real_verilator_header() {
     // Verilator groups declarations by storage, so compare ignoring order.
     assert_eq!(check_ports(&ports, &expected), Ok(()), "{ports:#?}");
     for p in &ports {
-        assert_eq!(p.storage, Storage::for_width(p.width()), "{p}");
+        assert_eq!(p.storage, packed_storage(p.width()).unwrap(), "{p}");
     }
 }

@@ -25,11 +25,12 @@
 use std::path::{Path, PathBuf};
 
 use svtypes::ir::{Design, Direction, TypeKind};
+use svtypes::width::{WidthError, packed_storage};
 
 use crate::Error;
 use crate::codegen::{self, ShimOptions};
 use crate::dut::{DutConfig, GeneratedInput};
-use crate::header::{HeaderPort, PortDir, Storage};
+use crate::header::{HeaderPort, PortDir};
 
 /// Generates the per-DUT files from the IR. See the module docs for where they go.
 ///
@@ -103,38 +104,42 @@ pub const DEFAULT_EMITTER: Emitter = codegen_emitter;
 /// normalised to `msb >= lsb` as Verilator prints it, for a plain vector with a
 /// non-negative range (`logic [5:2]` is `5,2`); everything else (structs, enums, packed
 /// arrays, scalars) is `width-1, 0`.
-pub fn ir_ports(design: &Design) -> Vec<HeaderPort> {
+///
+/// # Errors
+/// A port whose width has no storage ([`packed_storage`]: width 0).
+pub fn ir_ports(design: &Design) -> Result<Vec<HeaderPort>, WidthError> {
     let top = design.top_module();
-    top.ports
-        .iter()
-        .filter_map(|p| {
-            let ty = design.ty(p.ty);
-            if matches!(ty.kind, TypeKind::UnpackedArray { .. }) {
-                return None;
-            }
-            let width = ty.width?;
-            let (msb, lsb) = match &ty.kind {
-                TypeKind::Bits { range: Some(r), .. } => {
-                    match (u32::try_from(r.left), u32::try_from(r.right)) {
-                        (Ok(l), Ok(r)) => (l.max(r), l.min(r)),
-                        _ => (width - 1, 0),
-                    }
+    let mut ports = Vec::new();
+    for p in &top.ports {
+        let ty = design.ty(p.ty);
+        if matches!(ty.kind, TypeKind::UnpackedArray { .. }) {
+            continue;
+        }
+        let Some(width) = ty.width else { continue };
+        let storage =
+            packed_storage(width).map_err(|e| WidthError(format!("port `{}`: {}", p.name, e.0)))?;
+        let (msb, lsb) = match &ty.kind {
+            TypeKind::Bits { range: Some(r), .. } => {
+                match (u32::try_from(r.left), u32::try_from(r.right)) {
+                    (Ok(l), Ok(r)) => (l.max(r), l.min(r)),
+                    _ => (width - 1, 0),
                 }
-                _ => (width - 1, 0),
-            };
-            Some(HeaderPort {
-                name: p.cpp_member.clone().unwrap_or_else(|| p.name.clone()),
-                dir: match p.dir {
-                    Direction::Input => PortDir::In,
-                    Direction::Output => PortDir::Out,
-                    Direction::Inout => PortDir::InOut,
-                },
-                msb,
-                lsb,
-                storage: Storage::for_width(width),
-            })
-        })
-        .collect()
+            }
+            _ => (width - 1, 0),
+        };
+        ports.push(HeaderPort {
+            name: p.cpp_member.clone().unwrap_or_else(|| p.name.clone()),
+            dir: match p.dir {
+                Direction::Input => PortDir::In,
+                Direction::Output => PortDir::Out,
+                Direction::Inout => PortDir::InOut,
+            },
+            msb,
+            lsb,
+            storage,
+        });
+    }
+    Ok(ports)
 }
 
 /// Emitted outputs placed where the rest of the pipeline consumes them.
@@ -185,12 +190,19 @@ pub(crate) fn place(
         })
         .into_iter()
         .collect();
+    let ports = match emitted.ports {
+        Some(ports) => ports,
+        None => ir_ports(design).map_err(|e| Error::Emit {
+            dut: config.name.clone(),
+            msg: e.0,
+        })?,
+    };
     Ok(Placed {
         rust,
         model_sources,
         inputs,
         layout_check: emitted.layout_check,
-        ports: emitted.ports.unwrap_or_else(|| ir_ports(design)),
+        ports,
     })
 }
 

@@ -37,7 +37,7 @@ pub use emit::{Emitted, Emitter, SvModule, codegen_emitter, ir_ports, noop_emitt
 pub use env::BuildEnv;
 pub use error::Error;
 pub use header::{
-    HeaderPort, PortDir, PortMismatch, PortProblem, Storage, check_ports, parse_header_ports,
+    HeaderPort, PortDir, PortMismatch, PortProblem, check_ports, parse_header_ports,
     read_header_ports,
 };
 /// The type IR crate, re-exported so emitters name the same `Design` as the pipeline.

@@ -38,6 +38,14 @@ pub struct Design {
     pub modules: Vec<Module>,
     /// Packages, sorted by name.
     pub packages: Vec<Package>,
+    /// DPI-C imports declared anywhere in the design, sorted by C name, one per C name.
+    /// Omitted from the JSON form when empty, so designs without DPI serialize as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dpi_imports: Vec<DpiImport>,
+    /// C names of the design's DPI-C exports (SV functions and tasks C may call), sorted.
+    /// Omitted from the JSON form when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dpi_exports: Vec<String>,
 }
 
 impl Design {
@@ -406,6 +414,87 @@ pub struct ModportMember {
     pub dir: Direction,
     /// Signal type.
     pub ty: TypeId,
+}
+
+/// A DPI-C import (IEEE 1800-2023 §35.5.4): a function or task the design calls and C
+/// (here: Rust) implements. Its C prototype follows from [`DpiImport::result`] and the
+/// argument types (Annex H, and Verilator's `V<prefix>__Dpi.h`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DpiImport {
+    /// The SystemVerilog name the design calls.
+    pub name: String,
+    /// The C symbol: the alias in `import "DPI-C" c_name = function ...`, else `name`.
+    pub c_name: String,
+    /// The result of a function; `None` for a task or a `void` function. Verilator 5.052's
+    /// JSON does not tell those two apart; the C side of a task returns `int` (non-zero
+    /// means "disabled", §35.9) and Verilator ignores it, so `int` serves both.
+    pub result: Option<DpiType>,
+    /// Formal arguments in declaration order.
+    pub args: Vec<DpiArg>,
+    /// Where the import is declared, `file:line` (file name without directories).
+    pub loc: Option<String>,
+}
+
+/// A formal argument of a [`DpiImport`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DpiArg {
+    /// Argument name.
+    pub name: String,
+    /// Direction: `input` is passed by value (or `const` pointer for vectors), `output` and
+    /// `inout` by pointer (IEEE 1800-2023 §H.8).
+    pub dir: Direction,
+    /// Argument type.
+    pub ty: DpiType,
+}
+
+/// The type of a DPI-C argument or result, as far as it decides the C ABI
+/// (IEEE 1800-2023 §H.7).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DpiType {
+    /// `bit`: C `svBit` (`unsigned char`).
+    Bit,
+    /// `logic` (or `reg`): C `svLogic` (`unsigned char`).
+    Logic,
+    /// `bit [N-1:0]`: C `svBitVecVal*` (one `uint32_t` per 32 bits); returned by value as
+    /// one `svBitVecVal` when at most 32 bits.
+    BitVector {
+        /// Width in bits.
+        width: u32,
+        /// Declared `signed`.
+        signed: bool,
+    },
+    /// `logic [N-1:0]`: C `svLogicVecVal*` (an `{aval, bval}` pair per 32 bits).
+    LogicVector {
+        /// Width in bits.
+        width: u32,
+        /// Declared `signed`.
+        signed: bool,
+    },
+    /// `byte`: C `char`, or `unsigned char` when declared `unsigned`.
+    Byte {
+        /// Signed unless declared `byte unsigned`.
+        signed: bool,
+    },
+    /// `shortint`: C `short`.
+    ShortInt {
+        /// Signed unless declared `shortint unsigned`.
+        signed: bool,
+    },
+    /// `int`: C `int`.
+    Int {
+        /// Signed unless declared `int unsigned`.
+        signed: bool,
+    },
+    /// `longint`: C `long long`.
+    LongInt {
+        /// Signed unless declared `longint unsigned`.
+        signed: bool,
+    },
+    /// `chandle`: C `void*`.
+    Chandle,
+    /// Any other type (`string`, `real`, structs, enums, arrays), described in
+    /// SystemVerilog terms; back ends decide whether to reject it.
+    Unsupported(String),
 }
 
 #[cfg(test)]

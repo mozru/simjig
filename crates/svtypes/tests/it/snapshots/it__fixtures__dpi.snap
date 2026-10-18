@@ -1,0 +1,445 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 0,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": false,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "clk",
+          "dir": "Input",
+          "ty": 0,
+          "cpp_member": "clk",
+          "storage": "CData"
+        },
+        {
+          "name": "a",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": "a",
+          "storage": "IData"
+        },
+        {
+          "name": "y",
+          "dir": "Output",
+          "ty": 1,
+          "cpp_member": "y",
+          "storage": "IData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": [
+    {
+      "name": "dpi_pkg",
+      "params": [],
+      "typedefs": []
+    }
+  ],
+  "dpi_imports": [
+    {
+      "name": "f_aliased",
+      "c_name": "c_alias",
+      "result": {
+        "Int": {
+          "signed": true
+        }
+      },
+      "args": [
+        {
+          "name": "x",
+          "dir": "Input",
+          "ty": {
+            "Int": {
+              "signed": true
+            }
+          }
+        }
+      ],
+      "loc": "design.sv:28"
+    },
+    {
+      "name": "f_chandle",
+      "c_name": "f_chandle",
+      "result": "Chandle",
+      "args": [
+        {
+          "name": "c",
+          "dir": "Input",
+          "ty": "Chandle"
+        }
+      ],
+      "loc": "design.sv:25"
+    },
+    {
+      "name": "f_int",
+      "c_name": "f_int",
+      "result": {
+        "Int": {
+          "signed": true
+        }
+      },
+      "args": [
+        {
+          "name": "x",
+          "dir": "Input",
+          "ty": {
+            "Int": {
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "o",
+          "dir": "Output",
+          "ty": {
+            "Int": {
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "io",
+          "dir": "Inout",
+          "ty": {
+            "Int": {
+              "signed": true
+            }
+          }
+        }
+      ],
+      "loc": "design.sv:15"
+    },
+    {
+      "name": "f_ints",
+      "c_name": "f_ints",
+      "result": {
+        "Byte": {
+          "signed": true
+        }
+      },
+      "args": [
+        {
+          "name": "b",
+          "dir": "Input",
+          "ty": {
+            "Byte": {
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "s",
+          "dir": "Input",
+          "ty": {
+            "ShortInt": {
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "l",
+          "dir": "Input",
+          "ty": {
+            "LongInt": {
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "ub",
+          "dir": "Input",
+          "ty": {
+            "Byte": {
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "ui",
+          "dir": "Input",
+          "ty": {
+            "Int": {
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "ul",
+          "dir": "Input",
+          "ty": {
+            "LongInt": {
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "us",
+          "dir": "Input",
+          "ty": {
+            "ShortInt": {
+              "signed": false
+            }
+          }
+        }
+      ],
+      "loc": "design.sv:16"
+    },
+    {
+      "name": "f_ret16",
+      "c_name": "f_ret16",
+      "result": {
+        "BitVector": {
+          "width": 16,
+          "signed": false
+        }
+      },
+      "args": [
+        {
+          "name": "o8",
+          "dir": "Output",
+          "ty": {
+            "BitVector": {
+              "width": 8,
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "io41",
+          "dir": "Inout",
+          "ty": {
+            "LogicVector": {
+              "width": 41,
+              "signed": false
+            }
+          }
+        }
+      ],
+      "loc": "design.sv:24"
+    },
+    {
+      "name": "f_scalars",
+      "c_name": "f_scalars",
+      "result": "Bit",
+      "args": [
+        {
+          "name": "b",
+          "dir": "Input",
+          "ty": "Bit"
+        },
+        {
+          "name": "l",
+          "dir": "Input",
+          "ty": "Logic"
+        },
+        {
+          "name": "ob",
+          "dir": "Output",
+          "ty": "Bit"
+        },
+        {
+          "name": "ol",
+          "dir": "Output",
+          "ty": "Logic"
+        }
+      ],
+      "loc": "design.sv:19"
+    },
+    {
+      "name": "f_unsupported",
+      "c_name": "f_unsupported",
+      "result": null,
+      "args": [
+        {
+          "name": "s",
+          "dir": "Input",
+          "ty": {
+            "Unsupported": "`string`"
+          }
+        },
+        {
+          "name": "r",
+          "dir": "Input",
+          "ty": {
+            "Unsupported": "`real`"
+          }
+        },
+        {
+          "name": "p",
+          "dir": "Input",
+          "ty": {
+            "Unsupported": "a struct `pair_t`"
+          }
+        },
+        {
+          "name": "arr",
+          "dir": "Input",
+          "ty": {
+            "Unsupported": "an array"
+          }
+        }
+      ],
+      "loc": "design.sv:29"
+    },
+    {
+      "name": "f_vectors",
+      "c_name": "f_vectors",
+      "result": "Logic",
+      "args": [
+        {
+          "name": "v8",
+          "dir": "Input",
+          "ty": {
+            "BitVector": {
+              "width": 8,
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "l8",
+          "dir": "Input",
+          "ty": {
+            "LogicVector": {
+              "width": 8,
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "v41",
+          "dir": "Input",
+          "ty": {
+            "BitVector": {
+              "width": 41,
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "l64",
+          "dir": "Input",
+          "ty": {
+            "LogicVector": {
+              "width": 64,
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "v1",
+          "dir": "Input",
+          "ty": {
+            "BitVector": {
+              "width": 1,
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "v65",
+          "dir": "Input",
+          "ty": {
+            "BitVector": {
+              "width": 65,
+              "signed": false
+            }
+          }
+        }
+      ],
+      "loc": "design.sv:21"
+    },
+    {
+      "name": "f_void",
+      "c_name": "f_void",
+      "result": null,
+      "args": [],
+      "loc": "design.sv:26"
+    },
+    {
+      "name": "pkg_fn",
+      "c_name": "pkg_fn",
+      "result": {
+        "Int": {
+          "signed": true
+        }
+      },
+      "args": [
+        {
+          "name": "x",
+          "dir": "Input",
+          "ty": {
+            "Int": {
+              "signed": true
+            }
+          }
+        }
+      ],
+      "loc": "design.sv:4"
+    },
+    {
+      "name": "t_task",
+      "c_name": "t_task",
+      "result": null,
+      "args": [
+        {
+          "name": "x",
+          "dir": "Input",
+          "ty": {
+            "Int": {
+              "signed": true
+            }
+          }
+        }
+      ],
+      "loc": "design.sv:27"
+    }
+  ],
+  "dpi_exports": [
+    "e_fn"
+  ]
+}

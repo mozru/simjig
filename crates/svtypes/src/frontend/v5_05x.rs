@@ -15,6 +15,8 @@
 //! Strictness: every dtype node reached from a port, parameter or typedef is checked
 //! field by field; an unknown node type or field is an error naming its JSON path.
 
+mod dpi;
+
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -79,6 +81,13 @@ pub(crate) fn decode(tree: &Value, meta: &Value, version: &str) -> Result<Design
         let unit = d.units[i].clone();
         modules.push(d.module(&unit, unit.id == top_id)?);
     }
+    let scopes: Vec<_> = d
+        .units
+        .iter()
+        .map(|u| u.node.clone())
+        .chain(packages)
+        .collect();
+    let (dpi_imports, dpi_exports) = dpi::collect(&d, &scopes)?;
     Ok(Design {
         schema: SCHEMA,
         producer: Producer {
@@ -90,6 +99,8 @@ pub(crate) fn decode(tree: &Value, meta: &Value, version: &str) -> Result<Design
         types: d.types,
         modules,
         packages: out_packages,
+        dpi_imports,
+        dpi_exports,
     })
 }
 

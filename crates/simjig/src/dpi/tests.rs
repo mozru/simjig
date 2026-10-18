@@ -136,10 +136,13 @@ fn the_kernel_knows_a_call_is_running_only_during_it() {
 fn a_panic_is_marked_as_one_and_other_failures_are_not() {
     let mut a = bound("Vkind", Some(plus(0)));
     let (_, failure) = a.scope(|| add("Vkind", -1, 0));
-    assert!(failure.unwrap().panicked);
+    assert_eq!(failure.unwrap().kind, DpiFailureKind::Panic);
     let mut b = bound::<dyn Adder>("Vkind_none", None);
     let (_, failure) = b.scope(|| add("Vkind_none", 1, 0));
-    assert!(!failure.unwrap().panicked);
+    assert!(matches!(
+        failure.unwrap().kind,
+        DpiFailureKind::Setup { help } if help.contains("dut.set_dpi(..)")
+    ));
 }
 
 #[test]

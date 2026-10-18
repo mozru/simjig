@@ -260,6 +260,7 @@ fn run_seed(seed: u64) -> (String, u64) {
                 | FailureKind::TimeLimit { .. } => true,
                 FailureKind::ModelFatal { .. }
                 | FailureKind::DpiPanic { .. }
+                | FailureKind::Setup { .. }
                 | FailureKind::DesignFinished => false,
             };
             assert!(legit, "seed {seed}: unexpected failure: {f}");

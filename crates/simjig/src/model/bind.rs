@@ -195,10 +195,17 @@ pub fn create_in<D>(
 
 fn load_failure(error: &LoadError, precision: Precision) -> Failure {
     let message = error.to_string();
-    Failure {
-        kind: FailureKind::ModelFatal {
+    let kind = match error.help() {
+        Some(help) => FailureKind::Setup {
+            message: message.clone(),
+            help,
+        },
+        None => FailureKind::ModelFatal {
             message: message.clone(),
         },
+    };
+    Failure {
+        kind,
         time: SimTime::ZERO,
         precision,
         task: None,

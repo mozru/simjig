@@ -223,6 +223,33 @@ pub enum LoadError {
 }
 
 impl LoadError {
+    /// What to change, for an error of the test's setup (a build option, a stale build);
+    /// `None` when the design itself failed (an error while it was being created).
+    #[must_use]
+    pub fn help(&self) -> Option<&'static str> {
+        match self {
+            Self::AbiVersion { .. }
+            | Self::VtableSize { .. }
+            | Self::IrHash { .. }
+            | Self::Prefix { .. }
+            | Self::SignalTable { .. } => Some(
+                "rebuild the model and its generated Rust together (cargo clean -p for the \
+                 crate whose build.rs builds it)",
+            ),
+            Self::Precision { .. } => {
+                Some("give the design a timeprecision between 1 s and 1 fs (`--timescale`)")
+            }
+            Self::NoTrace { .. } => Some(
+                "build the model with `.trace_fst(true)` on its `simjig_build::Dut` in \
+                 build.rs, or ask for optional waves (`TraceOptions::if_supported`)",
+            ),
+            Self::TraceOpen { .. } => {
+                Some("check that the trace file's directory exists and is writable")
+            }
+            Self::Create { .. } => None,
+        }
+    }
+
     pub(crate) fn from_abi(prefix: &'static str, e: &AbiError) -> Self {
         match *e {
             AbiError::Version { model, runtime } => Self::AbiVersion {

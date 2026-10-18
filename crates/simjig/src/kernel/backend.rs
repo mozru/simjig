@@ -45,6 +45,12 @@ pub(crate) enum ModelErrorKind {
     Fatal,
     /// A DPI-C import implemented in Rust panicked during the eval.
     DpiPanic,
+    /// The test's setup cannot run (a DPI-C import without an implementation, ...); the
+    /// design is not at fault. What to change.
+    Setup {
+        /// The advice for the failure's `help:` line.
+        help: &'static str,
+    },
 }
 
 /// A fatal error raised by the model during `eval`.
@@ -63,6 +69,15 @@ impl ModelError {
     pub(crate) const fn fatal(message: String) -> Self {
         Self {
             kind: ModelErrorKind::Fatal,
+            message,
+            location: None,
+        }
+    }
+
+    /// A setup problem the model found while evaluating; `help` says what to change.
+    pub(crate) const fn setup(message: String, help: &'static str) -> Self {
+        Self {
+            kind: ModelErrorKind::Setup { help },
             message,
             location: None,
         }

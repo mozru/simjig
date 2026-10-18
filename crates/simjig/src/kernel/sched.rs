@@ -252,6 +252,10 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
                 ModelErrorKind::DpiPanic => FailureKind::DpiPanic {
                     message: message.clone(),
                 },
+                ModelErrorKind::Setup { help } => FailureKind::Setup {
+                    message: message.clone(),
+                    help,
+                },
             };
             k.fail(kind, None, e.location, message);
         }

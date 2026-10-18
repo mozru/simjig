@@ -233,9 +233,11 @@ fn load_error(meta: &'static ModelMeta) -> String {
     let options = ModelOptions::new(Seed::new(1, SeedSource::Env));
     let failure = instantiate(meta, &options).map(|_| ()).unwrap_err();
     assert_eq!(failure.time, SimTime::ZERO);
-    let FailureKind::ModelFatal { message } = failure.kind else {
-        panic!("expected ModelFatal, got {failure}");
+    // A stale build is the setup's fault, not the design's: the help says to rebuild.
+    let FailureKind::Setup { message, help } = failure.kind else {
+        panic!("expected Setup, got {failure}");
     };
+    assert!(help.starts_with("rebuild the model"), "{help}");
     message
 }
 

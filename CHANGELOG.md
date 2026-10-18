@@ -28,7 +28,11 @@ the public API, the generated code or simulation semantics.
   DPI scope.
 - A panicking implementation fails the run as `FailureKind::DpiPanic`, with the panicking
   line in `Failure::location` and in the message; a call with no implementation, or a
-  clash of import names, is `ModelFatal`. Either poisons the model.
+  clash of import names, is `FailureKind::Setup` with what to change. Either poisons the
+  model.
+- **Limit:** two instances of one DPI build cannot run in one simulation (lockstep
+  included): `set_dpi` cannot address the second one, whose first DPI call fails the run
+  as `Setup`. Build the design a second time under another `simjig_build::Dut::new` name.
 - Inside a DPI call every kernel entry point (signal reads and writes, triggers, `spawn`,
   `now()`, timers, sync primitives) panics with "DPI-C import `f` used <what>: DPI
   functions run inside eval; they can't access signals or await".
@@ -67,6 +71,15 @@ the public API, the generated code or simulation semantics.
   `<stem>.branch-<i>.fst`; a child never writes the parent's file.
 - In a simulation of several models, model `i > 0` traces into `<stem>.model-<i>.fst`
   (new `ModelOptions::for_model`); model 0 keeps the given path.
+
+#### Failure kinds (`simjig`)
+- New `FailureKind::Setup { message, help }`: the test's setup cannot run and the design
+  is not at fault, with advice that says what to change. It replaces `ModelFatal` (whose
+  help blamed the design) for a DPI-C call with no implementation or that cannot reach
+  its instance, for every `LoadError` but `Create` (a stale build, `NoTrace`,
+  `TraceOpen`, an unsupported precision), for DUTs that cannot share a simulation, and
+  for a DUT type without `DutModel::{load, bind}` in a multi-DUT test.
+- New `LoadError::help() -> Option<&'static str>`.
 
 #### Several DUTs per test and lockstep (`simjig`, `simjig-macros`)
 - `#[simjig::test]` accepts 2 to 4 DUT parameters, which share one simulation in

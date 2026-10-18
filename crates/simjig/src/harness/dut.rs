@@ -202,8 +202,10 @@ fn unsupported<D>(method: &str) -> Failure {
         std::any::type_name::<D>()
     );
     Failure {
-        kind: FailureKind::ModelFatal {
+        kind: FailureKind::Setup {
             message: message.clone(),
+            help: "implement `DutModel::load` and `DutModel::bind` for this DUT type, or \
+                   use it as the test's only DUT",
         },
         time: SimTime::ZERO,
         precision: Precision::PS,

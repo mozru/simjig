@@ -422,7 +422,8 @@ pub(crate) fn failing_signals(kind: &FailureKind) -> Vec<String> {
         | FailureKind::Deadlock { .. }
         | FailureKind::TimeLimit { .. }
         | FailureKind::ReadWriteLimit { .. }
-        | FailureKind::DpiPanic { .. } => Vec::new(),
+        | FailureKind::DpiPanic { .. }
+        | FailureKind::Setup { .. } => Vec::new(),
     }
 }
 

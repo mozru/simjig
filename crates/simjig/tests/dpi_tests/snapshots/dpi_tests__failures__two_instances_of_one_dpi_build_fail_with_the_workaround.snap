@@ -1,0 +1,6 @@
+---
+source: crates/simjig/tests/dpi_tests/failures.rs
+expression: mask_prefixes(&failure.to_string())
+---
+simjig Setup at t=0 ps: model 1: the design called DPI-C import `dpi_add`, but two models with prefix `Vdpi_<hash>` run in one simulation, so `set_dpi` cannot tell their implementations apart; build the design a second time under another `Dut::new` name
+  help: two instances of one DPI build cannot run in one simulation: build the design a second time under another `Dut::new` name in build.rs, and use one instance of each

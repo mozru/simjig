@@ -262,6 +262,7 @@ fn details(
         FailureKind::TaskPanic { .. }
         | FailureKind::ModelFatal { .. }
         | FailureKind::DpiPanic { .. }
+        | FailureKind::Setup { .. }
         | FailureKind::DesignFinished => Vec::new(),
         FailureKind::DeltaLimit { limit, signals } => vec![
             format!("limit:    {limit} evals in one timestep"),

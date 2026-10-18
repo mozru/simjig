@@ -37,13 +37,6 @@ fn dpi_panic(failure: &Failure) -> &str {
     }
 }
 
-fn model_fatal(failure: &Failure) -> &str {
-    match &failure.kind {
-        FailureKind::ModelFatal { message } => message,
-        other => panic!("expected ModelFatal, got {other:?}"),
-    }
-}
-
 #[test]
 fn a_panic_fails_the_run_and_poisons_the_model() {
     let (mut sim, dut) = sim::<dpi::Dut>();
@@ -94,18 +87,6 @@ async fn a_panic_in_a_harness_test_is_the_failure_report(dut: dpi::Dut) {
     dut.a.set(7);
     Timer::new(TICK).await;
     panic!("not reached: the run fails at the eval");
-}
-
-#[test]
-fn a_call_without_an_implementation_says_how_to_register_one() {
-    let (mut sim, _dut) = sim::<dpi::Dut>();
-    let failure = sim.run(async move { Timer::new(TICK).await }).unwrap_err();
-    let message = model_fatal(&failure);
-    assert!(
-        message.contains("has no DPI implementation; call `dut.set_dpi(..)` before the first eval"),
-        "{message}"
-    );
-    assert_eq!(failure.time.ticks(), 0, "the initial eval computes sum");
 }
 
 /// Runs `misuse` inside every `dpi_tick` call.
@@ -197,4 +178,48 @@ fn awaiting_a_timer_inside_a_dpi_call_fails_with_the_rule() {
         message.contains("DPI functions run inside eval; they can't access signals or await"),
         "{message}"
     );
+}
+
+/// `text` with every model prefix's hash (`Vdpi_05208168`) masked, so a snapshot does not
+/// change with the prefix scheme.
+pub(crate) fn mask_prefixes(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("`V") {
+        let (head, tail) = rest.split_at(at + 2);
+        out.push_str(head);
+        let name_end = tail.find('`').unwrap_or(tail.len());
+        let name = &tail[..name_end];
+        match name.rsplit_once('_') {
+            Some((stem, hash))
+                if hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            {
+                out.push_str(stem);
+                out.push_str("_<hash>");
+            }
+            _ => out.push_str(name),
+        }
+        rest = &tail[name_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn a_missing_implementation_is_a_setup_failure_that_says_how_to_register_one() {
+    let (mut sim, _dut) = sim::<dpi::Dut>();
+    let failure = sim.run(async move { Timer::new(TICK).await }).unwrap_err();
+    assert_eq!(failure.kind.name(), "Setup");
+    insta::assert_snapshot!(mask_prefixes(&failure.to_string()));
+}
+
+#[test]
+fn two_instances_of_one_dpi_build_fail_with_the_workaround() {
+    let (mut sim, (a, _b)) = sim::<(dpi::Dut, dpi::Dut)>();
+    a.set_dpi(Picky {
+        calls: Rc::new(Cell::new(0)),
+    });
+    let failure = sim.run(async move { Timer::new(TICK).await }).unwrap_err();
+    assert_eq!(failure.kind.name(), "Setup");
+    insta::assert_snapshot!(mask_prefixes(&failure.to_string()));
 }

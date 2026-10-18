@@ -145,6 +145,18 @@ fn a_model_built_without_fst_says_how_to_enable_it() {
         "{}",
         error.message
     );
+    assert_eq!(
+        error.kind.name(),
+        "Setup",
+        "a build option, not the design, is wrong"
+    );
+    let text = error.to_string();
+    let (prefix_start, prefix_end) = (
+        text.find("`Vcounter_").expect("the prefix") + 1,
+        text.find("` was built").expect("the prefix's end"),
+    );
+    let text = text.replace(&text[prefix_start..prefix_end], "Vcounter_<hash>");
+    insta::assert_snapshot!(text);
     // Optional waves fall back to an untraced run.
     let optional = TraceOptions::new(waves_path("plain")).if_supported();
     assert!(counter::Dut::instantiate(&options().with_trace(optional)).is_ok());

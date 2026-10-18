@@ -29,7 +29,9 @@
 //! same eval return zero without running the implementation. After the eval the backend
 //! takes the failure, poisons the model (the design already consumed a wrong value, so
 //! continuing would report garbage) and fails the run: a panic as `DpiPanic` with the
-//! panicking line (from `kernel::panics`), anything else as `ModelFatal`.
+//! panicking line (from `kernel::panics`); anything else is a mistake in the test's setup,
+//! not the design's, and fails as `Setup` with what to change (register an implementation,
+//! build a second model, use separate test binaries).
 //!
 //! While an implementation runs, the kernel refuses every entry point (signal access,
 //! triggers, `spawn`, `now()`, timers) with "DPI functions run inside eval; they can't
@@ -142,11 +144,11 @@ impl Slot {
         })
     }
 
-    /// Records a failure that is not a panic, unless an earlier failure is pending.
-    fn fail(&self, message: String) {
+    /// Records a setup failure (not a panic), unless an earlier failure is pending.
+    fn fail(&self, message: String, help: &'static str) {
         self.record(DpiFailure {
             message,
-            panicked: false,
+            kind: DpiFailureKind::Setup { help },
             location: None,
         });
     }
@@ -169,19 +171,44 @@ impl Slot {
 pub(crate) struct DpiFailure {
     /// The whole message, naming the import and the model.
     pub(crate) message: String,
-    /// Whether an implementation panicked (otherwise none was registered, or names clash).
-    pub(crate) panicked: bool,
+    /// A panic, or a setup mistake.
+    pub(crate) kind: DpiFailureKind,
     /// The panicking line, if the kernel's panic hook saw it.
     pub(crate) location: Option<&'static SourceLocation>,
 }
 
+/// Whether a DPI failure is the implementation's or the test setup's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DpiFailureKind {
+    /// The implementation panicked.
+    Panic,
+    /// No implementation was registered, or the call cannot reach this instance's.
+    Setup {
+        /// What to change.
+        help: &'static str,
+    },
+}
+
+/// The advice for a call that reached no implementation.
+const REGISTER_HELP: &str = "register the DPI implementation with `dut.set_dpi(..)` before \
+     the first eval: before `Sim::run`, or first thing in the test body, before any await";
+
+/// The advice for two instances of one build in one simulation.
+const SECOND_BUILD_HELP: &str = "two instances of one DPI build cannot run in one \
+     simulation: build the design a second time under another `Dut::new` name in build.rs, \
+     and use one instance of each";
+
+/// The advice for two models whose imports share a C name in one binary.
+const SEPARATE_BINARIES_HELP: &str = "a DPI-C import is one C symbol per test binary: put \
+     the tests of models that import the same name in separate test binaries, or leave the \
+     import to C with `Dut::dpi_in_c`";
+
 impl DpiFailure {
-    /// The eval's error: `DpiPanic` for a panic, a model fatal for the rest.
+    /// The eval's error: `DpiPanic` for a panic, `Setup` for the rest.
     pub(crate) fn into_model_error(self) -> ModelError {
-        if self.panicked {
-            ModelError::dpi_panic(self.message, self.location)
-        } else {
-            ModelError::fatal(self.message)
+        match self.kind {
+            DpiFailureKind::Panic => ModelError::dpi_panic(self.message, self.location),
+            DpiFailureKind::Setup { help } => ModelError::setup(self.message, help),
         }
     }
 }
@@ -298,29 +325,41 @@ fn dispatch<T: ?Sized + 'static, R>(
         return default;
     }
     if slot.ambiguous {
-        slot.fail(format!(
-            "the design called DPI-C import `{name}`, but two models with prefix `{prefix}` \
-             run in one simulation, so `set_dpi` cannot tell their implementations apart"
-        ));
+        slot.fail(
+            format!(
+                "the design called DPI-C import `{name}`, but two models with prefix \
+                 `{prefix}` run in one simulation, so `set_dpi` cannot tell their \
+                 implementations apart; build the design a second time under another \
+                 `Dut::new` name"
+            ),
+            SECOND_BUILD_HELP,
+        );
         return default;
     }
     // Equal literals are usually merged, so the pointer test settles almost every call.
     if !std::ptr::eq(slot.prefix, prefix) && slot.prefix != prefix {
-        slot.fail(format!(
-            "model `{}` called DPI-C import `{name}`, but the `{name}` linked into this binary \
-             is the one generated for model `{prefix}`; a DPI-C import is one C symbol per \
-             binary, so models that import the same name need separate test binaries",
-            slot.prefix
-        ));
+        slot.fail(
+            format!(
+                "model `{}` called DPI-C import `{name}`, but the `{name}` linked into this \
+                 binary is the one generated for model `{prefix}`; a DPI-C import is one C \
+                 symbol per binary, so models that import the same name need separate test \
+                 binaries",
+                slot.prefix
+            ),
+            SEPARATE_BINARIES_HELP,
+        );
         return default;
     }
     let mut imp = slot.imp.borrow_mut();
     let Some(imp) = imp.as_mut().and_then(|b| b.downcast_mut::<Box<T>>()) else {
-        slot.fail(format!(
-            "the design called DPI-C import `{name}`, but model `{prefix}` has no DPI \
-             implementation; call `dut.set_dpi(..)` before the first eval (before `Sim::run`, \
-             or first thing in the test, before any await)"
-        ));
+        slot.fail(
+            format!(
+                "the design called DPI-C import `{name}`, but model `{prefix}` has no DPI \
+                 implementation; call `dut.set_dpi(..)` before the first eval (before \
+                 `Sim::run`, or first thing in the test, before any await)"
+            ),
+            REGISTER_HELP,
+        );
         return default;
     };
     let call = state::enter_dpi_call(name);
@@ -339,7 +378,7 @@ fn dispatch<T: ?Sized + 'static, R>(
                      evaluated again",
                     panic_message(&*payload)
                 ),
-                panicked: true,
+                kind: DpiFailureKind::Panic,
                 location,
             });
             drop_payload(payload);

@@ -18,9 +18,16 @@
 //! to an input of both, and [`Lockstep`] compares typed outputs once per cycle and reports
 //! the first cycle they differ as a [`Divergence`] listing every differing signal.
 //!
+//! A design with DPI-C imports implemented in Rust cannot run as two instances of *one
+//! build*: `Dut::set_dpi` finds its model by (simulation, prefix), so it cannot address
+//! the second instance, whose first DPI call fails the run (`FailureKind::Setup`). Build
+//! the design a second time under another `simjig_build::Dut::new` name (another prefix)
+//! and run one instance of each.
+//!
 //! # Limits
 //! - The models of one simulation must share a time precision
 //!   ([`ModelSetError::PrecisionMismatch`](crate::ModelSetError::PrecisionMismatch)).
+//! - Two instances of one build with DPI-C imports implemented in Rust (above).
 //! - DPI exports are not supported in a multi-model simulation. Verilator names an exported
 //!   function's C symbol after the SystemVerilog function, without the `--prefix`, so two
 //!   builds of one design that export it collide at link time; two instances of one build
@@ -45,9 +52,17 @@ fn model_set_failure(error: &ModelSetError) -> Failure {
         ModelSetError::Empty | ModelSetError::TooManySignals => Precision::PS,
     };
     let message = format!("the test's DUTs cannot share one simulation: {error}");
+    let help = match error {
+        ModelSetError::PrecisionMismatch { .. } => {
+            "build every DUT of the test with the same timeprecision (`--timescale` in \
+             `verilator_args`, or `timeprecision` in the design)"
+        }
+        ModelSetError::Empty | ModelSetError::TooManySignals => "split the DUTs over several tests",
+    };
     Failure {
-        kind: FailureKind::ModelFatal {
+        kind: FailureKind::Setup {
             message: message.clone(),
+            help,
         },
         time: SimTime::ZERO,
         precision,
@@ -133,6 +148,10 @@ type Check = Box<dyn Fn() -> Option<FieldDiff>>;
 /// Each comparison reads a typed value from the reference model and one from the
 /// candidate; [`check`](Self::check) runs all of them, so a divergence lists every signal
 /// that differs in that cycle, not only the first.
+///
+/// For a design with DPI-C imports implemented in Rust, the two sides must be two builds
+/// (two `simjig_build::Dut::new` names), not two instances of one build: `set_dpi` cannot
+/// tell two instances of one build apart (see the module docs).
 ///
 /// ```ignore
 /// #[simjig::test]

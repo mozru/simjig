@@ -152,6 +152,15 @@ pub enum FailureKind {
         /// Which import panicked, and the panic message.
         message: String,
     },
+    /// The test is set up in a way that cannot run, and the design is not at fault: a
+    /// DPI-C import without an implementation, a model built without an option the test
+    /// needs, DUTs that cannot share a simulation. `help` says what to change.
+    Setup {
+        /// What is wrong.
+        message: String,
+        /// What to change, in the build script or the test.
+        help: &'static str,
+    },
     /// The design executed `$finish` before the main task returned.
     DesignFinished,
     /// The next timestep is past the limit set with
@@ -178,6 +187,7 @@ impl FailureKind {
             Self::Deadlock { .. } => "Deadlock",
             Self::ModelFatal { .. } => "ModelFatal",
             Self::DpiPanic { .. } => "DpiPanic",
+            Self::Setup { .. } => "Setup",
             Self::DesignFinished => "DesignFinished",
             Self::TimeLimit { .. } => "TimeLimit",
         }
@@ -214,6 +224,7 @@ impl FailureKind {
                 "the Rust implementation of the DPI-C import panicked; the panic message and \
                  the stderr backtrace show the cause"
             }
+            Self::Setup { help, .. } => help,
             Self::DesignFinished => {
                 "the design called $finish; end the test before it, or remove the $finish"
             }

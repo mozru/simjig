@@ -49,6 +49,11 @@ python tests/conformance/show.py golden/timer.jsonl # print a log as a table
 | `two_clocks` | async_fifo | two clocks with coincident rising edges: wake order and values; `Combine` of both edges |
 | `cdc_stream` | async_fifo | data crossing the CDC end to end |
 | `derived_edge` | derived_clk | `RisingEdge` on an internal derived clock next to `RisingEdge` on its source |
+| `coincident_join` | async_fifo | callback order at coincident clock edges: a task woken on one clock that awaits the other joins its callback, or waits for the next edge |
+| `changed_join` | comb_chain | the same for two outputs that change in one eval (`ValueChange(y)`, `ValueChange(y_eq)`) |
+| `written_join` | comb_chain | the same for two inputs written in one delta |
+| `edge_kinds` | counter | `ValueChange(clk)`, `RisingEdge(clk)` and `ClockCycles` on one signal are separate callbacks |
+| `combinator_hop` | counter | `First`, `Combine` and `with_timeout` resume their caller after the tasks the same callback woke |
 
 ## Log format
 JSON Lines: one compact JSON object per line (`json.dumps(..., separators=(",", ":"))`),
@@ -75,7 +80,7 @@ interleaving of tasks is part of the golden.
 Trigger labels are fixed strings chosen by the scenario, not cocotb's `repr`:
 `RisingEdge(sig)`, `FallingEdge(sig)`, `ValueChange(sig)`, `ReadWrite`, `ReadOnly`,
 `Timer(<n><unit>)`, `ClockCycles(sig,n)`, `ClockCycles(sig,n,falling)`,
-`First(a,b)`, `Combine(a,b)`, `with_timeout(<trigger>,<n><unit>)`.
+`First(a,b)`, `Combine(a,b)`, `with_timeout(<trigger>,<n><unit>)`, `Event.wait()`.
 
 Every clock in these scenarios is a cocotb `Clock(sig, period, "ns")` started with
 `start_high=False`: the signal is low for the first half period, so a 10 ns clock rises at

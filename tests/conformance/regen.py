@@ -41,6 +41,12 @@ SUITES = [
     ("async_fifo", "async_fifo", ["async_fifo.sv"], {"WIDTH": 8, "DEPTH": 8},
      "test_async_fifo", ["two_clocks", "cdc_stream"]),
     ("derived_clk", "derived_clk", ["derived_clk.sv"], {}, "test_derived_clk", ["derived_edge"]),
+    ("async_fifo", "async_fifo", ["async_fifo.sv"], {"WIDTH": 8, "DEPTH": 8},
+     "test_wake_order", ["coincident_join"]),
+    ("comb_chain", "comb_chain", ["comb_chain.sv"], {}, "test_wake_order",
+     ["changed_join", "written_join"]),
+    ("counter", "counter", ["counter.sv"], {"WIDTH": 8}, "test_wake_order",
+     ["edge_kinds", "combinator_hop"]),
 ]  # fmt: skip
 
 

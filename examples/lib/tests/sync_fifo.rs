@@ -216,13 +216,14 @@ fn monitor<T: Payload>(fifo: Fifo<T>, model: Model<T>) -> Rc<RefCell<Model<T>>> 
     board
 }
 
-/// Holds reset for two cycles with every input idle; returns just after the last reset
-/// edge, so the next edge is the first one out of reset.
+/// Holds reset for two cycles with every input idle, and releases it at the falling edge
+/// after the last reset edge, where it returns: the next edge is the first out of reset.
 async fn reset<T: Payload>(fifo: Fifo<T>) {
     fifo.rst.set(1);
     fifo.push.set(0);
     fifo.pop.set(0);
     cycles(fifo.clk, 2).await;
+    fifo.clk.falling().await;
     fifo.rst.set(0);
 }
 

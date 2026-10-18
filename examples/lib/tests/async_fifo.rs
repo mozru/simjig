@@ -1,7 +1,9 @@
 //! Testbench for `rtl/async_fifo.sv`, built with `WIDTH = 8`, `DEPTH = 8`.
 //!
 //! Two kernel clocks with unrelated periods drive the two domains; each domain has its own
-//! reset, released on its own clock. The testbench is split by role, one task each:
+//! reset, released on its own clock. Each driver drives at the falling edge of its own
+//! domain's clock, and each monitor samples at the rising edge. The testbench is split by
+//! role, one task each:
 //! - the **writer** drives `winc`/`wdata` on `wclk`, stalling at random; it keeps `winc`
 //!   high while `wfull` is, so the FIFO must refuse those writes;
 //! - the **reader** drives `rinc` on `rclk`, stalling at random, also regardless of
@@ -115,9 +117,10 @@ impl Stalls {
 async fn writer(dut: Dut, mut data: Rng, mut stalls: Stalls) {
     for _ in 0..ITEMS {
         while !stalls.active() {
+            dut.wclk.falling().await;
             dut.winc.set(0);
-            dut.wclk.rising().await;
         }
+        dut.wclk.falling().await;
         dut.winc.set(1);
         dut.wdata.set(Word::new_truncating(data.next_u64().into()));
         dut.wclk.rising().await;
@@ -126,14 +129,15 @@ async fn writer(dut: Dut, mut data: Rng, mut stalls: Stalls) {
             dut.wclk.rising().await;
         }
     }
+    dut.wclk.falling().await;
     dut.winc.set(0);
 }
 
 /// The reader: drives `rinc` with random stalls, forever (it is detached).
 async fn reader(dut: Dut, mut stalls: Stalls) {
     loop {
+        dut.rclk.falling().await;
         dut.rinc.set(stalls.active());
-        dut.rclk.rising().await;
     }
 }
 
@@ -320,8 +324,9 @@ async fn full_after_depth_writes(dut: Dut) {
     start_clocks(dut, directed_clocks());
     reset(dut).await;
     let mut accepted = 0;
-    dut.winc.set(1);
     for i in 0..4 * DEPTH {
+        dut.wclk.falling().await;
+        dut.winc.set(1);
         dut.wdata.set(Word::new_truncating(i as u128));
         dut.wclk.rising().await;
         if !dut.wfull.get().to_bool() {
@@ -350,12 +355,14 @@ async fn full_after_depth_writes(dut: Dut) {
 async fn flags_see_the_other_side_three_edges_later(dut: Dut) {
     start_clocks(dut, directed_clocks());
     reset(dut).await;
+    dut.wclk.falling().await;
     dut.winc.set(1);
     dut.wclk.rising().await; // the first write
     assert_eq!(edges_until_low(dut.rclk, dut.rempty).await, 3, "rempty");
     for _ in 1..DEPTH {
         dut.wclk.rising().await;
     }
+    dut.wclk.falling().await;
     dut.winc.set(0);
     dut.wclk.rising().await;
     ReadOnly::new().await;

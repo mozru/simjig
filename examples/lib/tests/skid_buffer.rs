@@ -104,13 +104,14 @@ fn monitor(dut: Dut) -> Rc<RefCell<Board>> {
     board
 }
 
-/// Holds reset for two cycles with `up` idle and `down` not ready; returns just after the
-/// last reset edge.
+/// Holds reset for two cycles with `up` idle and `down` not ready, and releases it at the
+/// falling edge after the last reset edge, where it returns.
 async fn reset(dut: Dut) {
     dut.rst.set(1);
     dut.up.valid.set(0);
     dut.down.ready.set(0);
     cycles(dut.clk, 2).await;
+    dut.clk.falling().await;
     dut.rst.set(0);
 }
 

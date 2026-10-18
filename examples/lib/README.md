@@ -20,11 +20,13 @@ pixi run cargo simjig show sync_fifo -p simjig-examples-lib   # a DUT's generate
 Every testbench here has the same parts:
 
 - **A clock and a reset helper.** `clock(dut.clk, ns(10)).start()`, then `reset(dut)`,
-  which holds reset for two edges with every input idle.
-- **One timing rule.** Monitors sample on the rising edge; drivers drive away from it (on
-  the falling edge, or just after the rising edge). At a rising edge of a testbench clock,
-  signals still hold their pre-edge values: exactly what the flops capture. A monitor that
-  samples there sees every handshake the design takes.
+  which holds reset for two edges with every input idle and releases it at a falling
+  edge.
+- **One timing rule.** Monitors sample on the rising edge; drivers, reset release
+  included, drive on the falling edge (in the async FIFO, each domain's own). At a rising
+  edge of a testbench clock, signals still hold their pre-edge values: exactly what the
+  flops capture. A monitor that samples there sees every handshake the design takes, and
+  a value driven half a cycle away from the edge can never race it.
 - **A monitor and a reference model.** The monitor is a detached task that checks the
   design against a plain-Rust model on every edge, then applies the edge to the model. It
   runs in every test, directed or random, so each is checked the same way; the test reads

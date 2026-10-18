@@ -48,6 +48,7 @@
 //! ccache is used when available (see [`ccache_compiler`]).
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use crate::archive::{self, Archive, Spec, Toolchain};
 use crate::cache::Cache;
@@ -390,7 +391,7 @@ fn link_args(archives: &[&Archive], natives: &[NativeLib], stdlib: Option<&str>)
 /// compiler (before any ccache wrapping), which identifies the toolchain in cache keys.
 fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool), Error> {
     let env = i.env;
-    let mut b = cc::Build::new();
+    let mut b = seed(env);
     b.cpp(true)
         .std(CXX_STD)
         .target(&env.target)
@@ -419,6 +420,22 @@ fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool)
         b.compiler(wrapper);
     }
     Ok((b, compiler))
+}
+
+/// A fresh `cc::Build` for the build script of `env` (its `OUT_DIR`). Every one is a clone
+/// of the first, so they share `cc`'s cache of what it found out about the compiler (its
+/// kind, the flags it accepts, the SDK): `cc` otherwise runs the compiler again to ask,
+/// for every DUT.
+fn seed(env: &BuildEnv) -> cc::Build {
+    static SEEDS: Mutex<Vec<(PathBuf, cc::Build)>> = Mutex::new(Vec::new());
+    // A panic while holding the lock leaves the list itself consistent.
+    let mut seeds = SEEDS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, b)) = seeds.iter().find(|(out, _)| *out == env.out_dir) {
+        return b.clone();
+    }
+    let b = cc::Build::new();
+    seeds.push((env.out_dir.clone(), b.clone()));
+    b
 }
 
 /// A native library a runtime extra links against.

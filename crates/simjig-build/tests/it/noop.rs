@@ -4,7 +4,7 @@
 use simjig_build::Dut;
 
 use crate::recipe::compiles;
-use crate::support::{Sandbox, dut, logging_ccache};
+use crate::support::{Sandbox, dut, logging_ccache, write_script};
 
 fn build(name: &str, env: &simjig_build::BuildEnv) -> simjig_build::Built {
     Dut::new(name)
@@ -48,4 +48,41 @@ fn verilator_is_located_once_per_build_script() {
         .filter(|l| l.starts_with("--getenv"))
         .count();
     assert_eq!(asks, 1, "{}", s.verilator_calls());
+}
+
+/// The C++ compiler is set up (found, its kind detected, its version asked) once per
+/// build script: building a DUT again, with every archive in the cache, runs it no more.
+#[test]
+fn the_compiler_is_set_up_once_per_build_script() {
+    let s = Sandbox::new();
+    let name = std::env::var("CXX").unwrap_or_else(|_| "c++".to_owned());
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join(&name))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| std::path::PathBuf::from(&name));
+    let runs = s.path().join("cxx-runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    let cxx = s.path().join("logging-cxx");
+    write_script(
+        &cxx,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'/$$\nexec '{}' \"$@\"\n",
+            runs.display(),
+            real.display()
+        ),
+    );
+    // SAFETY: nextest runs every test in its own process, and nothing else runs yet.
+    unsafe { std::env::set_var("CXX", &cxx) };
+    let mut env = s.env();
+    env.cxx = Some(cxx.into_os_string());
+    env.simjig_ccache = Some("0".into());
+    build("inv", &env);
+    std::fs::remove_dir_all(&runs).unwrap();
+    std::fs::create_dir_all(&runs).unwrap();
+    build("inv", &env);
+    let ran: Vec<String> = std::fs::read_dir(&runs)
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(ran, Vec::<String>::new(), "the compiler ran again");
 }

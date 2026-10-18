@@ -71,6 +71,7 @@ pub mod fork;
 mod harness;
 mod kernel;
 mod model;
+pub mod prelude;
 mod signal;
 
 pub use dpi::Chandle;

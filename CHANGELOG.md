@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `simjig::prelude`: one glob import (`use simjig::prelude::*;`) for what nearly every
+  testbench uses: `clock`, `cycles`, `ns`/`us`/`ps`/`ms`, `spawn`, `first!`, `join!`,
+  `with_timeout`, `Timer`, `ReadWrite`, `ReadOnly`, `TriggerExt`, `Queue`, `Event`,
+  `TestCtx`, `Rng`, `tb_log!`, `Bit`, `Bits`, `Value`, `Vector`, `Packed`. It can be
+  glob-imported next to a sweep module (`use <sweep>::*;`), whose `Value`, `Vector` and
+  `Packed` are the same items (`examples/lib/tests/prelude.rs`).
 - `.read_write()` and `.read_only()` on triggers (`TriggerExt`, sealed; new types
   `ThenRegion` and `Cycles`): `dut.clk.rising().read_write().await` awaits the edge, then
   the `ReadWrite` region of the same timestep (cocotb's `await RisingEdge(clk); await

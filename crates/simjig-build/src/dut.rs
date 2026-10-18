@@ -642,31 +642,33 @@ impl Dut {
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
         pipeline::claim(env, &cache, &self.config, &prefix)?;
-        let sv_inputs = self
-            .config
-            .sv_inputs()
-            .map(|g| cache.store_input(g))
-            .collect::<Result<Vec<_>, _>>()?;
-        let (front, cached) = Front::lookup(&cache, &self.config, top, &sv_inputs, &verilator)?;
-        let ir = match cached {
-            Some(ir) => ir,
-            None => pipeline::design_ir(&self.config, top, &sv_inputs, &verilator, &cache)?,
-        };
-        let emitted = (self.emitter)(&ir.design, &self.config)?;
-        let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
-        if let Some(check) = &placed.layout_check
-            && !front.checked(&cache, check)
-        {
-            pipeline::layout_check(&self.config, &sv_inputs, &verilator, &cache, check)?;
-        }
+        let (front, ir, placed) = self.front_end(env, &cache, &verilator, top)?;
         let mut generated = ir.wrapper.iter().cloned().collect::<Vec<_>>();
         for g in placed.inputs.iter().chain(&self.config.generated) {
             generated.push(cache.store_input(g)?);
         }
         let args = self.config.verilator_args(&prefix, &ir.top, &generated);
-        let (model, warnings) =
-            self.verilate(env, &cache, &verilator, &args, front, &ir, &placed)?;
+        let name = &self.config.name;
+        let model = cache.verilate(
+            name,
+            &verilator,
+            &args,
+            &self.config.include_dirs,
+            &env.out_dir,
+        )?;
+        let mut warnings = Vec::new();
+        warnings.extend(
+            model
+                .changed
+                .as_ref()
+                .map(|p| manifest::changed_warning(name, "verilating", p)),
+        );
         let header_ports = check_model(env, &self.config, &prefix, &model.obj_dir, &placed)?;
+        // After the checks: an IR the model contradicts is not recorded.
+        let front_changed = front.record(&cache, &ir, placed.layout_check.as_ref(), &model.deps)?;
+        warnings.extend(
+            front_changed.map(|p| manifest::changed_warning(name, "the front end ran", &p)),
+        );
         let mut directives = compile::compile(&compile::Inputs {
             env,
             config: &self.config,
@@ -706,35 +708,33 @@ impl Dut {
 }
 
 impl Dut {
-    /// Verilates the model and records the front end's results, with a warning for each
-    /// result left out of the cache because an input changed while it was made.
-    #[expect(clippy::too_many_arguments, reason = "the pipeline's state, used once")]
-    fn verilate(
+    /// The IR (cached or from the JSON pass), the emitted files placed, and the layout
+    /// check run unless it passed for this IR before.
+    fn front_end(
         &self,
         env: &BuildEnv,
         cache: &cache::Cache,
         verilator: &Verilator,
-        args: &[String],
-        front: Front,
-        ir: &pipeline::Ir,
-        placed: &emit::Placed,
-    ) -> Result<(cache::Verilated, Vec<String>), Error> {
-        let name = &self.config.name;
-        let model = cache.verilate(
-            name,
-            verilator,
-            args,
-            &self.config.include_dirs,
-            &env.out_dir,
-        )?;
-        let mut warnings = Vec::new();
-        if let Some(path) = &model.changed {
-            warnings.push(manifest::changed_warning(name, "verilating", path));
+        top: &str,
+    ) -> Result<(Front, pipeline::Ir, emit::Placed), Error> {
+        let sv_inputs = self
+            .config
+            .sv_inputs()
+            .map(|g| cache.store_input(g))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (front, cached) = Front::lookup(cache, &self.config, top, &sv_inputs, verilator)?;
+        let ir = match cached {
+            Some(ir) => ir,
+            None => pipeline::design_ir(&self.config, top, &sv_inputs, verilator, cache)?,
+        };
+        let emitted = (self.emitter)(&ir.design, &self.config)?;
+        let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
+        if let Some(check) = &placed.layout_check
+            && !front.checked(cache, check)
+        {
+            pipeline::layout_check(&self.config, &sv_inputs, verilator, cache, check)?;
         }
-        if let Some(path) = front.record(cache, ir, placed.layout_check.as_ref(), &model.deps)? {
-            warnings.push(manifest::changed_warning(name, "the front end ran", &path));
-        }
-        Ok((model, warnings))
+        Ok((front, ir, placed))
     }
 }
 

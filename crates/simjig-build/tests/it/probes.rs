@@ -235,3 +235,26 @@ fn probes_of_a_real_or_a_string_fail_the_build() {
         );
     }
 }
+
+/// A build whose model check fails (here the probe check against the scope table) leaves
+/// no IR in the cache: the entry is recorded only once the model agrees with it.
+#[test]
+fn a_failed_model_check_records_no_ir() {
+    let s = Sandbox::new();
+    let err = Dut::new("unpacked")
+        .sources([s.rtl().join("unpacked_vars.sv")])
+        .top("unpacked_vars")
+        .probe(
+            "unpacked_vars.r",
+            "unpacked_vars",
+            ProbeType::Bits { width: 1 },
+            ProbeAccess::Read,
+        )
+        .build_in(&s.env())
+        .unwrap_err();
+    assert!(err.to_string().contains("is a `real`"), "{err}");
+    let fronts = std::fs::read_dir(s.path().join("cache/fronts"))
+        .unwrap()
+        .count();
+    assert_eq!(fronts, 0);
+}

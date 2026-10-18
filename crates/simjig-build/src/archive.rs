@@ -155,20 +155,10 @@ impl Toolchain<'_> {
             }
         };
         let full = recorded.recorded_key(DEPS_DOMAIN, pre);
-        let name = archive_name(spec.what, &full);
-        // Publish the archive alone: its objects are inside it.
-        let out = cache.work_dir()?;
-        let dst = out.join(format!("lib{name}.a"));
-        std::fs::rename(&lib, &dst).map_err(Error::io("renaming into", &dst))?;
-        cache::remove_best_effort(&work);
-        let entry = cache.root().join(spec.kind).join(&full);
-        if entry.is_dir() && !entry.join(format!("lib{name}.a")).is_file() {
-            cache::remove_best_effort(&entry);
-        }
-        Cache::publish(&out, &entry)?;
+        let (dir, name) = publish(cache, spec, &full, &lib, &work)?;
         cache.write_atomic(&manifest, &recorded.text())?;
         Ok(Archive {
-            dir: entry,
+            dir,
             name,
             deps,
             changed: None,
@@ -337,6 +327,29 @@ fn lookup(
         deps: m.paths(),
         changed: None,
     })
+}
+
+/// Publishes the archive `lib` that `spec` compiled in `work` as the entry for the full
+/// key `full`; returns the entry and the archive's name. The entry holds the archive
+/// alone: its objects are inside it.
+fn publish(
+    cache: &Cache,
+    spec: &Spec<'_>,
+    full: &str,
+    lib: &Path,
+    work: &Path,
+) -> Result<(PathBuf, String), Error> {
+    let name = archive_name(spec.what, full);
+    let out = cache.work_dir()?;
+    let dst = out.join(format!("lib{name}.a"));
+    std::fs::rename(lib, &dst).map_err(Error::io("renaming into", &dst))?;
+    cache::remove_best_effort(work);
+    let entry = cache.root().join(spec.kind).join(full);
+    if entry.is_dir() && !entry.join(format!("lib{name}.a")).is_file() {
+        cache::remove_best_effort(&entry);
+    }
+    Cache::publish(&out, &entry)?;
+    Ok((entry, name))
 }
 
 /// The name of an archive before its full key is known.

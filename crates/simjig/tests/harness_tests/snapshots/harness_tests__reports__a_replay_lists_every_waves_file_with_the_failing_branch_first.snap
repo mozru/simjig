@@ -1,0 +1,14 @@
+---
+source: crates/simjig/tests/harness_tests/reports.rs
+expression: report.to_string()
+---
+FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [TaskPanic sig=fd557a33bc642bb4]
+  task:     main
+  message:  panicked: 1 of 2 fork branches failed
+  help:     the panic message and the stderr backtrace show the cause
+  repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'
+  waves:    /runs/r/waves.branch-1.fst (fork branch 1, failed at t=1750 ns; from t=250 ns); open with: gtkwave /runs/r/waves.branch-1.gtkw
+            /runs/r/waves.model-1.branch-1.fst (model 1, fork branch 1, failed at t=1750 ns); open with: gtkwave /runs/r/waves.model-1.branch-1.gtkw
+            /runs/r/waves.fst (model 0); open with: gtkwave /runs/r/waves.gtkw
+            /runs/r/waves.model-1.fst (model 1); open with: gtkwave /runs/r/waves.model-1.gtkw
+  replay:   reproduced (same seed, same ending at the same time, same events)

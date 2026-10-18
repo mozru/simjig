@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use simjig::{
     AppliedTimeout, BlockedTask, Failure, FailureKind, FailureReport, Precision, RunIdentity, Seed,
-    SeedSource, SimDuration, SimTime,
+    SeedSource, SimDuration, SimTime, Verdict, WavesFile, WavesReplay,
 };
 
 fn run() -> RunIdentity {
@@ -257,4 +257,38 @@ fn times_print_in_the_largest_exact_unit() {
     let text = render(&f, None);
     assert!(text.contains("  t=1 us  "), "{text}");
     assert!(text.contains("limit:    t=250 ns\n"), "{text}");
+}
+
+#[test]
+fn a_replay_lists_every_waves_file_with_the_failing_branch_first() {
+    let f = failure(
+        FailureKind::TaskPanic {
+            message: "1 of 2 fork branches failed".into(),
+        },
+        Some("main"),
+        "panicked: 1 of 2 fork branches failed",
+    );
+    let mut report = FailureReport::new(&f, run(), None, None);
+    let file =
+        |name: &str, model: usize, branch: Vec<usize>, marker: u64, failing: bool| WavesFile {
+            fst: PathBuf::from(format!("/runs/r/{name}.fst")),
+            gtkw: Some(PathBuf::from(format!("/runs/r/{name}.gtkw"))),
+            model,
+            branch,
+            marker: SimTime(marker),
+            failing_branch: failing,
+        };
+    report.waves = Some(WavesReplay {
+        files: vec![
+            file("waves.branch-1", 0, vec![1], 1750, true),
+            file("waves.model-1.branch-1", 1, vec![1], 1750, true),
+            file("waves", 0, vec![], 1250, false),
+            file("waves.model-1", 1, vec![], 1250, false),
+        ],
+        from: SimTime(250),
+        to: None,
+        precision: Precision::NS,
+        verdict: Verdict::Reproduced,
+    });
+    insta::assert_snapshot!(report.to_string());
 }

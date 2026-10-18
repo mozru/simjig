@@ -65,7 +65,7 @@ the public API, the generated code or simulation semantics.
 - A replay keeps every trace file it wrote: one per model (`waves.fst`,
   `waves.model-<i>.fst`) and per fork branch (`waves[.model-<i>].branch-<j>.fst`), each
   with its own `.gtkw`. `WavesReplay::files: Vec<WavesFile>` (model, branch path, marker,
-  save file) replaces `WavesReplay::{fst, gtkw}`. When a fork branch fails the test, its
+  save file; new `simjig::WavesFile`) replaces `WavesReplay::{fst, gtkw}`. When a fork branch fails the test, its
   files come first in the report, with the marker at the branch's own failure.
 - `cargo simjig waves <test> --seed <seed> [--window ..]`. It checks `--window` itself
   (decimals such as `1.5us` become `1500ns`; a bad window is a usage error naming the

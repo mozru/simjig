@@ -41,7 +41,7 @@ pub use harness::multi::{Divergence, Lockstep, Mirror};
 pub use harness::report::{AppliedTimeout, FailureReport, RunIdentity, Signature};
 pub use harness::runner::TestOutput;
 pub use harness::seed::{Rng, Seed, SeedSource};
-pub use harness::waves::{Verdict, WavesReplay};
+pub use harness::waves::{Verdict, WavesFile, WavesReplay};
 pub use kernel::clock::{Clock, ClockError, ClockHandle, clock};
 pub use kernel::failure::{BlockedTask, Failure, FailureKind, SourceLocation};
 pub use kernel::fake::{FakeModel, FakeSig, FakeState};

@@ -7,13 +7,13 @@ error: a simjig test takes at most 4 DUT parameters; group more models in one ty
 error: the test context is shared: take `&simjig::TestCtx`, not `&mut`
  --> tests/harness_ui/bad_params.rs:7:32
   |
-7 | async fn mutable_context(sim: &mut simjig::TestCtx) {}
+7 | async fn mutable_context(ctx: &mut simjig::TestCtx) {}
   |                                ^^^
 
-error: put the context parameter first: `(sim: &simjig::TestCtx, dut: Dut)`
+error: put the context parameter first: `(ctx: &simjig::TestCtx, dut: Dut)`
   --> tests/harness_ui/bad_params.rs:10:33
    |
-10 | async fn context_last(dut: Dut, sim: &simjig::TestCtx) {}
+10 | async fn context_last(dut: Dut, ctx: &simjig::TestCtx) {}
    |                                 ^^^^^^^^^^^^^^^^^^^^^
 
 error: a simjig test cannot be generic; name the DUT type in the parameter list, or list the DUT types to run a generic body on: `duts = [small::Dut, big::Dut]`

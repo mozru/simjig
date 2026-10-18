@@ -13,8 +13,8 @@ mod test_attr;
 ///
 /// ```ignore
 /// #[simjig::test(timeout = "2ms")]
-/// async fn backpressure(sim: &simjig::TestCtx, dut: fifo::Dut) -> simjig::Result {
-///     let mut rng = sim.rng("stim");
+/// async fn backpressure(ctx: &simjig::TestCtx, dut: fifo::Dut) -> simjig::Result {
+///     let mut rng = ctx.rng("stim");
 ///     // ...
 ///     Ok(())
 /// }
@@ -32,7 +32,7 @@ mod test_attr;
 ///   name `::simjig`, so a crate with generated DUTs must keep the dependency's name.
 ///
 /// # Signature
-/// `async fn name([sim: &simjig::TestCtx,] [dut: D, ...]) [-> simjig::Result]`, where each
+/// `async fn name([ctx: &simjig::TestCtx,] [dut: D, ...]) [-> simjig::Result]`, where each
 /// `D` implements `simjig::DutModel` and the parameter names are free. A shared-reference
 /// parameter is the context, a by-value parameter a DUT; the context comes first. Up to
 /// four DUTs share one simulation (`async fn t(a: inv::Dut, b: flop::Dut)`), each with its

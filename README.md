@@ -28,6 +28,10 @@ repository").
 A failing test prints a report with the seed, the simulation time, the failing task and a
 one-line `repro:` command that reruns it with the same seed.
 
+A `#[simjig::test]` function takes the test context first, then the DUT, and both are
+optional: `async fn t(ctx: &simjig::TestCtx, dut: flop::Dut)`, `async fn t(dut: flop::Dut)`
+or `async fn t()`.
+
 Every `#[simjig::test]` has a simulation-time budget: 10 ms unless it sets
 `timeout = "..."` (or `timeout = "none"`). For hangs that do not advance simulation time,
 the quickstart's `.config/nextest.toml` sets a wall-clock `slow-timeout` with

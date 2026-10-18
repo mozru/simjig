@@ -1,11 +1,11 @@
 ---
 source: crates/simjig-macros/src/test_attr.rs
-expression: "render(quote!(), quote!\n{ async fn pair(sim: &TestCtx, a: inv::Dut, b: flop::Dut) {} })"
+expression: "render(quote!(), quote!\n{ async fn pair(ctx: &TestCtx, a: inv::Dut, b: flop::Dut) {} })"
 ---
 #[::core::prelude::v1::test]
 fn pair() {
     #[allow(clippy::unused_async, clippy::result_large_err)]
-    async fn pair(sim: &TestCtx, a: inv::Dut, b: flop::Dut) {}
+    async fn pair(ctx: &TestCtx, a: inv::Dut, b: flop::Dut) {}
     ::simjig::__private::run_test::<
         (inv::Dut, flop::Dut),
         _,
@@ -20,8 +20,8 @@ fn pair() {
             should_panic: false,
             init: ::core::option::Option::None,
         },
-        |__simjig_sim, (__simjig_dut0, __simjig_dut1)| async move {
-            pair(&__simjig_sim, __simjig_dut0, __simjig_dut1).await
+        |__simjig_ctx, (__simjig_dut0, __simjig_dut1)| async move {
+            pair(&__simjig_ctx, __simjig_dut0, __simjig_dut1).await
         },
     );
 }

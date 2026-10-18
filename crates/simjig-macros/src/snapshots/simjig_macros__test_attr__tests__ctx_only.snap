@@ -1,11 +1,11 @@
 ---
 source: crates/simjig-macros/src/test_attr.rs
-expression: "render(quote!(), quote! { async fn b(sim: &TestCtx) {} })"
+expression: "render(quote!(), quote! { async fn b(ctx: &TestCtx) {} })"
 ---
 #[::core::prelude::v1::test]
 fn b() {
     #[allow(clippy::unused_async, clippy::result_large_err)]
-    async fn b(sim: &TestCtx) {}
+    async fn b(ctx: &TestCtx) {}
     ::simjig::__private::run_test::<
         (),
         _,
@@ -20,6 +20,6 @@ fn b() {
             should_panic: false,
             init: ::core::option::Option::None,
         },
-        |__simjig_sim, _| async move { b(&__simjig_sim).await },
+        |__simjig_ctx, _| async move { b(&__simjig_ctx).await },
     );
 }

@@ -7,10 +7,10 @@
 //! #[simjig::test(timeout = "none")]                 no time limit
 //! #[simjig::test(init = random)]                    random initial values (or `zero`)
 //! #[simjig::test(crate = <path>)]                   simjig under another name
-//! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
+//! async fn <name>([<ctx>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
 //!
 //! #[simjig::test(duts = [<Dut>, ...])]              one test per DUT type
-//! async fn <name><D: ..>([<sim>: &<Ctx>,] <dut>: D) [-> <Output>] { ... }
+//! async fn <name><D: ..>([<ctx>: &<Ctx>,] <dut>: D) [-> <Output>] { ... }
 //! ```
 //! With `duts`, the function may be generic and takes exactly one DUT. The expansion is a
 //! module `<name>` holding the function as written and one `#[test]` per DUT type, named
@@ -193,7 +193,7 @@ const MAX_DUTS: usize = 4;
 struct TestFn {
     func: ItemFn,
     /// The span of the context parameter's type, if the test takes one.
-    sim: Option<Span>,
+    ctx: Option<Span>,
     /// The DUT types, in parameter order.
     duts: Vec<Type>,
 }
@@ -205,7 +205,7 @@ impl TestFn {
     fn validate(func: ItemFn, each: bool) -> syn::Result<Self> {
         let mut errors = Vec::new();
         check_qualifiers(&func, each, &mut errors);
-        let (sim, duts) = classify_params(&func, &mut errors);
+        let (ctx, duts) = classify_params(&func, &mut errors);
         if each && duts.len() != 1 {
             errors.push(syn::Error::new_spanned(
                 &func.sig.inputs,
@@ -220,7 +220,7 @@ impl TestFn {
             }
             return Err(first);
         }
-        Ok(Self { func, sim, duts })
+        Ok(Self { func, ctx, duts })
     }
 }
 
@@ -268,7 +268,7 @@ fn check_qualifiers(func: &ItemFn, each: bool, errors: &mut Vec<syn::Error>) {
 
 /// Sorts the parameters into the context (a shared reference) and the DUTs (by value).
 fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>, Vec<Type>) {
-    let (mut sim, mut duts) = (None::<Span>, Vec::<Type>::new());
+    let (mut ctx, mut duts) = (None::<Span>, Vec::<Type>::new());
     for arg in &func.sig.inputs {
         let pat = match arg {
             FnArg::Receiver(receiver) => {
@@ -287,7 +287,7 @@ fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>
                         mutability.span,
                         "the test context is shared: take `&simjig::TestCtx`, not `&mut`",
                     ));
-                } else if sim.is_some() {
+                } else if ctx.is_some() {
                     errors.push(syn::Error::new_spanned(
                         pat,
                         "a simjig test takes at most one context parameter (`&simjig::TestCtx`)",
@@ -295,10 +295,10 @@ fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>
                 } else if !duts.is_empty() {
                     errors.push(syn::Error::new_spanned(
                         pat,
-                        "put the context parameter first: `(sim: &simjig::TestCtx, dut: Dut)`",
+                        "put the context parameter first: `(ctx: &simjig::TestCtx, dut: Dut)`",
                     ));
                 } else {
-                    sim = Some(pat.ty.span());
+                    ctx = Some(pat.ty.span());
                 }
             }
             ty if duts.len() == MAX_DUTS => errors.push(syn::Error::new_spanned(
@@ -311,7 +311,7 @@ fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>
             ty => duts.push(ty.clone()),
         }
     }
-    (sim, duts)
+    (ctx, duts)
 }
 
 /// The runner's DUT type, the closure pattern that takes it apart, and the variables it
@@ -334,21 +334,21 @@ fn dut_parts(duts: &[Type]) -> (TokenStream, TokenStream, Vec<Ident>) {
     }
 }
 
-/// The test body's closure parameters (`|sim, dut|`) and the arguments the closure passes
+/// The test body's closure parameters (`|ctx, dut|`) and the arguments the closure passes
 /// to the user's function, which takes the context, the DUTs, both or neither.
 fn closure_params(test: &TestFn, dut_vars: &[Ident]) -> (TokenStream, Vec<TokenStream>) {
-    let sim_var = format_ident!("__simjig_sim");
-    let (sim_pat, sim_arg) = match test.sim {
+    let ctx_var = format_ident!("__simjig_ctx");
+    let (ctx_pat, ctx_arg) = match test.ctx {
         // Spanned at the user's parameter type, so a wrong type is reported there.
         Some(span) => {
-            let arg = Ident::new("__simjig_sim", span);
-            (quote!(#sim_var), Some(quote_spanned!(span=> &#arg)))
+            let arg = Ident::new("__simjig_ctx", span);
+            (quote!(#ctx_var), Some(quote_spanned!(span=> &#arg)))
         }
         None => (quote!(_), None),
     };
     (
-        sim_pat,
-        sim_arg
+        ctx_pat,
+        ctx_arg
             .into_iter()
             .chain(dut_vars.iter().map(|v| quote!(#v)))
             .collect(),
@@ -379,10 +379,10 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
     body.attrs.clear();
     body.vis = Visibility::Inherited;
     let (dut_ty, dut_pat, dut_vars) = dut_parts(&test.duts);
-    let (sim_pat, call_args) = closure_params(test, &dut_vars);
+    let (ctx_pat, call_args) = closure_params(test, &dut_vars);
     let allow = allow();
     let output_check = output_check(args, sig);
-    let run = run_call(args, test, &dut_ty, &sim_pat, &dut_pat, ident, &call_args);
+    let run = run_call(args, test, &dut_ty, &ctx_pat, &dut_pat, ident, &call_args);
     quote! {
         #[::core::prelude::v1::test]
         #(#attrs)*
@@ -426,7 +426,7 @@ fn run_call(
     args: &Args,
     test: &TestFn,
     dut_ty: &TokenStream,
-    sim_pat: &TokenStream,
+    ctx_pat: &TokenStream,
     dut_pat: &TokenStream,
     name: &Ident,
     call_args: &[TokenStream],
@@ -455,7 +455,7 @@ fn run_call(
                 should_panic: #should_panic,
                 init: #init,
             },
-            |#sim_pat, #dut_pat| async move { #func(#(#call_args),*).await },
+            |#ctx_pat, #dut_pat| async move { #func(#(#call_args),*).await },
         );
     }
 }
@@ -497,12 +497,12 @@ fn emit_each(args: &Args, test: &TestFn, duts: &[Type]) -> syn::Result<TokenStre
         .zip(&names)
         .map(|(ty, name)| {
             let dut_var = format_ident!("__simjig_dut");
-            let (sim_pat, call_args) = closure_params(test, std::slice::from_ref(&dut_var));
+            let (ctx_pat, call_args) = closure_params(test, std::slice::from_ref(&dut_var));
             let run = run_call(
                 args,
                 test,
                 &quote!(#ty),
-                &sim_pat,
+                &ctx_pat,
                 &quote!(#dut_var),
                 name,
                 &call_args,
@@ -576,8 +576,8 @@ mod tests {
             quote! {
                 /// Docs stay on the test.
                 #[ignore]
-                async fn backpressure(sim: &TestCtx, dut: fifo::Dut) -> simjig::Result {
-                    dut.go(sim).await
+                async fn backpressure(ctx: &TestCtx, dut: fifo::Dut) -> simjig::Result {
+                    dut.go(ctx).await
                 }
             }
         ));
@@ -616,14 +616,14 @@ mod tests {
     }
 
     #[test]
-    fn expands_dut_only_and_sim_only() {
+    fn expands_dut_only_and_ctx_only() {
         insta::assert_snapshot!(
             "dut_only",
             render(quote!(), quote! { async fn a(dut: Counter) {} })
         );
         insta::assert_snapshot!(
-            "sim_only",
-            render(quote!(), quote! { async fn b(sim: &TestCtx) {} })
+            "ctx_only",
+            render(quote!(), quote! { async fn b(ctx: &TestCtx) {} })
         );
     }
 
@@ -661,7 +661,7 @@ mod tests {
     fn expands_several_duts_to_a_tuple() {
         insta::assert_snapshot!(render(
             quote!(),
-            quote! { async fn pair(sim: &TestCtx, a: inv::Dut, b: flop::Dut) {} }
+            quote! { async fn pair(ctx: &TestCtx, a: inv::Dut, b: flop::Dut) {} }
         ));
     }
 
@@ -691,7 +691,7 @@ mod tests {
             quote! {
                 /// Docs go on the module.
                 #[ignore]
-                pub async fn resets<D: fifo::Ports>(sim: &TestCtx, dut: D) -> simjig::Result {
+                pub async fn resets<D: fifo::Ports>(ctx: &TestCtx, dut: D) -> simjig::Result {
                     Ok(())
                 }
             }
@@ -737,7 +737,7 @@ mod tests {
     fn rejects_context_after_dut() {
         insta::assert_snapshot!(render(
             quote!(),
-            quote! { async fn t(dut: Dut, sim: &TestCtx) {} }
+            quote! { async fn t(dut: Dut, ctx: &TestCtx) {} }
         ));
     }
 }

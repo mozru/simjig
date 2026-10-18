@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `#[simjig::test]`: the error for a context parameter after a DUT now suggests
+  `(ctx: &simjig::TestCtx, dut: Dut)` (was `sim`), and the macro's docs, grammar and
+  expansion name the context `ctx` throughout (`__simjig_ctx` in the generated closure;
+  reviewed snapshots `simjig_macros::test_attr` and `harness_ui/bad_params.stderr`). The
+  README states the parameter order once: the context, then the DUT, both optional.
 - Sweep modules (generated code, reviewed snapshots `codegen_it::sweep`): the ports' own
   associated types are named before the types their structs' fields and bundles bring,
   so adding a field to a struct port can no longer rename a flat port's type. Renamed:

@@ -36,13 +36,13 @@ async fn context_gives_the_precision_to_print_times(ctx: &TestCtx) {
 }
 
 #[simjig::test]
-async fn context_names_the_test_and_its_seeds(sim: &TestCtx, _dut: counter::Dut) {
+async fn context_names_the_test_and_its_seeds(ctx: &TestCtx, _dut: counter::Dut) {
     assert_eq!(
-        sim.test_name(),
+        ctx.test_name(),
         "macros::context_names_the_test_and_its_seeds"
     );
-    assert_eq!(sim.rng("a"), sim.seed().rng("a"));
-    assert_eq!(sim.verilator_seed(), sim.seed().verilator_seed());
+    assert_eq!(ctx.rng("a"), ctx.seed().rng("a"));
+    assert_eq!(ctx.verilator_seed(), ctx.seed().verilator_seed());
 }
 
 #[simjig::test(timeout = "100ns")]

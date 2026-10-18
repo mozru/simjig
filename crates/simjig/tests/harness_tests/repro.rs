@@ -15,8 +15,8 @@ fn first_draw(seed: u64) -> u64 {
 
 #[simjig::test]
 #[ignore = "fails for odd draws on purpose; run by `simjig_seed_reproduces_a_seeded_failure`"]
-async fn seeded_failure(sim: &TestCtx, dut: counter::Dut) {
-    let value = sim.rng("stim").below(1000);
+async fn seeded_failure(ctx: &TestCtx, dut: counter::Dut) {
+    let value = ctx.rng("stim").below(1000);
     dut.en.write_u64(1);
     dut.data.write_u64(value & 0xff);
     rising(dut.clk).await;

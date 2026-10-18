@@ -1,5 +1,5 @@
 ---
 source: crates/simjig-macros/src/test_attr.rs
-expression: "render(quote!(), quote! { async fn t(dut: Dut, sim: &TestCtx) {} })"
+expression: "render(quote!(), quote! { async fn t(dut: Dut, ctx: &TestCtx) {} })"
 ---
-error: put the context parameter first: `(sim: &simjig::TestCtx, dut: Dut)`
+error: put the context parameter first: `(ctx: &simjig::TestCtx, dut: Dut)`

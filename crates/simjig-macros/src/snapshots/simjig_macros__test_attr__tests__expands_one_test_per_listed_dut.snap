@@ -1,13 +1,13 @@
 ---
 source: crates/simjig-macros/src/test_attr.rs
-expression: "render(quote!(timeout = \"1us\", duts = [fifo::small::Dut, fifo::big::Dut]),\nquote!\n{\n    #[doc = r\" Docs go on the module.\"] #[ignore] pub async fn resets<D:\n    fifo::Ports>(sim: &TestCtx, dut: D) -> simjig::Result { Ok(()) }\n})"
+expression: "render(quote!(timeout = \"1us\", duts = [fifo::small::Dut, fifo::big::Dut]),\nquote!\n{\n    #[doc = r\" Docs go on the module.\"] #[ignore] pub async fn resets<D:\n    fifo::Ports>(ctx: &TestCtx, dut: D) -> simjig::Result { Ok(()) }\n})"
 ---
 /// Docs go on the module.
 pub mod resets {
     #[allow(unused_imports)]
     use super::*;
     #[allow(clippy::unused_async, clippy::result_large_err)]
-    async fn resets<D: fifo::Ports>(sim: &TestCtx, dut: D) -> simjig::Result {
+    async fn resets<D: fifo::Ports>(ctx: &TestCtx, dut: D) -> simjig::Result {
         Ok(())
     }
     #[::core::prelude::v1::test]
@@ -31,8 +31,8 @@ pub mod resets {
                 should_panic: false,
                 init: ::core::option::Option::None,
             },
-            |__simjig_sim, __simjig_dut| async move {
-                resets(&__simjig_sim, __simjig_dut).await
+            |__simjig_ctx, __simjig_dut| async move {
+                resets(&__simjig_ctx, __simjig_dut).await
             },
         );
     }
@@ -57,8 +57,8 @@ pub mod resets {
                 should_panic: false,
                 init: ::core::option::Option::None,
             },
-            |__simjig_sim, __simjig_dut| async move {
-                resets(&__simjig_sim, __simjig_dut).await
+            |__simjig_ctx, __simjig_dut| async move {
+                resets(&__simjig_ctx, __simjig_dut).await
             },
         );
     }

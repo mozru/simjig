@@ -25,8 +25,8 @@ use crate::kernel::{sim, state};
 ///
 /// ```ignore
 /// #[simjig::test]
-/// async fn random_writes(sim: &TestCtx, dut: fifo::Dut) {
-///     let mut rng = sim.rng("stim");
+/// async fn random_writes(ctx: &TestCtx, dut: fifo::Dut) {
+///     let mut rng = ctx.rng("stim");
 ///     dut.data.set(rng.below(256));
 /// }
 /// ```

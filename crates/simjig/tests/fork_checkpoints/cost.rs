@@ -50,11 +50,22 @@ async fn copy_on_write_shows_in_the_branch_cost(ctx: &TestCtx, _dut: counter::Du
         );
         assert!(cost.wall >= cost.fork, "{cost:?}");
     }
+    // The bound is half the page count, not the page count. Each branch's count includes a
+    // baseline of faults from the runtime (allocator, stack, the report pipe), and that
+    // baseline varies with timing and load: branch 1's baseline need not equal the idle
+    // branches', and the kernel may resolve a write to a page another fault already
+    // brought in (fault-around, a page swapped back in under memory pressure) without a
+    // fault of its own. The exact bound once failed under load by a single fault (2047 of
+    // 2048), so it tested the noise. Half the pages, ~1000 faults above an idle branch's
+    // ~200, still fails if copy-on-write stopped showing in `minor_faults` (the count
+    // would stay near the idle baseline) and leaves a margin far above that noise.
     let idle = costs[0].minor_faults.max(costs[2].minor_faults);
     let copied = costs[1].minor_faults.saturating_sub(idle);
+    let pages = (BALLAST / MAX_PAGE) as u64;
     assert!(
-        copied >= (BALLAST / MAX_PAGE) as u64,
-        "rewriting {BALLAST} bytes copies at least one fault per page: {costs:?}"
+        copied >= pages / 2,
+        "rewriting {BALLAST} bytes ({pages} pages of {MAX_PAGE} bytes or more) costs at \
+         least one fault per two pages: {costs:?}"
     );
     assert!(
         ballast.borrow().iter().all(|&b| b == 1),

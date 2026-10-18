@@ -494,10 +494,13 @@ impl DutConfig {
                 return fail(format!("Verilator argument `{arg}`: {why}"));
             }
         }
-        if let Some((file, word)) = crate::optfile::find(&self.option_args(), is_param_override) {
+        let param = |w: &str, _: Option<&str>| is_param_override(w).then_some(());
+        if let Some(found) = crate::optfile::find(&self.option_args(), param) {
             return fail(format!(
-                "Verilator option file `{}` has `{word}`: {PARAM_HINT}",
-                file.display()
+                "Verilator option file `{}` has `{}` on line {}: {PARAM_HINT}",
+                found.file.display(),
+                found.word,
+                found.line
             ));
         }
         if self

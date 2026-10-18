@@ -4,26 +4,53 @@
 //!
 //! A word is what is left between whitespace once the comments are gone: `//` after
 //! whitespace or at the start of a line, `#` as the first non-blank character of a line,
-//! and `/* */`. Quotes and backslash escapes are not interpreted (a quote at either end
-//! of a word is dropped), which only matters to an option inside a quoted value. Paths in
-//! an `-F` file are relative to its directory, in an `-f` file to the working directory
-//! (`parseFileArg`). `$VAR` in paths is not substituted, and a file that cannot be read
-//! is left to Verilator to report.
+//! and `/* */`. A file with a `// verilator fargs <words>` (or one-line
+//! `/* verilator fargs <words> */`) comment is only the words of those comments. Within a
+//! word, `\` escapes the next character, `"..."` quotes (with `\` escapes inside; the
+//! quotes are dropped), and `'"..."'` quotes keeping the double quotes; a `'` not followed
+//! by `"` is an ordinary character (`8'hff`). Checked against the
+//! installed 5.052. Paths in an `-F` file are relative to its directory, in an `-f` file
+//! to the working directory (`parseFileArg`). `$VAR` in paths is not substituted, and a
+//! file that cannot be read is left to Verilator to report.
 
 use std::path::{Path, PathBuf};
 
 /// How deep option files may nest before the search stops (a file including itself).
 const MAX_DEPTH: u32 = 16;
 
-/// The first word of the option files `args` name (nested ones too) that `refused`
-/// accepts, with the file it is in.
-pub(crate) fn find(args: &[String], refused: fn(&str) -> bool) -> Option<(PathBuf, String)> {
+/// A word of an option file that a check refused.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Found<T> {
+    /// The option file the word is in.
+    pub(crate) file: PathBuf,
+    /// The 1-based line of the file the word starts on.
+    pub(crate) line: usize,
+    /// The word, as Verilator reads it (quotes and escapes resolved).
+    pub(crate) word: String,
+    /// What the check said about it.
+    pub(crate) why: T,
+}
+
+/// The first word of the option files `args` name (nested ones too) for which `check`,
+/// given the word and the next word of the same file, returns `Some`. Words of `args`
+/// themselves are not checked.
+pub(crate) fn find<T>(
+    args: &[String],
+    mut check: impl FnMut(&str, Option<&str>) -> Option<T>,
+) -> Option<Found<T>> {
     traverse(args, &mut |item| match item {
         Item::Word {
             word,
+            next,
             file: Some(file),
+            line,
             ..
-        } if refused(word) => Some((file.to_path_buf(), word.to_owned())),
+        } => check(word, next).map(|why| Found {
+            file: file.to_path_buf(),
+            line,
+            word: word.to_owned(),
+            why,
+        }),
         _ => None,
     })
 }
@@ -85,11 +112,15 @@ enum Item<'a> {
     /// An option file (`-f`/`-F`), before its words; it may not exist.
     File(&'a Path),
     /// Any other word. `base` is the directory its relative paths join (an `-F` file's),
-    /// `None` for the working directory; `file` is the option file it is in.
+    /// `None` for the working directory; `file` is the option file it is in and `line`
+    /// the 1-based line it starts on there (0 in `args`); `next` is the word after it in
+    /// the same list.
     Word {
         word: &'a str,
+        next: Option<&'a str>,
         base: Option<&'a Path>,
         file: Option<&'a Path>,
+        line: usize,
     },
 }
 
@@ -100,11 +131,12 @@ enum Item<'a> {
 /// file against the working directory, even when that `-f` is inside an `-F` file
 /// (`parseOptsFile(.., false)` sets the option directory to `.`).
 fn traverse<T>(args: &[String], visit: &mut impl FnMut(Item<'_>) -> Option<T>) -> Option<T> {
-    traverse_in(args, None, None, 0, visit)
+    let words: Vec<(String, usize)> = args.iter().map(|a| (a.clone(), 0)).collect();
+    traverse_in(&words, None, None, 0, visit)
 }
 
 fn traverse_in<T>(
-    args: &[String],
+    words: &[(String, usize)],
     base: Option<&Path>,
     file: Option<&Path>,
     depth: u32,
@@ -113,16 +145,18 @@ fn traverse_in<T>(
     if depth > MAX_DEPTH {
         return None;
     }
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
+    let mut it = words.iter().enumerate();
+    while let Some((i, (arg, line))) = it.next() {
         let relative = match arg.strip_prefix("--").or_else(|| arg.strip_prefix('-')) {
             Some("f") => false,
             Some("F") => true,
             _ => {
                 let found = visit(Item::Word {
                     word: arg,
+                    next: words.get(i + 1).map(|(w, _)| w.as_str()),
                     base,
                     file,
+                    line: *line,
                 });
                 if found.is_some() {
                     return found;
@@ -130,25 +164,34 @@ fn traverse_in<T>(
                 continue;
             }
         };
-        let named = Path::new(it.next()?);
+        let named = Path::new(&it.next()?.1.0);
         let path = base.map_or_else(|| named.to_path_buf(), |dir| dir.join(named));
         if let Some(found) = visit(Item::File(&path)) {
             return Some(found);
         }
-        let words = std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words(&t));
+        let inner = std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words_of(&t));
         let dir = if relative { path.parent() } else { None };
-        if let Some(found) = traverse_in(&words, dir, Some(&path), depth + 1, visit) {
+        if let Some(found) = traverse_in(&inner, dir, Some(&path), depth + 1, visit) {
             return Some(found);
         }
     }
     None
 }
 
-/// The words of an option file (see the module docs).
-fn words(text: &str) -> Vec<String> {
-    let mut kept = String::new();
+/// The words of an option file with the line each starts on (see the module docs):
+/// `V3Options::parseOptsFile` of 5.052, its comment pass and then its word splitter.
+fn words_of(text: &str) -> Vec<(String, usize)> {
+    split_words(&without_comments(text))
+}
+
+/// The characters of `text` that are not comments, each with its 1-based line, a space
+/// ending each line; or, when the file has `verilator fargs` comments, only their text.
+fn without_comments(text: &str) -> Vec<(char, usize)> {
+    let mut kept: Vec<(char, usize)> = Vec::new();
+    let mut fargs = false;
     let mut in_comment = false;
-    for line in text.lines() {
+    for (n, line) in text.lines().enumerate() {
+        let n = n + 1;
         let chars: Vec<char> = line.chars().collect();
         let (mut last, mut blank_so_far, mut i) = (' ', true, 0);
         while let Some(&c) = chars.get(i) {
@@ -162,28 +205,118 @@ fn words(text: &str) -> Vec<String> {
                 || (c == '#' && blank_so_far)
             {
                 // A comment to the end of the line.
+                if c == '/' {
+                    fargs_comment(&chars[i..], n, &mut fargs, &mut kept);
+                }
                 break;
             } else if c == '/' && next == Some('*') {
+                fargs_comment(&chars[i..], n, &mut fargs, &mut kept);
                 in_comment = true;
                 blank_so_far = false;
                 i += 1;
             } else {
                 blank_so_far &= c.is_whitespace();
-                kept.push(c);
+                if !fargs {
+                    kept.push((c, n));
+                }
             }
             last = chars[i];
             i += 1;
         }
-        kept.push(' ');
+        if !fargs {
+            kept.push((' ', n));
+        }
     }
-    kept.split_whitespace()
-        .map(|w| w.trim_matches('"').to_owned())
-        .collect()
+    kept
+}
+
+/// A `// verilator fargs <words>` or `/* verilator fargs <words> */` comment (`comment`
+/// starts at its `/`): the first one replaces what was kept so far, and from then on only
+/// such comments are kept.
+fn fargs_comment(comment: &[char], line: usize, fargs: &mut bool, kept: &mut Vec<(char, usize)>) {
+    let block = comment.get(1) == Some(&'*');
+    let text: String = comment[2..].iter().collect();
+    let Some(rest) = text
+        .trim_start()
+        .strip_prefix("verilator")
+        .filter(|r| r.starts_with(char::is_whitespace))
+        .and_then(|r| r.trim_start().strip_prefix("fargs"))
+        .filter(|r| r.starts_with(char::is_whitespace))
+    else {
+        return;
+    };
+    let mut rest = rest.trim_start();
+    if block {
+        // A block that does not end on its line is a fatal error, which Verilator reports.
+        rest = rest.split_once("*/").map_or(rest, |(words, _)| words);
+    }
+    if !std::mem::replace(fargs, true) {
+        kept.clear();
+    }
+    kept.extend(rest.chars().chain([' ']).map(|c| (c, line)));
+}
+
+/// Verilator's word splitter: whitespace ends a word outside quotes, `\` escapes a
+/// character, `"..."` quotes with escapes, `'"...'` quotes keeping the `"`.
+fn split_words(chars: &[(char, usize)]) -> Vec<(String, usize)> {
+    #[derive(Clone, Copy)]
+    enum St {
+        Word,
+        Escaped,
+        Single,
+        Double,
+    }
+    let (mut st, mut before_escape) = (St::Word, St::Word);
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let mut start = 0;
+    let mut it = chars.iter().copied().peekable();
+    while let Some((c, line)) = it.next() {
+        if word.is_empty() && matches!(st, St::Word) {
+            start = line;
+        }
+        match st {
+            St::Word if c.is_whitespace() => {
+                if !word.is_empty() {
+                    out.push((std::mem::take(&mut word), start));
+                }
+            }
+            St::Word if c == '\\' => (before_escape, st) = (st, St::Escaped),
+            St::Word if c == '\'' => {
+                // `'"` opens a quoted string; otherwise the quote is kept (`8'hff`), and
+                // so is the character after it, whatever it is.
+                let after = it.next().map_or('\'', |(a, _)| a);
+                if after == '"' {
+                    st = St::Single;
+                } else {
+                    word.push('\'');
+                }
+                word.push(after);
+            }
+            St::Word if c == '"' => st = St::Double,
+            St::Single if c == '\'' => st = St::Word,
+            St::Double if c == '"' => st = St::Word,
+            St::Double if c == '\\' => (before_escape, st) = (st, St::Escaped),
+            St::Escaped => {
+                word.push(c);
+                st = before_escape;
+            }
+            St::Word | St::Single | St::Double => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        out.push((word, start));
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn is_g(word: &str, _: Option<&str>) -> Option<()> {
+        word.starts_with("-G").then_some(())
+    }
 
     /// What a failed build reruns on: sources, library files and directories and include
     /// directories, from the arguments and from option files, resolved like Verilator;
@@ -250,9 +383,18 @@ mod tests {
             ]
         );
         assert_eq!(
-            find(&outer, |w| w.starts_with("-G")),
-            Some((sub.join("inner.f"), "-GX=1".to_owned()))
+            find(&outer, is_g),
+            Some(Found {
+                file: sub.join("inner.f"),
+                line: 2,
+                word: "-GX=1".to_owned(),
+                why: ()
+            })
         );
+    }
+
+    fn words(text: &str) -> Vec<String> {
+        words_of(text).into_iter().map(|(w, _)| w).collect()
     }
 
     #[test]
@@ -260,6 +402,53 @@ mod tests {
         let text = "-Wall // -GA=1\n# -GB=1\n  # -GC=1\n-x /* -GD=1\n -GE=1 */ -y\n\
                     a//b \"-GF=1\" #z\n";
         assert_eq!(words(text), ["-Wall", "-x", "-y", "a//b", "-GF=1", "#z"]);
+    }
+
+    /// Quotes and escapes as the installed Verilator 5.052 reads them, each case checked by
+    /// running it on an option file and reading the word back from `Invalid option: ..`.
+    #[test]
+    fn quotes_and_escapes_are_verilators() {
+        for (text, want) in [
+            (r"--bog\ us", &["--bog us"][..]),
+            (r#""--bog us""#, &["--bog us"]),
+            (r#"--a"b c"d"#, &["--ab cd"]),
+            (r#""a\"b""#, &[r#"a"b"#]),
+            (r#"'"x y"'"#, &[r#""x y""#]),
+            // A `'` keeps the character after it, the line's closing space here (5.052
+            // reports `Cannot find file containing module: 'us' '`).
+            ("'--bog us'", &["'--bog", "us' "]),
+            ("-GX='h5 --bogq", &["-GX='h5", "--bogq"]),
+        ] {
+            assert_eq!(words(text), want, "{text}");
+        }
+    }
+
+    /// A `verilator fargs` comment (5.052 reads them; checked) makes the file only those
+    /// comments' words.
+    #[test]
+    fn fargs_comments_replace_the_file() {
+        assert_eq!(
+            words("-a\n// verilator fargs --fargsword\n--bodyword\n"),
+            ["--fargsword"]
+        );
+        assert_eq!(
+            words("/* verilator fargs --blockfargs */ --body2\n// verilator fargs x y\n"),
+            ["--blockfargs", "x", "y"]
+        );
+        assert_eq!(words("// verilator fargsx --a\n-b\n"), ["-b"]);
+    }
+
+    #[test]
+    fn words_know_their_line() {
+        assert_eq!(
+            words_of("a.sv\n\n  --top-module x // c\n\"y\nz\"\n"),
+            [
+                ("a.sv".to_owned(), 1),
+                ("--top-module".to_owned(), 3),
+                ("x".to_owned(), 3),
+                ("y z".to_owned(), 4)
+            ]
+        );
     }
 
     #[test]
@@ -270,11 +459,15 @@ mod tests {
         // `-F` resolves `inner.f` next to itself.
         std::fs::write(sub.join("outer.F"), "-Wall\n-f inner.f\n").unwrap();
         std::fs::write(sub.join("inner.f"), "// -GX=0\n-GX=1\n").unwrap();
-        let is_g = |w: &str| w.starts_with("-G");
         let outer = sub.join("outer.F").display().to_string();
         assert_eq!(
             find(&["-F".to_owned(), outer.clone()], is_g),
-            Some((sub.join("inner.f"), "-GX=1".to_owned()))
+            Some(Found {
+                file: sub.join("inner.f"),
+                line: 2,
+                word: "-GX=1".to_owned(),
+                why: ()
+            })
         );
         assert_eq!(
             inputs(&[

@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Option files (`-f`, `-F`, file lists) are split into words as Verilator 5.052 does:
+  `\` escapes, `"..."` and `'"..."'` quotes, and `// verilator fargs` comments, which
+  replace the file's words. The configuration checks and a failed build's reruns read
+  the same words Verilator does (a quoted `"-GX=1"` was seen with its quotes dropped
+  only at the ends, an escaped space split the word). The `-G` refusal names the line.
 - A successful `Dut::build` tracks a `CppRecipe::include_dirs` entry by the files
   directly in it, never an ancestor of `OUT_DIR`, as a failed build does: an include
   directory of `.` is the package directory, which Cargo scanned whole, `target/`

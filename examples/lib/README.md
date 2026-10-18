@@ -12,7 +12,7 @@ pixi run cargo simjig show sync_fifo -p simjig-examples-lib   # a DUT's generate
 | File | What |
 |---|---|
 | `rtl/` | the modules, lint-clean under Verilator `-Wall` |
-| `build.rs` | one function per module, each building that module's DUTs (every one with `-Wall`) |
+| `build.rs` | one function per module, each building that module's DUTs (every one with `-Wall` and FST tracing, for waves on failure) |
 | `tests/<module>.rs` | one test binary per module |
 
 ## The testbench shape

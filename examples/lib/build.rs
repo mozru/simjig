@@ -2,7 +2,10 @@
 //! model into this crate's tests (`simjig::include_dut!(<name>)` in a test file).
 //!
 //! One function per DUT, each in its own block, so modules can be added independently.
-//! Every DUT is linted with `-Wall`; Verilator's warnings fail the build.
+//! Every DUT is linted with `-Wall`; Verilator's warnings fail the build. Every DUT is
+//! built with `.trace_fst(true)`, so any failing test here can be replayed with waves
+//! (`SIMJIG_WAVES_ON_FAIL=1`, or the report's `waves:` line). Tracing costs only build
+//! time: a run is traced only when it is replayed for waves.
 
 use simjig_build::{Dut, Error, IfaceBinding};
 
@@ -29,6 +32,7 @@ fn sync_fifo() -> Result<(), Error> {
         .param("WIDTH", 8)
         .param("DEPTH", 4)
         .param("FWFT", 0)
+        .trace_fst(true)
         .verilator_args(LINT)
         .build()?;
     Dut::new("item_fifo")
@@ -36,6 +40,7 @@ fn sync_fifo() -> Result<(), Error> {
         .top("item_fifo")
         .param("DEPTH", 4)
         .param("FWFT", 1)
+        .trace_fst(true)
         .verilator_args(LINT)
         .build()?;
     Ok(())
@@ -63,6 +68,7 @@ fn skid_buffer() -> Result<(), Error> {
         .param("WIDTH", SKID_WIDTH)
         .bind_iface_with(stream("up", "sink"))
         .bind_iface_with(stream("down", "source"))
+        .trace_fst(true)
         .verilator_args(LINT)
         // The generated top (`simjig_wrap_skid_buffer`) declares no `timeunit`, while every
         // RTL unit here does: without a default, Verilator stops on the mix (TIMESCALEMOD).

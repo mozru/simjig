@@ -29,6 +29,7 @@
 extern "C" {
 const simjig_model_vtable* simjig_vtable_Vtc_full(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_badprobe(void);
 const simjig_model_vtable* simjig_vtable_Vtc_hier(void);
 const simjig_model_vtable* simjig_vtable_Vtc_timing(void);
 }
@@ -239,6 +240,50 @@ void vtable_describes_the_build() {
     CHECK_EQ(simjig_vtable_Vtc_hier()->features, SIMJIG_FEATURE_COVERAGE);
     CHECK_EQ(simjig_vtable_Vtc_timing()->features,
              SIMJIG_FEATURE_TIMING | SIMJIG_FEATURE_TRACE_FST);
+}
+
+void probe_width_is_checked_at_create() {
+    {
+        Model ok{simjig_vtable_Vtc_plain(), "TOP"};
+        CHECK_EQ(ok.created(), SIMJIG_OK);
+    }
+    Model bad{simjig_vtable_Vtc_plain_badprobe(), "TOP"};
+    CHECK_EQ(bad.created(), SIMJIG_EXCEPTION);
+    bool named = false;
+    for (const simjig_msg& msg : bad.drain()) {
+        if (msg.kind != SIMJIG_MSG_EXCEPTION) continue;
+        named = std::strstr(msg.msg, "probe 'tc.u.r'") != nullptr
+                && std::strstr(msg.msg, "is 1 bits wide, but it is bound as 5 bits") != nullptr;
+        if (!named) std::fprintf(stderr, "  message: %s\n", msg.msg);
+    }
+    CHECK(named);
+    CHECK_EQ(bad.vt()->eval(bad.h()), SIMJIG_POISONED);
+}
+
+// simjig_rt_abi_fields lists every field: within each struct the fields start at 0, follow
+// each other without overlap, and end inside the struct.
+void abi_field_table_covers_every_field() {
+    size_t n = 0;
+    const simjig_abi_field* f = simjig_rt_abi_fields(&n);
+    CHECK_EQ(n, 47u);
+    const std::pair<const char*, size_t> types[] = {
+        {"simjig_model_vtable", sizeof(simjig_model_vtable)},
+        {"simjig_signal", sizeof(simjig_signal)},
+        {"simjig_msg", sizeof(simjig_msg)},
+        {"simjig_create_opts", sizeof(simjig_create_opts)},
+    };
+    size_t i = 0;
+    for (const auto& [type, size] : types) {
+        CHECK(i < n && std::strcmp(f[i].type, type) == 0 && f[i].offset == 0);
+        uint32_t end = 0;
+        for (; i < n && std::strcmp(f[i].type, type) == 0; ++i) {
+            CHECK(f[i].offset >= end);
+            end = f[i].offset + f[i].size;
+        }
+        CHECK(end <= size && size - end < 8);  // only tail padding is left
+    }
+    CHECK_EQ(i, n);
+    CHECK(std::strcmp(f[24].name, "rng_seed") == 0 && f[24].offset == 184);
 }
 
 void plain_model_reports_unsupported() {
@@ -604,6 +649,8 @@ int main(int argc, char** argv) {
         // Fork first, while the process certainly has a single thread.
         {"fork_child_detaches_and_reopens", fork_child_detaches_and_reopens},
         {"plain_model_reports_unsupported", plain_model_reports_unsupported},
+        {"probe_width_is_checked_at_create", probe_width_is_checked_at_create},
+        {"abi_field_table_covers_every_field", abi_field_table_covers_every_field},
         {"thread_rng_survives_a_reseed_epoch", thread_rng_survives_a_reseed_epoch},
         {"fst_trace_is_written_and_parses", fst_trace_is_written_and_parses},
         {"trace_from_t_has_no_sample_before_t", trace_from_t_has_no_sample_before_t},

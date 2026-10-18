@@ -142,6 +142,14 @@ int redirect_to_devnull(const FileId& id) noexcept;
 // WARNING naming `what` and the reason, and returns false.
 bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept;
 
+// Checks a probe (a SIMJIG_DIR_INTERNAL signal) against the model's own metadata: the
+// public_flat_rd/_rw variable `<path>` must exist in scope `<model_name>.<path's scope>`,
+// live at `s.ptr`, be packed only, and be exactly `s.width` bits wide. The C++ type check in
+// SIMJIG_SIGNAL only sees the storage class (an 8-bit CData also holds a 5-bit signal), and
+// Verilator's width exists only in these runtime tables (V<prefix>__Syms__Slow.cpp), so the
+// check runs at create. Throws std::runtime_error naming the probe on a mismatch.
+void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s);
+
 }  // namespace simjig
 
 // The C-opaque handle. The generated per-model handle derives from it and owns the model as a
@@ -185,6 +193,18 @@ simjig_status simjig_rt_rng_seed(simjig_handle* h, uint64_t seed);
 // `cap` of {sizeof, alignof} for simjig_model_vtable, simjig_signal, simjig_msg and
 // simjig_create_opts, in that order. Returns the number of values written.
 size_t simjig_rt_abi_layout(uint32_t* out, size_t cap);
+
+// One field of a struct in simjig_abi.h, as this compiler lays it out.
+typedef struct simjig_abi_field {
+    const char* type;  // the struct's C name, e.g. "simjig_model_vtable"
+    const char* name;  // the field's name, e.g. "trace_open_ex"
+    uint32_t offset;   // offsetof(type, name)
+    uint32_t size;     // sizeof the field
+} simjig_abi_field;
+// Every field of simjig_model_vtable, simjig_signal, simjig_msg and simjig_create_opts, in
+// that struct order and in declaration order within each; *count entries, static storage.
+// The Rust mirror's offset_of! asserts are compared against it (docs/notes/tracecov.md).
+const simjig_abi_field* simjig_rt_abi_fields(size_t* count);
 }
 
 #endif  // SIMJIG_RT_H_

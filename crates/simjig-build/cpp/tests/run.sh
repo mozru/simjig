@@ -12,7 +12,7 @@ out="${CARGO_TARGET_DIR:-$PWD/target}/tracecov-tests"
 rm -rf "$out"
 mkdir -p "$out/scratch"
 vl() { verilator --cc --threads 1 "$@" >/dev/null; }
-vl --no-timing "$here/tc.sv" --top-module tc --Mdir "$out/plain" --prefix Vtc_plain
+vl --no-timing "$here/tc.vlt" "$here/tc.sv" --top-module tc --Mdir "$out/plain" --prefix Vtc_plain
 vl --no-timing --coverage-line "$here/tc_hier.sv" --Mdir "$out/hier" --prefix Vtc_hier
 vl --timing --trace-fst "$here/tc_timing.sv" --Mdir "$out/timing" --prefix Vtc_timing
 others=$(ls "$out"/plain/*.cpp "$out"/hier/*.cpp "$out"/timing/*.cpp | grep -v '__ALL')

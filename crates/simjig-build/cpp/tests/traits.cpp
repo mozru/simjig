@@ -7,6 +7,7 @@
 #include "Vtc_hier__Syms.h"
 #include "Vtc_hier___024root.h"
 #include "Vtc_plain.h"
+#include "Vtc_plain___024root.h"
 #include "Vtc_timing.h"
 #include "simjig_model.h"
 
@@ -41,7 +42,25 @@ struct PlainTraits {
     static constexpr bool kTiming = false;
     static constexpr bool kTraceFst = false;
     static constexpr bool kCoverage = false;
-    static void bind(Vtc_plain& m, simjig::SignalTable& t) { bind_tc(m, t); }
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_SIGNAL(t, m.rootp->tc__DOT__u__DOT__r, "tc.u.r", 1, SIMJIG_DIR_INTERNAL, kRead);
+    }
+};
+
+// The same model with its probe bound 5 bits wide: the storage class (CData) still matches, so
+// only the create-time check against Verilator's metadata can catch it.
+struct BadProbeTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000005ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_SIGNAL(t, m.rootp->tc__DOT__u__DOT__r, "tc.u.r", 5, SIMJIG_DIR_INTERNAL, kRead);
+    }
 };
 
 struct HierTraits {
@@ -73,5 +92,6 @@ struct TimingTraits {
 
 SIMJIG_EXPORT_VTABLE(Vtc_full, FullTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain, PlainTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_badprobe, BadProbeTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_hier, HierTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_timing, TimingTraits)

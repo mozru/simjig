@@ -224,6 +224,9 @@ struct Vtable final {
             const char* name = opts != nullptr && opts->name != nullptr ? opts->name : "TOP";
             h->model = std::make_unique<Model>(&ctx, name);
             Traits::bind(*h->model, h->table);
+            for (const simjig_signal& s : h->table.signals()) {
+                if (s.dir == SIMJIG_DIR_INTERNAL) check_probe(ctx, h->model->name(), s);
+            }
         });
     }
 

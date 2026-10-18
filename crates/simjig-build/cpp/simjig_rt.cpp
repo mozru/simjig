@@ -14,8 +14,11 @@
 // precedes an $error tells them apart (Runtime::adopt_print).
 #include "simjig_rt.h"
 
+#include "verilated_syms.h"
+
 #include <algorithm>
 #include <cerrno>
+#include <stdexcept>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -127,6 +130,27 @@ bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
         rt.on_warn("", 0, "", "cannot create an output file");
     }
     return false;
+}
+
+void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s) {
+    const std::string path = or_empty(s.name);
+    const size_t dot = path.rfind('.');
+    const std::string scope_name =
+        std::string{or_empty(model_name)} + "." + (dot == std::string::npos ? "" : path.substr(0, dot));
+    const std::string var_name = dot == std::string::npos ? path : path.substr(dot + 1);
+    const auto fail = [&](const std::string& why) {
+        throw std::runtime_error("simjig: probe '" + path + "': " + why);
+    };
+    const VerilatedScope* scope = ctx.scopeFind(scope_name.c_str());
+    if (scope == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
+    const VerilatedVar* var = scope->varFind(var_name.c_str());
+    if (var == nullptr) fail("no public variable '" + var_name + "' in scope '" + scope_name + "'");
+    if (var->datap() != s.ptr) fail("bound to a different member than the model's variable");
+    if (var->udims() != 0) fail("the model's variable is an unpacked array");
+    if (var->entBits() != s.width) {
+        fail("the model's variable is " + std::to_string(var->entBits()) + " bits wide, but it is bound as "
+             + std::to_string(s.width) + " bits");
+    }
 }
 
 Runtime::Runtime(const simjig_create_opts* opts, bool coroutines)
@@ -422,6 +446,63 @@ simjig_status simjig_rt_rng_seed(simjig_handle* h, uint64_t seed) {
     h->rt.reseed(seed);
     return SIMJIG_OK;
 }
+
+#define SIMJIG_FIELD(T, F) \
+    simjig_abi_field { #T, #F, offsetof(T, F), sizeof(static_cast<T*>(nullptr)->F) }
+const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
+    static const simjig_abi_field fields[] = {
+        SIMJIG_FIELD(simjig_model_vtable, abi_version),
+        SIMJIG_FIELD(simjig_model_vtable, size),
+        SIMJIG_FIELD(simjig_model_vtable, prefix),
+        SIMJIG_FIELD(simjig_model_vtable, verilator_version),
+        SIMJIG_FIELD(simjig_model_vtable, ir_hash),
+        SIMJIG_FIELD(simjig_model_vtable, create),
+        SIMJIG_FIELD(simjig_model_vtable, destroy),
+        SIMJIG_FIELD(simjig_model_vtable, eval),
+        SIMJIG_FIELD(simjig_model_vtable, final),
+        SIMJIG_FIELD(simjig_model_vtable, set_time),
+        SIMJIG_FIELD(simjig_model_vtable, events_pending),
+        SIMJIG_FIELD(simjig_model_vtable, next_time_slot),
+        SIMJIG_FIELD(simjig_model_vtable, signals),
+        SIMJIG_FIELD(simjig_model_vtable, drain_msgs),
+        SIMJIG_FIELD(simjig_model_vtable, trace_open),
+        SIMJIG_FIELD(simjig_model_vtable, trace_dump),
+        SIMJIG_FIELD(simjig_model_vtable, trace_close),
+        SIMJIG_FIELD(simjig_model_vtable, cov_counters),
+        SIMJIG_FIELD(simjig_model_vtable, features),
+        SIMJIG_FIELD(simjig_model_vtable, trace_open_ex),
+        SIMJIG_FIELD(simjig_model_vtable, trace_flush),
+        SIMJIG_FIELD(simjig_model_vtable, trace_reopen),
+        SIMJIG_FIELD(simjig_model_vtable, cov_zero),
+        SIMJIG_FIELD(simjig_model_vtable, cov_write),
+        SIMJIG_FIELD(simjig_model_vtable, rng_seed),
+        SIMJIG_FIELD(simjig_signal, id),
+        SIMJIG_FIELD(simjig_signal, width),
+        SIMJIG_FIELD(simjig_signal, words),
+        SIMJIG_FIELD(simjig_signal, storage),
+        SIMJIG_FIELD(simjig_signal, dir),
+        SIMJIG_FIELD(simjig_signal, access),
+        SIMJIG_FIELD(simjig_signal, reserved),
+        SIMJIG_FIELD(simjig_signal, name),
+        SIMJIG_FIELD(simjig_signal, ptr),
+        SIMJIG_FIELD(simjig_msg, kind),
+        SIMJIG_FIELD(simjig_msg, line),
+        SIMJIG_FIELD(simjig_msg, time),
+        SIMJIG_FIELD(simjig_msg, file),
+        SIMJIG_FIELD(simjig_msg, hier),
+        SIMJIG_FIELD(simjig_msg, msg),
+        SIMJIG_FIELD(simjig_msg, msg_len),
+        SIMJIG_FIELD(simjig_create_opts, size),
+        SIMJIG_FIELD(simjig_create_opts, flags),
+        SIMJIG_FIELD(simjig_create_opts, name),
+        SIMJIG_FIELD(simjig_create_opts, error_limit),
+        SIMJIG_FIELD(simjig_create_opts, argc),
+        SIMJIG_FIELD(simjig_create_opts, argv),
+    };
+    if (count != nullptr) *count = sizeof(fields) / sizeof(fields[0]);
+    return fields;
+}
+#undef SIMJIG_FIELD
 
 size_t simjig_rt_abi_layout(uint32_t* out, size_t cap) {
     const uint32_t layout[] = {

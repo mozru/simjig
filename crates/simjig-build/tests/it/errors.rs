@@ -163,3 +163,46 @@ fn a_mixed_timeunit_design_names_the_unit_to_fix() {
     );
     assert!(err.contains(&hint), "{err}");
 }
+
+/// A DUT with interface ports and many data ports, built with `-Wall`, whose design has a
+/// real error: the `PINMISSING` warnings of the generated elaboration top (one per open
+/// data port) are dropped, the error leads the message, on its first line too (what a
+/// script handling the failure prints), and no lint waiver is suggested.
+#[test]
+fn a_real_error_under_wall_is_not_buried_by_the_generated_top() {
+    let s = Sandbox::new();
+    let iface = s.path().join("w_if.sv");
+    let top = s.path().join("w_top.sv");
+    std::fs::write(
+        &iface,
+        "interface w_if;\n  logic v;\n  modport sink (input v);\nendinterface\n",
+    )
+    .unwrap();
+    let outs: String = (0..12).map(|i| format!(", output logic o{i}")).collect();
+    let assigns: String = (0..12)
+        .map(|i| format!("  assign o{i} = in.v;\n"))
+        .collect();
+    std::fs::write(
+        &top,
+        format!(
+            "module w_top (input logic clk, w_if.sink in{outs});\n{assigns}  \
+             wire [3:0] bad = 4'(nosuch_sig);\nendmodule\n"
+        ),
+    )
+    .unwrap();
+    let err = Dut::new("w_top")
+        .sources([&iface, &top])
+        .top("w_top")
+        .bind_iface("in", "w_if.sink")
+        .verilator_args(["-Wall"])
+        .build_in(&s.env())
+        .unwrap_err()
+        .to_string();
+    let first = err.lines().next().unwrap();
+    assert!(
+        first.contains("%Error") && first.contains("nosuch_sig"),
+        "{first}\n{err}"
+    );
+    assert!(!err.contains("PINMISSING"), "{err}");
+    assert!(!err.contains("hint: Verilator's lint warnings"), "{err}");
+}

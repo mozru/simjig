@@ -31,3 +31,21 @@ subdirectories that an `` `include "sub/x.svh" `` reaches. The success path is u
 it tracks what Verilator's `-MD` says it read, plus the recipe's include directories
 (still tracked whole; a C++ include directory containing `target/` would loop the same
 way, but none of the reviewers' shapes has one).
+
+## The buried `%Error`
+The brief asked to wrap the generated tops in `lint_off` for the codes they trigger. The
+elaboration top triggers `PINMISSING` (one per open data port) and, in the user's
+interface file, `UNDRIVEN` (its signals are undriven there). Waiving `PINMISSING` in the
+file broke `iface_diag`, which reads an unbound interface port's declaration from that
+very warning (two `ifaces::` tests failed), and a `lint_off` cannot reach the `UNDRIVEN`,
+located in the user's file. So the JSON pass's error drops the warnings located in the
+generated tops it read (`error::without_warnings_in`) instead: correctness of the
+binding diagnostics over the simpler waiver. The wrapper (the model's top) triggered no
+warning under `-Wall` in the shapes tried, and keeps only its `TIMESCALEMOD` waiver: the
+model build must still report a wrapper warning, which would be simjig's bug.
+
+The excerpt leads with every `%Error` line (at most 40) when the stderr is longer than
+40 lines, then the first 40 lines. The first line of the message carries the first
+error, for scripts that print only `e.to_string().lines().next()`. The lint hint keyed
+off "no `%Error` except `Exiting due to .. warning(s)`", and `.. 1 error(s), N
+warning(s)` also ends in `warning(s)`: fixed (`error::is_error_line`).

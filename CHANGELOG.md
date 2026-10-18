@@ -4,6 +4,14 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A Verilator failure no longer buries its `%Error` under warnings: the first line of
+  the message ends with the first error (`... failed (exit status: 1) on `x.sv`:
+  %Error: x.sv:3:5: ...`), so a build script printing that line for a skipped DUT shows
+  it; a long stderr is shown as every `%Error` line, then its first 40 lines; and the
+  JSON pass's error drops the warnings located in simjig's generated tops (under
+  `-Wall`, one `PINMISSING` per data port the elaboration top leaves open). The lint
+  waiver hint is given only when no error is reported: a truncated
+  `Exiting due to 1 error(s), N warning(s)` counted as warnings only.
 - `Dut::file_list(path)` (`-f`) and `Dut::file_list_relative(path)` (`-F`) add a
   Verilator file list whose files are the DUT's sources: read in order before
   `.sources`, by the JSON passes, the layout check and the model build, and part of the

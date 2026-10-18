@@ -160,19 +160,29 @@ pub enum Error {
 impl Error {
     /// Converts a JSON pass failure. A failed Verilator run becomes [`Error::Command`],
     /// like every other failed tool, so it names the offending source file.
-    pub(crate) fn json_pass(dut: &str, e: svtypes::error::Error) -> Self {
+    ///
+    /// Warnings located in `generated` (the generated tops the pass read) are dropped: the
+    /// elaboration top leaves every data port open, which `-Wall` reports as one
+    /// `PINMISSING` per port, and they are simjig's, not the user's. A pass's warnings
+    /// never fail it (`-Wno-fatal`), and the model build lints the wrapper itself. They
+    /// are not waived in the generated file instead: `iface_diag` reads the declaration
+    /// of an unbound interface port from that `PINMISSING`.
+    pub(crate) fn json_pass(dut: &str, e: svtypes::error::Error, generated: &[PathBuf]) -> Self {
         match e {
             svtypes::error::Error::Tool {
                 command,
                 status,
                 stderr,
-            } => Self::Command {
-                what: format!("parsing DUT `{dut}` (Verilator JSON pass)"),
-                status,
-                path: offending_path(&stderr),
-                stderr: excerpt(&stderr),
-                command,
-            },
+            } => {
+                let stderr = without_warnings_in(&stderr, generated);
+                Self::Command {
+                    what: format!("parsing DUT `{dut}` (Verilator JSON pass)"),
+                    status,
+                    path: offending_path(&stderr),
+                    stderr: excerpt(&stderr),
+                    command,
+                }
+            }
             source => Self::Ir {
                 dut: dut.to_owned(),
                 source,
@@ -235,18 +245,73 @@ pub(crate) fn debug_chain(e: &dyn std::error::Error, f: &mut fmt::Formatter<'_>)
     Ok(())
 }
 
-/// At most this many stderr lines are kept; Verilator prints its errors first.
+/// At most this many stderr lines are kept as context (and as many `%Error` lines).
 const EXCERPT_LINES: usize = 40;
 
+/// Whether a Verilator stderr line reports an error: a `%Error` line other than the
+/// closing summary of a run that stopped on warnings alone (`V3Error.cpp` prints
+/// `%Error: Exiting due to N warning(s)` when the error count is 0, and
+/// `.. N error(s), M warning(s)` otherwise).
+fn is_error_line(line: &str) -> bool {
+    line.starts_with("%Error")
+        && !(line.starts_with("%Error: Exiting due to") && !line.contains("error(s)"))
+}
+
+/// The stderr kept in an [`Error::Command`]: all of it when it is short, else every
+/// error line (up to [`EXCERPT_LINES`]), then the first [`EXCERPT_LINES`] lines as
+/// context. Verilator prints diagnostics in the order it finds them, so warnings (a
+/// `-Wall` design's, each several lines long) can fill the first lines before an error.
 fn excerpt(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().collect();
     let mut out = String::new();
-    let total = stderr.lines().count();
-    for line in stderr.lines().take(EXCERPT_LINES) {
+    if lines.len() > EXCERPT_LINES {
+        let errors: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|l| is_error_line(l))
+            .take(EXCERPT_LINES)
+            .collect();
+        if !errors.is_empty() {
+            for line in errors {
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push_str(&format!(
+                "--- the first {EXCERPT_LINES} of {} lines:\n",
+                lines.len()
+            ));
+        }
+    }
+    for line in lines.iter().take(EXCERPT_LINES) {
         out.push_str(line);
         out.push('\n');
     }
-    if total > EXCERPT_LINES {
-        out = format!("{out}... ({} more lines)\n", total - EXCERPT_LINES);
+    if lines.len() > EXCERPT_LINES {
+        out = format!("{out}... ({} more lines)\n", lines.len() - EXCERPT_LINES);
+    }
+    out
+}
+
+/// `stderr` without the warnings located in `files`. A Verilator diagnostic is a line
+/// starting with `%` (`%Warning-CODE: <file>:<line>:<col>: ...`) and the indented lines
+/// after it, up to the next `%` line.
+fn without_warnings_in(stderr: &str, files: &[PathBuf]) -> String {
+    let mut out = String::new();
+    let mut dropping = false;
+    for line in stderr.lines() {
+        if line.starts_with('%') {
+            dropping = line.starts_with("%Warning-")
+                && line.split_once(": ").is_some_and(|(_, rest)| {
+                    files.iter().any(|f| {
+                        rest.strip_prefix(f.to_string_lossy().as_ref())
+                            .is_some_and(|r| r.starts_with(':'))
+                    })
+                });
+        }
+        if !dropping {
+            out.push_str(line);
+            out.push('\n');
+        }
     }
     out
 }
@@ -340,11 +405,7 @@ fn untimed_units(stderr: &str) -> Option<String> {
 /// line only when the error count is 0).
 fn only_lint_warnings(stderr: &str) -> bool {
     let warned = stderr.lines().any(|l| l.starts_with("%Warning-"));
-    let errored = stderr.lines().any(|l| {
-        l.starts_with("%Error")
-            && !(l.starts_with("%Error: Exiting due to") && l.ends_with("warning(s)"))
-    });
-    warned && !errored
+    warned && !stderr.lines().any(is_error_line)
 }
 
 fn display_command_failure(
@@ -361,6 +422,14 @@ fn display_command_failure(
     let mut out = format!("{what} failed ({status})");
     if let Some(path) = path {
         out = format!("{out} on `{}`", path.display());
+    }
+    // The first line is what a build script reporting a handled failure prints, so it
+    // carries the first error.
+    if let Some(first) = stderr
+        .lines()
+        .find(|l| is_error_line(l) && !l.starts_with("%Error: Exiting due to"))
+    {
+        out = format!("{out}: {first}");
     }
     if !stderr.trim().is_empty() {
         out.push_str("\nstderr:\n");
@@ -400,6 +469,7 @@ mod tests {
             svtypes::error::Error::UnsupportedVersion {
                 version: "Verilator 9.000".into(),
             },
+            &[],
         );
         assert_eq!(err.to_string(), "reading the type IR of DUT `d`");
         let source = std::error::Error::source(&err).map(ToString::to_string);
@@ -465,10 +535,12 @@ mod tests {
                 status: Some(1),
                 stderr: "%Error: /r/shreg.sv:3:5: syntax error\n".into(),
             },
+            &[],
         );
         assert_eq!(
             err.to_string(),
-            "parsing DUT `shreg` (Verilator JSON pass) failed (exit status: 1) on `/r/shreg.sv`\nstderr:\n\
+            "parsing DUT `shreg` (Verilator JSON pass) failed (exit status: 1) on `/r/shreg.sv`: \
+             %Error: /r/shreg.sv:3:5: syntax error\nstderr:\n\
              %Error: /r/shreg.sv:3:5: syntax error\ncommand: verilator --json-only shreg.sv"
         );
     }
@@ -571,6 +643,64 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("-Wno-fatal"), "{text}");
+    }
+
+    /// Under `-Wall` a page of warnings can come before the error: the excerpt leads with
+    /// every error, so the error is shown and the lint hint (for a run that stopped on
+    /// warnings alone) is not given.
+    #[test]
+    fn errors_after_many_warnings_lead_the_excerpt() {
+        let mut stderr = String::new();
+        for i in 0..30 {
+            stderr +=
+                &format!("%Warning-PINMISSING: /r/e.sv:5:29: missing pin 'p{i}'\n    5 | x\n");
+        }
+        stderr += "%Error: /r/d.sv:39:30: Can't find definition of variable: 'nosuch'\n\
+                   %Error: Exiting due to 1 error(s), 30 warning(s)\n";
+        let text = Error::Command {
+            what: "verilating DUT `d`".into(),
+            command: "verilator --cc d.sv".into(),
+            status: Some(1),
+            stderr: excerpt(&stderr),
+            path: offending_path(&stderr),
+        }
+        .to_string();
+        assert!(
+            text.starts_with(
+                "verilating DUT `d` failed (exit status: 1) on `/r/d.sv`: %Error: \
+                 /r/d.sv:39:30: Can't find definition of variable: 'nosuch'\nstderr:\n\
+                 %Error: /r/d.sv:39:30: Can't find definition of variable: 'nosuch'\n\
+                 %Error: Exiting due to 1 error(s), 30 warning(s)\n\
+                 --- the first 40 of 62 lines:\n%Warning-PINMISSING: "
+            ),
+            "{text}"
+        );
+        assert!(text.contains("... (22 more lines)"), "{text}");
+        assert!(!text.contains("-Wno-fatal"), "{text}");
+        // The summary alone says there was an error, though the error line was lost.
+        assert!(!only_lint_warnings(
+            "%Warning-WIDTH: w\n%Error: Exiting due to 1 error(s), 1 warning(s)\n"
+        ));
+    }
+
+    /// The warnings located in a generated top go, with their continuation lines; the
+    /// user's warnings and every error stay.
+    #[test]
+    fn warnings_in_generated_tops_are_dropped() {
+        let stderr = "%Warning-PINMISSING: /c/simjig_elab_t.sv:5:29: Instance has missing pin: 'clk'\n\
+                      \x20   5 |   t dut (.in(in));\n\
+                      \x20                  /r/t.sv:3:23: ... Location of port declaration\n\
+                      %Warning-UNDRIVEN: /r/if.sv:3:15: Signal is not driven: 'valid'\n\
+                      \x20                  : ... note: In instance 'simjig_elab_t.dut'\n\
+                      %Error: /c/simjig_elab_t.sv:9:1: syntax error\n\
+                      %Error: Exiting due to 1 error(s), 2 warning(s)\n";
+        assert_eq!(
+            without_warnings_in(stderr, &[PathBuf::from("/c/simjig_elab_t.sv")]),
+            "%Warning-UNDRIVEN: /r/if.sv:3:15: Signal is not driven: 'valid'\n\
+             \x20                  : ... note: In instance 'simjig_elab_t.dut'\n\
+             %Error: /c/simjig_elab_t.sv:9:1: syntax error\n\
+             %Error: Exiting due to 1 error(s), 2 warning(s)\n"
+        );
     }
 
     #[test]

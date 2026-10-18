@@ -1,7 +1,10 @@
 //! Repository automation.
 //!
-//! `cargo xtask ci` runs the same gate locally and in GitHub Actions, so a green local run
-//! means a green CI run.
+//! - `cargo xtask setup` installs every pinned tool (see [`setup`]).
+//! - `cargo xtask ci` runs the same gate locally and in GitHub Actions, so a green local
+//!   run means a green CI run.
+
+mod setup;
 
 use std::env;
 use std::process::{Command, ExitCode};
@@ -92,19 +95,32 @@ fn run(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<(), String>
     }
 }
 
-fn main() -> ExitCode {
-    let task = env::args().nth(1);
-    let Some("ci") = task.as_deref() else {
-        eprintln!("usage: cargo xtask ci");
-        return ExitCode::FAILURE;
-    };
-    let steps = CI;
-    for step in steps {
-        if let Err(msg) = run(step.program, step.args, step.env) {
-            eprintln!("error: {msg}");
-            return ExitCode::FAILURE;
-        }
+const USAGE: &str = "usage: cargo xtask <ci | setup>";
+
+fn ci() -> Result<(), String> {
+    for step in CI {
+        run(step.program, step.args, step.env)?;
     }
     eprintln!("==> all checks passed");
-    ExitCode::SUCCESS
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result = match args.as_slice() {
+        ["ci"] => ci(),
+        ["setup"] => setup::setup(),
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            ExitCode::FAILURE
+        }
+    }
 }

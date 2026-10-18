@@ -55,6 +55,10 @@ pixi run cargo simjig doctor   # checks Verilator, the compiler and nextest, wit
 pixi run cargo nextest run -p quickstart
 ```
 
+A new crate needs a target before its first build: with only `Cargo.toml` and
+`build.rs`, cargo stops with `no targets specified in the manifest`. Add the first test
+file (`tests/<name>.rs`) or an empty `src/lib.rs`.
+
 Each file opens with a `//!` line because the repository's lints (`[lints] workspace =
 true`, as in the quickstart) warn on `missing_docs`, and a build script and each test
 file are crates of their own.

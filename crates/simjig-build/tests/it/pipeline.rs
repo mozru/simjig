@@ -282,3 +282,27 @@ fn duplicate_dpi_exports_across_duts_fail() {
         "{err}"
     );
 }
+
+/// Two covergroup models of one build script must agree on `--coverage`: Verilator
+/// compiles its covergroup runtime per model from `VM_COVERAGE`, and only one copy links.
+#[test]
+fn covergroup_models_with_mixed_coverage_fail() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let dut = |name: &str| {
+        Dut::new(name)
+            .sources([rtl.join("cg_user.sv")])
+            .top("cg_user")
+    };
+    dut("plain").build_in(&s.env()).unwrap();
+    dut("plain_again").build_in(&s.env()).unwrap();
+    let err = dut("covered")
+        .coverage(true)
+        .build_in(&s.env())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("uses covergroups") && err.contains("DUT `plain"),
+        "{err}"
+    );
+}

@@ -497,6 +497,7 @@ impl Dut {
         )?;
         let mut directives = compile::compile(&compile::Inputs {
             env,
+            config: &self.config,
             cache: &cache,
             verilator: &verilator,
             prefix: &prefix,

@@ -6,7 +6,9 @@
 //! - a DUT name built twice with different configurations (the name also names
 //!   `OUT_DIR/simjig/<name>.rs`);
 //! - a DPI export name defined by two models: DPI symbols are global C functions
-//!   (IEEE 1800-2023 §35.5.1), so every caller would bind to one model's export.
+//!   (IEEE 1800-2023 §35.5.1), so every caller would bind to one model's export;
+//! - the covergroup runtime compiled with two `VM_COVERAGE` settings (see
+//!   [`claim_covergroups`]).
 //!
 //! The registry is keyed by `OUT_DIR` so tests that build in several sandboxes from one
 //! process do not see each other's models.
@@ -27,6 +29,8 @@ struct Model {
     prefix: String,
     /// The DPI functions and tasks the model exports, from `<prefix>__Dpi.h`.
     dpi_exports: Vec<String>,
+    /// For a model that uses covergroups: whether it was built with `--coverage`.
+    covergroup_coverage: Option<bool>,
 }
 
 static BUILT: Mutex<Vec<Model>> = Mutex::new(Vec::new());
@@ -69,6 +73,7 @@ pub(crate) fn claim_name(
                 identity: identity.to_owned(),
                 prefix: prefix.to_owned(),
                 dpi_exports: Vec::new(),
+                covergroup_coverage: None,
             });
             Ok(())
         }
@@ -117,6 +122,44 @@ pub(crate) fn claim_dpi_exports(
     }
     if let Some(m) = this(&mut built, env, prefix) {
         m.dpi_exports = exports;
+    }
+    Ok(())
+}
+
+/// Records that the model uses covergroups, built with `coverage` (`--coverage`); fails
+/// if another model of this build script uses them with the other setting.
+///
+/// Why: Verilator 5.052 compiles `verilated_covergroup.cpp` per model with the model's
+/// `VM_COVERAGE`, and the file's bodies differ by that switch, so the two settings give
+/// two archives defining the same symbols. A static link keeps the first one, and one
+/// model would run with the other's covergroup runtime.
+pub(crate) fn claim_covergroups(
+    env: &BuildEnv,
+    config: &DutConfig,
+    prefix: &str,
+    coverage: bool,
+) -> Result<(), Error> {
+    let mut built = built();
+    let clash = others(&mut built, env, prefix)
+        .find(|m| m.covergroup_coverage.is_some_and(|c| c != coverage))
+        .map(|m| (m.name.clone(), m.prefix.clone()));
+    if let Some((name, other)) = clash {
+        let on_off = |on: bool| if on { "with" } else { "without" };
+        return Err(config_error(
+            config,
+            format!(
+                "this DUT uses covergroups and is built {} `.coverage(true)`, but DUT `{name}` \
+                 (model {other}) in this build script uses covergroups and is built {} it. \
+                 Verilator compiles its covergroup runtime differently for the two, and only \
+                 one copy can be linked; give both DUTs the same coverage setting, or build \
+                 them in different crates",
+                on_off(coverage),
+                on_off(!coverage)
+            ),
+        ));
+    }
+    if let Some(m) = this(&mut built, env, prefix) {
+        m.covergroup_coverage = Some(coverage);
     }
     Ok(())
 }

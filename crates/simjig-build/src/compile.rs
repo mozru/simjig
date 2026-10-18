@@ -11,15 +11,22 @@
 //!    and [`CppRecipe::model_sources`], into `OUT_DIR`. Its `VM_*` defines are the
 //!    model's own switches from `_classes.mk`, exactly as `verilated.mk` passes them.
 //! 2. **runtime extras**: runtime classes that only some models need (`verilated_fst_c`
-//!    for `--trace-fst`, `verilated_cov` for `--coverage`), one cached archive per class,
-//!    compiled with the switches of the model that asked for it.
+//!    for `--trace-fst`, `verilated_cov` for `--coverage`, `verilated_covergroup` for
+//!    covergroups), one cached archive per class and set of switches, compiled with the
+//!    switches of the model that asked for it. Two models of one binary may therefore
+//!    link two archives of one class, defining the same symbols; a static link keeps the
+//!    first. That is harmless only while the copies are the same code: of 5.052's extras,
+//!    `verilated_fst_c.cpp` and `verilated_cov.cpp` read no `VM_*` switch, but
+//!    `verilated_covergroup.cpp` reads `VM_COVERAGE`, so two covergroup models of one
+//!    build script must agree on `--coverage` (`script::claim_covergroups` enforces it).
 //! 3. **the shared libverilated**: `verilated.cpp`, `verilated_threads.cpp`,
 //!    `verilated_timing.cpp`, `simjig_rt.cpp` and [`CppRecipe::global_sources`], with
 //!    fixed `VM_*` defines ([`RUNTIME_SWITCHES`]). Fixed, so that every model of a
 //!    configuration links the *same* archive: two archives defining the same runtime
-//!    symbols in one binary would be an ODR violation. That is sound because 5.052's
-//!    runtime sources read only `VM_SC` and `VM_VPI` (and `VM_TRACE` for a compatibility
-//!    macro), and generated code reads no `VM_*` at all (checked with grep, abi.md).
+//!    symbols in one binary would be an ODR violation. That is sound because these
+//!    sources of 5.052 read only `VM_SC`, `VM_VPI` and `VM_SOLVER_DEFAULT` (unset; and
+//!    `VM_TRACE` for a compatibility macro), and generated code reads no `VM_*` at all
+//!    (checked with grep, abi.md).
 //!    Cached once per (Verilator version, compiler, target, flags, runtime sources);
 //!    the runtime sources include `simjig_vl_config.h`.
 //! 4. native libraries the extras need (`lz4`, `z` for FST), then the C++ standard
@@ -30,10 +37,11 @@
 use std::path::{Path, PathBuf};
 
 use crate::cache::{self, Cache};
+use crate::dut::DutConfig;
 use crate::hash::KeyHasher;
 use crate::runtime::Runtime;
 use crate::verilator::{self, Verilator};
-use crate::{ABI_VERSION, BuildEnv, Error};
+use crate::{ABI_VERSION, BuildEnv, Error, script};
 
 /// Additions to the C ABI compile recipe. The default adds nothing, which *is* the ABI
 /// recipe: the base flags, runtime and link order described in the module docs are
@@ -174,6 +182,7 @@ impl ClassesMk {
 
 pub(crate) struct Inputs<'a> {
     pub(crate) env: &'a BuildEnv,
+    pub(crate) config: &'a DutConfig,
     pub(crate) cache: &'a Cache,
     pub(crate) verilator: &'a Verilator,
     pub(crate) prefix: &'a str,
@@ -195,6 +204,9 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     let mk_path = verilator::output_file(i.obj_dir, i.prefix, "_classes.mk");
     let text = std::fs::read_to_string(&mk_path).map_err(Error::io("reading", &mk_path))?;
     let mk = ClassesMk::parse(&mk_path, &text)?;
+    if mk.global.iter().any(|c| c == "verilated_covergroup") {
+        script::claim_covergroups(i.env, i.config, i.prefix, mk.on("VM_COVERAGE"))?;
+    }
     let runtime = Runtime::extract(i.cache)?;
     let (base, compiler) = base_build(i, &runtime)?;
     let tc = Toolchain {

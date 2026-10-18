@@ -74,15 +74,22 @@ pub(crate) struct Ir {
 ///    is the one the emitter sees.
 ///
 /// DUT parameters go into the generated tops, not `-G`, which would reach the top.
+///
+/// `generated` are the stored user-generated design inputs (`DutConfig::sv_inputs`).
 pub(crate) fn design_ir(
     config: &DutConfig,
     top: &str,
+    generated: &[PathBuf],
     verilator: &Verilator,
     cache: &Cache,
 ) -> Result<Ir, Error> {
+    let json_pass = |top: &str, extra: &[PathBuf]| {
+        svtypes::verilator::json_pass(&config.json_pass_opts(top, generated, extra, verilator))
+            .map_err(|e| Error::json_pass(&config.name, e))
+    };
     let Some(iface) = config.iface_top() else {
         return Ok(Ir {
-            design: json_pass(config, top, &[], verilator)?,
+            design: json_pass(top, &[])?,
             wrapper: None,
             top: top.to_owned(),
         });
@@ -96,36 +103,19 @@ pub(crate) fn design_ir(
         file_name: format!("{elab_top}.sv"),
         contents: codegen::emit_elab_top(&iface),
     })?;
-    let elab_ir = json_pass(config, &elab_top, &[elab], verilator)?;
+    let elab_ir = json_pass(&elab_top, &[elab])?;
     let plan = codegen::lower_wrapper(&elab_ir, &iface).map_err(codegen_err)?;
     let wrapper_top = codegen::wrapper_module(top);
     let wrapper = cache.store_input(&GeneratedInput {
         file_name: format!("{wrapper_top}.sv"),
         contents: codegen::emit_wrapper(&plan),
     })?;
-    let design = json_pass(
-        config,
-        &wrapper_top,
-        std::slice::from_ref(&wrapper),
-        verilator,
-    )?;
+    let design = json_pass(&wrapper_top, std::slice::from_ref(&wrapper))?;
     Ok(Ir {
         design,
         wrapper: Some(wrapper),
         top: wrapper_top,
     })
-}
-
-/// Runs one JSON pass with the located Verilator, the one that builds the model: the IR
-/// and the model must come from the same elaboration rules.
-fn json_pass(
-    config: &DutConfig,
-    top: &str,
-    extra: &[PathBuf],
-    verilator: &Verilator,
-) -> Result<Design, Error> {
-    svtypes::verilator::json_pass(&config.json_pass_opts(top, extra, verilator))
-        .map_err(|e| Error::json_pass(&config.name, e))
 }
 
 /// Lints the layout check with the model's flags, without `-G` (docs/notes/codegen.md).
@@ -135,6 +125,7 @@ fn json_pass(
 /// `USERFATAL` warning; [`codegen::LAYOUT_CHECK_FLAGS`] makes it an error.
 pub(crate) fn layout_check(
     config: &DutConfig,
+    generated: &[PathBuf],
     verilator: &Verilator,
     cache: &Cache,
     check: &SvModule,
@@ -144,11 +135,16 @@ pub(crate) fn layout_check(
         contents: check.contents.clone(),
     })?;
     let mut cmd = verilator.command();
-    cmd.args(layout_check_args(config, &check.module, &file));
+    cmd.args(layout_check_args(config, generated, &check.module, &file));
     verilator::run(&mut cmd).map(|_| ())
 }
 
-fn layout_check_args(config: &DutConfig, module: &str, file: &Path) -> Vec<String> {
+fn layout_check_args(
+    config: &DutConfig,
+    generated: &[PathBuf],
+    module: &str,
+    file: &Path,
+) -> Vec<String> {
     // `-Wno-fatal` first: lint policy belongs to the model build, which sees the same
     // sources. Without it, a design with `timeunit` fails here on TIMESCALEMOD, because
     // the generated module declares none. The layout-check flags come last, after the
@@ -157,9 +153,9 @@ fn layout_check_args(config: &DutConfig, module: &str, file: &Path) -> Vec<Strin
     // `-Werror-USERFATAL`, and `-Wno-USERFATAL` disables the warning until a later
     // `-Wwarn-USERFATAL` re-enables it (`-Werror-` alone does not).
     let mut a = vec!["-Wno-fatal".to_owned()];
-    let sources = config
-        .sources
+    let sources = generated
         .iter()
+        .chain(&config.sources)
         .cloned()
         .chain([file.to_path_buf()])
         .collect();
@@ -183,10 +179,11 @@ mod tests {
             top: Some("c".into()),
             ..DutConfig::default()
         };
-        let args = layout_check_args(&config, "simjig_layout_c", Path::new("/g/l.sv"));
+        let generated = [PathBuf::from("/g/pkg.sv")];
+        let args = layout_check_args(&config, &generated, "simjig_layout_c", Path::new("/g/l.sv"));
         assert_eq!(
             args.join(" "),
-            "-Wno-fatal --no-timing --top-module simjig_layout_c -DK=V /r/c.sv /g/l.sv \
+            "-Wno-fatal --no-timing --top-module simjig_layout_c -DK=V /g/pkg.sv /r/c.sv /g/l.sv \
              -Wwarn-USERFATAL --lint-only -Werror-USERFATAL"
         );
     }

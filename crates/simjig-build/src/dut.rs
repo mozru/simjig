@@ -276,20 +276,37 @@ impl DutConfig {
     }
 
     /// The JSON pass inputs: the same design as the model build sees ([`Self::design`]),
-    /// run by the Verilator that builds the model. `extra` sources (generated tops) come
-    /// after the user's.
+    /// run by the Verilator that builds the model. `generated` (the stored user-generated
+    /// SystemVerilog inputs, [`Self::sv_inputs`]) come before the user's sources, as in the
+    /// model build; `extra` sources (generated tops) after them.
     pub(crate) fn json_pass_opts(
         &self,
         top: &str,
+        generated: &[PathBuf],
         extra: &[PathBuf],
         verilator: &Verilator,
     ) -> svtypes::verilator::JsonPassOpts {
-        let sources = self.sources.iter().chain(extra).cloned().collect();
+        let sources = generated
+            .iter()
+            .chain(&self.sources)
+            .chain(extra)
+            .cloned()
+            .collect();
         svtypes::verilator::JsonPassOpts {
             exe: verilator.exe.clone(),
             env: verilator.child_env(),
             ..self.design(top, sources, self.ifaces.is_empty())
         }
+    }
+
+    /// The user-generated inputs ([`Dut::verilator_input`]) that are design sources, not
+    /// control files: every Verilator run needs them, while a `.vlt` only shapes the model.
+    pub(crate) fn sv_inputs(&self) -> impl Iterator<Item = &GeneratedInput> {
+        self.generated.iter().filter(|g| {
+            !Path::new(&g.file_name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("vlt"))
+        })
     }
 
     /// Checks the configuration and returns the top module.
@@ -564,11 +581,16 @@ impl Dut {
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
         pipeline::claim(env, &cache, &self.config, &prefix)?;
-        let ir = pipeline::design_ir(&self.config, top, &verilator, &cache)?;
+        let sv_inputs = self
+            .config
+            .sv_inputs()
+            .map(|g| cache.store_input(g))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ir = pipeline::design_ir(&self.config, top, &sv_inputs, &verilator, &cache)?;
         let emitted = (self.emitter)(&ir.design, &self.config)?;
         let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
         if let Some(check) = &placed.layout_check {
-            pipeline::layout_check(&self.config, &verilator, &cache, check)?;
+            pipeline::layout_check(&self.config, &sv_inputs, &verilator, &cache, check)?;
         }
         let mut generated = ir.wrapper.into_iter().collect::<Vec<_>>();
         for g in placed.inputs.iter().chain(&self.config.generated) {

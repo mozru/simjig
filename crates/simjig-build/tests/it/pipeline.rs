@@ -364,3 +364,33 @@ fn an_option_file_that_changes_coverage_fails_the_build() {
         "{err}"
     );
 }
+
+/// A generated `.sv` input is part of the design in every Verilator run: the JSON pass and
+/// the layout check see it as well as the model build, so a package it declares can be
+/// imported by the user's sources.
+#[test]
+fn generated_sv_inputs_reach_every_verilator_run() {
+    let s = Sandbox::new();
+    let top = s.path().join("uses_pkg.sv");
+    std::fs::write(
+        &top,
+        "module uses_pkg import gen_pkg::*; (input logic [W-1:0] a, output word_t y);\n  \
+         assign y = word_t'(a);\nendmodule\n",
+    )
+    .unwrap();
+    let built = Dut::new("uses_pkg")
+        .sources([&top])
+        .top("uses_pkg")
+        .verilator_input(
+            "gen_pkg.sv",
+            "package gen_pkg;\n  localparam int W = 6;\n  typedef logic [W-1:0] word_t;\nendpackage\n",
+        )
+        .build_in(&s.env())
+        .unwrap();
+    let a = &built.design.top_module().ports[0];
+    assert_eq!(built.design.ty(a.ty).width, Some(6));
+    let calls = s.verilator_calls();
+    let runs = calls.lines().filter(|l| l.contains("gen_pkg.sv")).count();
+    // A DUT without interface ports: one JSON pass, the layout check, the model build.
+    assert_eq!(runs, 3, "{calls}");
+}

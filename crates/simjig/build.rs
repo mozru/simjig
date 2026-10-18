@@ -12,6 +12,8 @@
 //! Cargo has no test-only build scripts, so two rules keep this away from simjig's users:
 //! - models are built only when `SIMJIG_TEST_MODELS=1`, which the repository's
 //!   `.cargo/config.toml` sets; a crate that depends on simjig never builds them;
+//! - nor does trybuild's nested build (`tests/harness_tests/ui.rs`), which reads the same
+//!   config file but links no model (see [`in_trybuild`]);
 //! - every link directive simjig-build emits is rewritten to `cargo::rustc-link-arg-tests`,
 //!   so the archives reach only simjig's test binaries, never the library.
 //!
@@ -20,7 +22,7 @@
 //! skipped.
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use simjig_build::{Dut, ProbeAccess, ProbeType, codegen};
 
@@ -106,6 +108,11 @@ fn main() {
         println!("cargo::rustc-env=SIMJIG_TEST_MODELS_ERROR={why}");
         return;
     }
+    if std::env::var_os("OUT_DIR").is_some_and(|out| in_trybuild(Path::new(&out))) {
+        let why = "trybuild's nested build links no test model";
+        println!("cargo::rustc-env=SIMJIG_TEST_MODELS_ERROR={why}");
+        return;
+    }
     match build_models() {
         Ok(lines) => {
             for line in lines {
@@ -119,6 +126,23 @@ fn main() {
             println!("cargo::rustc-env=SIMJIG_TEST_MODELS_ERROR={err}");
         }
     }
+}
+
+/// Whether `out_dir` lies in trybuild's target directory (`<target>/tests/trybuild`, which
+/// trybuild 1.x always uses for its nested cargo).
+///
+/// That build compiles simjig only as the library its compile-fail cases depend on, so
+/// models built there are never linked, and on a cold target verilating all of them takes
+/// longer than nextest lets the UI test run. Detected from the path rather than by the UI
+/// test setting `SIMJIG_TEST_MODELS=0` (an existing variable wins over `[env]`): that would
+/// need the `unsafe` `std::env::set_var` in a test binary whose other tests read the
+/// environment on other threads, and every way of running the test (cargo test, nextest, an
+/// IDE) passes through this path.
+fn in_trybuild(out_dir: &Path) -> bool {
+    let parts: Vec<_> = out_dir.components().collect();
+    parts
+        .windows(2)
+        .any(|w| w[0].as_os_str() == "tests" && w[1].as_os_str() == "trybuild")
 }
 
 /// Builds every model; returns the `cargo::` lines to print (printed only when all of them

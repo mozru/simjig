@@ -29,7 +29,20 @@ pub struct Probe {
 }
 
 /// The type of a probed variable.
+///
+/// `#[non_exhaustive]`, like the other public enums that may grow: a `match` outside
+/// `simjig-build` needs a wildcard arm.
+///
+/// ```compile_fail,E0004
+/// fn width(ty: &simjig_build::ProbeType) -> Option<u32> {
+///     match ty {
+///         simjig_build::ProbeType::Named(_) => None,
+///         simjig_build::ProbeType::Bits { width } => Some(*width),
+///     }
+/// }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProbeType {
     /// A named IR type, qualified as in the IR (`pkg::state_t`).
     Named(String),

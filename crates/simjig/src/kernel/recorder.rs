@@ -15,7 +15,26 @@ use super::time::SimTime;
 pub(crate) const RECORDER_CAPACITY: usize = 4096;
 
 /// What a [`TraceRecord`] describes.
+///
+/// It may grow: a `match` outside this crate needs a wildcard arm.
+///
+/// ```compile_fail,E0004
+/// fn code(e: &simjig::TraceKind) -> u8 {
+///     match e {
+///         simjig::TraceKind::Step { .. } => 0,
+///         simjig::TraceKind::Eval { .. } => 0,
+///         simjig::TraceKind::ReadOnly { .. } => 0,
+///         simjig::TraceKind::Spawn { .. } => 0,
+///         simjig::TraceKind::Poll { .. } => 0,
+///         simjig::TraceKind::Done { .. } => 0,
+///         simjig::TraceKind::Cancel { .. } => 0,
+///         simjig::TraceKind::Write { .. } => 0,
+///         simjig::TraceKind::Failure { .. } => 0,
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TraceKind {
     /// The kernel advanced to a new timestamp.
     Step,

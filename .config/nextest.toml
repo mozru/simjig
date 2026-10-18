@@ -16,3 +16,14 @@ path = "junit.xml"
 [[profile.default.overrides]]
 filter = 'binary_id(simjig::harness_tests) & test(/^ui::/)'
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# The `rebuild::` tests build one copy of a fixture crate with Cargo (tests/it/rebuild.rs),
+# from cold in a fresh target dir: each may take minutes. They run one at a time, so a
+# test's clock does not run while it waits for the other's build.
+[test-groups]
+fixture-rebuild = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(/^rebuild::/)'
+test-group = 'fixture-rebuild'
+slow-timeout = { period = "60s", terminate-after = 6 }

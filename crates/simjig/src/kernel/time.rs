@@ -246,7 +246,20 @@ impl SimDuration {
 }
 
 /// Why a time value could not be built.
+///
+/// It may grow: a `match` outside this crate needs a wildcard arm.
+///
+/// ```compile_fail,E0004
+/// fn code(e: &simjig::TimeError) -> u8 {
+///     match e {
+///         simjig::TimeError::NotRepresentable { .. } => 0,
+///         simjig::TimeError::Overflow { .. } => 0,
+///         simjig::TimeError::PrecisionOutOfRange { .. } => 0,
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TimeError {
     /// The value is not a whole number of ticks.
     NotRepresentable {

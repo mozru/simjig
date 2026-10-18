@@ -16,6 +16,7 @@
 //! configuration, cached) and the model with `cc`, and emit `cargo::` directives.
 #![forbid(unsafe_code)]
 
+mod archive;
 mod cache;
 pub mod codegen;
 mod compile;
@@ -24,8 +25,12 @@ mod dut;
 pub mod emit;
 mod env;
 mod error;
+mod front;
 mod hash;
 mod header;
+mod iface_diag;
+mod manifest;
+mod optfile;
 mod pipeline;
 mod runtime;
 mod script;

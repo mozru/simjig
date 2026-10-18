@@ -24,9 +24,9 @@ use serde_json::Value;
 use super::json::{Index, Node};
 use crate::error::{Error, Result};
 use crate::ir::{
-    Design, Direction, Field, IfacePort, Instance, Modport, ModportMember, Module, ModuleId,
-    ModuleKind, Package, Param, ParamValue, Port, Producer, Range, SCHEMA, Storage, TimeExp, Type,
-    TypeId, TypeKind, Unrepresentable, Variable, VariableKind, Variant,
+    Design, Direction, Field, GenerateBlock, IfacePort, Instance, Modport, ModportMember, Module,
+    ModuleId, ModuleKind, Package, Param, ParamValue, Port, Producer, Range, SCHEMA, Storage,
+    TimeExp, Type, TypeId, TypeKind, Unrepresentable, Variable, VariableKind, Variant,
 };
 use crate::literal::{self, Literal};
 use crate::width;
@@ -110,6 +110,14 @@ struct Unit<'a> {
     node: Node<'a>,
     id: ModuleId,
     level: i64,
+}
+
+/// The hierarchy items of a module body or generate block, while decoding it.
+#[derive(Default)]
+struct Scope {
+    instances: Vec<Instance>,
+    variables: Vec<Variable>,
+    generate_blocks: Vec<GenerateBlock>,
 }
 
 /// Where a `typedef` was declared.
@@ -223,9 +231,11 @@ impl<'a> Decoder<'a> {
             modports: Vec::new(),
             instances: Vec::new(),
             variables: Vec::new(),
+            generate_blocks: Vec::new(),
         };
+        let mut scope = Scope::default();
         for stmt in self.ix.children(&unit.node, "stmtsp")? {
-            self.hierarchy_item(&stmt, &mut m)?;
+            self.hierarchy_item(&stmt, &mut scope)?;
             match Index::kind(&stmt) {
                 // A port is any non-interface VAR with a direction: `inout wire` ports
                 // have varType WIRE, not PORT.
@@ -248,34 +258,57 @@ impl<'a> Decoder<'a> {
                 _ => {}
             }
         }
+        m.instances = scope.instances;
+        m.variables = scope.variables;
+        m.generate_blocks = scope.generate_blocks;
         Ok(m)
     }
 
-    /// Records `stmt` in the module's instances or variables, if it is one of them. A cell
-    /// whose unit is not a decoded module or interface (none in 5.052's elaborated output)
-    /// is left out rather than failing the design: the hierarchy only serves diagnostics.
-    fn hierarchy_item(&self, stmt: &Node<'a>, m: &mut Module) -> Result<()> {
+    /// Records `stmt` in the scope's instances, variables or generate blocks, if it is one
+    /// of them. A cell whose unit is not a decoded module or interface (none in 5.052's
+    /// elaborated output) is left out rather than failing the design: the hierarchy only
+    /// serves diagnostics.
+    ///
+    /// Generate blocks (`GENBLOCK`, items in `itemsp`) are already elaborated at this
+    /// stage (the dump runs after `V3Width`, before `V3Begin`): a false generate-if is gone,
+    /// an unnamed block has its `genblk<N>` name and a generate-for loop is unrolled into
+    /// one block per iteration named `label[i]`, after an `implied` block of the same
+    /// label that holds only the genvar, which is skipped.
+    fn hierarchy_item(&self, stmt: &Node<'a>, scope: &mut Scope) -> Result<()> {
         let ix = &self.ix;
         match Index::kind(stmt) {
             "CELL" => {
                 if let Some(&module) = ix.opt_str(stmt, "modp")?.and_then(|a| self.unit_ids.get(a))
                 {
-                    m.instances.push(Instance {
+                    scope.instances.push(Instance {
                         name: decode_name(ix.str(stmt, "origName")?),
                         module,
+                        array: !ix.children(stmt, "rangep")?.is_empty(),
                     });
                 }
             }
             "VAR" => {
                 let kind = match ix.str(stmt, "varType")? {
-                    "IFACEREF" => return Ok(()),
+                    "IFACEREF" | "GENVAR" => return Ok(()),
                     "GPARAM" => VariableKind::Parameter,
                     "LPARAM" => VariableKind::Localparam,
                     _ => VariableKind::Signal,
                 };
-                m.variables.push(Variable {
+                scope.variables.push(Variable {
                     name: decode_name(ix.str(stmt, "origName")?),
                     kind,
+                });
+            }
+            "GENBLOCK" if !ix.flag(stmt, "implied")? => {
+                let mut inner = Scope::default();
+                for item in ix.children(stmt, "itemsp")? {
+                    self.hierarchy_item(&item, &mut inner)?;
+                }
+                scope.generate_blocks.push(GenerateBlock {
+                    name: decode_name(ix.str(stmt, "name")?),
+                    instances: inner.instances,
+                    variables: inner.variables,
+                    generate_blocks: inner.generate_blocks,
                 });
             }
             _ => {}

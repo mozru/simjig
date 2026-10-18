@@ -242,7 +242,7 @@ pub(crate) struct ModelVtable {
     pub(crate) trace_open: unsafe extern "C" fn(*mut Handle, *const c_char) -> i32,
     pub(crate) trace_dump: unsafe extern "C" fn(*mut Handle, u64) -> i32,
     pub(crate) trace_close: unsafe extern "C" fn(*mut Handle) -> i32,
-    /// `cov_runs`: every coverage counter, as runs of contiguous arrays (`CovRun`).
+    /// `cov_runs`: every code coverage counter, as runs of contiguous arrays (`CovRun`).
     pub(crate) cov_runs: unsafe extern "C" fn(*mut Handle, *mut usize) -> *const CovRun,
     /// `SIMJIG_FEATURE_*` bits.
     pub(crate) features: u64,

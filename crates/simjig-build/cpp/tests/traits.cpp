@@ -91,6 +91,32 @@ struct ParamWriteTraits {
         SIMJIG_PROBE(t, m, "tc.u", "LP", "tc.u.LP", 8, kReadWrite);
     }
 };
+// A probe of a scope the model has no public variable in, and of a variable the scope lacks:
+// create says which one is missing.
+struct NoScopeTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000009ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.v", "r", "tc.v.r", 1, kRead);
+    }
+};
+struct NoVarTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c0000000000000aull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "q", "tc.u.q", 1, kRead);
+    }
+};
 // tc_sub.r is public_flat_rd only: a read-write probe of it is refused too.
 struct ReadOnlyWriteTraits {
     using Model = Vtc_plain;
@@ -102,6 +128,20 @@ struct ReadOnlyWriteTraits {
     static void bind(Vtc_plain& m, simjig::SignalTable& t) {
         bind_tc(m, t);
         SIMJIG_PROBE(t, m, "tc.u", "r", "tc.u.r", 1, kReadWrite);
+    }
+};
+
+// tc_sub.rv is a `real`: Verilator records it as 1 bit wide, so only its type refuses it.
+struct RealProbeTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c0000000000000bull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "rv", "tc.u.rv", 1, kRead);
     }
 };
 
@@ -151,6 +191,9 @@ SIMJIG_EXPORT_VTABLE(Vtc_plain_badprobe, BadProbeTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rd, ParamReadTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rw, ParamWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_rd_as_rw, ReadOnlyWriteTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_no_scope, NoScopeTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_no_var, NoVarTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_real, RealProbeTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_hier, HierTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_cg, CgTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_timing, TimingTraits)

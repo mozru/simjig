@@ -36,6 +36,9 @@ const simjig_model_vtable* simjig_vtable_Vtc_plain_badprobe(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_param_rd(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_param_rw(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_rd_as_rw(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_no_scope(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_no_var(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_real(void);
 const simjig_model_vtable* simjig_vtable_Vtc_hier(void);
 const simjig_model_vtable* simjig_vtable_Vtc_timing(void);
 const simjig_model_vtable* simjig_vtable_Vtc_cg(void);
@@ -300,6 +303,43 @@ void probe_access_is_checked_at_create() {
     if (ro_why.find("probe 'tc.u.r'") == std::string::npos
         || ro_why.find("public_flat_rd") == std::string::npos) {
         std::fprintf(stderr, "  message: %s\n", ro_why.c_str());
+        CHECK(false);
+    }
+}
+
+// A missing scope and a missing variable get one diagnosis each, the same as the build-time
+// check's (syms.rs): only a missing variable can be a probe inside a hierarchical block.
+void missing_scopes_and_variables_are_told_apart() {
+    const std::pair<const simjig_model_vtable*, const char*> cases[] = {
+        {simjig_vtable_Vtc_plain_no_scope(),
+         "simjig: probe 'tc.v.r': no public scope 'TOP.tc.v' in the model: Verilator made "
+         "nothing in it public"},
+        {simjig_vtable_Vtc_plain_no_var(),
+         "simjig: probe 'tc.u.q': no public variable 'q' in scope 'TOP.tc.u' (a probe inside a "
+         "hierarchical block, hier_block, is in another model)"},
+    };
+    for (const auto& [vt, want] : cases) {
+        Model m{vt, "TOP"};
+        CHECK_EQ(m.created(), SIMJIG_EXCEPTION);
+        const std::string why = create_failure(m);
+        if (why != want) {
+            std::fprintf(stderr, "  message: %s\n", why.c_str());
+            CHECK(false);
+        }
+    }
+}
+
+// A `real` is recorded as 1 bit wide, so a 1-bit probe of it passes the width check: its
+// storage type refuses it, with the build-time check's words (syms.rs).
+void a_real_is_refused_by_its_type() {
+    Model m{simjig_vtable_Vtc_plain_real(), "TOP"};
+    CHECK_EQ(m.created(), SIMJIG_EXCEPTION);
+    const std::string why = create_failure(m);
+    const char* want =
+        "simjig: probe 'tc.u.rv': `rv` is a `real` (Verilator stores it as VLVT_REAL); only "
+        "packed variables (bit vectors, packed structs and unions, enums) can be probed";
+    if (why != want) {
+        std::fprintf(stderr, "  message: %s\n", why.c_str());
         CHECK(false);
     }
 }
@@ -852,6 +892,9 @@ int main(int argc, char** argv) {
         {"plain_model_reports_unsupported", plain_model_reports_unsupported},
         {"probe_width_is_checked_at_create", probe_width_is_checked_at_create},
         {"probe_access_is_checked_at_create", probe_access_is_checked_at_create},
+        {"missing_scopes_and_variables_are_told_apart",
+         missing_scopes_and_variables_are_told_apart},
+        {"a_real_is_refused_by_its_type", a_real_is_refused_by_its_type},
         {"abi_field_table_covers_every_field", abi_field_table_covers_every_field},
         {"thread_rng_survives_a_reseed_epoch", thread_rng_survives_a_reseed_epoch},
         {"fst_trace_is_written_and_parses", fst_trace_is_written_and_parses},

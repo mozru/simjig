@@ -41,6 +41,9 @@ fn second_build_hits_the_cache_without_running_verilator() {
     other_crate.out_dir = s.path().join("other-out");
     let third = counter(&rtl, 8).build_in(&other_crate).unwrap();
     assert_eq!((third.cache, s.verilations()), (CacheStatus::Hit, 1));
+    // And links the same model archive: the shim it compiles is content-addressed.
+    assert_eq!(model_entry(&third), model_entry(&first));
+    assert_eq!(count_entries(&s.path().join("cache/archives")), 1);
 
     // A different parameter is a different model, but reuses the same libverilated.
     // (Another crate: one build script may not reuse a DUT name for another config.)
@@ -135,4 +138,101 @@ fn a_prefix_owned_by_another_configuration_is_rejected() {
         "{err}"
     );
     assert_eq!(s.verilations(), verilated, "rejected before verilating");
+}
+
+/// The model archive's entry directory (from its link directives).
+fn model_entry(built: &simjig_build::Built) -> std::path::PathBuf {
+    built
+        .directives
+        .iter()
+        .filter_map(|d| d.strip_prefix("cargo::rustc-link-search=native="))
+        .map(std::path::PathBuf::from)
+        .find(|d| d.components().any(|c| c.as_os_str() == "archives"))
+        .expect("a model archive directory")
+}
+
+/// An archive entry holds only the archive: its objects are inside it.
+#[test]
+fn archive_entries_hold_only_the_archive() {
+    let s = Sandbox::new();
+    let built = counter(&s.rtl(), 8).build_in(&s.env()).unwrap();
+    for kind in ["archives", "libverilated"] {
+        for entry in std::fs::read_dir(s.path().join("cache").join(kind)).unwrap() {
+            let files: Vec<std::path::PathBuf> = std::fs::read_dir(entry.unwrap().path())
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+            assert!(
+                files.len() == 1 && files[0].extension().is_some_and(|e| e == "a"),
+                "{kind}: {files:?}"
+            );
+        }
+    }
+    assert!(model_entry(&built).is_dir());
+}
+
+/// An entry directory without its archive (an interrupted older build) is a miss, and
+/// the build puts the archive back instead of linking a missing file.
+#[test]
+fn an_entry_without_its_archive_is_rebuilt() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let built = counter(&rtl, 8).build_in(&s.env()).unwrap();
+    let entry = model_entry(&built);
+    for f in std::fs::read_dir(&entry).unwrap() {
+        std::fs::remove_file(f.unwrap().path()).unwrap();
+    }
+    let again = counter(&rtl, 8).build_in(&s.env()).unwrap();
+    assert_eq!(model_entry(&again), entry);
+    let archives = std::fs::read_dir(&entry).unwrap().count();
+    assert_eq!(archives, 1, "the archive is back");
+}
+
+/// Work directories left by a build that was killed are removed when they are an hour
+/// old; younger ones may belong to a build still running.
+#[test]
+fn stale_work_dirs_are_removed() {
+    let s = Sandbox::new();
+    let tmp = s.path().join("cache/tmp");
+    let (old, young) = (tmp.join("old"), tmp.join("young"));
+    for d in [&old, &young] {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::write(d.join("x.o"), "").unwrap();
+    }
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+    counter(&s.rtl(), 8).build_in(&s.env()).unwrap();
+    assert!(!old.exists(), "the stale work dir is gone");
+    assert!(young.exists(), "a recent work dir is kept");
+}
+
+/// Verilator 5.052's `.d` lists the option files it read (`-f`, `-F`), nested ones too, so
+/// an option file no argument names is part of the key: editing it verilates again.
+#[test]
+fn editing_a_nested_option_file_misses() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let (outer, inner) = (s.path().join("outer.f"), s.path().join("inner.f"));
+    std::fs::write(&outer, format!("-f {}\n", inner.display())).unwrap();
+    std::fs::write(&inner, "-Wno-WIDTH\n").unwrap();
+    let build = || {
+        counter(&rtl, 8)
+            .verilator_args(["-f".to_owned(), outer.display().to_string()])
+            .build_in(&s.env())
+            .unwrap()
+    };
+    let first = build();
+    assert!(
+        first
+            .directives
+            .contains(&format!("cargo::rerun-if-changed={}", inner.display())),
+        "{:?}",
+        first.directives
+    );
+    assert_eq!((build().cache, s.verilations()), (CacheStatus::Hit, 1));
+    std::fs::write(&inner, "-Wno-UNUSED\n").unwrap();
+    assert_eq!((build().cache, s.verilations()), (CacheStatus::Miss, 2));
 }

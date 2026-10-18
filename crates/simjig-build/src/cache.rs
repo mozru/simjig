@@ -1,14 +1,19 @@
 //! The content-hash cache shared by every crate (and test crate) of a workspace.
 //!
 //! Layout under the cache root (see [`crate::BuildEnv::cache_dir`]):
-//! - `models/<full key>/obj/`: Verilator output; `models/<full key>/deps`: its inputs.
-//! - `manifests/<pre key>`: the input list of the last build with that pre key.
+//! - `models/<full key>/obj/`: Verilator output; `models/<full key>/deps`: every file
+//!   Verilator read (its `.d` file's list).
+//! - `manifests/<pre key>`: the input list of the last build with that pre key (of a
+//!   verilation, of an archive compile, see `archive`, or of a DUT's IR, see `front`).
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
 //! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
 //! - `archives/<key>/`: compiled models (see `compile`).
-//! - `tmp/`: work directories, renamed into place when complete.
+//! - `fronts/<key>`: the IR of a DUT; `checks/<key>`: a layout check that passed (see
+//!   `front`).
+//! - `tmp/`: work directories, renamed into place when complete; one left by a killed
+//!   build is removed an hour later.
 //!
 //! Keys. Verilator only reveals which files it read (`` `include ``s) after running, so
 //! the lookup has two steps, like ccache's direct mode:
@@ -16,8 +21,14 @@
 //!    `simjig-build` version, the full Verilator version line, every argument, the
 //!    contents of every listed source and the file names in every include directory
 //!    (so a new file that would shadow an include changes the key);
-//! 2. the manifest for that pre key names the files the last such build read; the *full
-//!    key* adds their current contents. The entry for the full key is a hit.
+//! 2. the manifest for that pre key names the files the last such build read (but the
+//!    Verilator binary, see [`is_verilator_binary`]); the *full key* adds their current
+//!    contents (read again only for files whose status changed, see `manifest`). The
+//!    entry for the full key is a hit.
+//!
+//! An input edited while Verilator runs (see `manifest`) leaves the output out of the
+//! cache: it serves the build that made it, from `OUT_DIR` ([`keep_unpublished`]), and
+//! the next build verilates again.
 //!
 //! Invariants: an entry directory is only ever created by an atomic `rename` of a
 //! complete work directory, so readers never see a partial entry; entries are never
@@ -29,6 +40,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dut::{CacheStatus, GeneratedInput};
 use crate::hash::KeyHasher;
+use crate::manifest::{Digests, Manifest, Recorded, Snapshot, escape_path, unescape_path};
 use crate::verilator::{self, Verilator};
 use crate::{ABI_VERSION, Error, depfile};
 
@@ -45,6 +57,9 @@ pub(crate) struct Verilated {
     /// Every file Verilator read, from its `.d` file.
     pub(crate) deps: Vec<PathBuf>,
     pub(crate) status: CacheStatus,
+    /// A dependency that changed while Verilator read it: this output serves this build
+    /// only and is not in the cache (see `manifest`).
+    pub(crate) changed: Option<PathBuf>,
 }
 
 impl Cache {
@@ -57,11 +72,14 @@ impl Cache {
             "prefixes",
             "libverilated",
             "archives",
+            "fronts",
+            "checks",
             "tmp",
         ] {
             let dir = root.join(sub);
             std::fs::create_dir_all(&dir).map_err(Error::io("creating", &dir))?;
         }
+        remove_stale_work_dirs(&root.join("tmp"));
         Ok(Self { root })
     }
 
@@ -91,30 +109,24 @@ impl Cache {
     }
 
     /// Returns Verilator's output for `args`, running Verilator only on a miss.
-    /// `dut` names the DUT in a failure message.
+    /// `dut` names the DUT in a failure message; `out_dir` keeps an output that cannot be
+    /// cached (see [`keep_unpublished`]).
     pub(crate) fn verilate(
         &self,
         dut: &str,
         verilator: &Verilator,
         args: &[String],
         include_dirs: &[PathBuf],
+        out_dir: &Path,
     ) -> Result<Verilated, Error> {
         let pre = pre_key(verilator, args, include_dirs)?;
         let manifest = self.root.join("manifests").join(&pre);
-        if let Ok(text) = std::fs::read_to_string(&manifest) {
-            let deps: Vec<PathBuf> = text.lines().map(PathBuf::from).collect();
-            if let Some(full) = full_key(&pre, &deps) {
-                let entry = self.root.join("models").join(full);
-                if entry.join("obj").is_dir() {
-                    return Ok(Verilated {
-                        obj_dir: entry.join("obj"),
-                        deps,
-                        status: CacheStatus::Hit,
-                    });
-                }
-            }
-        }
+        let known = match self.lookup(&pre, &manifest) {
+            Ok(hit) => return Ok(hit),
+            Err(known) => known,
+        };
         let work = self.work_dir()?;
+        let snapshot = Snapshot::start(&work, known);
         let obj = work.join("obj");
         let mut cmd = verilator.command();
         cmd.arg("-Mdir").arg(&obj).args(args);
@@ -122,23 +134,56 @@ impl Cache {
             remove_best_effort(&work);
             return Err(e);
         }
-        let deps = read_deps(&obj, prefix_of(args))?;
-        let full = full_key(&pre, &deps).ok_or_else(|| Error::Parse {
-            path: obj.clone(),
-            line: 0,
-            msg: "a file Verilator read vanished before it could be hashed".to_owned(),
-        })?;
-        let listing = deps_listing(&deps);
+        let prefix = prefix_of(args);
+        let deps = read_deps(&obj, prefix)?;
+        let recorded = match Manifest::record(&keyed_deps(&deps), &snapshot) {
+            Recorded::Stable(m) => m,
+            Recorded::Changed(path) => {
+                let dir = keep_unpublished(&work, out_dir, &format!("verilated-{prefix}"))?;
+                return Ok(Verilated {
+                    obj_dir: dir.join("obj"),
+                    deps,
+                    status: CacheStatus::Miss,
+                    changed: Some(path),
+                });
+            }
+        };
         let deps_file = work.join("deps");
-        std::fs::write(&deps_file, &listing).map_err(Error::io("writing", &deps_file))?;
-        let entry = self.root.join("models").join(full);
+        std::fs::write(&deps_file, deps_listing(&deps))
+            .map_err(Error::io("writing", &deps_file))?;
+        let entry = self
+            .root
+            .join("models")
+            .join(recorded.recorded_key(DEPS_DOMAIN, &pre));
         Self::publish(&work, &entry)?;
-        self.write_atomic(&manifest, &listing)?;
+        self.write_atomic(&manifest, &recorded.text())?;
         Ok(Verilated {
             obj_dir: entry.join("obj"),
             deps,
             status: CacheStatus::Miss,
+            changed: None,
         })
+    }
+
+    /// The entry for `pre` if the manifest's files still hash to one; else their current
+    /// digests, if there is a manifest, for the run's snapshot.
+    fn lookup(&self, pre: &str, manifest: &Path) -> Result<Verilated, Option<Digests>> {
+        let current = Manifest::read(manifest)
+            .and_then(|m| m.current())
+            .ok_or(None)?;
+        let entry = self.root.join("models").join(current.key(DEPS_DOMAIN, pre));
+        // The entry's own list has the Verilator binary too, which the key leaves out.
+        let listed = std::fs::read_to_string(entry.join("deps")).ok();
+        let deps = listed.and_then(|text| text.lines().map(unescape_path).collect());
+        match deps {
+            Some(deps) if entry.join("obj").is_dir() => Ok(Verilated {
+                obj_dir: entry.join("obj"),
+                deps,
+                status: CacheStatus::Hit,
+                changed: None,
+            }),
+            _ => Err(Some(current)),
+        }
     }
 
     /// A fresh, empty work directory under `tmp/`.
@@ -173,7 +218,8 @@ impl Cache {
         }
     }
 
-    fn write_atomic(&self, path: &Path, contents: &str) -> Result<(), Error> {
+    /// Replaces the file at `path` with `contents` atomically.
+    pub(crate) fn write_atomic(&self, path: &Path, contents: &str) -> Result<(), Error> {
         let work = self.work_dir()?;
         let tmp = work.join("file");
         std::fs::write(&tmp, contents).map_err(Error::io("writing", &tmp))?;
@@ -245,19 +291,20 @@ fn pre_key(
     Ok(h.finish())
 }
 
-/// `None` when a dependency can no longer be read (the entry cannot be valid).
-fn full_key(pre: &str, deps: &[PathBuf]) -> Option<String> {
-    let mut h = KeyHasher::new("simjig-verilate-deps-v1");
-    h.str(pre);
-    for d in deps.iter().filter(|d| !is_verilator_binary(d)) {
-        h.file(d).ok()?;
-    }
-    Some(h.finish())
+/// The domain of the full keys (see the module docs).
+const DEPS_DOMAIN: &str = "simjig-verilate-deps-v2";
+
+/// The dependencies the full key covers: all but the Verilator binary.
+fn keyed_deps(deps: &[PathBuf]) -> Vec<PathBuf> {
+    deps.iter()
+        .filter(|d| !is_verilator_binary(d))
+        .cloned()
+        .collect()
 }
 
 /// The Verilator executable shows up in its own `.d` file. Its version line is already in
 /// the pre key, and hashing a multi-megabyte binary on every build would be wasted work.
-fn is_verilator_binary(p: &Path) -> bool {
+pub(crate) fn is_verilator_binary(p: &Path) -> bool {
     p.file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.starts_with("verilator_bin"))
@@ -279,10 +326,49 @@ fn prefix_of(args: &[String]) -> &str {
 fn deps_listing(deps: &[PathBuf]) -> String {
     let mut out = String::new();
     for d in deps {
-        out.push_str(&d.display().to_string());
+        out.push_str(&escape_path(d));
         out.push('\n');
     }
     out
+}
+
+/// Moves `work`, the output of a run whose input changed while it ran, to
+/// `OUT_DIR/simjig-unpublished/<label>` (replacing an earlier one) and returns where it
+/// is. It serves this build only, and must outlive the build script: the link that
+/// follows reads it. When it cannot be moved there (`OUT_DIR` on another filesystem than
+/// the cache), it stays in `tmp/`, removed an hour later; by then Cargo has run the
+/// build script again, since the edited input is newer than its last run.
+pub(crate) fn keep_unpublished(work: &Path, out_dir: &Path, label: &str) -> Result<PathBuf, Error> {
+    let parent = out_dir.join("simjig-unpublished");
+    std::fs::create_dir_all(&parent).map_err(Error::io("creating", &parent))?;
+    let dst = parent.join(label);
+    if dst.exists() {
+        std::fs::remove_dir_all(&dst).map_err(Error::io("removing", &dst))?;
+    }
+    Ok(match std::fs::rename(work, &dst) {
+        Ok(()) => dst,
+        Err(_) => work.to_path_buf(),
+    })
+}
+
+/// How old a work directory must be before it counts as left behind by a killed build.
+/// No compile or verilation of one model takes an hour; a younger directory may belong to
+/// a build that is still running (in another process sharing the cache).
+const STALE_WORK_DIR: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Removes the work directories under `tmp` last modified more than [`STALE_WORK_DIR`] ago.
+fn remove_stale_work_dirs(tmp: &Path) {
+    let Ok(entries) = std::fs::read_dir(tmp) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for e in entries.flatten() {
+        let modified = e.metadata().and_then(|m| m.modified());
+        let age = modified.ok().and_then(|m| now.duration_since(m).ok());
+        if age.is_some_and(|a| a > STALE_WORK_DIR) {
+            remove_best_effort(&e.path());
+        }
+    }
 }
 
 fn nanos() -> u128 {
@@ -339,35 +425,13 @@ mod tests {
     }
 
     #[test]
-    fn full_key_tracks_dependency_contents() {
-        let t = tempfile::tempdir().unwrap();
-        let inc = t.path().join("defs.svh");
-        let bin = t.path().join("verilator_bin");
-        std::fs::write(&inc, "`define STEP 1\n").unwrap();
-        std::fs::write(&bin, "binary v1").unwrap();
-        let deps = [bin.clone(), inc.clone()];
-        let k1 = full_key("pre", &deps).unwrap();
-        std::fs::write(&bin, "binary v2").unwrap();
-        assert_eq!(
-            full_key("pre", &deps).unwrap(),
-            k1,
-            "the binary is covered by the version"
-        );
-        std::fs::write(&inc, "`define STEP 2\n").unwrap();
-        assert_ne!(
-            full_key("pre", &deps).unwrap(),
-            k1,
-            "an included file changed"
-        );
-        assert_ne!(
-            full_key("other", &deps).unwrap(),
-            full_key("pre", &deps).unwrap()
-        );
-        std::fs::remove_file(&inc).unwrap();
-        assert_eq!(
-            full_key("pre", &deps),
-            None,
-            "a vanished dependency is a miss"
-        );
+    fn the_verilator_binary_is_left_out_of_the_key() {
+        let deps = [
+            "/v/bin/verilator_bin",
+            "/r/defs.svh",
+            "/v/bin/verilator_bin_dbg",
+        ]
+        .map(PathBuf::from);
+        assert_eq!(keyed_deps(&deps), [PathBuf::from("/r/defs.svh")]);
     }
 }

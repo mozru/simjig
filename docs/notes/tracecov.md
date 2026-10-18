@@ -269,8 +269,7 @@ upstream.
   tested directly.
 - (Superseded) `cov_counters` became `cov_runs` in s1c2fix, which covers non-inlined
   modules; probes are found through the scope table, not `rootp->a__DOT__b`.
-- Probe paths through generate blocks (`top.g[0].u.x`, `top.gen_blk.x`) are not supported
-  yet: the lowering accepts only plain identifiers, and the IR's instance tree
+- (Superseded by s1c4fix: generate-block probe paths are supported via IR schema 4.) Probe paths through generate blocks (`top.g[0].u.x`, `top.gen_blk.x`) were not supported: the lowering accepts only plain identifiers, and the IR's instance tree
   (`Module::instances`) lists only instances directly in a module body. Verilator's scope
   table names such a scope plainly, `g.gb[0].u` (checked on 5.052; only the C++ member
   name is mangled), so `find_probe` could find it; supporting

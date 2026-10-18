@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use svtypes::ir::{Design, TypeId, TypeKind};
 use svtypes::width::packed_storage;
 
+use super::super::error::UNKNOWN_IR_KIND;
 use super::super::names::{Namespace, camel, screaming, snake};
 use super::super::{EnumVariant, Error, Item, ItemKind, RustType, StructField, UnionView};
 
@@ -141,6 +142,7 @@ fn generates(design: &Design, id: TypeId, path: &str) -> Result<bool, Error> {
         TypeKind::Bits { .. } | TypeKind::PackedArray { .. } | TypeKind::UnpackedArray { .. } => {
             Ok(ty.name.is_some() && ty.alias_of.is_some())
         }
+        _ => Err(Error::unsupported(path, UNKNOWN_IR_KIND)),
     }
 }
 
@@ -214,7 +216,8 @@ fn push_children(design: &Design, id: TypeId, site: &Use, stack: &mut Vec<(TypeI
         TypeKind::PackedArray { elem, .. } | TypeKind::UnpackedArray { elem, .. } => {
             children.push((*elem, child("elem")));
         }
-        TypeKind::Bits { .. } => {}
+        // `generates` refused a kind it does not know before its children are wanted.
+        _ => {}
     }
     if let Some(target) = ty.alias_of {
         children.push((target, site.clone()));
@@ -354,6 +357,7 @@ fn lower_item(
             TypeKind::Bits { .. }
             | TypeKind::PackedArray { .. }
             | TypeKind::UnpackedArray { .. } => unreachable_alias(&sv_name)?,
+            _ => return Err(Error::unsupported(&sv_name, UNKNOWN_IR_KIND)),
         }
     };
     Ok(Item {

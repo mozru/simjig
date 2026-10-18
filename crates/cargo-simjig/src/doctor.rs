@@ -18,6 +18,7 @@ use crate::json;
 
 /// How [`run`] prints the report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Format {
     /// [`Report`]'s `Display` form, for people.
     Text,
@@ -46,6 +47,7 @@ pub fn run(format: Format) -> ExitCode {
 
 /// How bad a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum Status {
     /// The check passed.
     Ok,
@@ -79,6 +81,7 @@ impl fmt::Display for Status {
 
 /// Which check produced a finding. Variants are listed in report order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum Check {
     /// The Verilator the build would use (`svtypes::toolchain::locate`) exists and its
     /// version is accepted (`svtypes::toolchain::judge`).

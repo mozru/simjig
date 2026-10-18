@@ -216,6 +216,45 @@ bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
     return false;
 }
 
+namespace {
+
+// VLVT_UINT8/16/32/64 and VLVT_WDATA: the storage of a packed vector (verilated.h).
+bool is_packed_vltype(VerilatedVarType vt) {
+    return vt == VLVT_UINT8 || vt == VLVT_UINT16 || vt == VLVT_UINT32 || vt == VLVT_UINT64
+           || vt == VLVT_WDATA;
+}
+
+// The enumerator's name, as syms.rs prints it from the scope table.
+std::string vltype_name(VerilatedVarType vt) {
+    switch (vt) {
+        case VLVT_PTR: return "VLVT_PTR";
+        case VLVT_UINT8: return "VLVT_UINT8";
+        case VLVT_UINT16: return "VLVT_UINT16";
+        case VLVT_UINT32: return "VLVT_UINT32";
+        case VLVT_UINT64: return "VLVT_UINT64";
+        case VLVT_WDATA: return "VLVT_WDATA";
+        case VLVT_STRING: return "VLVT_STRING";
+        case VLVT_REAL: return "VLVT_REAL";
+        case VLVT_STRUCT: return "VLVT_STRUCT";
+        case VLVT_UNION: return "VLVT_UNION";
+        default: return "VLVT_" + std::to_string(static_cast<int>(vt));
+    }
+}
+
+// The SystemVerilog type stored as `vt`, for messages (syms.rs `sv_type`).
+std::string sv_type_of(VerilatedVarType vt) {
+    switch (vt) {
+        case VLVT_REAL: return "real";
+        case VLVT_STRING: return "string";
+        case VLVT_STRUCT: return "unpacked struct";
+        case VLVT_UNION: return "unpacked union";
+        case VLVT_PTR: return "pointer";
+        default: return vltype_name(vt);
+    }
+}
+
+}  // namespace
+
 void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
                  const char* var, const char* display, uint32_t width, uint8_t access) {
     const std::string scope_name = std::string{or_empty(model_name)} + "." + or_empty(scope);
@@ -223,7 +262,11 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
         throw std::runtime_error("simjig: probe '" + std::string{or_empty(display)} + "': " + why);
     };
     const VerilatedScope* s = ctx.scopeFind(scope_name.c_str());
-    if (s == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
+    // One diagnosis per case, the same as the build-time check's (syms.rs).
+    if (s == nullptr) {
+        fail("no public scope '" + scope_name + "' in the model: Verilator made nothing in it "
+             "public");
+    }
     const VerilatedVar* v = s->varFind(or_empty(var));
     if (v == nullptr) {
         fail("no public variable '" + std::string{or_empty(var)} + "' in scope '" + scope_name
@@ -241,18 +284,27 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
             fail("the model's variable is public_flat_rd, but the probe is bound for writing");
         }
     }
-    if (v->udims() != 0) fail("the model's variable is an unpacked array");
-    if (v->entBits() != static_cast<int>(width)) {
-        fail("the model's variable is " + std::to_string(v->entBits())
+    // The type checks in the build-time check's order (syms.rs `check_probe`): unpacked,
+    // the storage type, the storage against the width, then the width. The storage type
+    // first, because Verilator records a `real` or a `string` as 1 bit wide.
+    const std::string name{or_empty(var)};
+    if (v->udims() != 0) fail("`" + name + "` is an unpacked array; only packed variables can be probed");
+    // verilated_sym_props.h: the storage class Verilator chose for the variable.
+    const VerilatedVarType vt = v->vltype();
+    if (!is_packed_vltype(vt)) {
+        fail("`" + name + "` is a `" + sv_type_of(vt) + "` (Verilator stores it as "
+             + vltype_name(vt) + "); only packed variables (bit vectors, packed structs and "
+               "unions, enums) can be probed");
+    }
+    const int bits = v->entBits();
+    if (bits <= 0 || vt != vltype_for_width(static_cast<uint32_t>(bits))) {
+        fail("`" + name + "` is " + std::to_string(bits) + " bits wide, but Verilator stores it as "
+             + vltype_name(vt) + ", which is not the storage of that width");
+    }
+    if (bits != static_cast<int>(width)) {
+        fail("the model's variable is " + std::to_string(bits)
              + " bits wide, but it is bound as " + std::to_string(width) + " bits");
     }
-    // verilated_sym_props.h: the storage class Verilator chose for the variable.
-    const VerilatedVarType expected = width <= 8    ? VLVT_UINT8
-                                      : width <= 16 ? VLVT_UINT16
-                                      : width <= 32 ? VLVT_UINT32
-                                      : width <= 64 ? VLVT_UINT64
-                                                    : VLVT_WDATA;
-    if (v->vltype() != expected) fail("the model's variable is not stored as a packed vector");
     if (v->datap() == nullptr) fail("the model's variable has no address");
     return v->datap();
 }

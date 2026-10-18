@@ -33,6 +33,41 @@
 
 namespace simjig {
 
+// Verilator's storage rule (verilated_types.h: CData..QData, VlWide<N>), the C++ side's one
+// copy: the shim's static_asserts (storage_bytes, simjig_model.h) and find_probe's check of
+// Verilator's metadata (vltype_for_width) derive from it.
+constexpr uint8_t storage_for_width(uint32_t width) {
+    return width <= 8    ? SIMJIG_STORAGE_C
+           : width <= 16 ? SIMJIG_STORAGE_S
+           : width <= 32 ? SIMJIG_STORAGE_I
+           : width <= 64 ? SIMJIG_STORAGE_Q
+                         : SIMJIG_STORAGE_W;
+}
+
+constexpr uint32_t words_for_width(uint32_t width) { return (width + 31) / 32; }
+
+// The size of the storage of `width` bits.
+constexpr size_t storage_bytes(uint32_t width) {
+    switch (storage_for_width(width)) {
+        case SIMJIG_STORAGE_C: return 1;
+        case SIMJIG_STORAGE_S: return 2;
+        case SIMJIG_STORAGE_I: return 4;
+        case SIMJIG_STORAGE_Q: return 8;
+        default: return 4 * static_cast<size_t>(words_for_width(width));
+    }
+}
+
+// The VerilatedVarType (verilated.h) Verilator records for a variable of that storage.
+constexpr VerilatedVarType vltype_for_width(uint32_t width) {
+    switch (storage_for_width(width)) {
+        case SIMJIG_STORAGE_C: return VLVT_UINT8;
+        case SIMJIG_STORAGE_S: return VLVT_UINT16;
+        case SIMJIG_STORAGE_I: return VLVT_UINT32;
+        case SIMJIG_STORAGE_Q: return VLVT_UINT64;
+        default: return VLVT_WDATA;
+    }
+}
+
 // Thrown by the fatal hooks to abandon the current eval. Deliberately not a std::exception, so
 // that no `catch (const std::exception&)` other than the barrier's can swallow it.
 struct FatalUnwind final {};

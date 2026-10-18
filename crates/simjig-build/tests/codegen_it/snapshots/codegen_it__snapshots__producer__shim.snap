@@ -14,7 +14,7 @@ constexpr uint8_t kReadWrite = SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE;
 struct Traits {
     using Model = Vsimjig_wrap_producer;
     static constexpr const char* kPrefix = "Vsimjig_wrap_producer";
-    static constexpr uint64_t kIrHash = 0xd52ad5534cefbd34ull;
+    static constexpr uint64_t kIrHash = 0xf7b61e0b74d4b09bull;
     static constexpr bool kTiming = false;
     static constexpr bool kTraceFst = false;
     static constexpr bool kCoverage = false;

@@ -29,9 +29,9 @@ mod with_models {
 
     unsafe extern "C" {
         #[link_name = "simjig_vtable_Vcounter"]
-        safe fn counter_vtable() -> &'static ModelVtable;
+        safe fn counter_vtable() -> *const ModelVtable;
         #[link_name = "simjig_vtable_Vticker"]
-        safe fn ticker_vtable() -> &'static ModelVtable;
+        safe fn ticker_vtable() -> *const ModelVtable;
         safe fn simjig_rt_abi_layout(out: *mut u32, cap: usize) -> usize;
     }
 
@@ -40,6 +40,25 @@ mod with_models {
         vt: &'static ModelVtable,
         handle: NonNull<Handle>,
         signals: Vec<Signal>,
+    }
+
+    /// The IR hashes `shim.cpp` gives the two models.
+    const COUNTER_HASH: u64 = 0x5eed_c0de_0000_0001;
+    const TICKER_HASH: u64 = 0x5eed_c0de_0000_0002;
+
+    /// A model's checked vtable.
+    fn checked(vt: *const ModelVtable, ir_hash: u64) -> &'static ModelVtable {
+        // SAFETY: the symbol returns a static table exported by a model built in build.rs.
+        unsafe { ModelVtable::check(vt, ir_hash) }
+            .unwrap_or_else(|e| panic!("vtable rejected: {e:?}"))
+    }
+
+    fn counter() -> &'static ModelVtable {
+        checked(counter_vtable(), COUNTER_HASH)
+    }
+
+    fn ticker() -> &'static ModelVtable {
+        checked(ticker_vtable(), TICKER_HASH)
     }
 
     impl Model {
@@ -188,12 +207,13 @@ mod with_models {
 
     #[test]
     fn vtable_identifies_its_model() {
-        let vt = counter_vtable();
-        assert_eq!(vt.check(0x5eed_c0de_0000_0001), Ok(()));
+        let vt = counter();
+        // SAFETY: as in `checked`.
+        let wrong = unsafe { ModelVtable::check(counter_vtable(), 7) };
         assert_eq!(
-            vt.check(7),
-            Err(abi::AbiError::IrHash {
-                model: 0x5eed_c0de_0000_0001,
+            wrong.err(),
+            Some(abi::AbiError::IrHash {
+                model: COUNTER_HASH,
                 expected: 7
             })
         );
@@ -211,7 +231,7 @@ mod with_models {
     #[test]
     fn signal_table_describes_every_storage_class() {
         use abi::{Dir::*, Storage::*};
-        let (model, status) = Model::new(counter_vtable(), 0);
+        let (model, status) = Model::new(counter(), 0);
         assert_eq!(status, Status::Ok);
         let rows: Vec<(String, u32, u32, abi::Storage, abi::Dir)> = model
             .signals
@@ -250,7 +270,7 @@ mod with_models {
 
     #[test]
     fn ports_read_and_write_through_the_table() {
-        let (mut m, _) = Model::new(counter_vtable(), 0);
+        let (mut m, _) = Model::new(counter(), 0);
         m.set("counter.rst", 1);
         assert_eq!(m.cycle(0), Status::Ok);
         assert_eq!(m.get("counter.count"), 0);
@@ -286,7 +306,7 @@ mod with_models {
 
     #[test]
     fn fatal_returns_status_and_message_and_poisons() {
-        let (mut m, _) = Model::new(counter_vtable(), 0);
+        let (mut m, _) = Model::new(counter(), 0);
         assert_eq!(m.cycle(0), Status::Ok);
         m.set("counter.cmd", 1);
         assert_eq!(m.cycle(1), Status::Fatal);
@@ -305,7 +325,7 @@ mod with_models {
 
     #[test]
     fn error_continues_until_the_error_limit_then_stops() {
-        let (mut m, _) = Model::new(counter_vtable(), 2);
+        let (mut m, _) = Model::new(counter(), 2);
         m.set("counter.cmd", 2);
         assert_eq!(m.cycle(0), Status::Ok);
         assert_eq!(m.cycle(1), Status::Stop);
@@ -321,7 +341,7 @@ mod with_models {
 
     #[test]
     fn stop_finish_and_display_are_reported() {
-        let (mut m, _) = Model::new(counter_vtable(), 0);
+        let (mut m, _) = Model::new(counter(), 0);
         m.set("counter.cmd", 4);
         assert_eq!(m.cycle(0), Status::Ok);
         let msgs = m.drain();
@@ -336,7 +356,7 @@ mod with_models {
         assert_eq!(m.drain()[0].kind, Ok(MsgKind::Finish));
         assert_eq!(m.final_blocks(), Status::Finish);
 
-        let (mut m, _) = Model::new(counter_vtable(), 0);
+        let (mut m, _) = Model::new(counter(), 0);
         m.set("counter.cmd", 5);
         assert_eq!(m.cycle(0), Status::Stop);
         let msgs = m.drain();
@@ -345,7 +365,7 @@ mod with_models {
 
     #[test]
     fn fatal_inside_a_timing_coroutine_is_reported_after_eval() {
-        let (mut m, status) = Model::new(ticker_vtable(), 0);
+        let (mut m, status) = Model::new(ticker(), 0);
         assert_eq!(status, Status::Ok);
         m.set("ticker.arm", 1);
         let mut t = 0;
@@ -372,7 +392,7 @@ mod with_models {
 
     #[test]
     fn full_ring_drops_oldest_and_counts_them() {
-        let (mut m, _) = Model::new(counter_vtable(), 0);
+        let (mut m, _) = Model::new(counter(), 0);
         m.set("counter.cmd", 4);
         // The runtime keeps 4096 records (simjig_rt.cpp kRingCapacity).
         for t in 0..4100 {
@@ -388,7 +408,7 @@ mod with_models {
 
     #[test]
     fn untimed_model_has_no_time_slot() {
-        let (mut m, _) = Model::new(counter_vtable(), 0);
+        let (mut m, _) = Model::new(counter(), 0);
         // Verilator's own nextTimeSlot() is a fatal here; the ABI answers "none".
         assert_eq!(m.next_time_slot(), TIME_NONE);
         assert_eq!(m.eval(), Status::Ok);
@@ -406,7 +426,7 @@ mod with_models {
         use std::hint::black_box;
         use std::time::Instant;
         const N: u32 = 50_000_000;
-        let (mut m, _) = Model::new(counter_vtable(), 0);
+        let (mut m, _) = Model::new(counter(), 0);
         let count = m.sig("counter.count");
         let half = m.sig("counter.half_in");
         let start = Instant::now();

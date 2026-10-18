@@ -278,28 +278,47 @@ pub(crate) enum AbiError {
 }
 
 impl ModelVtable {
-    /// Checks that this runtime can use the table and that it belongs to the generated Rust
-    /// with `ir_hash`.
-    pub(crate) fn check(&self, ir_hash: u64) -> Result<(), AbiError> {
-        if self.abi_version != ABI_VERSION {
+    /// Checks that this runtime can use the table at `vt` and that it belongs to the
+    /// generated Rust with `ir_hash`; returns it as a reference only then.
+    ///
+    /// A model built against an older header has a shorter table, so no reference to a
+    /// whole [`ModelVtable`] may exist before `size` is known to cover it: the two leading
+    /// fields are read through the raw pointer first.
+    ///
+    /// # Safety
+    /// `vt` is non-null, 8-aligned, and points to a table exported by a model (at least its
+    /// `abi_version` and `size` fields, and `size` bytes in all) that stays valid and
+    /// unmodified for `'a`.
+    pub(crate) unsafe fn check<'a>(vt: *const Self, ir_hash: u64) -> Result<&'a Self, AbiError> {
+        // SAFETY: `vt` is non-null and aligned; naming the field place creates no reference.
+        let field = unsafe { &raw const (*vt).abi_version };
+        // SAFETY: every table version starts with `abi_version` (caller's precondition).
+        let abi_version = unsafe { field.read() };
+        if abi_version != ABI_VERSION {
             return Err(AbiError::Version {
-                model: self.abi_version,
+                model: abi_version,
                 runtime: ABI_VERSION,
             });
         }
-        if (self.size as usize) < size_of::<Self>() {
+        // SAFETY: as for `abi_version`.
+        let field = unsafe { &raw const (*vt).size };
+        // SAFETY: `size` follows `abi_version` in every version (caller's precondition).
+        let size = unsafe { field.read() };
+        if (size as usize) < size_of::<Self>() {
             return Err(AbiError::Size {
-                model: self.size,
+                model: size,
                 runtime: size_of::<Self>(),
             });
         }
-        if self.ir_hash != ir_hash {
+        // SAFETY: the model's table spans `size >= size_of::<Self>()` valid bytes for `'a`.
+        let table = unsafe { &*vt };
+        if table.ir_hash != ir_hash {
             return Err(AbiError::IrHash {
-                model: self.ir_hash,
+                model: table.ir_hash,
                 expected: ir_hash,
             });
         }
-        Ok(())
+        Ok(table)
     }
 }
 
@@ -455,5 +474,47 @@ pub(crate) unsafe fn write_wide(sig: &Signal, words: &[u32]) {
         let word = unsafe { dst.add(i) };
         // SAFETY: `word` is a live, writable, 4-aligned u32 of that member.
         unsafe { word.write(v) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The leading fields of an older, shorter table: 136 bytes, as before the trace and
+    /// coverage entries were appended.
+    #[repr(C, align(8))]
+    struct OldTable {
+        abi_version: u32,
+        size: u32,
+        rest: [u8; 128],
+    }
+
+    // Run under Miri: a reference to a whole ModelVtable over this allocation is UB.
+    #[test]
+    fn a_shorter_table_is_rejected_before_any_reference_exists() {
+        let old = Box::new(OldTable {
+            abi_version: ABI_VERSION,
+            size: 136,
+            rest: [0; 128],
+        });
+        let vt: *const ModelVtable = (&raw const *old).cast();
+        // SAFETY: the allocation holds abi_version, size and `size` bytes in all.
+        let result = unsafe { ModelVtable::check(vt, 0) };
+        assert_eq!(
+            result.err(),
+            Some(AbiError::Size {
+                model: 136,
+                runtime: size_of::<ModelVtable>()
+            })
+        );
+        let other = Box::new(OldTable {
+            abi_version: ABI_VERSION + 1,
+            size: 8,
+            rest: [0; 128],
+        });
+        // SAFETY: as above.
+        let result = unsafe { ModelVtable::check((&raw const *other).cast(), 0) };
+        assert!(matches!(result, Err(AbiError::Version { model: 2, .. })));
     }
 }

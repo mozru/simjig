@@ -20,9 +20,13 @@ simjig::include_dut!(flop);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(counter);
 #[cfg(simjig_test_models)]
+simjig::include_dut!(counter_rev2);
+#[cfg(simjig_test_models)]
 simjig::include_dut!(fatal);
 
 #[cfg(simjig_test_models)]
 mod designs;
 #[cfg(simjig_test_models)]
 mod fakes;
+#[cfg(simjig_test_models)]
+mod lockstep;

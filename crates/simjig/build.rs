@@ -67,6 +67,11 @@ fn duts() -> Vec<Dut> {
         shared("inv", &["inv.sv"]),
         shared("flop", &["flop.sv"]),
         shared("counter", &["counter.sv"]),
+        // A second revision of `counter` (same top, different RTL) for the lockstep tests.
+        Dut::new("counter_rev2")
+            .sources(["tests/multi_dut/counter_rev2.sv"])
+            .top("counter")
+            .verilator_args(TIMESCALE),
         probes(
             shared("comb_chain", &["comb_chain.sv"]),
             "comb_chain",

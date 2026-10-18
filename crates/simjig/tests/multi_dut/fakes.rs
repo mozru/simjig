@@ -1,10 +1,10 @@
 //! A hand-written Rust model next to a Verilator one: a reference inverter on a
-//! `FakeModel`, run next to the `inv` RTL. Also the errors of DUT sets that
+//! `FakeModel`, compared in lockstep with the `inv` RTL. Also the errors of DUT sets that
 //! cannot share a simulation.
 
 use simjig::{
-    DutModel, Failure, FakeModel, LoadedModel, ModelOptions, Precision, RawSig, ReadOnly, Seed,
-    SeedSource, Sim, Timer, ns,
+    DutModel, Failure, FakeModel, LoadedModel, Lockstep, ModelOptions, Precision, RawSig, ReadOnly,
+    Seed, SeedSource, Sim, Timer, ns,
 };
 use simjig_bits::Bit;
 
@@ -56,14 +56,20 @@ impl DutModel for Alone {
 }
 
 #[simjig::test(timeout = "1us")]
-async fn a_rust_model_runs_next_to_the_rtl(rtl: inv::Dut, model: RefInv<-12>) {
+async fn a_rust_model_runs_in_lockstep_with_the_rtl(rtl: inv::Dut, model: RefInv<-12>) {
+    let mut lockstep = Lockstep::new().compare(
+        "y",
+        move || rtl.y.get(),
+        move || Bit::from(model.y.read_u64() == 1),
+    );
     for a in [false, true, true, false] {
         rtl.a.set(a);
         model.a.write_u64(u64::from(a));
         ReadOnly::new().await;
-        assert_eq!(rtl.y.get(), Bit::from(model.y.read_u64() == 1));
+        lockstep.step();
         Timer::new(ns(1)).await;
     }
+    assert_eq!(lockstep.cycle(), 4);
 }
 
 fn options() -> ModelOptions {

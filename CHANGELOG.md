@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A DUT claims its name before its configuration is checked, so one that fails
+  `validate` (or locating Verilator) still owns `OUT_DIR/simjig/<name>.rs`: a later DUT
+  whose name differs only in case (`Counter` after `counter`) is refused instead of
+  overwriting the failure stub on a case-insensitive filesystem.
 - New `Dut::bind_iface_with_params(port, "iface.modport", [("WIDTH", 8)])`: an
   interface binding with parameter overrides whose values are written like `.param`'s
   (`Display`), instead of an `IfaceBinding` literal of strings. Additive.

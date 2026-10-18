@@ -613,6 +613,40 @@ fn dut_names_differing_only_in_case_are_refused() {
     assert_eq!(generated(&s, "counter"), before);
 }
 
+/// A DUT that fails its configuration check still claims its name, so a later DUT whose
+/// name differs only in case is refused and leaves the first one's failure stub.
+#[test]
+fn a_dut_failing_validation_still_claims_its_name() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let e = Dut::new("counter")
+        .sources([rtl.join("counter.sv")])
+        .build_in(&s.env())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("no top module"), "{e}");
+    let stub = generated(&s, "counter");
+    assert!(stub.contains("compile_error!"), "{stub}");
+    let e = counter(&rtl)
+        .build_in(&s.env())
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("already built with a different configuration"),
+        "{e}"
+    );
+    let e = Dut::new("Counter")
+        .sources([rtl.join("counter.sv")])
+        .top("counter")
+        .build_in(&s.env())
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("which differs only in case"), "{e}");
+    assert_eq!(generated(&s, "counter"), stub);
+}
+
 /// A file list is read after simjig's own `--top-module`/`--timing`, so an option the
 /// builder refuses in `verilator_args` would silently override it from a list (vendor
 /// lists often carry `--top-module`, `--trace`, `--cc --exe --build`): it is refused there

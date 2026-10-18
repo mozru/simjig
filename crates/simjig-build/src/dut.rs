@@ -2,8 +2,9 @@
 //!
 //! [`Dut`] records configuration only. [`Dut::build_in`] then runs the pipeline in a
 //! fixed order:
-//! 1. locate and version-check Verilator;
-//! 2. claim the DUT name in this build script (`script::claim_name`);
+//! 1. claim the DUT name in this build script (`script::claim_name`), so a DUT that
+//!    fails a later step still owns its generated file;
+//! 2. check the configuration, and locate and version-check Verilator;
 //! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same file lists, sources,
 //!    `-I`, `-D`, `-G`, extra arguments and `--timing` setting (one builder,
 //!    `DutConfig::design`), giving the type IR. A DUT with interface ports takes two
@@ -881,11 +882,16 @@ impl Dut {
 
     /// [`Dut::build_in`] without the stub on failure and the `cfg` on success.
     fn run(self, env: &BuildEnv) -> Result<Built, Error> {
+        let prefix = self.config.prefix();
+        // Claimed first, so a DUT that fails any later check still owns its name: on a
+        // case-insensitive filesystem a later `Counter` would otherwise overwrite the
+        // failure stub of `counter`. A name that is not an identifier names no file.
+        if is_c_ident(&self.config.name) {
+            script::claim_name(env, &self.config, &prefix)?;
+        }
         let top = self.config.validate()?;
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
-        let prefix = self.config.prefix();
-        script::claim_name(env, &self.config, &prefix)?;
         let (front, ir, placed) = self.front_end(env, &cache, &verilator, top)?;
         // After the front end's checks (the JSON pass, `dpi_in_c`, the emitters, the
         // layout check): a build they fail leaves no claim in the shared cache.

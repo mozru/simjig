@@ -10,25 +10,25 @@ pub type Word = ::simjig::__private::bits::Bits<12>;
 /// Parameters of SystemVerilog package `cfg`.
 pub mod cfg {
     /// `WIDTH`.
-    pub const WIDTH: i32 = 12;
+    pub const WIDTH: ::core::primitive::i32 = 12;
     /// `NEG`.
-    pub const NEG: i32 = -5;
+    pub const NEG: ::core::primitive::i32 = -5;
     /// `MAGIC`.
-    pub const MAGIC: u8 = 165;
+    pub const MAGIC: ::core::primitive::u8 = 165;
     /// `BIG`.
-    pub const BIG: u128 = 633_825_300_114_114_700_748_351_602_689;
+    pub const BIG: ::core::primitive::u128 = 633_825_300_114_114_700_748_351_602_689;
     /// `FLAG`.
-    pub const FLAG: bool = true;
+    pub const FLAG: ::core::primitive::bool = true;
     /// `NAME`.
-    pub const NAME: &str = "simjig";
+    pub const NAME: &::core::primitive::str = "simjig";
     /// `RATIO`.
-    pub const RATIO: f64 = 0.25;
+    pub const RATIO: ::core::primitive::f64 = 0.25;
     /// `DEPTH`.
-    pub const DEPTH: i32 = 24;
+    pub const DEPTH: ::core::primitive::i32 = 24;
 }
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
-#[derive(Clone, Copy, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct Dut {
     /// `top.data`: input, 12 bits.
     pub data: ::simjig::__private::In<Word>,
@@ -39,7 +39,7 @@ pub struct Dut {
 impl Dut {
     /// Hash of the IR and configuration this code was generated from; the model's
     /// vtable carries the same value.
-    pub const IR_HASH: u64 = 0xa419_1ada_e446_7900;
+    pub const IR_HASH: ::core::primitive::u64 = 0xa419_1ada_e446_7900;
 
     /// Every signal, indexed by slot.
     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[

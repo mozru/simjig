@@ -8,7 +8,7 @@
 
 use super::super::writer::Writer;
 use super::super::{EnumVariant, Item, ItemKind, RustType, StructField, UnionView};
-use super::{BITS, RT, base_value, raw_type, render};
+use super::{BITS, RT, base_value, derive, prim, raw_type, render};
 
 /// Emits one item.
 pub(super) fn emit_item(w: &mut Writer, item: &Item) {
@@ -43,7 +43,7 @@ fn raw(item: &Item) -> String {
 
 fn emit_packed_header(w: &mut Writer, item: &Item, raw: &str) {
     w.open(format!("impl {BITS}::Packed for {} {{", item.name));
-    w.line(format!("const WIDTH: u32 = {};", item.width));
+    w.line(format!("const WIDTH: {} = {};", prim("u32"), item.width));
     w.line(format!("type Raw = {raw};"));
     w.line("");
 }
@@ -55,7 +55,15 @@ fn emit_struct(w: &mut Writer, item: &Item, fields: &[StructField]) {
         "/// SystemVerilog `{}`: a packed struct of {} bits, first field most significant.",
         item.sv_name, item.width
     ));
-    w.line("#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]");
+    w.line(derive(&[
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "Hash",
+        "Default",
+        "Debug",
+    ]));
     w.open(format!("pub struct {} {{", item.name));
     for f in fields {
         w.line(format!(
@@ -67,22 +75,14 @@ fn emit_struct(w: &mut Writer, item: &Item, fields: &[StructField]) {
     }
     w.close("}");
     w.line("");
-    w.open("const _: () = {");
-    for f in fields {
-        w.line(format!(
-            "assert!(<{} as {BITS}::Packed>::WIDTH == {}, \"{}.{} must be {} bits wide\");",
-            render(&f.ty),
-            f.width,
-            item.sv_name,
-            f.sv_name,
-            f.width
-        ));
-    }
-    w.close("};");
+    emit_width_asserts(w, item, fields);
     w.line("");
     emit_packed_header(w, item, &raw);
     w.open(format!("fn to_raw(self) -> {raw} {{"));
-    w.line(format!("let mut words = [0u32; {words}];"));
+    w.line(format!(
+        "let mut words: [{}; {words}] = [0; {words}];",
+        prim("u32")
+    ));
     for f in fields {
         w.line(format!(
             "{RT}::pack_field(&mut words, {}, self.{});",
@@ -93,7 +93,10 @@ fn emit_struct(w: &mut Writer, item: &Item, fields: &[StructField]) {
     w.close("}");
     w.line("");
     w.open(format!("fn from_raw(raw: {raw}) -> Self {{"));
-    w.line(format!("let mut words = [0u32; {words}];"));
+    w.line(format!(
+        "let mut words: [{}; {words}] = [0; {words}];",
+        prim("u32")
+    ));
     w.line(format!("{RT}::RawWords::to_words(raw, &mut words);"));
     w.open("Self {");
     for f in fields {
@@ -107,6 +110,22 @@ fn emit_struct(w: &mut Writer, item: &Item, fields: &[StructField]) {
     w.close("}");
     w.line("");
     emit_diff(w, item, fields);
+}
+
+/// A `const` block asserting that each field type is as wide as the IR says.
+fn emit_width_asserts(w: &mut Writer, item: &Item, fields: &[StructField]) {
+    w.open("const _: () = {");
+    for f in fields {
+        w.line(format!(
+            "::core::assert!(<{} as {BITS}::Packed>::WIDTH == {}, \"{}.{} must be {} bits wide\");",
+            render(&f.ty),
+            f.width,
+            item.sv_name,
+            f.sv_name,
+            f.width
+        ));
+    }
+    w.close("};");
 }
 
 fn emit_diff(w: &mut Writer, item: &Item, fields: &[StructField]) {
@@ -145,7 +164,14 @@ fn emit_union(w: &mut Writer, item: &Item, bits: &RustType, views: &[UnionView])
         "/// SystemVerilog `{}`: a packed union of {} bits; each member is a view of the same bits.",
         item.sv_name, item.width
     ));
-    w.line("#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]");
+    w.line(derive(&[
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "Hash",
+        "Default",
+    ]));
     w.line(format!("pub struct {name}({bits_ty});"));
     w.line("");
     w.open(format!("impl {name} {{"));
@@ -218,7 +244,14 @@ fn emit_enum(w: &mut Writer, item: &Item, base: &RustType, kind: &str, variants:
     );
     w.line("/// this is a newtype over the bits: reading never fails, and [`Self::variant`] says");
     w.line("/// whether the value is a member. `Default` is the all-zero value.");
-    w.line("#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]");
+    w.line(derive(&[
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "Hash",
+        "Default",
+    ]));
     w.line(format!("pub struct {name}({base_ty});"));
     w.line("");
     w.open(format!("impl {name} {{"));
@@ -253,9 +286,9 @@ fn emit_enum(w: &mut Writer, item: &Item, base: &RustType, kind: &str, variants:
         w.line(format!("    {kind}::{}", v.kind_name));
     }
     let raw_value = if *base == RustType::Bit {
-        "u128::from(self.0.to_bool())"
+        format!("{}::from(self.0.to_bool())", prim("u128"))
     } else {
-        "self.0.to_u128()"
+        "self.0.to_u128()".to_owned()
     };
     w.open("} else {");
     w.line(format!(
@@ -277,7 +310,14 @@ fn emit_enum(w: &mut Writer, item: &Item, base: &RustType, kind: &str, variants:
 /// The companion Rust `enum` of a generated enum, and its conversion.
 fn emit_enum_kind(w: &mut Writer, name: &str, kind: &str, variants: &[EnumVariant]) {
     w.line(format!("/// The variants of [`{name}`]."));
-    w.line("#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]");
+    w.line(derive(&[
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "Hash",
+        "Debug",
+    ]));
     w.open(format!("pub enum {kind} {{"));
     for v in variants {
         w.line(format!("/// `{}`.", v.sv_name));
@@ -311,7 +351,7 @@ fn emit_enum_debug(w: &mut Writer, name: &str, kind: &str, variants: &[EnumVaria
         ));
     }
     w.line(format!(
-        "::core::result::Result::Err(_) => return write!(f, \"{name}({{:?}})\", self.0),"
+        "::core::result::Result::Err(_) => return ::core::write!(f, \"{name}({{:?}})\", self.0),"
     ));
     w.close("};");
     w.line("f.write_str(name)");

@@ -5,7 +5,7 @@
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct Implicit(::simjig::__private::bits::Bits<3>);
 
 impl Implicit {
@@ -43,23 +43,23 @@ impl ::core::fmt::Debug for Implicit {
             ::core::result::Result::Ok(ImplicitVariant::A) => "A",
             ::core::result::Result::Ok(ImplicitVariant::B) => "B",
             ::core::result::Result::Ok(ImplicitVariant::C) => "C",
-            ::core::result::Result::Err(_) => return write!(f, "Implicit({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "Implicit({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for Implicit {
-    const WIDTH: u32 = 3;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 3;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`Implicit`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum ImplicitVariant {
     /// `A`.
     A,
@@ -84,7 +84,7 @@ impl ::core::convert::From<ImplicitVariant> for Implicit {
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct Explicit(::simjig::__private::bits::Bits<8>);
 
 impl Explicit {
@@ -122,23 +122,23 @@ impl ::core::fmt::Debug for Explicit {
             ::core::result::Result::Ok(ExplicitVariant::Off) => "OFF",
             ::core::result::Result::Ok(ExplicitVariant::On) => "ON",
             ::core::result::Result::Ok(ExplicitVariant::Err) => "ERR",
-            ::core::result::Result::Err(_) => return write!(f, "Explicit({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "Explicit({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for Explicit {
-    const WIDTH: u32 = 8;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 8;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`Explicit`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum ExplicitVariant {
     /// `OFF`.
     Off,
@@ -163,7 +163,7 @@ impl ::core::convert::From<ExplicitVariant> for Explicit {
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct Mixed(::simjig::__private::bits::Bits<4>);
 
 impl Mixed {
@@ -206,23 +206,23 @@ impl ::core::fmt::Debug for Mixed {
             ::core::result::Result::Ok(MixedVariant::X1) => "X1",
             ::core::result::Result::Ok(MixedVariant::X2) => "X2",
             ::core::result::Result::Ok(MixedVariant::X3) => "X3",
-            ::core::result::Result::Err(_) => return write!(f, "Mixed({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "Mixed({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for Mixed {
-    const WIDTH: u32 = 4;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 4;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`Mixed`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum MixedVariant {
     /// `X0`.
     X0,
@@ -250,7 +250,7 @@ impl ::core::convert::From<MixedVariant> for Mixed {
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct Int(::simjig::__private::bits::Bits<32>);
 
 impl Int {
@@ -288,23 +288,23 @@ impl ::core::fmt::Debug for Int {
             ::core::result::Result::Ok(IntVariant::Red) => "RED",
             ::core::result::Result::Ok(IntVariant::Green) => "GREEN",
             ::core::result::Result::Ok(IntVariant::Blue) => "BLUE",
-            ::core::result::Result::Err(_) => return write!(f, "Int({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "Int({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for Int {
-    const WIDTH: u32 = 32;
-    type Raw = u32;
+    const WIDTH: ::core::primitive::u32 = 32;
+    type Raw = ::core::primitive::u32;
 
-    fn to_raw(self) -> u32 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u32 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u32) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u32) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`Int`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum IntVariant {
     /// `RED`.
     Red,
@@ -329,7 +329,7 @@ impl ::core::convert::From<IntVariant> for Int {
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct Twostate(::simjig::__private::bits::Bits<2>);
 
 impl Twostate {
@@ -362,23 +362,23 @@ impl ::core::fmt::Debug for Twostate {
         let name = match self.variant() {
             ::core::result::Result::Ok(TwostateVariant::Lo) => "LO",
             ::core::result::Result::Ok(TwostateVariant::Hi) => "HI",
-            ::core::result::Result::Err(_) => return write!(f, "Twostate({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "Twostate({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for Twostate {
-    const WIDTH: u32 = 2;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 2;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`Twostate`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum TwostateVariant {
     /// `LO`.
     Lo,
@@ -400,7 +400,7 @@ impl ::core::convert::From<TwostateVariant> for Twostate {
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct IAnon(::simjig::__private::bits::Bit);
 
 impl IAnon {
@@ -422,7 +422,7 @@ impl IAnon {
         } else if self == Self::YES {
             IAnonVariant::Yes
         } else {
-            return ::core::result::Result::Err(::simjig::__private::InvalidEnum::new("top.i_anon", 1, u128::from(self.0.to_bool())));
+            return ::core::result::Result::Err(::simjig::__private::InvalidEnum::new("top.i_anon", 1, ::core::primitive::u128::from(self.0.to_bool())));
         };
         ::core::result::Result::Ok(kind)
     }
@@ -433,23 +433,23 @@ impl ::core::fmt::Debug for IAnon {
         let name = match self.variant() {
             ::core::result::Result::Ok(IAnonVariant::No) => "NO",
             ::core::result::Result::Ok(IAnonVariant::Yes) => "YES",
-            ::core::result::Result::Err(_) => return write!(f, "IAnon({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "IAnon({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for IAnon {
-    const WIDTH: u32 = 1;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 1;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`IAnon`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum IAnonVariant {
     /// `NO`.
     No,
@@ -467,7 +467,7 @@ impl ::core::convert::From<IAnonVariant> for IAnon {
 }
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
-#[derive(Clone, Copy, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct Dut {
     /// `top.i_impl`: input, 3 bits.
     pub i_impl: ::simjig::__private::In<Implicit>,
@@ -488,7 +488,7 @@ pub struct Dut {
 impl Dut {
     /// Hash of the IR and configuration this code was generated from; the model's
     /// vtable carries the same value.
-    pub const IR_HASH: u64 = 0xbc3d_315a_4947_b864;
+    pub const IR_HASH: ::core::primitive::u64 = 0xbc3d_315a_4947_b864;
 
     /// Every signal, indexed by slot.
     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[

@@ -5,18 +5,22 @@
     clippy::expect_used,
     reason = "test helpers outside #[test] fns; a panic is the failure report"
 )]
-#![expect(
-    unreachable_pub,
-    reason = "generated code and the stub runtime are written as for a library crate"
-)]
 
 // Generated code names `::simjig::__private`; here that is the stub below.
 extern crate self as simjig;
 
+// The generated modules are reachable (`compile` is `pub`), as they are in a user crate
+// that `include_dut!`s them, so the generated code is checked under the workspace lints
+// without exceptions. The hand-written stub and case list are not; they are exempt.
 #[path = "stub.rs"]
+#[expect(
+    unreachable_pub,
+    reason = "a stand-in for the runtime's hidden module, written as for a library"
+)]
 mod __private;
+#[expect(unreachable_pub, reason = "test helpers written as for a library")]
 mod cases;
-mod compile;
+pub mod compile;
 mod errors;
 mod snapshots;
 mod verilator;

@@ -25,6 +25,33 @@ pub(crate) const RT: &str = "::simjig::__private";
 /// The bit-vector crate, as re-exported by the runtime.
 pub(crate) const BITS: &str = "::simjig::__private::bits";
 
+/// The fully qualified path of the primitive type `name`. Generated code spells every
+/// name it uses by absolute path, because it is spliced into a user module whose glob
+/// imports would shadow the prelude (and even primitive types).
+pub(crate) fn prim(name: &str) -> String {
+    format!("::core::primitive::{name}")
+}
+
+/// A `#[derive(..)]` of standard traits, each by absolute path (see [`prim`]).
+pub(crate) fn derive(traits: &[&str]) -> String {
+    let paths: Vec<String> = traits
+        .iter()
+        .map(|t| {
+            let module = match *t {
+                "Clone" => "clone",
+                "Copy" => "marker",
+                "PartialEq" | "Eq" => "cmp",
+                "Hash" => "hash",
+                "Default" => "default",
+                "Debug" => "fmt",
+                other => unreachable!("no path for derive `{other}`"),
+            };
+            format!("::core::{module}::{t}")
+        })
+        .collect();
+    format!("#[derive({})]", paths.join(", "))
+}
+
 /// What the Rust bindings need besides the lowering: the model's C side, which only the
 /// build pipeline knows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,11 +148,11 @@ pub(crate) fn hex(value: u128) -> String {
 /// The Rust type of Verilator storage (the `Packed::Raw` contract).
 pub(crate) fn raw_type(storage: &Storage) -> String {
     match storage {
-        Storage::CData => "u8".to_owned(),
-        Storage::SData => "u16".to_owned(),
-        Storage::IData => "u32".to_owned(),
-        Storage::QData => "u64".to_owned(),
-        Storage::VlWide { words } => format!("[u32; {words}]"),
+        Storage::CData => prim("u8"),
+        Storage::SData => prim("u16"),
+        Storage::IData => prim("u32"),
+        Storage::QData => prim("u64"),
+        Storage::VlWide { words } => format!("[{}; {words}]", prim("u32")),
         Storage::VlUnpacked { elem, len } => format!("[{}; {len}]", raw_type(elem)),
     }
 }
@@ -161,7 +188,7 @@ fn handle(access: Access) -> (&'static str, &'static str) {
 /// A Rust literal for a [`ConstValue`], and its type; `scope` prefixes generated types.
 fn const_parts(value: &ConstValue, scope: &str) -> (String, String) {
     match value {
-        ConstValue::Int { ty, value } => ((*ty).to_owned(), grouped(value, 3)),
+        ConstValue::Int { ty, value } => (prim(ty), grouped(value, 3)),
         ConstValue::Wide { width, words } => {
             let ty = format!("{BITS}::WideBits<{width}, {}>", words.len());
             let list: Vec<String> = words.iter().map(|w| hex(u128::from(*w))).collect();
@@ -176,8 +203,8 @@ fn const_parts(value: &ConstValue, scope: &str) -> (String, String) {
             format!("{scope}{ty}"),
             format!("{scope}{ty}::from_bits({})", base_value(base, *value)),
         ),
-        ConstValue::Str(s) => ("&str".to_owned(), format!("{s:?}")),
-        ConstValue::Real(text) => ("f64".to_owned(), text.clone()),
+        ConstValue::Str(s) => (format!("&{}", prim("str")), format!("{s:?}")),
+        ConstValue::Real(text) => (prim("f64"), text.clone()),
     }
 }
 
@@ -200,7 +227,7 @@ fn emit_bundle(w: &mut Writer, bundle: &Bundle) {
         "/// Interface modport `{}`, as seen by the testbench.",
         bundle.sv_name
     ));
-    w.line("#[derive(Clone, Copy, Debug)]");
+    w.line(derive(&["Clone", "Copy", "Debug"]));
     w.open(format!("pub struct {} {{", bundle.name));
     for m in &bundle.members {
         let (h, _) = handle(m.access);
@@ -250,7 +277,7 @@ fn emit_dut(w: &mut Writer, lowered: &Lowered) {
         "/// The signals of model `{}`: its ports in declaration order, then its probes.",
         lowered.top
     ));
-    w.line("#[derive(Clone, Copy, Debug)]");
+    w.line(derive(&["Clone", "Copy", "Debug"]));
     w.open("pub struct Dut {");
     for field in &lowered.fields {
         match field {
@@ -273,7 +300,8 @@ fn emit_dut(w: &mut Writer, lowered: &Lowered) {
     w.line("/// Hash of the IR and configuration this code was generated from; the model's");
     w.line("/// vtable carries the same value.");
     w.line(format!(
-        "pub const IR_HASH: u64 = {};",
+        "pub const IR_HASH: {} = {};",
+        prim("u64"),
         hex(u128::from(lowered.ir_hash))
     ));
     w.line("");

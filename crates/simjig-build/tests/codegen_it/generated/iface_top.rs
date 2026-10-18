@@ -5,7 +5,7 @@
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct Kind(::simjig::__private::bits::Bits<2>);
 
 impl Kind {
@@ -43,23 +43,23 @@ impl ::core::fmt::Debug for Kind {
             ::core::result::Result::Ok(KindVariant::Idle) => "KIND_IDLE",
             ::core::result::Result::Ok(KindVariant::Data) => "KIND_DATA",
             ::core::result::Result::Ok(KindVariant::Last) => "KIND_LAST",
-            ::core::result::Result::Err(_) => return write!(f, "Kind({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "Kind({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for Kind {
-    const WIDTH: u32 = 2;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 2;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`Kind`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum KindVariant {
     /// `KIND_IDLE`.
     Idle,
@@ -82,11 +82,11 @@ impl ::core::convert::From<KindVariant> for Kind {
 /// Parameters of SystemVerilog package `iface_pkg`.
 pub mod iface_pkg {
     /// `DATA_W`.
-    pub const DATA_W: i32 = 16;
+    pub const DATA_W: ::core::primitive::i32 = 16;
 }
 
 /// Interface modport `bus_if.dst`, as seen by the testbench.
-#[derive(Clone, Copy, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct BusIfDst {
     /// `valid`.
     pub valid: ::simjig::__private::In<::simjig::__private::bits::Bit>,
@@ -111,7 +111,7 @@ impl BusIfDst {
 }
 
 /// Interface modport `bus_if.src`, as seen by the testbench.
-#[derive(Clone, Copy, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct BusIfSrc {
     /// `valid`.
     pub valid: ::simjig::__private::Out<::simjig::__private::bits::Bit>,
@@ -136,7 +136,7 @@ impl BusIfSrc {
 }
 
 /// The signals of model `simjig_wrap_iface_top`: its ports in declaration order, then its probes.
-#[derive(Clone, Copy, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct Dut {
     /// `simjig_wrap_iface_top.clk`: input, 1 bit.
     pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,
@@ -151,7 +151,7 @@ pub struct Dut {
 impl Dut {
     /// Hash of the IR and configuration this code was generated from; the model's
     /// vtable carries the same value.
-    pub const IR_HASH: u64 = 0x32b5_4803_7c68_4b54;
+    pub const IR_HASH: ::core::primitive::u64 = 0x32b5_4803_7c68_4b54;
 
     /// Every signal, indexed by slot.
     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[

@@ -44,6 +44,9 @@ fn builds_counter_end_to_end() {
     assert_eq!(built.header_ports, want, "WIDTH=12 reached Verilator");
     check_links(&s, &built);
     check_reruns(&rtl, &built.directives);
+    // A new Verilator at the same path (an upgrade in place) reruns the build script.
+    let exe = format!("cargo::rerun-if-changed={}", s.wrapper().display());
+    assert!(built.directives.contains(&exe), "{:?}", built.directives);
 
     // pixi provides ccache, so the compiler runs through it.
     let wrapper = std::fs::read_to_string(s.path().join("out/simjig-cxx-ccache")).unwrap();

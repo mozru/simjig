@@ -505,7 +505,7 @@ impl Dut {
             recipe: &self.recipe,
             model_sources: &placed.model_sources,
         })?;
-        directives.extend(rerun_directives(&model.deps, &self.recipe));
+        directives.extend(rerun_directives(&verilator, &model.deps, &self.recipe));
         Ok(Built {
             prefix,
             obj_dir: model.obj_dir,
@@ -525,9 +525,12 @@ fn absolute(p: impl AsRef<Path>) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-fn rerun_directives(deps: &[PathBuf], recipe: &CppRecipe) -> Vec<String> {
-    let files = deps
-        .iter()
+/// Reruns on every file Verilator read, the recipe's files, the Verilator executable
+/// (replaced in place by an upgrade, while `PATH` stays the same) and the tracked
+/// variables.
+fn rerun_directives(verilator: &Verilator, deps: &[PathBuf], recipe: &CppRecipe) -> Vec<String> {
+    let files = std::iter::once(&verilator.exe)
+        .chain(deps)
         .chain(&recipe.global_sources)
         .chain(&recipe.model_sources)
         .chain(&recipe.include_dirs);

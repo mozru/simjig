@@ -39,7 +39,8 @@ pub const USAGE: &str = concat!(
     "  waves     replay one test with FST waves into its run directory\n",
     "            cargo simjig waves <test> [--seed <seed>] [-p <package>]\n",
     "                                      [--window <t0>..<t1>] [-- <nextest args>]\n",
-    "            <test>    the test's name as its failure report prints it (`module::test`)\n",
+    "            <test>    the test's name as the FAIL line prints it: the test function's\n",
+    "                      name, or `module::test` for a test in a module (matched exactly)\n",
     "            --seed    the seed from the report (default: the test's own seed)\n",
     "            -p        the package that holds the test (default: every package)\n",
     "            --window  the span to trace, e.g. 2us..3us or 1.5us.. (default: the last\n",
@@ -94,7 +95,7 @@ impl WavesArgs {
             }
         }
         if parsed.test.is_empty() {
-            return Err("name the test, as its failure report prints it".to_owned());
+            return Err("name the test, as the FAIL line of its report prints it".to_owned());
         }
         Ok(parsed)
     }

@@ -3,13 +3,23 @@
 ## Tools
 
 ```sh
-rustup show                     # installs the pinned toolchain from rust-toolchain.toml
-cargo install --locked cargo-nextest cargo-deny cargo-machete typos-cli
-pixi install --locked           # Verilator, C++ compiler, ccache, pinned in pixi.lock
+cargo xtask setup               # pixi install --locked, then the pinned cargo tools
+pixi run cargo xtask doctor     # checks Verilator, VERILATOR_ROOT, CXX, ccache, FST, nextest
 ```
+
+Three pins make the environment reproducible: `rust-toolchain.toml` (Rust; rustup
+installs it on the first cargo command), `pixi.lock` (Verilator, the C++ compiler, ccache,
+make), and the `DEV_TOOLS` table in `xtask/src/setup.rs` (cargo-nextest, cargo-deny,
+cargo-machete, typos-cli). `cargo xtask setup` is idempotent: it skips tools already at
+their pinned version. To bump a cargo tool, edit `DEV_TOOLS` and run setup again.
 
 Run commands that need Verilator through `pixi run` (e.g. `pixi run cargo xtask ci`).
 Set `PIXI_NO_TELEMETRY=1` to stop pixi's anonymous usage ping.
+
+`cargo xtask doctor` runs the same checks as `cargo simjig doctor`, the command simjig
+users run (`cargo install --path crates/cargo-simjig`). Each problem is printed as `WARN`
+or `FAIL` with a one-line fix; any `FAIL` exits non-zero, and `--json` prints one JSON
+object for CI.
 
 **The checkout path must not contain spaces.** Verilator's launcher script breaks on them
 (for example `~/Library/Application Support/...`).
@@ -41,7 +51,7 @@ CI runs on a self-hosted macOS arm64 runner (labels `self-hosted, macOS, ARM64`)
    Follow the download and `./config.sh` steps shown there.
 2. Enter the registration token yourself. Never paste it into a chat or commit it.
 3. Run it as a service: `./svc.sh install && ./svc.sh start`.
-4. Install the tools above for the runner's user. The workflow adds `~/.cargo/bin` to
+4. Run `cargo xtask setup` as the runner's user. The workflow adds `~/.cargo/bin` to
    `PATH`.
 
 ### Safety rules

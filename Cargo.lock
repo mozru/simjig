@@ -483,7 +483,12 @@ name = "simjig-build"
 version = "0.0.0"
 dependencies = [
  "cc",
+ "insta",
+ "proptest",
+ "serde_json",
  "sha2",
+ "simjig-bits",
+ "svtypes",
  "tempfile",
  "thiserror",
 ]

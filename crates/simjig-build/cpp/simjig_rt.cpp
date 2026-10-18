@@ -17,6 +17,7 @@
 #include "verilated_syms.h"
 
 #include <algorithm>
+#include <functional>
 #include <cerrno>
 #include <stdexcept>
 #include <cstdio>
@@ -56,6 +57,44 @@ const char* or_empty(const char* s) { return s != nullptr ? s : ""; }
 }  // namespace
 
 Runtime* active() noexcept { return t_active; }
+
+void note_cov_counter(uint32_t* countp) noexcept {
+    // Points register while the model is constructed, inside create's Scope. A model built
+    // outside simjig has no active runtime and nobody to tell.
+    if (t_active != nullptr) t_active->note_cov_counter(countp);
+}
+
+void Runtime::note_cov_counter(uint32_t* countp) noexcept {
+    try {
+        m_cov_counters.push_back(countp);
+    } catch (...) {
+        m_cov_lost = true;  // out of memory: cov_runs then reports nothing rather than a part
+    }
+}
+
+std::vector<simjig_cov_run> Runtime::cov_runs(const void* begin, size_t size) {
+    std::vector<uint32_t*> seen = std::move(m_cov_counters);
+    m_cov_counters.clear();
+    if (m_cov_lost) return {};
+    const auto* lo = static_cast<const char*>(begin);
+    const auto inside = [lo, size](uint32_t* p) {
+        const auto* c = reinterpret_cast<const char*>(p);
+        return std::less_equal<const char*>{}(lo, c) && std::less<const char*>{}(c, lo + size);
+    };
+    seen.erase(std::remove_if(seen.begin(), seen.end(), [&](uint32_t* p) { return !inside(p); }),
+               seen.end());
+    std::sort(seen.begin(), seen.end(), std::less<uint32_t*>{});
+    seen.erase(std::unique(seen.begin(), seen.end()), seen.end());
+    std::vector<simjig_cov_run> runs;
+    for (uint32_t* p : seen) {
+        if (!runs.empty() && runs.back().counters + runs.back().len == p) {
+            ++runs.back().len;
+        } else {
+            runs.push_back(simjig_cov_run{p, 1});
+        }
+    }
+    return runs;
+}
 
 VlRNG& thread_rng() noexcept {
     // The address of a thread_local is fixed for the thread's lifetime, so it is taken once.
@@ -476,7 +515,7 @@ const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
         SIMJIG_FIELD(simjig_model_vtable, trace_open),
         SIMJIG_FIELD(simjig_model_vtable, trace_dump),
         SIMJIG_FIELD(simjig_model_vtable, trace_close),
-        SIMJIG_FIELD(simjig_model_vtable, cov_counters),
+        SIMJIG_FIELD(simjig_model_vtable, cov_runs),
         SIMJIG_FIELD(simjig_model_vtable, features),
         SIMJIG_FIELD(simjig_model_vtable, trace_open_ex),
         SIMJIG_FIELD(simjig_model_vtable, trace_flush),
@@ -506,6 +545,8 @@ const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
         SIMJIG_FIELD(simjig_create_opts, error_limit),
         SIMJIG_FIELD(simjig_create_opts, argc),
         SIMJIG_FIELD(simjig_create_opts, argv),
+        SIMJIG_FIELD(simjig_cov_run, counters),
+        SIMJIG_FIELD(simjig_cov_run, len),
     };
     if (count != nullptr) *count = sizeof(fields) / sizeof(fields[0]);
     return fields;
@@ -518,6 +559,7 @@ size_t simjig_rt_abi_layout(uint32_t* out, size_t cap) {
         sizeof(simjig_signal),       alignof(simjig_signal),
         sizeof(simjig_msg),          alignof(simjig_msg),
         sizeof(simjig_create_opts),  alignof(simjig_create_opts),
+        sizeof(simjig_cov_run),      alignof(simjig_cov_run),
     };
     const size_t n = std::min(cap, sizeof(layout) / sizeof(layout[0]));
     if (out != nullptr) std::copy(layout, layout + n, out);

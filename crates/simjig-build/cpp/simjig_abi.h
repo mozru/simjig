@@ -132,6 +132,12 @@ typedef struct simjig_create_opts {
     const char* const* argv; /* argc entries; may be NULL when argc is 0 */
 } simjig_create_opts;
 
+/* One contiguous array of coverage counters (see `cov_runs`). */
+typedef struct simjig_cov_run {
+    uint32_t* counters; /* `len` live counters, valid until destroy */
+    size_t len;
+} simjig_cov_run;
+
 /* Bits of `simjig_model_vtable.features`: how the model was verilated. */
 #define SIMJIG_FEATURE_TIMING 1u    /* --timing */
 #define SIMJIG_FEATURE_TRACE_FST 2u /* --trace-fst: the trace_* entries work */
@@ -177,10 +183,15 @@ typedef struct simjig_model_vtable {
     simjig_status (*trace_dump)(simjig_handle* h, uint64_t time);
     /* Writes the trace's header and closes it. No-op (OK) when no trace is open. */
     simjig_status (*trace_close)(simjig_handle* h);
-    /* Coverage counters (--coverage): a live pointer to the model's *count uint32_t counters,
-     * valid until destroy, or NULL with *count = 0 (no --coverage, no points, or points outside
-     * the top module object; see docs/notes/tracecov.md for the index-to-point mapping). */
-    uint32_t* (*cov_counters)(simjig_handle* h, size_t* count);
+    /* Coverage counters (--coverage): *count runs that together hold every counter of the
+     * model exactly once, valid until destroy; NULL with *count = 0 without --coverage or
+     * without points. Verilator keeps one counter array per module object (the root, each
+     * module instance it did not inline, each interface instance) plus one in the symbol
+     * table; a run is a maximal contiguous range of them, and the runs come in symbol-table
+     * order (the order of the objects in V<prefix>__Syms). The run layout and an index's
+     * coverage point are fixed for one build (docs/notes/s1c2fix.md has the mapping).
+     * (Before the first release this slot was `cov_counters`, one array or NULL.) */
+    const simjig_cov_run* (*cov_runs)(simjig_handle* h, size_t* count);
 
     /* ---- Appended after size 136 (SIMJIG_ABI_VERSION 1). ---- */
 

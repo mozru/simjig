@@ -17,6 +17,7 @@ extern crate self as simjig;
 mod __private;
 mod cases;
 mod compile;
+mod coverage;
 mod errors;
 mod probes;
 mod snapshots;

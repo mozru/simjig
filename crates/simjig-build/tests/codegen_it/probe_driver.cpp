@@ -3,6 +3,8 @@
 //   w:<signal>:<hex>   write a signal of at most 64 bits
 //   r:<signal>:<hex>   read it and check the value
 //   e                  eval
+//   cov:<path>:0       print "cov runs <R> counters <N> sum <S>" over every coverage
+//                      counter, then write coverage.dat to <path>
 // A failed create prints its messages and exits 2; a failed check prints "FAIL: ..." and
 // exits 1. Prints "ok" at the end.
 #include <cinttypes>
@@ -76,6 +78,22 @@ int main(int argc, char** argv) {
         if (c1 == std::string::npos || c2 == c1) {
             std::printf("FAIL: bad op %s\n", op.c_str());
             return 1;
+        }
+        if (op.rfind("cov:", 0) == 0) {
+            size_t runs = 0;
+            const simjig_cov_run* r = vt->cov_runs(h, &runs);
+            uint64_t counters = 0;
+            uint64_t sum = 0;
+            for (size_t k = 0; k < runs; ++k) {
+                counters += r[k].len;
+                for (size_t j = 0; j < r[k].len; ++j) sum += r[k].counters[j];
+            }
+            std::printf("cov runs %zu counters %" PRIu64 " sum %" PRIu64 "\n", runs, counters, sum);
+            if (vt->cov_write(h, op.substr(4, c2 - 4).c_str()) != SIMJIG_OK) {
+                std::printf("FAIL: cov_write\n");
+                return 1;
+            }
+            continue;
         }
         const simjig_signal* s = find(sigs, n, op.substr(c1 + 1, c2 - c1 - 1));
         const uint64_t value = std::strtoull(op.c_str() + c2 + 1, nullptr, 16);

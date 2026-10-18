@@ -14,6 +14,11 @@
 // - VL_PRINTF / VL_VPRINTF: verilated.h uses them only `#ifndef`. VL_PRINTF_MT (which every
 //   $display/$write/$fatal text goes through) ends in VL_PRINTF, so redirecting it captures all
 //   model output into the per-model message ring (simjig_rt.cpp).
+// - VL_COVER_INSERT (redefined at the end): every coverage point a model registers also reports
+//   its counter's address to the runtime creating the model, so cov_runs can hand out every
+//   counter array, wherever Verilator put it (docs/notes/s1c2fix.md). verilated_cov.h defines
+//   the macro unconditionally, so it is included here first (it brings verilated.h) and the
+//   macro replaced; its include guard keeps any later include from restoring the original.
 #ifndef SIMJIG_VL_CONFIG_H_
 #define SIMJIG_VL_CONFIG_H_
 
@@ -41,5 +46,29 @@ int simjig_vl_printf(const char* format, ...) __attribute__((format(printf, 1, 2
 int simjig_vl_vprintf(const char* format, va_list args);
 #define VL_PRINTF simjig_vl_printf
 #define VL_VPRINTF simjig_vl_vprintf
+
+#ifdef __cplusplus
+#include <cstdint>
+
+namespace simjig {
+// Defined in simjig_rt.cpp: records `countp` with the runtime whose model is being created.
+void note_cov_counter(uint32_t* countp) noexcept;
+// 64-bit counters exist only with --threads > 1, which simjig never builds.
+inline void note_cov_counter(uint64_t*) noexcept {}
+}  // namespace simjig
+
+#include "verilated_cov.h"
+
+// Verilator 5.052's definition (verilated_cov.h) plus the note_cov_counter call.
+#undef VL_COVER_INSERT
+#define VL_COVER_INSERT(covcontextp, name, countp, ...)       \
+    do {                                                       \
+        auto const ccontextp = covcontextp;                    \
+        ::simjig::note_cov_counter(countp);                    \
+        ccontextp->_inserti(countp);                           \
+        ccontextp->_insertf(__FILE__, __LINE__);               \
+        ccontextp->_insertp("hier", name, __VA_ARGS__);        \
+    } while (false)
+#endif  // __cplusplus
 
 #endif  // SIMJIG_VL_CONFIG_H_

@@ -91,9 +91,8 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
   the replay wrote, moved from the replay's root by `replay::move_waves`:
   - `waves.fst` for the first model, `waves.model-<i>.fst` for model `i > 0` of a
     multi-DUT test (`harness::dut`, `ModelOptions::for_model`);
-  - `waves[.model-<i>].branch-<j>.fst` for each `fork` branch, one `.branch-<j>` per
-    checkpoint level (`model::trace::branch_path`; `.branch-1.branch-4` is branch 4 of a
-    checkpoint inside branch 1). `replay::trace_identity` parses the names; any other
+  - `waves[.model-<i>].branch-<j>.fst` for each `fork` branch, one `.branch-<j>`
+    (`model::trace::branch_path`; checkpoints cannot nest, see s3c3fix: `ForkError::Nested`). `replay::trace_identity` parses the names; any other
     file is left where it is;
   - one `<stem>.gtkw` per FST (`[dumpfile]`, `[timestart] <from>`, the primary marker at
     the failure time in ticks, a zoom fitting the window into ~1000 px, the failing

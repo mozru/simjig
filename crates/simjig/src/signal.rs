@@ -384,3 +384,34 @@ handle! {
     PublicRw
 }
 settable!(PublicRw);
+
+#[cfg(test)]
+mod tests {
+    use simjig_bits::Bit;
+
+    use super::*;
+    use crate::kernel::clock::Clock;
+    use crate::kernel::fake::FakeModel;
+    use crate::kernel::sim::Sim;
+    use crate::kernel::time::{Precision, SimDuration};
+    use crate::kernel::trigger::{changed, cycles, falling, now, rising};
+
+    #[test]
+    fn the_free_triggers_take_a_writable_typed_handle() {
+        let mut model = FakeModel::new(Precision::NS);
+        model.signal("clk", 1);
+        let mut sim = Sim::from_fake(model);
+        let raw = sim.signal("clk").unwrap();
+        sim.add_clock(Clock::new(raw, SimDuration::from_ticks(10)))
+            .unwrap();
+        let clk = In::<Bit>::from_raw(raw);
+        let t = sim.run(async move {
+            rising(clk).await;
+            falling(clk).await;
+            changed(clk).await;
+            cycles(clk, 2).await;
+            now()
+        });
+        assert_eq!(t.unwrap().ticks(), 30);
+    }
+}

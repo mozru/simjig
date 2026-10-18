@@ -17,6 +17,10 @@
 //! same); an edge of a design-driven signal fires after the eval that made it, with
 //! post-eval values. A write is never captured by the edge that woke the writer.
 //!
+//! The signal triggers take a [`RawSig`] or a writable typed handle (`In`, `InOut`,
+//! `PublicRw`), like [`clock`](crate::clock); every typed handle, outputs included, also
+//! has them as methods (`dut.ready.rising()`).
+//!
 //! All of them register on first poll and deregister in `Drop`, so dropping one (for
 //! example as the loser of [`first!`](crate::first)) leaves nothing behind. Edges are seen
 //! only at eval boundaries: a pulse that starts and ends inside one eval is invisible.
@@ -105,8 +109,8 @@ fn edge(sig: RawSig, edge: EdgeKind, what: &str) -> Edge {
 /// # Panics
 /// Outside the signal's running simulation, or if it is not 1 bit wide.
 #[track_caller]
-pub fn rising(sig: RawSig) -> Edge {
-    edge(sig, EdgeKind::Rising, "rising")
+pub fn rising(sig: impl Into<RawSig>) -> Edge {
+    edge(sig.into(), EdgeKind::Rising, "rising")
 }
 
 /// Resumes after an eval in which the 1-bit signal went from 1 to 0.
@@ -114,8 +118,8 @@ pub fn rising(sig: RawSig) -> Edge {
 /// # Panics
 /// As [`rising`].
 #[track_caller]
-pub fn falling(sig: RawSig) -> Edge {
-    edge(sig, EdgeKind::Falling, "falling")
+pub fn falling(sig: impl Into<RawSig>) -> Edge {
+    edge(sig.into(), EdgeKind::Falling, "falling")
 }
 
 /// Resumes after an eval that changed any bit of the signal.
@@ -123,8 +127,8 @@ pub fn falling(sig: RawSig) -> Edge {
 /// # Panics
 /// Outside the signal's running simulation.
 #[track_caller]
-pub fn changed(sig: RawSig) -> Edge {
-    edge(sig, EdgeKind::Changed, "changed")
+pub fn changed(sig: impl Into<RawSig>) -> Edge {
+    edge(sig.into(), EdgeKind::Changed, "changed")
 }
 
 impl Future for Edge {
@@ -142,7 +146,8 @@ impl Future for Edge {
 ///
 /// # Panics
 /// As [`rising`].
-pub async fn cycles(sig: RawSig, n: u64) {
+pub async fn cycles(sig: impl Into<RawSig>, n: u64) {
+    let sig = sig.into();
     for _ in 0..n {
         rising(sig).await;
     }

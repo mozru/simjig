@@ -103,7 +103,7 @@ pub use kernel::trigger::{
 pub use model::meta::LoadError;
 pub use model::trace::TraceOptions;
 pub use model::values::{FieldDiff, InvalidEnum};
-pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
+pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords, Value, Vector};
 
 /// Bit-vector values with SystemVerilog semantics (`Bit`, `Bits<N>`, `WideBits`, the
 /// `Packed` trait): the `simjig-bits` crate.
@@ -128,7 +128,7 @@ pub mod __private {
     pub use crate::model::bind::{Binder, ModelBinder, create, create_in, instantiate, load};
     pub use crate::model::meta::{Access, ModelMeta, SignalMeta, Storage, Vtable};
     pub use crate::model::values::{FieldDiff, InvalidEnum, pack_field, unpack_field};
-    pub use crate::signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
+    pub use crate::signal::{In, InOut, Out, PublicRd, PublicRw, RawWords, Value, Vector};
     pub use crate::{__dut_model as dut_model, __link_model as link_model};
 
     /// What generated DPI-C trampolines and `Dut::set_dpi` name (`crate::dpi`).

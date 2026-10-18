@@ -35,6 +35,10 @@
 //! does not state it in the type system. Generated packed structs use the same trait to
 //! convert their storage ([`pack_field`](crate::__private::pack_field)).
 //!
+//! [`Value`] and [`Vector`] name those bounds (and the ones a test compares and prints
+//! with) as one trait each, for code generic over the value type: a parameter sweep's
+//! associated types are bounded by them.
+//!
 //! A handle's type parameter is unconstrained, so generated code can name handles of
 //! unpacked arrays (`In<[Bits<8>; 4]>`); such handles have no `get`/`set` until the ABI
 //! describes unpacked storage.
@@ -130,6 +134,50 @@ impl<const W: usize> RawWords for [u32; W] {
         out
     }
 }
+
+/// A value a handle can [`get`](In::get) and [`set`](In::set), compare and print: every
+/// type simjig-build generates for a port (`Bit`, `Bits<N>`, `WideBits`, a packed struct,
+/// union or enum).
+///
+/// It names the bounds a generic test body needs, so the body of a parameter sweep
+/// (`async fn t<D: fifo::Ports>(dut: D)`) needs no `where` clause: an associated type of a
+/// sweep's `Ports` trait is bounded by `Value` (or by [`Vector`]). Implemented for every
+/// type that has the bounds.
+pub trait Value: Packed<Raw: RawWords> + Eq + fmt::Debug + Default {}
+
+impl<T: Packed<Raw: RawWords> + Eq + fmt::Debug + Default> Value for T {}
+
+/// A bit vector: a [`Value`] that converts from a `u128` literal and compares with one
+/// (`Bit`, `Bits<N>` and `WideBits`, not the generated structs and enums).
+///
+/// In a generic body, `dut.data().set(0x5a)`, `dut.data().get() == 3` and
+/// `dut.count().get().to_u128()` work for every width. Implemented for every type that
+/// has the bounds; [`to_u128`](Self::to_u128) is provided.
+pub trait Vector: Value + From<u128> + PartialEq<u128> {
+    /// The value as an integer (`Bit` is 0 or 1).
+    ///
+    /// # Panics
+    /// If the value does not fit 128 bits (a `WideBits` with a bit set above bit 127).
+    #[track_caller]
+    #[must_use]
+    fn to_u128(self) -> u128 {
+        let mut buf = <Self::Raw as sealed::Buffer>::zeroed();
+        self.to_raw().to_words(buf.as_mut());
+        let words = buf.as_ref();
+        assert!(
+            words.iter().skip(4).all(|&w| w == 0),
+            "{self:?} ({} bits) does not fit a u128",
+            Self::WIDTH
+        );
+        words
+            .iter()
+            .take(4)
+            .rev()
+            .fold(0, |acc, &w| acc << 32 | u128::from(w))
+    }
+}
+
+impl<T: Value + From<u128> + PartialEq<u128>> Vector for T {}
 
 /// Construction of a handle from a slot; crate-only, so a handle's direction cannot be
 /// changed by rebinding its `RawSig`.
@@ -395,6 +443,31 @@ mod tests {
     use crate::kernel::sim::Sim;
     use crate::kernel::time::{Precision, SimDuration};
     use crate::kernel::trigger::{changed, cycles, falling, now, rising};
+
+    /// `Vector::to_u128` reads every vector type, `Bit` as 0 or 1, and refuses a wide
+    /// value above 128 bits rather than cutting it.
+    #[test]
+    fn vectors_read_as_integers() {
+        use simjig_bits::{Bits, WideBits};
+        assert_eq!(Vector::to_u128(Bit::ONE), 1);
+        assert_eq!(Vector::to_u128(Bit::ZERO), 0);
+        assert_eq!(Vector::to_u128(Bits::<7>::new(0x5a)), 0x5a);
+        assert_eq!(
+            Vector::to_u128(Bits::<64>::new(u128::from(u64::MAX))),
+            u128::from(u64::MAX)
+        );
+        assert_eq!(Vector::to_u128(Bits::<128>::new(u128::MAX)), u128::MAX);
+        assert_eq!(
+            Vector::to_u128(WideBits::<200, 7>::from(u128::MAX)),
+            u128::MAX
+        );
+        let wide = std::panic::catch_unwind(|| {
+            let mut v = WideBits::<200, 7>::default();
+            v.set_bit(128, true);
+            Vector::to_u128(v)
+        });
+        assert!(wide.is_err());
+    }
 
     #[test]
     fn the_free_triggers_take_a_writable_typed_handle() {

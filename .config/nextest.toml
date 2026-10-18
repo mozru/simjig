@@ -9,3 +9,10 @@ failure-output = "immediate-final"
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# The trybuild UI test compiles simjig and its proc-macro dependencies in a nested cargo
+# (`<target>/tests/trybuild`); on a cold target that alone can take minutes on a slow
+# machine. A backstop: its build script already skips the test models there.
+[[profile.default.overrides]]
+filter = 'binary_id(simjig::harness_tests) & test(/^ui::/)'
+slow-timeout = { period = "60s", terminate-after = 5 }

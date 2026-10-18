@@ -39,6 +39,7 @@ python tests/conformance/show.py golden/timer.jsonl # print a log as a table
 | `readonly_read` | flop | values in `ReadOnly` after a `RisingEdge` |
 | `write_after_edge` | flop | when a write after `RisingEdge` becomes visible, and which edge captures it; last write wins |
 | `timeout` | flop | `with_timeout`: trigger loses, wins, and ties with the timeout |
+| `timeout_ties` | flop | `with_timeout` ties: a `Timer`, a sub-coroutine, a task started just before, an edge, `ClockCycles`; one tick short of a tie; a task whose `Timer` was armed first |
 | `timer` | counter | `Timer` wake-ups between edges and exactly on edges; `Timer(1, "step")` |
 | `clock_cycles` | counter | `ClockCycles`, rising and falling |
 | `value_change` | counter | `ValueChange` on a DUT output and on a testbench-written input |
@@ -48,6 +49,11 @@ python tests/conformance/show.py golden/timer.jsonl # print a log as a table
 | `two_clocks` | async_fifo | two clocks with coincident rising edges: wake order and values; `Combine` of both edges |
 | `cdc_stream` | async_fifo | data crossing the CDC end to end |
 | `derived_edge` | derived_clk | `RisingEdge` on an internal derived clock next to `RisingEdge` on its source |
+| `coincident_join` | async_fifo | callback order at coincident clock edges: a task woken on one clock that awaits the other joins its callback, or waits for the next edge |
+| `changed_join` | comb_chain | the same for two outputs that change in one eval (`ValueChange(y)`, `ValueChange(y_eq)`) |
+| `written_join` | comb_chain | the same for two inputs written in one delta |
+| `edge_kinds` | counter | `ValueChange(clk)`, `RisingEdge(clk)` and `ClockCycles` on one signal are separate callbacks |
+| `combinator_hop` | counter | `First`, `Combine` and `with_timeout` resume their caller after the tasks the same callback woke |
 
 ## Log format
 JSON Lines: one compact JSON object per line (`json.dumps(..., separators=(",", ":"))`),
@@ -74,7 +80,7 @@ interleaving of tasks is part of the golden.
 Trigger labels are fixed strings chosen by the scenario, not cocotb's `repr`:
 `RisingEdge(sig)`, `FallingEdge(sig)`, `ValueChange(sig)`, `ReadWrite`, `ReadOnly`,
 `Timer(<n><unit>)`, `ClockCycles(sig,n)`, `ClockCycles(sig,n,falling)`,
-`First(a,b)`, `Combine(a,b)`, `with_timeout(<trigger>,<n><unit>)`.
+`First(a,b)`, `Combine(a,b)`, `with_timeout(<trigger>,<n><unit>)`, `Event.wait()`.
 
 Every clock in these scenarios is a cocotb `Clock(sig, period, "ns")` started with
 `start_high=False`: the signal is low for the first half period, so a 10 ns clock rises at
@@ -124,7 +130,16 @@ The rules below follow from this loop.
 - `First(RisingEdge(clk), Timer(t))` with both due at the same time: **the Timer wins**
   (`first_combine` at 25 ns).
 - `with_timeout(RisingEdge(clk), t)` with the timeout at the same time as the edge:
-  **`SimTimeoutError`** (`timeout` at 25 ns, reading `clk=0`).
+  **`SimTimeoutError`** (`timeout` at 25 ns, reading `clk=0`). The same for
+  `ClockCycles` (`timeout_ties` at 45 ns).
+- `with_timeout(x, t)` is `select(Timer(t), x)`, which arms the timeout's Timer
+  **before** `x`. Timers due at the same time fire one at a time, in the order they were
+  armed, and cocotb runs every task a callback makes ready (and every task those wake)
+  before the next callback. So a Timer due exactly at the timeout loses to it, whether
+  awaited directly, inside a sub-coroutine, or in a task started just before
+  (`timeout_ties` at 15, 20 and 25 ns: `SimTimeoutError`). A task whose own Timer was
+  armed *before* the `with_timeout` call finishes first and its result wins
+  (`timeout_ties` at 54.999 ns: `fired`).
 - A trigger armed from a Timer wake-up at time t still catches the clock edge at t,
   because that edge has not been applied yet. In `first_combine`, `Combine(ClockCycles(clk,2),
   Timer(13ns))` armed at 25 ns counts the 25 ns edge as its first cycle, finishes its
@@ -162,12 +177,88 @@ Every edge, Timer and ReadOnly observation is identical in the two modes.
 - Both clocks' new values are applied together, before either edge trigger fires. Each
   task woken at a coincident edge sees **both** clocks high and both domains' flops
   pre-edge (`two_clocks` at 75 and 105 ns).
-- Wake order at a coincident edge is **not** clock-declaration order. The `wclk` clock
-  was started first, yet the `rclk` waiters (including the `Combine` that completes on
-  `rclk`) ran before the `wclk` waiter at 75 and 105 ns. This is consistent with cocotb
-  firing value-change callbacks in the order their triggers were primed, oldest first. The
-  `rclk` trigger was primed at 60 ns; the `wclk` trigger was re-primed at 65 ns after
-  firing. This explanation is a hypothesis; only the order itself is in the golden.
+- Wake order at a coincident edge is **not** clock-declaration order: the clock whose
+  trigger was primed first (oldest) wakes its tasks first. In `two_clocks` the `wclk`
+  clock was started first, yet the `rclk` waiters (including the `Combine` that completes
+  on `rclk`) ran before the `wclk` waiter at 75 and 105 ns: the `rclk` trigger was primed
+  at 60 ns, the `wclk` trigger re-primed at 65 ns after firing. See "Callback order".
+
+### Callback order
+cocotb 2.1 keeps **one trigger per (signal, edge kind)**: `RisingEdge(s)`,
+`FallingEdge(s)` and `ValueChange(s)` are three triggers, each backed by its own VPI
+value-change callback, registered when the trigger's first waiter arrives ("primed") and
+removed when it fires or its last waiter leaves. Verilator's `callValueCbs`
+(`verilated_vpi.cpp`) walks the callbacks in registration order, skipping those added
+during the walk, and each callback compares the signal with its own copy of the value,
+taken when it was registered. cocotb's `GPITrigger._react` runs the whole event loop
+inside each callback. Hence, for one comparison (after an eval and the write
+application that follows it):
+- **Triggers fire one at a time, oldest-primed first**, and every task one wakes (and
+  every task those wake, such as an `Event` waiter) runs before the next trigger fires
+  (`coincident_join`, `changed_join`, `written_join`, `edge_kinds` at 15 ns: the
+  `Event.wait()` task runs between the two triggers' waiters). Within a trigger, waiters
+  resume in the order they started waiting.
+- A task woken by one trigger that then awaits a trigger that **another task already
+  waits on**, and which has not fired yet in this walk, **joins it** and resumes in the
+  same walk (`coincident_join` 15 ns, `changed_join` and `written_join` 2 ns,
+  `edge_kinds` 15 ns).
+- If **nobody else waits** on that trigger, the task primes it afresh: its callback
+  snapshots the value that already changed and waits for the next change
+  (`coincident_join` 55 ns, `changed_join` and `written_join` 6 ns, `edge_kinds` 35 ns,
+  where `RisingEdge(clk)` is primed from a `ValueChange(clk)` wake at a rising edge). The
+  same holds for a trigger that **already fired** in this walk: its waiters re-prime it,
+  last in the order (`coincident_join` 85 ns).
+- `ClockCycles(s, n)` awaits the one `RisingEdge(s)` trigger `n` times, inline in the
+  awaiting task, so it joins like a plain `RisingEdge` (`edge_kinds` 45 ns).
+
+- **`First`, `Combine` and `with_timeout` resume their caller late.** They await each
+  operand in a helper task (`_wait` in `_concurrent_waiters.py`, started with
+  `_start_next`, so the helpers register before tasks started earlier but not yet run)
+  and wake the caller through an internal event. When the deciding helper finishes, the
+  caller is scheduled behind every task already queued: for `Combine` (and a `First`
+  whose losers have all finished) that is one hop; `First` and `with_timeout` (`select`)
+  first cancel a loser still waiting by scheduling it once more, and the caller is
+  scheduled when that loser finishes, a second hop. So the caller resumes after the tasks
+  the same callback woke directly (`combinator_hop` at 25 and 35 ns), and after the tasks
+  those wake when a loser was cancelled: an `Event` set by such a task wakes its waiter
+  before the caller of `First` (45 ns) and `with_timeout` (65 ns), after the caller of
+  `Combine` (55 ns). simjig polls the operands inline and yields once, or twice when
+  dropping the losers cancelled a pending wait (`kernel::combinator::hop`).
+
+simjig mirrors this with one wait group per (signal, edge kind), ordered by the
+registration that primed it (`kernel::waits`, "Value-change groups"), and a walk that runs
+tasks to quiescence after each group that fires (`kernel::sched::fire_value_changes`).
+
+### Further rules, confirmed but not in a golden
+Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel_tests`).
+- `NextTimeStep` waiters resume before that time step's `Timer` waiters (step 1 above;
+  `phases::next_time_step_resumes_at_the_next_scheduled_time_before_timers`).
+- `First` of edges that fire in the same comparison goes to the **leftmost** operand
+  (`phases::first_of_coincident_edges_goes_to_the_leftmost_operand`).
+- A bus that changes and changes back within one time step, in two deltas, fires
+  `ValueChange` **twice** (`phases::a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice`).
+- A task woken from a `ReadOnly` waiter (an `Event` set, a `Queue` put) runs in that
+  `ReadOnly` phase. cocotb raises `RuntimeError` on a write there; simjig fails the run
+  with `WriteInReadOnly`
+  (`failures::a_task_woken_from_read_only_runs_there_and_cannot_write`).
+- Under `--timing`, `Timer`s due at time t resume before the design's `#` events at t:
+  they run in step 1, before the `eval_step()` that executes those events
+  (`timing::a_timer_resumes_before_the_designs_event_at_the_same_time`).
+
+### Known differences from cocotb
+Deliberate, each with the reason:
+- **`Timer` of zero ticks** is rejected when it is first **awaited** (a `TaskPanic` naming
+  the line that built it); cocotb raises `ValueError` when `Timer(0)` is **built**.
+  `Timer::new` is a `const fn`, which can neither report a run failure nor put the call
+  site in the message, and a `Timer` may be built before the run starts
+  (`phases::trigger_misuse_points_at_the_line_that_made_the_trigger`).
+- **Combinator operand bodies run in the caller.** cocotb runs each operand of `First`,
+  `Combine` and `with_timeout` in its own helper task, so a multi-step operand (a
+  coroutine that awaits several triggers) resumes at its helper's place in the event loop;
+  simjig polls every operand when the caller is woken. The caller's own resumption point
+  matches cocotb ("Callback order"); code *inside* an operand that runs between two of its
+  awaits may run earlier or later relative to other tasks woken by the same trigger. No
+  golden exercises it.
 
 ### Simulation end
 The simulation ends when no timed callback and no `--timing` event is left. A test that

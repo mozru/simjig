@@ -24,9 +24,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::kernel::recorder::Fnv;
 use crate::{BlockedTask, Failure, FailureKind, Precision, SimDuration, SimTime};
 
-use super::seed::{Fnv, Seed};
+use super::seed::Seed;
 use super::waves::{WavesReplay, failing_signals};
 
 /// A stable hash of a failure's kind, location and number-masked message.
@@ -319,17 +320,7 @@ fn details(
 
 /// One `blocked:` line per task: what it awaits.
 fn blocked_lines(blocked: &[BlockedTask]) -> Vec<String> {
-    blocked
-        .iter()
-        .map(|b| {
-            let awaiting = if b.awaiting.is_empty() {
-                "a future the kernel cannot see".to_owned()
-            } else {
-                b.awaiting.join(", ")
-            };
-            format!("blocked:  `{}` awaits {awaiting}", b.task)
-        })
-        .collect()
+    blocked.iter().map(|b| format!("blocked:  {b}")).collect()
 }
 
 impl fmt::Display for FailureReport {

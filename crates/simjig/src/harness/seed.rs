@@ -13,6 +13,8 @@
 
 use std::fmt;
 
+use crate::kernel::recorder::Fnv;
+
 /// Where a run's root seed came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SeedSource {
@@ -191,28 +193,6 @@ pub(crate) const fn mix64(mut z: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     z ^ (z >> 31)
-}
-
-/// FNV-1a, 64-bit: stable across platforms and releases, unlike `DefaultHasher`.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Fnv(u64);
-
-impl Default for Fnv {
-    fn default() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
-    }
-}
-
-impl Fnv {
-    pub(crate) fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-
-    pub(crate) const fn finish(self) -> u64 {
-        self.0
-    }
 }
 
 #[cfg(test)]

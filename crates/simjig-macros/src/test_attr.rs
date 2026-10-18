@@ -277,15 +277,9 @@ fn dut_parts(duts: &[Type]) -> (TokenStream, TokenStream, Vec<Ident>) {
     }
 }
 
-fn emit(args: &Args, test: &TestFn) -> TokenStream {
-    let ItemFn {
-        attrs, vis, sig, ..
-    } = &test.func;
-    let ident = &sig.ident;
-    let mut body = test.func.clone();
-    body.attrs.clear();
-    body.vis = Visibility::Inherited;
-    let (dut_ty, dut_pat, dut_vars) = dut_parts(&test.duts);
+/// The test body's closure parameters (`|sim, dut|`) and the arguments the closure passes
+/// to the user's function, which takes the context, the DUTs, both or neither.
+fn closure_params(test: &TestFn, dut_vars: &[Ident]) -> (TokenStream, Vec<TokenStream>) {
     let sim_var = format_ident!("__simjig_sim");
     let (sim_pat, sim_arg) = match test.sim {
         // Spanned at the user's parameter type, so a wrong type is reported there.
@@ -295,14 +289,18 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
         }
         None => (quote!(_), None),
     };
-    let call_args = sim_arg
-        .into_iter()
-        .chain(dut_vars.iter().map(|v| quote!(#v)));
-    let krate = args
-        .krate
-        .as_ref()
-        .map_or_else(|| quote!(::simjig), |path| quote!(#path));
-    let timeout = match args.timeout {
+    (
+        sim_pat,
+        sim_arg
+            .into_iter()
+            .chain(dut_vars.iter().map(|v| quote!(#v)))
+            .collect(),
+    )
+}
+
+/// The `TestMeta::timeout` expression for the `timeout` argument.
+fn timeout_expr(krate: &TokenStream, timeout: Option<TimeoutArg>) -> TokenStream {
+    match timeout {
         None => quote!(#krate::__private::TimeoutArg::Default),
         Some(TimeoutArg::Disabled) => quote!(#krate::__private::TimeoutArg::Disabled),
         Some(TimeoutArg::Given(Timeout { value, unit })) => {
@@ -312,7 +310,24 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
                 unit: #krate::TimeUnit::#unit,
             }))
         }
-    };
+    }
+}
+
+fn emit(args: &Args, test: &TestFn) -> TokenStream {
+    let ItemFn {
+        attrs, vis, sig, ..
+    } = &test.func;
+    let ident = &sig.ident;
+    let mut body = test.func.clone();
+    body.attrs.clear();
+    body.vis = Visibility::Inherited;
+    let (dut_ty, dut_pat, dut_vars) = dut_parts(&test.duts);
+    let (sim_pat, call_args) = closure_params(test, &dut_vars);
+    let krate = args
+        .krate
+        .as_ref()
+        .map_or_else(|| quote!(::simjig), |path| quote!(#path));
+    let timeout = timeout_expr(&krate, args.timeout);
     // Whether these fire depends on user code, so this is `allow`, not `expect` (an
     // unfulfilled `expect` would warn instead): a body need not await, and the test's
     // `simjig::Result` carries the plain-data `Failure`, which is large by design.

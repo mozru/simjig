@@ -29,8 +29,9 @@ projects built on top of simjig.
   models.
 - Nothing depends on `xtask`. Only `xtask` depends on `cargo-simjig` (for `cargo xtask
   doctor`); runtime crates never depend on it.
-- `unsafe` exists only in `simjig::{model::abi, model::raw, kernel::waker, dpi::abi, fork}`;
-  every other module and crate forbids it.
+- `unsafe` exists only in `simjig::{model::abi, model::raw, kernel::waker, dpi::abi, fork}`
+  and in the expansion of `simjig::__link_model!` (generated code's vtable symbol); every
+  other module and crate forbids it.
 - `simjig::kernel` imports nothing from `simjig::model`, so the scheduler can be tested
   against a fake model.
 - No Rust reference to Verilator model memory ever exists. Testbench writes go through the
@@ -45,3 +46,13 @@ projects built on top of simjig.
   table row whose storage disagrees with its width, and `simjig::find_probe`
   (`simjig_rt.cpp`) checks each probe's width against the `VLVT_*` type Verilator
   recorded for it.
+
+## Single homes
+One place per concept (constitution rule 6); everything else calls it.
+| Concept | Home |
+|---|---|
+| Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |
+| Rendering a failure | `Display` of `kernel::failure::Failure` and of `BlockedTask` (one blocked task); the harness's report (`harness::report::FailureReport`) builds on them |
+| Seeds and random streams | `harness::seed`: `Seed` (root seed, test-name seed, Verilator seed), `Seed::rng` (named streams), `Rng` (xoshiro256**) |
+| Stable hashing (FNV-1a 64) | `kernel::recorder::Fnv`: the trace hash, seeds, stream seeds, failure signatures |
+| Checking a model's C vtable before use | `simjig::model::raw::check_vtable` |

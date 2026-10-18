@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use simjig::{
-    Clock, FailureKind, FakeModel, NextTimeStep, Precision, ReadOnly, ReadWrite, Sim, SimTime,
-    Timer, changed, falling, now, rising, spawn, yield_now,
+    Clock, Event, FailureKind, FakeModel, NextTimeStep, Precision, RawSig, ReadOnly, ReadWrite,
+    Sim, SimTime, Timer, changed, falling, first, join, now, rising, spawn, with_timeout,
+    yield_now,
 };
 
 use super::{assert_clean, clocked, dut, ticks};
@@ -36,8 +37,8 @@ fn writes_are_deposits_visible_only_after_application() {
 
 #[test]
 fn edge_waiters_wake_in_registration_order_across_signals() {
-    // Two clocks with coincident edges at 0, 20, 40...: the waiter armed first wakes first,
-    // whatever the clock declaration order (golden two_clocks, rule 5).
+    // Two clocks with coincident edges at 0, 20, 40...: the group primed first fires first,
+    // whatever the clock declaration order (golden two_clocks).
     let mut m = FakeModel::new(Precision::NS);
     m.signal("c1", 1);
     m.signal("c2", 1);
@@ -67,6 +68,109 @@ fn edge_waiters_wake_in_registration_order_across_signals() {
     .unwrap();
     // Both clocks were applied before either edge fired.
     assert_eq!(*trace.borrow(), ["c2 at 20, c1=1", "c1 at 20, c2=1"]);
+}
+
+/// A model with two 1-bit signals the testbench writes.
+fn two_bits() -> (Sim, RawSig, RawSig) {
+    let mut m = FakeModel::new(Precision::NS);
+    m.signal("x", 1);
+    m.signal("y", 1);
+    let sim = Sim::from_fake(m);
+    let (x, y) = (sim.signal("x").unwrap(), sim.signal("y").unwrap());
+    (sim, x, y)
+}
+
+#[test]
+fn a_task_woken_by_one_value_change_joins_a_younger_group_not_yet_fired() {
+    // Golden written_join: x's group is primed before y's, both change in one apply. The
+    // walk fires x's group and runs what it wakes (a, then z through the Event) before it
+    // reaches y's group, which a has joined by then.
+    let (mut sim, x, y) = two_bits();
+    let trace: Trace = Rc::default();
+    let shared = Rc::clone(&trace);
+    sim.run(async move {
+        let ev = Event::new("ev");
+        let (set, t1, t2, t3) = (
+            ev.clone(),
+            Rc::clone(&shared),
+            Rc::clone(&shared),
+            Rc::clone(&shared),
+        );
+        let task_a = spawn("a", async move {
+            changed(x).await;
+            push(&t1, format!("a x at {}", now().ticks()));
+            set.set();
+            changed(y).await;
+            push(&t1, format!("a y at {}", now().ticks()));
+        });
+        let task_b = spawn("b", async move {
+            changed(y).await;
+            push(&t2, format!("b y at {}", now().ticks()));
+        });
+        let task_z = spawn("z", async move {
+            ev.wait().await;
+            push(&t3, format!("z at {}", now().ticks()));
+        });
+        Timer::new(ticks(1)).await;
+        x.write_u64(1);
+        y.write_u64(1);
+        Timer::new(ticks(1)).await;
+        x.write_u64(0);
+        y.write_u64(0);
+        task_a.await;
+        task_b.await;
+        task_z.await;
+    })
+    .unwrap();
+    assert_eq!(
+        *trace.borrow(),
+        ["a x at 1", "z at 1", "b y at 1", "a y at 1"]
+    );
+}
+
+#[test]
+fn changed_and_rising_on_one_signal_are_separate_groups() {
+    // Golden edge_kinds: `changed(x)` was primed before `rising(x)`. At 1 a joins b's
+    // rising group, not fired yet. At 3 nobody waits on rising(x), so the group a primes
+    // snapshots x = 1 and waits for the next rising edge, at 5.
+    let (mut sim, x, _) = two_bits();
+    let trace: Trace = Rc::default();
+    let shared = Rc::clone(&trace);
+    sim.run(async move {
+        let (t1, t2) = (Rc::clone(&shared), Rc::clone(&shared));
+        let task_a = spawn("a", async move {
+            changed(x).await;
+            push(&t1, format!("a changed at {}", now().ticks()));
+            rising(x).await;
+            push(&t1, format!("a rising at {}", now().ticks()));
+            for _ in 0..2 {
+                changed(x).await;
+                push(&t1, format!("a changed at {}", now().ticks()));
+            }
+            rising(x).await;
+            push(&t1, format!("a rising at {}", now().ticks()));
+        });
+        let task_b = spawn("b", async move {
+            rising(x).await;
+            push(&t2, format!("b rising at {}", now().ticks()));
+        });
+        for level in [1, 0, 1, 0, 1] {
+            Timer::new(ticks(1)).await;
+            x.write_u64(level);
+        }
+        task_a.await;
+        task_b.await;
+    })
+    .unwrap();
+    let want = [
+        "a changed at 1",
+        "b rising at 1",
+        "a rising at 1",
+        "a changed at 2",
+        "a changed at 3",
+        "a rising at 5",
+    ];
+    assert_eq!(*trace.borrow(), want);
 }
 
 #[test]
@@ -109,6 +213,40 @@ fn next_time_step_resumes_at_the_next_scheduled_time_before_timers() {
 }
 
 #[test]
+fn each_timer_runs_what_it_wakes_before_the_next_timer_due_then() {
+    // `old` and `young` both wait until t=5, `old`'s Timer registered first. cocotb runs
+    // its event loop after each Timer callback, so `woken` (set off by `old`) runs before
+    // `young` (golden timeout_ties, the pre-armed task at 54.999 ns).
+    let mut d = dut();
+    let trace: Trace = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let event = Rc::new(Event::new("go"));
+            let (t1, t2, t3) = (Rc::clone(&t), Rc::clone(&t), Rc::clone(&t));
+            let e = Rc::clone(&event);
+            let woken = spawn("woken", async move {
+                e.wait().await;
+                push(&t1, "woken");
+            });
+            let e = Rc::clone(&event);
+            let old = spawn("old", async move {
+                Timer::new(ticks(5)).await;
+                push(&t2, "old");
+                e.set();
+            });
+            yield_now().await; // `woken` and `old` register first
+            let young = spawn("young", async move {
+                Timer::new(ticks(5)).await;
+                push(&t3, "young");
+            });
+            simjig::join!(woken, old, young);
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["old", "woken", "young"]);
+}
+
+#[test]
 fn yield_now_lets_ready_tasks_run_first() {
     let mut d = dut();
     let trace: Trace = Rc::default();
@@ -138,6 +276,126 @@ fn falling_and_changed_follow_value_changes() {
         (fall, now(), q.read_u64())
     });
     assert_eq!(seen.unwrap(), (SimTime(5), SimTime(10), 9));
+}
+
+#[test]
+fn a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice() {
+    let mut d = dut();
+    let a = d.a;
+    let seen = d.sim.run(async move {
+        let watcher = spawn("watch", async move {
+            changed(a).await;
+            let first = (now(), a.read_u64());
+            changed(a).await;
+            (first, (now(), a.read_u64()))
+        });
+        Timer::new(ticks(1)).await;
+        a.write_u64(5);
+        ReadWrite::new().await;
+        a.write_u64(0);
+        watcher.await
+    });
+    assert_eq!(seen.unwrap(), ((SimTime(1), 5), (SimTime(1), 0)));
+}
+
+#[test]
+fn combinators_resume_their_caller_after_the_tasks_the_same_edge_woke() {
+    // Golden combinator_hop. Per round, the caller's combinator registers on rising(x)
+    // before f does; f sets an Event z waits on. `first!` and `with_timeout` cancel a
+    // waiting loser (the Timer), one hop more than `join!`: z runs before their caller,
+    // after the caller of `join!`.
+    let (mut sim, x, _) = two_bits();
+    let trace: Trace = Rc::default();
+    let shared = Rc::clone(&trace);
+    sim.run(async move {
+        for round in 0..3_u64 {
+            let ev = Event::new("ev");
+            let (set, tf, tz) = (ev.clone(), Rc::clone(&shared), Rc::clone(&shared));
+            let task_z = spawn("z", async move {
+                ev.wait().await;
+                push(&tz, "z");
+            });
+            let task_f = spawn("f", async move {
+                rising(x).await;
+                push(&tf, "f");
+                set.set();
+            });
+            let writer = spawn("w", async move {
+                Timer::new(ticks(1)).await;
+                x.write_u64(1);
+                Timer::new(ticks(1)).await;
+                x.write_u64(0);
+            });
+            let label = match round {
+                0 => {
+                    first!(rising(x), Timer::new(ticks(100)));
+                    "first! caller"
+                }
+                1 => {
+                    join!(rising(x), Timer::new(ticks(1)));
+                    "join! caller"
+                }
+                _ => {
+                    with_timeout(ticks(100), rising(x)).await.unwrap();
+                    "with_timeout caller"
+                }
+            };
+            push(&shared, label);
+            for task in [task_z, task_f, writer] {
+                task.await;
+            }
+        }
+    })
+    .unwrap();
+    let want = [
+        "f",
+        "z",
+        "first! caller",
+        "f",
+        "join! caller",
+        "z",
+        "f",
+        "z",
+        "with_timeout caller",
+    ];
+    assert_eq!(*trace.borrow(), want);
+}
+
+#[test]
+fn first_of_coincident_edges_goes_to_the_leftmost_operand() {
+    let mut m = FakeModel::new(Precision::NS);
+    m.signal("c1", 1);
+    m.signal("c2", 1);
+    let mut sim = Sim::from_fake(m);
+    let c1 = sim.signal("c1").unwrap();
+    let c2 = sim.signal("c2").unwrap();
+    sim.add_clock(Clock::new(c1, ticks(10))).unwrap();
+    sim.add_clock(Clock::new(c2, ticks(10))).unwrap();
+    let won = sim.run(async move {
+        Timer::new(ticks(1)).await;
+        let a = simjig::first!(
+            async {
+                rising(c2).await;
+                "c2"
+            },
+            async {
+                rising(c1).await;
+                "c1"
+            }
+        );
+        let b = simjig::first!(
+            async {
+                rising(c1).await;
+                "c1"
+            },
+            async {
+                rising(c2).await;
+                "c2"
+            }
+        );
+        (a, b)
+    });
+    assert_eq!(won.unwrap(), ("c2", "c1"));
 }
 
 #[test]

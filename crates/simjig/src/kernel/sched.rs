@@ -5,12 +5,14 @@
 //! goldens in `tests/conformance/` and overriding DECISION §1 where they differ:
 //!
 //! 1. **Timed region.** Set the model's time. Wake `NextTimeStep` waiters and run tasks;
-//!    then wake `Timer`s due now, log the kernel clocks' edges due now (declaration order,
-//!    as writes by the clock), and run tasks. Timer tasks therefore see the state *before*
-//!    this timestep's clock edges, and a trigger they arm still catches those edges.
-//! 2. **Delta loop.** Repeat: `eval`; apply the write log (deposits); compare watched
-//!    slots against their values at the previous comparison and wake their waiters in
-//!    registration order; run tasks. Stop after an iteration that applied no write.
+//!    then log the kernel clocks' edges due now (declaration order, as writes by the
+//!    clock), and wake the `Timer`s due now one at a time, in registration order, running
+//!    tasks after each. Timer tasks therefore see the state *before* this timestep's clock
+//!    edges, and a trigger they arm still catches those edges.
+//! 2. **Delta loop.** Repeat: `eval`; apply the write log (deposits); walk the primed
+//!    value-change groups oldest first and fire each one whose edge happened, running tasks
+//!    after each (see `waits`, "Value-change groups"); run tasks. Stop after an iteration
+//!    that applied no write.
 //!    Applying a clock edge and firing its waiters *before* the eval that clocks the flops
 //!    is why, right after `rising(clk)` on a kernel clock, flops still show old values;
 //!    design-driven signals change in an eval, so their waiters see post-eval values.
@@ -75,6 +77,13 @@ fn wake_from(k: &Kernel, fire: impl FnOnce(&mut WaitTable, &mut Vec<Wake>)) {
     wake_sorted(wakes);
 }
 
+/// Fires the oldest Timer due at `t`; returns whether there was one.
+fn fire_next_timer(k: &Kernel, t: SimTime) -> bool {
+    let mut fired = false;
+    wake_from(k, |w, out| fired = w.fire_next_timer(t, out));
+    fired
+}
+
 /// Runs timesteps until the main task completes, a failure is recorded, or time cannot
 /// advance.
 pub(crate) fn run_loop(k: &Kernel, limit: Option<SimTime>) {
@@ -130,7 +139,8 @@ fn step(k: &Kernel) {
 
     wake_from(k, WaitTable::fire_next_step);
     run_ready(k);
-    wake_from(k, |w, out| w.fire_time(t, out));
+    // The clock edges due at `t` are logged before any Timer task runs, so a Timer task
+    // that stops a clock or writes its signal at `t` comes after that edge in the log.
     let edges: Vec<(u32, u32)> = k
         .clocks
         .borrow_mut()
@@ -142,6 +152,13 @@ fn step(k: &Kernel) {
         .collect();
     for (slot, level) in edges {
         signal::write(k, slot, &[level], Writer::Clock, None);
+    }
+    // One Timer at a time, each followed by every task it makes ready (cocotb runs its
+    // event loop after each GPI callback). So a task woken by an older Timer, and any task
+    // it wakes in turn, runs before the waiter of a younger Timer due at the same time:
+    // `with_timeout` relies on it to break ties as cocotb does.
+    while !stopped(k) && fire_next_timer(k, t) {
+        run_ready(k);
     }
     run_ready(k);
 
@@ -293,8 +310,8 @@ fn read_write_limit(k: &Kernel, waiters: &[(Option<Key>, Option<&'static Locatio
     );
 }
 
-/// Applies the write log, then wakes waiters of watched slots that changed since the
-/// previous comparison. Returns whether any write was applied.
+/// Applies the write log, then fires the value changes since the previous comparison.
+/// Returns whether any write was applied.
 fn apply_and_compare(k: &Kernel) -> bool {
     let writes = k.log.borrow_mut().take();
     {
@@ -313,13 +330,32 @@ fn apply_and_compare(k: &Kernel) -> bool {
     }
     let applied = !writes.is_empty();
     k.log.borrow_mut().recycle(writes);
-    let mut wakes = Vec::new();
-    {
-        let model = k.models.borrow();
-        k.waits.borrow_mut().compare(&model, &mut wakes);
-    }
-    wake_sorted(wakes);
+    fire_value_changes(k);
     applied
+}
+
+/// Fires the value-change groups whose edge happened, one group at a time in priming
+/// order, each followed by every task it makes ready: cocotb on Verilator runs one VPI
+/// value-change callback at a time (`callValueCbs`, in registration order) and its whole
+/// event loop inside each. A task woken by one group that waits on a younger group not yet
+/// reached in this walk joins it; groups primed during the walk wait for the next change.
+fn fire_value_changes(k: &Kernel) {
+    let until = k.waits.borrow().last_seq();
+    let mut after = 0;
+    while !stopped(k) {
+        let mut wakes = Vec::new();
+        let fired = {
+            let model = k.models.borrow();
+            k.waits
+                .borrow_mut()
+                .fire_next_change(&model, until, &mut after, &mut wakes)
+        };
+        if !fired {
+            return;
+        }
+        wake_sorted(wakes);
+        run_ready(k);
+    }
 }
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next

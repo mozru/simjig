@@ -362,18 +362,24 @@ fn time_limit(timeout: TimeoutArg, precision: Precision, test: &str) -> Option<A
                 is_default: false,
             })
         }
-        TimeoutArg::Default => {
-            // At a precision coarser than 1 ms, round up to whole ticks.
-            let ticks_per_ms = match precision.exponent() {
-                e @ ..=-3 => 10u64.pow(u32::from((-3 - e).unsigned_abs())),
-                _ => 1,
-            };
-            Some(AppliedTimeout {
-                duration: SimDuration::from_ticks(DEFAULT_TIMEOUT_MS * ticks_per_ms),
-                is_default: true,
-            })
-        }
+        TimeoutArg::Default => Some(AppliedTimeout {
+            duration: SimDuration::from_ticks(default_timeout_ticks(precision)),
+            is_default: true,
+        }),
     }
+}
+
+/// [`DEFAULT_TIMEOUT_MS`] in ticks of `precision`: `ceil(10 ms / tick)`, at least one.
+///
+/// At a precision coarser than 1 ms, 10 ms is not always a whole number of ticks; it
+/// rounds up rather than failing, since the user wrote no timeout to fix.
+fn default_timeout_ticks(precision: Precision) -> u64 {
+    // `exponent` is in -15..=0, so neither power overflows.
+    let ticks = match precision.exponent() {
+        e @ ..=-3 => DEFAULT_TIMEOUT_MS * 10u64.pow(u32::from((-3 - e).unsigned_abs())),
+        e => DEFAULT_TIMEOUT_MS.div_ceil(10u64.pow(u32::from((e + 3).unsigned_abs()))),
+    };
+    ticks.max(1)
 }
 
 fn finish(

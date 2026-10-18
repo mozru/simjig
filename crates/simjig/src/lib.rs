@@ -118,7 +118,7 @@ pub mod __private {
         run, run_test,
     };
     pub use crate::harness::waves::{WavesRequest, WavesWhen, Window, WindowEnd};
-    pub use crate::kernel::combinator::{MaybeDone, boxed};
+    pub use crate::kernel::combinator::{MaybeDone, boxed, hop};
 
     // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,
     // "The `__private` contract", and `model::bind` for the model glue.

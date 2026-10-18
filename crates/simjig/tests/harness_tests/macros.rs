@@ -81,10 +81,12 @@ async fn timeout_none_runs_past_the_default() {
     Timer::new(simjig::ms(20)).await;
 }
 
+// The body ends after 20 ms: if the 10 ms default did not fire, the test fails because it
+// did not panic, rather than hanging until nextest kills it.
 #[simjig::test]
 #[should_panic(expected = "(the default for #[simjig::test]")]
-async fn the_default_timeout_fails_a_hang() {
-    loop {
+async fn the_default_timeout_fails_a_long_test() {
+    for _ in 0..20 {
         Timer::new(simjig::ms(1)).await;
     }
 }

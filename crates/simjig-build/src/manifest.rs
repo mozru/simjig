@@ -35,7 +35,7 @@ use crate::hash::KeyHasher;
 const TRUST_MARGIN: Duration = Duration::from_secs(3);
 
 /// The first line of a manifest file; any other text is not a manifest.
-const HEADER: &str = "simjig-manifest-v1";
+const HEADER: &str = "simjig-manifest-v2";
 
 /// The files one run read, as recorded after it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,7 +167,7 @@ impl Manifest {
                     s => Some(Stat::parse(s)?),
                 };
                 Some(Entry {
-                    path: PathBuf::from(f.next()?),
+                    path: unescape_path(f.next()?)?,
                     digest,
                     stat,
                 })
@@ -186,7 +186,7 @@ impl Manifest {
                 "\t",
                 &stat,
                 "\t",
-                &e.path.display().to_string(),
+                &escape_path(&e.path),
                 "\n",
             ] {
                 out.push_str(field);
@@ -237,6 +237,40 @@ pub(crate) enum Recorded {
     /// This dependency changed while the run read it, or vanished: the output serves
     /// this build only.
     Changed(PathBuf),
+}
+
+/// A path as one line of a listing: `\` and line breaks escaped (`\\`, `\n`, `\r`), as
+/// a file name may hold them. A path that is not UTF-8 is written lossily: it names no
+/// file, so the entry it is in is a miss, never a wrong hit.
+pub(crate) fn escape_path(path: &Path) -> String {
+    let mut out = String::new();
+    for c in path.display().to_string().chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The path [`escape_path`] wrote; `None` for a stray escape.
+pub(crate) fn unescape_path(line: &str) -> Option<PathBuf> {
+    let mut out = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        out.push(match c {
+            '\\' => match chars.next()? {
+                '\\' => '\\',
+                'n' => '\n',
+                'r' => '\r',
+                _ => return None,
+            },
+            c => c,
+        });
+    }
+    Some(PathBuf::from(out))
 }
 
 /// The `cargo::warning` for an output left out of the cache because `path` changed
@@ -374,7 +408,7 @@ mod tests {
         );
     }
 
-    /// A file written shortly before the run may change again with the same status, so
+    /// A file written a second before the run may change again with the same status, so
     /// its status is not recorded.
     #[test]
     fn a_status_just_older_than_the_run_is_not_trusted() {
@@ -429,6 +463,44 @@ mod tests {
         ));
         std::fs::write(&h, "#define K 1\n").unwrap();
         stable(&[h], &snapshot);
+    }
+
+    /// A status is trusted only when the file's newer time is more than [`TRUST_MARGIN`]
+    /// older than the start.
+    #[test]
+    fn the_trust_margin_is_strict() {
+        let t = tempfile::tempdir().unwrap();
+        let h = old_file(t.path(), "k.h", "x");
+        let newest = Stat::of(&h).unwrap().1;
+        let at = |d: Duration| snapshot_at(newest + d, None);
+        let at_margin = stable(std::slice::from_ref(&h), &at(TRUST_MARGIN));
+        assert_eq!(at_margin.entries[0].stat, None);
+        let past_margin = at(TRUST_MARGIN + Duration::from_nanos(1));
+        assert!(
+            stable(std::slice::from_ref(&h), &past_margin).entries[0]
+                .stat
+                .is_some()
+        );
+        // Written a second before the run: hashed on every build.
+        let one_second = stable(&[h], &at(Duration::from_secs(1)));
+        assert_eq!(one_second.entries[0].stat, None);
+    }
+
+    #[test]
+    fn paths_with_line_breaks_round_trip() {
+        let t = tempfile::tempdir().unwrap();
+        let deps = [
+            old_file(t.path(), "a\nb.h", "a"),
+            old_file(t.path(), "c\\n\rd.h", "c"),
+        ];
+        let m = stable(&deps, &later());
+        assert_eq!(Manifest::parse(&m.text()), Some(m.clone()));
+        assert_eq!(
+            m.text().lines().count(),
+            3,
+            "a header and one line per file"
+        );
+        assert_eq!(unescape_path("a\\x"), None, "a stray escape");
     }
 
     #[test]

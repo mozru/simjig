@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dut::{CacheStatus, GeneratedInput};
 use crate::hash::KeyHasher;
-use crate::manifest::{Digests, Manifest, Recorded, Snapshot};
+use crate::manifest::{Digests, Manifest, Recorded, Snapshot, escape_path, unescape_path};
 use crate::verilator::{self, Verilator};
 use crate::{ABI_VERSION, Error, depfile};
 
@@ -173,11 +173,12 @@ impl Cache {
             .ok_or(None)?;
         let entry = self.root.join("models").join(current.key(DEPS_DOMAIN, pre));
         // The entry's own list has the Verilator binary too, which the key leaves out.
-        let listed = std::fs::read_to_string(entry.join("deps"));
-        match listed {
-            Ok(text) if entry.join("obj").is_dir() => Ok(Verilated {
+        let listed = std::fs::read_to_string(entry.join("deps")).ok();
+        let deps = listed.and_then(|text| text.lines().map(unescape_path).collect());
+        match deps {
+            Some(deps) if entry.join("obj").is_dir() => Ok(Verilated {
                 obj_dir: entry.join("obj"),
-                deps: text.lines().map(PathBuf::from).collect(),
+                deps,
                 status: CacheStatus::Hit,
                 changed: None,
             }),
@@ -321,7 +322,7 @@ fn prefix_of(args: &[String]) -> &str {
 fn deps_listing(deps: &[PathBuf]) -> String {
     let mut out = String::new();
     for d in deps {
-        out.push_str(&d.display().to_string());
+        out.push_str(&escape_path(d));
         out.push('\n');
     }
     out

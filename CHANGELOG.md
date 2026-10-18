@@ -4,6 +4,14 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A Verilator failure prints its first error once, as the headline with the DUT and
+  the location (``elaborating DUT `d` failed (exit status: 1) at /r/d.sv:3:5: syntax
+  error``), then the rest of the excerpt, a hint, and the command; the `%Error` line
+  was printed in the headline and again under `stderr:`. The JSON pass reads
+  ``elaborating DUT `d` `` (its command line still shows `--json-only`), not
+  ``parsing DUT `d` (Verilator JSON pass)``. A type, package scope or name Verilator
+  cannot find (`Can't find typedef`, `Package/class for .. not found`, `before
+  declaration`) hints at the package's import and its place before its users.
 - A `.param` naming no parameter of the top fails with
   ``module `rate_limiter` has no parameter `PERIDO`; did you mean `PERIOD`? (it has
   BURST, PERIOD)``, instead of Verilator's `-G` message or a `PINNOTFOUND` located in

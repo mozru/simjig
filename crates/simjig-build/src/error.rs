@@ -72,9 +72,11 @@ pub enum Error {
         /// Its `--version` output (first line).
         found: String,
     },
-    /// An external tool ran but failed. The message leads with what failed (`JSON pass
-    /// for DUT `x``, `verilating DUT `x``) and ends with the command line.
-    #[error("{}", display_command_failure(what, command, *status, stderr, path.as_deref()))]
+    /// An external tool ran but failed. The message leads with a headline naming what
+    /// failed (``elaborating DUT `x` ``, ``verilating DUT `x` ``) and the first error's
+    /// `file:line:col` and message, then the rest of the stderr excerpt, a hint when one
+    /// applies, and last the command line.
+    #[error("{}", display_command_failure(what, command, *status, stderr))]
     Command {
         /// What the run was for, e.g. ``verilating DUT `counter` ``.
         what: String,
@@ -176,7 +178,9 @@ impl Error {
             } => {
                 let stderr = without_warnings_in(&stderr, generated);
                 Self::Command {
-                    what: format!("parsing DUT `{dut}` (Verilator JSON pass)"),
+                    // The JSON pass is named by the command line (`--json-only`); to the
+                    // user it is the design's elaboration.
+                    what: format!("elaborating DUT `{dut}`"),
                     status,
                     path: offending_path(&stderr),
                     stderr: excerpt(&stderr),
@@ -360,6 +364,17 @@ fn hint(stderr: &str) -> Option<String> {
                 .to_owned(),
         );
     }
+    if stderr
+        .lines()
+        .any(|l| l.starts_with("%Error") && PACKAGE_NAME_ERRORS.iter().any(|m| l.contains(m)))
+    {
+        return Some(
+            "if the name comes from a package, is the package imported (`import pkg::*;`, \
+             or `pkg::name`), and is its source listed before its users? Verilator reads \
+             the file lists in order, then `.sources` in order"
+                .to_owned(),
+        );
+    }
     if let Some(units) = untimed_units(stderr) {
         return Some(format!(
             "some units declare a `timeunit` and these do not: {units}; add a `timeunit` \
@@ -375,6 +390,15 @@ fn hint(stderr: &str) -> Option<String> {
             .to_owned()
     })
 }
+
+/// Verilator 5.052's errors for a name a package should have declared: a type not found,
+/// a `pkg::` scope not found, and a name used before it is declared, which is how an
+/// `import pkg::*` from a package read later (or not at all) ends (checked for each).
+const PACKAGE_NAME_ERRORS: [&str; 3] = [
+    ": Can't find typedef",
+    ": Package/class for ",
+    " before declaration (IEEE 1800-2023 6.18)",
+];
 
 /// The units Verilator's `TIMESCALEMOD` names as missing a `timeunit` (IEEE 1800-2023
 /// §3.14.2.3), as `` `file:line` ``, in order and once each: Verilator 5.052 prints
@@ -409,32 +433,34 @@ fn only_lint_warnings(stderr: &str) -> bool {
     warned && !stderr.lines().any(is_error_line)
 }
 
-fn display_command_failure(
-    what: &str,
-    command: &str,
-    status: Option<i32>,
-    stderr: &str,
-    path: Option<&Path>,
-) -> String {
+fn display_command_failure(what: &str, command: &str, status: Option<i32>, stderr: &str) -> String {
     let status = status.map_or_else(
         || "killed by a signal".to_owned(),
         |s| format!("exit status: {s}"),
     );
-    let mut out = format!("{what} failed ({status})");
-    if let Some(path) = path {
-        out = format!("{out} on `{}`", path.display());
-    }
-    // The first line is what a build script reporting a handled failure prints, so it
-    // carries the first error.
-    if let Some(first) = stderr
+    // The headline is what a build script reporting a handled failure prints, so it
+    // carries the first error; the excerpt then shows it once, in the headline.
+    let first = stderr
         .lines()
-        .find(|l| is_error_line(l) && !l.starts_with("%Error: Exiting due to"))
-    {
-        out = format!("{out}: {first}");
+        .find(|l| is_error_line(l) && !l.starts_with("%Error: Exiting due to"));
+    let mut out = match first.and_then(parse_error) {
+        Some((code, Some(loc), msg)) => {
+            let code = code.map(|c| format!("{c}: ")).unwrap_or_default();
+            format!("{what} failed ({status}) at {loc}: {code}{msg}")
+        }
+        Some((code, None, msg)) => {
+            let code = code.map(|c| format!("{c}: ")).unwrap_or_default();
+            format!("{what} failed ({status}): {code}{msg}")
+        }
+        None => format!("{what} failed ({status})"),
+    };
+    let mut rest = stderr.to_owned();
+    if let Some(first) = first {
+        rest = stderr.replacen(&format!("{first}\n"), "", 1);
     }
-    if !stderr.trim().is_empty() {
-        out.push_str("\nstderr:\n");
-        out.push_str(stderr.trim_end());
+    if !rest.trim().is_empty() {
+        out.push('\n');
+        out.push_str(rest.trim_end());
     }
     if let Some(hint) = hint(stderr) {
         out.push_str("\nhint: ");
@@ -443,6 +469,28 @@ fn display_command_failure(
     out.push_str("\ncommand: ");
     out.push_str(command);
     out
+}
+
+/// The code (`PINNOTFOUND`), location (`file:line:col`) and message of a Verilator error
+/// line, `%Error[-CODE]: [<file>:<line>[:<col>]: ]<message>`.
+fn parse_error(line: &str) -> Option<(Option<&str>, Option<&str>, &str)> {
+    let (tag, rest) = line.strip_prefix("%Error")?.split_once(": ")?;
+    let code = tag.strip_prefix('-');
+    // The path ends at the first `:` followed by a digit, the location at the `: ` after
+    // its `:<line>[:<col>]`.
+    let location = rest
+        .char_indices()
+        .find(|&(i, c)| c == ':' && rest[i + 1..].starts_with(|d: char| d.is_ascii_digit()))
+        .and_then(|(i, _)| {
+            let digits = rest[i..].find(|c: char| c != ':' && !c.is_ascii_digit())?;
+            let end = i + digits;
+            (end > 0 && rest[..end].ends_with(':') && rest[end..].starts_with(' '))
+                .then(|| (&rest[..end - 1], &rest[end + 1..]))
+        });
+    Some(match location {
+        Some((loc, msg)) => (code, Some(loc), msg),
+        None => (code, None, rest),
+    })
 }
 
 #[cfg(test)]
@@ -540,10 +588,67 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            "parsing DUT `shreg` (Verilator JSON pass) failed (exit status: 1) on `/r/shreg.sv`: \
-             %Error: /r/shreg.sv:3:5: syntax error\nstderr:\n\
-             %Error: /r/shreg.sv:3:5: syntax error\ncommand: verilator --json-only shreg.sv"
+            "elaborating DUT `shreg` failed (exit status: 1) at /r/shreg.sv:3:5: syntax \
+             error\ncommand: verilator --json-only shreg.sv"
         );
+    }
+
+    /// The headline names the location and the error once; the rest of the excerpt (its
+    /// source context, later errors) follows it.
+    #[test]
+    fn the_first_error_is_the_headline_and_is_not_repeated() {
+        let err = Error::Command {
+            what: "verilating DUT `d`".into(),
+            command: "verilator --cc d.sv".into(),
+            status: Some(1),
+            stderr: "%Error-PINNOTFOUND: /r/d.sv:5:19: Parameter not found: 'X'\n    5 | x\n\
+                     %Error: /r/e.sv:1:1: other\n%Error: Exiting due to 2 error(s)\n"
+                .into(),
+            path: None,
+        };
+        assert_eq!(
+            err.to_string(),
+            "verilating DUT `d` failed (exit status: 1) at /r/d.sv:5:19: PINNOTFOUND: \
+             Parameter not found: 'X'\n    5 | x\n%Error: /r/e.sv:1:1: other\n\
+             %Error: Exiting due to 2 error(s)\ncommand: verilator --cc d.sv"
+        );
+        assert_eq!(
+            parse_error("%Error: Parameters from the command line were not found: P"),
+            Some((
+                None,
+                None,
+                "Parameters from the command line were not found: P"
+            ))
+        );
+        assert_eq!(
+            parse_error("%Error: /a/b c.sv:3: msg: 1"),
+            Some((None, Some("/a/b c.sv:3"), "msg: 1"))
+        );
+    }
+
+    /// A type or package scope Verilator cannot find (5.052's messages) asks whether the
+    /// package is imported and read before its users.
+    #[test]
+    fn missing_package_names_hint_at_imports_and_order() {
+        for stderr in [
+            "%Error: /r/u.sv:1:17: Can't find typedef/interface: 'pkt_t'\n",
+            "%Error: /r/u.sv:1:17: Package/class for ':: reference' not found: 'p'\n",
+            "%Error: /r/u.sv:1:31: Reference to 'pkt_t' before declaration (IEEE 1800-2023 \
+             6.18)\n",
+        ] {
+            let text = Error::Command {
+                what: "elaborating DUT `d`".into(),
+                command: "verilator d.sv".into(),
+                status: Some(1),
+                stderr: stderr.into(),
+                path: None,
+            }
+            .to_string();
+            assert!(
+                text.contains("hint: if the name comes from a package, is the package imported"),
+                "{text}"
+            );
+        }
     }
 
     /// A delay or event control that needs `--timing` (Verilator's STMTDLY warning, its
@@ -669,9 +774,8 @@ mod tests {
         .to_string();
         assert!(
             text.starts_with(
-                "verilating DUT `d` failed (exit status: 1) on `/r/d.sv`: %Error: \
-                 /r/d.sv:39:30: Can't find definition of variable: 'nosuch'\nstderr:\n\
-                 %Error: /r/d.sv:39:30: Can't find definition of variable: 'nosuch'\n\
+                "verilating DUT `d` failed (exit status: 1) at /r/d.sv:39:30: Can't find \
+                 definition of variable: 'nosuch'\n\
                  %Error: Exiting due to 1 error(s), 30 warning(s)\n\
                  --- the first 40 of 62 lines:\n%Warning-PINMISSING: "
             ),

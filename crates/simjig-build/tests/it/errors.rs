@@ -33,7 +33,7 @@ fn verilator_errors_name_the_command_and_file() {
     let msg = err.to_string();
     assert!(
         msg.starts_with(&format!(
-            "parsing DUT `broken` (Verilator JSON pass) failed (exit status: 1) on `{}`",
+            "elaborating DUT `broken` failed (exit status: 1) at {}:",
             broken.display()
         )),
         "{msg}"
@@ -205,7 +205,7 @@ fn a_real_error_under_wall_is_not_buried_by_the_generated_top() {
         .to_string();
     let first = err.lines().next().unwrap();
     assert!(
-        first.contains("%Error") && first.contains("nosuch_sig"),
+        first.contains(&format!("at {}:", top.display())) && first.contains("nosuch_sig"),
         "{first}\n{err}"
     );
     assert!(!err.contains("PINMISSING"), "{err}");

@@ -43,27 +43,56 @@ fn prepare(root: &Path) -> PathBuf {
     krate
 }
 
-/// Runs one test of the fixture crate and checks that it ran and passed.
-fn run_fixture_test(name: &str) {
+/// The prepared fixture crate and its target dir, with the lock that serialises its users.
+fn fixture() -> (PathBuf, PathBuf, std::fs::File) {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fixture-vtable");
     std::fs::create_dir_all(&root).unwrap();
     let lock = std::fs::File::create(root.join("lock")).unwrap();
     lock.lock().unwrap();
     let krate = prepare(&root);
     let target = krate.parent().unwrap().join("target");
+    (krate, target, lock)
+}
+
+/// Runs `cargo <args>` in the fixture crate; returns stdout and stderr after checking
+/// that it succeeded.
+fn cargo(krate: &Path, target: &Path, args: &[&str]) -> (String, String) {
+    cargo_with(krate, target, args, &[])
+}
+
+/// [`cargo`] with extra environment variables (`SIMJIG_CACHE_DIR` is removed unless
+/// `envs` sets it).
+pub(crate) fn cargo_with(
+    krate: &Path,
+    target: &Path,
+    args: &[&str],
+    envs: &[(&str, std::ffi::OsString)],
+) -> (String, String) {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = Command::new(cargo)
-        .args(["test", "--offline", "--quiet", "--", "--exact", name])
-        .current_dir(&krate)
-        .env("CARGO_TARGET_DIR", &target)
+        .args(args)
+        .current_dir(krate)
+        .env("CARGO_TARGET_DIR", target)
         .env_remove("SIMJIG_CACHE_DIR")
+        .envs(envs.iter().map(|(k, v)| (k, v)))
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
         out.status.success(),
-        "cargo test failed:\n{stdout}\n{stderr}"
+        "cargo {args:?} failed:\n{stdout}\n{stderr}"
+    );
+    (stdout, stderr)
+}
+
+/// Runs one test of the fixture crate and checks that it ran and passed.
+fn run_fixture_test(name: &str) {
+    let (krate, target, _lock) = fixture();
+    let (stdout, _) = cargo(
+        &krate,
+        &target,
+        &["test", "--offline", "--quiet", "--", "--exact", name],
     );
     assert!(stdout.contains("1 passed"), "{name} did not run:\n{stdout}");
     // The cache was derived from OUT_DIR: it sits in the fixture's target dir.
@@ -93,4 +122,38 @@ fn two_models_share_one_binary() {
 #[test]
 fn integration_test_without_the_lib_links_the_model() {
     run_fixture_test("standalone_test_links_the_model");
+}
+
+/// After a build that wrote new generated inputs into the cache (here: all of them, after
+/// removing `inputs/` and touching a source), the next build is a no-op: the build script
+/// does not run again. The inputs are content-addressed and derive from tracked
+/// configuration, so they are no reason to rerun; listing them made the first no-op build
+/// after every new DUT configuration rerun the whole script (their mtime is later than the
+/// script's start).
+#[test]
+fn a_no_op_build_after_new_generated_inputs_is_fresh() {
+    let (krate, target, _lock) = fixture();
+    let build = ["build", "--offline", "--tests", "-v"];
+    cargo(&krate, &target, &build);
+    let inputs = target.join("simjig-cache/inputs");
+    if inputs.exists() {
+        std::fs::remove_dir_all(&inputs).unwrap();
+    }
+    let source = krate.join("duts/inv/inv.sv");
+    std::fs::File::options()
+        .append(true)
+        .open(&source)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now())
+        .unwrap();
+    let (_, stderr) = cargo(&krate, &target, &build);
+    assert!(
+        stderr.contains("build-script-build`") && inputs.is_dir(),
+        "a touched source reruns the script, which stores the inputs again:\n{stderr}"
+    );
+    let (_, stderr) = cargo(&krate, &target, &build);
+    assert!(
+        stderr.contains("Fresh simjig-fixture-vtable") && !stderr.contains("build-script-build`"),
+        "the second build reran the build script:\n{stderr}"
+    );
 }

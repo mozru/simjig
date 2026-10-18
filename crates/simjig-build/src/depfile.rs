@@ -1,10 +1,11 @@
-//! Parser for the Make-style dependency file Verilator writes with `--MMD`
-//! (`<obj>/V<prefix>__ver.d`).
+//! Parser for the Make-style dependency files Verilator writes with `--MMD`
+//! (`<obj>/V<prefix>__ver.d`) and C++ compilers write with `-MD` (`<object>.d`).
 //!
-//! The file has one rule, `targets : prerequisites`, possibly split over lines with a
-//! trailing `\`. The prerequisites are every file Verilator read: the sources, every
-//! `` `include ``d file, its own `verilated_std.sv`, and the `verilator_bin` executable.
-//! They drive both `cargo::rerun-if-changed` and the cache key.
+//! Each file has one rule, `targets : prerequisites` (compilers write `target: ...`),
+//! possibly split over lines with a trailing `\`. Verilator's prerequisites are every file
+//! it read: the sources, every `` `include ``d file, its own `verilated_std.sv`, and the
+//! `verilator_bin` executable; a compiler's are the source and every header it read.
+//! They drive both `cargo::rerun-if-changed` and the cache keys.
 
 use std::path::{Path, PathBuf};
 
@@ -28,10 +29,11 @@ pub(crate) fn parse(path: &Path, text: &str) -> Result<Vec<PathBuf>, Error> {
             "expected exactly one `targets : prerequisites` rule",
         ));
     }
-    // Verilator writes ` : ` with spaces; plain `:` could be part of a path.
+    // Verilator writes ` : `, compilers `: `; a `:` not followed by a space could be part
+    // of a path.
     let (_, prereqs) = rule
-        .split_once(" : ")
-        .ok_or_else(|| err(1, "missing ` : ` between targets and prerequisites"))?;
+        .split_once(": ")
+        .ok_or_else(|| err(1, "missing `: ` between targets and prerequisites"))?;
     let mut deps: Vec<PathBuf> = Vec::new();
     for word in split_words(prereqs) {
         let p = PathBuf::from(word);
@@ -96,6 +98,16 @@ mod tests {
     }
 
     #[test]
+    fn compiler_shape() {
+        // Shape of a clang 21 `-MD` output.
+        let text = "/w/1a2b-near.o: /src/near.cpp \\\n  /src/near.h /sdk/usr/include/stdio.h\n";
+        assert_eq!(
+            deps(text),
+            ["/src/near.cpp", "/src/near.h", "/sdk/usr/include/stdio.h"]
+        );
+    }
+
+    #[test]
     fn continuation_lines_and_escaped_spaces() {
         let text = "t1 t2 : a.sv \\\n  b\\ c.svh \\\n  d.sv\n";
         assert_eq!(deps(text), ["a.sv", "b c.svh", "d.sv"]);
@@ -107,7 +119,7 @@ mod tests {
         assert_eq!(msg(""), "x.d:0: empty dependency file");
         assert_eq!(
             msg("a b c\n"),
-            "x.d:1: missing ` : ` between targets and prerequisites"
+            "x.d:1: missing `: ` between targets and prerequisites"
         );
         assert_eq!(
             msg("a : b\nc : d\n"),

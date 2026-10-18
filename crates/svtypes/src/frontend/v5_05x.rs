@@ -22,9 +22,9 @@ use serde_json::Value;
 use super::json::{Index, Node};
 use crate::error::{Error, Result};
 use crate::ir::{
-    Design, Direction, Field, IfacePort, Modport, ModportMember, Module, ModuleId, ModuleKind,
-    Package, Param, ParamValue, Port, Producer, Range, SCHEMA, Storage, TimeExp, Type, TypeId,
-    TypeKind, Unrepresentable, Variant,
+    Design, Direction, Field, GenerateBlock, IfacePort, Instance, Modport, ModportMember, Module,
+    ModuleId, ModuleKind, Package, Param, ParamValue, Port, Producer, Range, SCHEMA, Storage,
+    TimeExp, Type, TypeId, TypeKind, Unrepresentable, Variable, VariableKind, Variant,
 };
 use crate::literal::{self, Literal};
 use crate::width;
@@ -99,6 +99,14 @@ struct Unit<'a> {
     node: Node<'a>,
     id: ModuleId,
     level: i64,
+}
+
+/// The hierarchy items of a module body or generate block, while decoding it.
+#[derive(Default)]
+struct Scope {
+    instances: Vec<Instance>,
+    variables: Vec<Variable>,
+    generate_blocks: Vec<GenerateBlock>,
 }
 
 /// Where a `typedef` was declared.
@@ -210,8 +218,13 @@ impl<'a> Decoder<'a> {
             ports: Vec::new(),
             iface_ports: Vec::new(),
             modports: Vec::new(),
+            instances: Vec::new(),
+            variables: Vec::new(),
+            generate_blocks: Vec::new(),
         };
+        let mut scope = Scope::default();
         for stmt in self.ix.children(&unit.node, "stmtsp")? {
+            self.hierarchy_item(&stmt, &mut scope)?;
             match Index::kind(&stmt) {
                 // A port is any non-interface VAR with a direction: `inout wire` ports
                 // have varType WIRE, not PORT.
@@ -234,7 +247,62 @@ impl<'a> Decoder<'a> {
                 _ => {}
             }
         }
+        m.instances = scope.instances;
+        m.variables = scope.variables;
+        m.generate_blocks = scope.generate_blocks;
         Ok(m)
+    }
+
+    /// Records `stmt` in the scope's instances, variables or generate blocks, if it is one
+    /// of them. A cell whose unit is not a decoded module or interface (none in 5.052's
+    /// elaborated output) is left out rather than failing the design: the hierarchy only
+    /// serves diagnostics.
+    ///
+    /// Generate blocks (`GENBLOCK`, items in `itemsp`) are already elaborated at this
+    /// stage (the dump runs after `V3Width`, before `V3Begin`): a false generate-if is gone,
+    /// an unnamed block has its `genblk<N>` name and a generate-for loop is unrolled into
+    /// one block per iteration named `label[i]`, after an `implied` block of the same
+    /// label that holds only the genvar, which is skipped.
+    fn hierarchy_item(&self, stmt: &Node<'a>, scope: &mut Scope) -> Result<()> {
+        let ix = &self.ix;
+        match Index::kind(stmt) {
+            "CELL" => {
+                if let Some(&module) = ix.opt_str(stmt, "modp")?.and_then(|a| self.unit_ids.get(a))
+                {
+                    scope.instances.push(Instance {
+                        name: decode_name(ix.str(stmt, "origName")?),
+                        module,
+                        array: !ix.children(stmt, "rangep")?.is_empty(),
+                    });
+                }
+            }
+            "VAR" => {
+                let kind = match ix.str(stmt, "varType")? {
+                    "IFACEREF" | "GENVAR" => return Ok(()),
+                    "GPARAM" => VariableKind::Parameter,
+                    "LPARAM" => VariableKind::Localparam,
+                    _ => VariableKind::Signal,
+                };
+                scope.variables.push(Variable {
+                    name: decode_name(ix.str(stmt, "origName")?),
+                    kind,
+                });
+            }
+            "GENBLOCK" if !ix.flag(stmt, "implied")? => {
+                let mut inner = Scope::default();
+                for item in ix.children(stmt, "itemsp")? {
+                    self.hierarchy_item(&item, &mut inner)?;
+                }
+                scope.generate_blocks.push(GenerateBlock {
+                    name: decode_name(ix.str(stmt, "name")?),
+                    instances: inner.instances,
+                    variables: inner.variables,
+                    generate_blocks: inner.generate_blocks,
+                });
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Decodes a parameter; `Ok(Err(..))` for one whose value the IR cannot hold (an X or
@@ -352,7 +420,9 @@ impl<'a> Decoder<'a> {
         self.ix.check_fields(var, VAR_FIELDS)?;
         let name = self.ix.str(var, "name")?.to_owned();
         let dir = self.direction(var)?;
-        let ty = self.ty(&self.ix.deref(var, "dtypep")?)?;
+        let ty = self
+            .ty(&self.ix.deref(var, "dtypep")?)
+            .map_err(|e| self.port_error(var, &name, e))?;
         let storage = self
             .storage(ty)
             .map_err(|e| self.ix.err(var, format!("port `{name}`: {e}")))?;
@@ -370,6 +440,25 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    /// A type error reached from port `name`, reworded to lead with the port and its
+    /// declaration (the type node may sit anywhere in the type table).
+    fn port_error(&self, var: &Node<'a>, name: &str, e: Error) -> Error {
+        match e {
+            Error::Json {
+                path,
+                source_loc,
+                version,
+                message,
+            } => Error::Json {
+                path,
+                source_loc: self.ix.source_loc(var).or(source_loc),
+                version,
+                message: format!("port `{name}`: {message}"),
+            },
+            other => other,
+        }
+    }
+
     fn storage(&self, ty: TypeId) -> std::result::Result<Storage, String> {
         let t = &self.types[ty.index()];
         match (&t.kind, t.width) {
@@ -378,7 +467,11 @@ impl<'a> Decoder<'a> {
                 len: range.count().map_err(|e| e.0)?,
             }),
             (_, Some(w)) => width::packed_storage(w).map_err(|e| e.0),
-            (_, None) => Err("unpacked structs and unions have no supported C++ storage".into()),
+            (_, None) => Err(
+                "unpacked structs and unions have no supported C++ storage; declare the type \
+                 `packed`"
+                    .into(),
+            ),
         }
     }
 

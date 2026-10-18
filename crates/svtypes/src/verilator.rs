@@ -201,12 +201,12 @@ fn run(cmd: &mut Command) -> Result<Output> {
     Err(Error::Tool {
         command: line,
         status: out.status.code(),
-        stderr: excerpt(&text, 40),
+        stderr: text.into_owned(),
     })
 }
 
 /// The last `lines` lines of `text`.
-fn excerpt(text: &str, lines: usize) -> String {
+pub(crate) fn excerpt(text: &str, lines: usize) -> String {
     let all: Vec<&str> = text.lines().collect();
     let skip = all.len().saturating_sub(lines);
     let tail = all[skip..].join("\n");

@@ -30,7 +30,8 @@
 //   the simulation).
 // - Each SIMJIG_PROBE (an internal public_flat variable) is looked up in Verilator's scope
 //   table, which knows its address whether or not its module was inlined, and is checked
-//   there for storage class, exact width and packing (find_probe); a mismatch fails create.
+//   there for storage class, exact width, packing and access (find_probe: a writable probe
+//   must be public_flat_rw and not a parameter); a mismatch fails create.
 // - No model code runs outside simjig::guard().
 // - Trace and coverage code is compiled only for kTraceFst / kCoverage models (`if constexpr`
 //   in templates), so a model without them needs neither verilated_fst_c.cpp nor
@@ -53,25 +54,6 @@
 #include <vector>
 
 namespace simjig {
-
-// Verilator's storage rule (verilated_types.h: CData..QData, VlWide<N>).
-constexpr uint8_t storage_for_width(uint32_t width) {
-    return width <= 8    ? SIMJIG_STORAGE_C
-           : width <= 16 ? SIMJIG_STORAGE_S
-           : width <= 32 ? SIMJIG_STORAGE_I
-           : width <= 64 ? SIMJIG_STORAGE_Q
-                         : SIMJIG_STORAGE_W;
-}
-
-constexpr uint32_t words_for_width(uint32_t width) { return (width + 31) / 32; }
-
-constexpr size_t storage_bytes(uint32_t width) {
-    return width <= 8    ? 1
-           : width <= 16 ? 2
-           : width <= 32 ? 4
-           : width <= 64 ? 8
-                         : 4 * static_cast<size_t>(words_for_width(width));
-}
 
 // The storage class of a Verilator member type; undefined for anything else, so binding an
 // unexpected type is a compile error.
@@ -446,11 +428,11 @@ struct Vtable final {
     } while (0)
 
 // Binds one probe: the public_flat variable `var_` of scope `<model name>.<scope_>`, found and
-// checked against `width_` at create (simjig::find_probe throws on a mismatch).
+// checked against `width_` and `access_` at create (simjig::find_probe throws on a mismatch).
 #define SIMJIG_PROBE(table_, model_, scope_, var_, name_, width_, access_)                   \
     (table_).add((width_), SIMJIG_DIR_INTERNAL, (access_), (name_),                          \
                  ::simjig::find_probe(*(model_).contextp(), (model_).name(), (scope_), (var_),  \
-                                      (name_), (width_)))
+                                      (name_), (width_), (access_)))
 
 // Exports the model's single C symbol, `simjig_vtable_<PREFIX>`.
 #define SIMJIG_EXPORT_VTABLE(PREFIX, TRAITS)                                     \

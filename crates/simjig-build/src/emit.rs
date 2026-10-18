@@ -10,9 +10,14 @@
 //! | Output | Written to | Used as |
 //! |---|---|---|
 //! | [`Emitted::rust`] | `OUT_DIR/simjig/<name>.rs` | `include!`d by the user crate |
-//! | [`Emitted::shim_cpp`] | `OUT_DIR/simjig/<prefix>_shim.cpp` | compiled into the model archive |
+//! | [`Emitted::shim_cpp`] | cache `inputs/<hash>/<prefix>_shim.cpp` | compiled into the model archive |
 //! | [`Emitted::vlt`] | cache `inputs/<hash>/<prefix>.vlt` | Verilator control file |
 //! | [`Emitted::layout_check`] | cache `inputs/<hash>/<module>.sv` | `--lint-only` run before verilating |
+//!
+//! The shim is content-addressed like the Verilator inputs, so its path, which the model
+//! archive's key and debug information carry, is the same in every target directory:
+//! crates (and target directories) that build the same configuration share one model
+//! archive.
 //!
 //! The header cross-check compares the generated header with [`Emitted::ports`] when the
 //! emitter supplies them, else with the IR top module's ports ([`ir_ports`]).
@@ -28,6 +33,7 @@ use svtypes::ir::{Design, Direction, TypeKind};
 use svtypes::width::{WidthError, packed_storage};
 
 use crate::Error;
+use crate::cache::Cache;
 use crate::codegen::{self, RustOptions, ShimOptions};
 use crate::dut::{DutConfig, GeneratedInput};
 use crate::header::{HeaderPort, PortDir};
@@ -53,6 +59,28 @@ pub struct Emitted {
     pub layout_check: Option<SvModule>,
     /// The ports the model header must declare; `None` means the IR top's ports.
     pub ports: Option<Vec<HeaderPort>>,
+    /// The probes the shim binds (`SIMJIG_PROBE`). After verilating, the pipeline checks
+    /// each against Verilator's scope table (width, packing, access), so a mismatch fails
+    /// the build rather than the first `create`.
+    pub probes: Vec<ProbeSite>,
+}
+
+/// A probe as the shim binds it, for the build-time check against the scope table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeSite {
+    /// The probe's path as declared (`counter.u_core.state`), for messages.
+    pub path: String,
+    /// The declaring module, for messages.
+    pub module: String,
+    /// The scope as Verilator names it, without the model's instance name
+    /// ([`codegen::SignalTarget::Probe::scope`]).
+    pub scope: String,
+    /// The variable.
+    pub var: String,
+    /// The bits the shim binds.
+    pub width: u32,
+    /// Bound for writing (`public_flat_rw`).
+    pub writable: bool,
 }
 
 /// A generated SystemVerilog module.
@@ -73,10 +101,7 @@ pub fn noop_emitter(_design: &Design, _config: &DutConfig) -> Result<Emitted, Er
 /// The code generator: [`codegen::lower`] once, then the Rust bindings, the shim, the
 /// `.vlt` file and the layout check from the same [`codegen::Lowered`].
 pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
-    let fail = |source| Error::Codegen {
-        dut: config.name.clone(),
-        source,
-    };
+    let fail = |source| Error::codegen(&config.name, source);
     let lowered = codegen::lower(design, &config.codegen_config()).map_err(fail)?;
     let features = config.features();
     let opts = ShimOptions {
@@ -98,7 +123,26 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
             contents: codegen::emit_layout_check(&lowered),
         }),
         ports: None,
+        probes: probe_sites(&lowered),
     })
+}
+
+fn probe_sites(lowered: &codegen::Lowered) -> Vec<ProbeSite> {
+    lowered
+        .signals
+        .iter()
+        .filter_map(|s| match &s.target {
+            codegen::SignalTarget::Probe { module, var, scope } => Some(ProbeSite {
+                path: s.name.clone(),
+                module: module.clone(),
+                scope: scope.clone(),
+                var: var.clone(),
+                width: s.width,
+                writable: s.access == codegen::Access::PublicRw,
+            }),
+            codegen::SignalTarget::Port { .. } => None,
+        })
+        .collect()
 }
 
 /// The emitter [`crate::Dut`] uses unless [`crate::Dut::emitter`] replaces it.
@@ -162,30 +206,39 @@ pub(crate) struct Placed {
     pub(crate) layout_check: Option<SvModule>,
     /// The ports the header must declare.
     pub(crate) ports: Vec<HeaderPort>,
+    /// The probes the shim binds.
+    pub(crate) probes: Vec<ProbeSite>,
 }
 
-/// Writes the files that live in `OUT_DIR` and collects the rest (see the module docs).
+/// Writes the files that live in `OUT_DIR` and the shim, and collects the rest (see the
+/// module docs).
 pub(crate) fn place(
     emitted: Emitted,
     design: &Design,
     config: &DutConfig,
     out_dir: &Path,
+    cache: &Cache,
 ) -> Result<Placed, Error> {
     let prefix = config.prefix();
-    let dir = out_dir.join("simjig");
-    let write = |name: String, text: &str| -> Result<PathBuf, Error> {
-        std::fs::create_dir_all(&dir).map_err(Error::io("creating", &dir))?;
+    let dir = generated_dir(out_dir);
+    let write = |dir: &Path, name: String, text: &str| -> Result<PathBuf, Error> {
+        std::fs::create_dir_all(dir).map_err(Error::io("creating", dir))?;
         let path = dir.join(name);
         write_if_changed(&path, text)?;
         Ok(path)
     };
     let rust = emitted
         .rust
-        .map(|r| write(format!("{}.rs", config.name), &r))
+        .map(|r| write(&dir, format!("{}.rs", config.name), &r))
         .transpose()?;
-    let model_sources = emitted
+    let model_sources: Vec<PathBuf> = emitted
         .shim_cpp
-        .map(|s| write(format!("{prefix}_shim.cpp"), &s))
+        .map(|contents| {
+            cache.store_input(&GeneratedInput {
+                file_name: format!("{prefix}_shim.cpp"),
+                contents,
+            })
+        })
         .transpose()?
         .into_iter()
         .collect();
@@ -210,7 +263,13 @@ pub(crate) fn place(
         inputs,
         layout_check: emitted.layout_check,
         ports,
+        probes: emitted.probes,
     })
+}
+
+/// `OUT_DIR/simjig/`: the files simjig generates into `OUT_DIR` (see the module docs).
+pub(crate) fn generated_dir(out_dir: &Path) -> PathBuf {
+    out_dir.join("simjig")
 }
 
 /// Rewriting an identical file would bump its mtime and make Cargo rebuild whatever

@@ -14,19 +14,38 @@ pub enum Error {
         /// What is unsupported and what to do instead.
         reason: String,
     },
+    /// A probe does not match the design (its path, module, type or access).
+    Probe {
+        /// The probe's path, as configured.
+        path: String,
+        /// What is wrong and how to fix it.
+        reason: String,
+    },
     /// The configuration does not match the design.
     Config {
-        /// The configuration entry, e.g. `probe top.u.x` or `bind_iface(in_bus)`.
+        /// The configuration entry, e.g. `bind_iface(in_bus)` or `wrapper simjig_wrap_top`.
         item: String,
         /// What is wrong and how to fix it.
         reason: String,
     },
 }
 
+/// The reason for an IR construct this `simjig-build` does not know: the IR's enums are
+/// `#[non_exhaustive]`, and a newer `svtypes` may produce a kind added after this release.
+pub(crate) const UNKNOWN_IR_KIND: &str = "a kind of IR construct this simjig-build does not know (from a newer svtypes); update \
+     simjig-build";
+
 impl Error {
     pub(crate) fn unsupported(item: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::Unsupported {
             item: item.into(),
+            reason: reason.into(),
+        }
+    }
+
+    pub(crate) fn probe(path: &str, reason: impl Into<String>) -> Self {
+        Self::Probe {
+            path: path.to_owned(),
             reason: reason.into(),
         }
     }
@@ -45,6 +64,7 @@ impl fmt::Display for Error {
             Self::Unsupported { item, reason } => {
                 write!(f, "codegen: {item}: unsupported: {reason}")
             }
+            Self::Probe { path, reason } => write!(f, "codegen: probe {path}: {reason}"),
             Self::Config { item, reason } => write!(f, "codegen: {item}: {reason}"),
         }
     }

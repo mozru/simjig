@@ -8,11 +8,22 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, PoisonError};
 
 use svtypes::toolchain::{self, Search, Verdict};
 use svtypes::version::VerilatorVersion;
 
 use crate::{BuildEnv, Error};
+
+/// What [`Verilator::locate`] depends on: `OUT_DIR` (one build script), then
+/// `SIMJIG_VERILATOR`, `VERILATOR_ROOT`, `PATH` and `SIMJIG_UNTESTED_VERILATOR`.
+type LocateKey = (
+    PathBuf,
+    Option<PathBuf>,
+    Option<PathBuf>,
+    Option<OsString>,
+    bool,
+);
 
 /// A located, version-checked Verilator installation.
 #[derive(Debug, Clone)]
@@ -39,7 +50,34 @@ impl Verilator {
     /// (`SIMJIG_VERILATOR`, then `$VERILATOR_ROOT/bin/verilator`, then `PATH`; a
     /// supported release, or any release with `SIMJIG_UNTESTED_VERILATOR=1`), then asks
     /// it for its include directory.
+    ///
+    /// The answer is kept for the rest of the process, per `OUT_DIR` and search inputs:
+    /// a build script builds every DUT with the same Verilator, and asking it costs two
+    /// processes.
     pub fn locate(env: &BuildEnv) -> Result<Self, Error> {
+        static FOUND: Mutex<Vec<(LocateKey, Verilator)>> = Mutex::new(Vec::new());
+        let key = (
+            env.out_dir.clone(),
+            env.simjig_verilator.clone(),
+            env.verilator_root.clone(),
+            env.path.clone(),
+            env.untested_verilator,
+        );
+        // A panic while holding the lock leaves the list itself consistent.
+        let found = FOUND.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((_, v)) = found.iter().find(|(k, _)| *k == key) {
+            return Ok(v.clone());
+        }
+        drop(found);
+        let v = Self::locate_uncached(env)?;
+        FOUND
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((key, v.clone()));
+        Ok(v)
+    }
+
+    fn locate_uncached(env: &BuildEnv) -> Result<Self, Error> {
         let search = Search {
             simjig_verilator: env.simjig_verilator.clone(),
             verilator_root: env.verilator_root.clone(),
@@ -56,7 +94,10 @@ impl Verilator {
             verilator_root: env.verilator_root.clone(),
             untested: false,
         };
-        let out = run(found.command().arg("--version"))?;
+        let out = run(
+            found.command().arg("--version"),
+            "asking Verilator for its version",
+        )?;
         let version_line = String::from_utf8_lossy(&out.stdout)
             .lines()
             .next()
@@ -74,7 +115,10 @@ impl Verilator {
             }
         };
         found.untested = untested;
-        let root = run(found.command().args(["--getenv", "VERILATOR_ROOT"]))?;
+        let root = run(
+            found.command().args(["--getenv", "VERILATOR_ROOT"]),
+            "asking Verilator for VERILATOR_ROOT",
+        )?;
         let root = PathBuf::from(String::from_utf8_lossy(&root.stdout).trim());
         found.version = version;
         found.version_line = version_line;
@@ -119,8 +163,8 @@ fn quote(arg: &str) -> String {
     }
 }
 
-/// Runs a command to completion; a non-zero exit is an [`Error::Command`].
-pub(crate) fn run(cmd: &mut Command) -> Result<Output, Error> {
+/// Runs a command to completion; a non-zero exit is an [`Error::Command`] headed `what`.
+pub(crate) fn run(cmd: &mut Command, what: &str) -> Result<Output, Error> {
     let line = display_command(cmd);
     let out = cmd.output().map_err(|source| Error::Spawn {
         command: line.clone(),
@@ -129,7 +173,7 @@ pub(crate) fn run(cmd: &mut Command) -> Result<Output, Error> {
     if out.status.success() {
         Ok(out)
     } else {
-        Err(Error::command(line, &out))
+        Err(Error::command(what, line, &out))
     }
 }
 

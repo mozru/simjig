@@ -12,7 +12,7 @@ use crate::dut::{DutConfig, GeneratedInput};
 use crate::emit::SvModule;
 use crate::hash::KeyHasher;
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error, script};
+use crate::{BuildEnv, Error, iface_diag, script};
 
 /// Makes sure no two configurations share a model prefix.
 ///
@@ -85,7 +85,11 @@ pub(crate) fn design_ir(
 ) -> Result<Ir, Error> {
     let json_pass = |top: &str, extra: &[PathBuf]| {
         svtypes::verilator::json_pass(&config.json_pass_opts(top, generated, extra, verilator))
-            .map_err(|e| Error::json_pass(&config.name, e))
+            .map_err(|e| {
+                iface_diag::unbound_iface_ports(config, &e)
+                    .or_else(|| iface_diag::binding_mistakes(config, &e))
+                    .unwrap_or_else(|| Error::json_pass(&config.name, e))
+            })
     };
     let Some(iface) = config.iface_top() else {
         return Ok(Ir {
@@ -94,10 +98,7 @@ pub(crate) fn design_ir(
             top: top.to_owned(),
         });
     };
-    let codegen_err = |source| Error::Codegen {
-        dut: config.name.clone(),
-        source,
-    };
+    let codegen_err = |source| Error::codegen(&config.name, source);
     let elab_top = codegen::elab_module(top);
     let elab = cache.store_input(&GeneratedInput {
         file_name: format!("{elab_top}.sv"),
@@ -136,7 +137,8 @@ pub(crate) fn layout_check(
     })?;
     let mut cmd = verilator.command();
     cmd.args(layout_check_args(config, generated, &check.module, &file));
-    verilator::run(&mut cmd).map(|_| ())
+    let what = format!("the layout check of DUT `{}`", config.name);
+    verilator::run(&mut cmd, &what).map(|_| ())
 }
 
 fn layout_check_args(

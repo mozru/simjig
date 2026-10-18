@@ -18,6 +18,7 @@
 
 use svtypes::ir::{Design, TypeId, TypeKind};
 
+use super::super::error::UNKNOWN_IR_KIND;
 use super::super::{Error, LayoutTypedef};
 
 /// Who the spelling is for.
@@ -167,6 +168,7 @@ fn base_and_dims(
                 "unpacked aggregates inside packed types do not exist in SystemVerilog",
             ));
         }
+        _ => return Err(Error::unsupported(describe(design, id), UNKNOWN_IR_KIND)),
     })
 }
 

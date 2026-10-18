@@ -16,6 +16,7 @@
 //! configuration, cached) and the model with `cc`, and emit `cargo::` directives.
 #![forbid(unsafe_code)]
 
+mod archive;
 mod cache;
 pub mod codegen;
 mod compile;
@@ -24,17 +25,22 @@ mod dut;
 pub mod emit;
 mod env;
 mod error;
+mod front;
 mod hash;
 mod header;
+mod iface_diag;
+mod manifest;
+mod optfile;
 mod pipeline;
 mod runtime;
 mod script;
+mod syms;
 mod verilator;
 
 pub use codegen::{IfaceBinding, Probe, ProbeAccess, ProbeType};
 pub use compile::CppRecipe;
 pub use dut::{Built, CacheStatus, Dut, DutConfig, Features, GeneratedInput};
-pub use emit::{Emitted, Emitter, SvModule, codegen_emitter, ir_ports, noop_emitter};
+pub use emit::{Emitted, Emitter, ProbeSite, SvModule, codegen_emitter, ir_ports, noop_emitter};
 pub use env::BuildEnv;
 pub use error::Error;
 pub use header::{

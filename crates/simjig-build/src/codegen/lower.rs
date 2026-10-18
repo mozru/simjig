@@ -11,6 +11,7 @@
 //!
 //! Type names are decided in [`types`], identifier rules in [`names`](super::names).
 
+mod path;
 mod sv;
 mod types;
 mod wrapper;
@@ -18,6 +19,7 @@ mod wrapper;
 use svtypes::ir::{Design, Param, ParamValue, Storage, TypeId, TypeKind};
 use svtypes::width::packed_storage;
 
+use self::path::check_probe_path;
 use self::sv::{LayoutSpeller, nameable};
 use self::types::{Root, Types, Use, bits, lower_types};
 use self::wrapper::dut_module;
@@ -36,8 +38,8 @@ use super::{
 ///
 /// # Errors
 /// [`Error::Unsupported`] for IR constructs without a generated form (unpacked struct
-/// ports, enums above 128 bits, ...); [`Error::Config`] when probes or interface bindings
-/// do not match the design.
+/// ports, enums above 128 bits, ...); [`Error::Probe`] when a probe does not match the
+/// design (its path, module or access); [`Error::Config`] when interface bindings do not.
 pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> {
     let top = design.top_module();
     let wrapper = config
@@ -135,21 +137,13 @@ fn roots(design: &Design, config: &CodegenConfig) -> Result<Vec<Root>, Error> {
 fn probe_type(design: &Design, probe: &Probe) -> Result<Option<TypeId>, Error> {
     match &probe.ty {
         ProbeType::Bits { width } if *width >= 1 => Ok(None),
-        ProbeType::Bits { .. } => Err(Error::config(
-            format!("probe {}", probe.path),
-            "width must be at least 1",
-        )),
+        ProbeType::Bits { .. } => Err(Error::probe(&probe.path, "width must be at least 1")),
         ProbeType::Named(name) => design
             .types
             .iter()
             .position(|t| t.name.as_deref() == Some(name))
             .map(|i| Some(TypeId(u32::try_from(i).unwrap_or(u32::MAX))))
-            .ok_or_else(|| {
-                Error::config(
-                    format!("probe {}", probe.path),
-                    format!("no type named `{name}` in the IR"),
-                )
-            }),
+            .ok_or_else(|| Error::probe(&probe.path, format!("no type named `{name}` in the IR"))),
     }
 }
 
@@ -310,33 +304,13 @@ fn lower_probe(
 ) -> Result<(Signal, String), Error> {
     let item = || format!("probe {}", probe.path);
     let segments: Vec<&str> = probe.path.split('.').collect();
-    let (what, dut) = match wrapper {
-        Some(w) => ("the DUT", w.dut.as_str()),
-        None => ("the top module", design.top_module().orig_name.as_str()),
-    };
-    if segments.len() < 2 || segments[0] != dut {
-        return Err(Error::config(
-            item(),
-            format!("the path must start with {what} `{dut}`, e.g. `{dut}.u_core.state`"),
-        ));
-    }
-    if let Some(bad) = segments.iter().find(|s| !is_simple_ident(s)) {
-        return Err(Error::config(
-            item(),
-            format!("`{bad}` is not a plain identifier"),
-        ));
-    }
-    if !design.modules.iter().any(|m| m.orig_name == probe.module) {
-        return Err(Error::config(
-            item(),
-            format!("no module `{}` in the design", probe.module),
-        ));
-    }
+    check_probe_path(design, probe, &segments, wrapper)
+        .map_err(|why| Error::probe(&probe.path, why))?;
     let (ty, width) = match (probe_type(design, probe)?, &probe.ty) {
         (Some(id), _) => (types.rust(design, id), design.ty(id).width.unwrap_or(0)),
         (None, ProbeType::Bits { width }) => (bits(*width), *width),
         (None, ProbeType::Named(_)) => {
-            return Err(Error::config(item(), "internal: unresolved type"));
+            return Err(Error::probe(&probe.path, "internal: unresolved type"));
         }
     };
     if width == 0 {
@@ -370,12 +344,6 @@ fn lower_probe(
         },
     };
     Ok((signal, segments[1..].join("_")))
-}
-
-/// `[A-Za-z_][A-Za-z0-9_]*`.
-fn is_simple_ident(s: &str) -> bool {
-    s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Package parameters, one group per package that has any.
@@ -425,6 +393,12 @@ fn lower_const(
             }
             _ => int_const(lit),
         },
+        _ => {
+            return Err(Error::unsupported(
+                format!("parameter {}", param.name),
+                super::error::UNKNOWN_IR_KIND,
+            ));
+        }
     };
     Ok(Const {
         name: ns.claim(&screaming(&param.name)),
@@ -610,10 +584,5 @@ mod tests {
         assert_eq!(real_literal("3").as_deref(), Some("3.0"));
         assert_eq!(real_literal("1e-3").as_deref(), Some("1e-3"));
         assert_eq!(real_literal("inf"), None);
-    }
-
-    #[test]
-    fn probe_segments_are_plain_identifiers() {
-        assert!(is_simple_ident("_x1") && !is_simple_ident("1x") && !is_simple_ident("a$b"));
     }
 }

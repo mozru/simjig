@@ -13,13 +13,26 @@ use simjig_build::{
 
 use crate::support::{Sandbox, dut};
 
-/// The model archive of `built` exports its vtable symbol.
-fn exports_vtable(env_out: &Path, built: &Built) -> bool {
-    let archive = env_out.join(format!(
-        "simjig-{p}/libsimjig_model_{p}.a",
-        p = built.prefix
-    ));
-    let nm = Command::new("nm").arg(&archive).output().unwrap();
+/// The model archive of `built` (in the shared cache, named in its link directives)
+/// exports its vtable symbol.
+fn exports_vtable(cache: &Path, built: &Built) -> bool {
+    let name = format!("libsimjig_model_{}_", built.prefix);
+    let archive = built
+        .directives
+        .iter()
+        .filter_map(|d| d.strip_prefix("cargo::rustc-link-arg="))
+        .map(Path::new)
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(&name))
+        })
+        .unwrap_or_else(|| panic!("no model archive in {:?}", built.directives));
+    assert!(
+        archive.starts_with(cache.join("archives")),
+        "{}",
+        archive.display()
+    );
+    let nm = Command::new("nm").arg(archive).output().unwrap();
     String::from_utf8_lossy(&nm.stdout).contains(&format!("simjig_vtable_{}", built.prefix))
 }
 
@@ -49,16 +62,20 @@ fn generated_files_reach_out_dir_verilator_and_the_compiler() {
         rust.contains("pub struct Beat"),
         "the package struct: {rust}"
     );
-    let shim = env
-        .out_dir
-        .join(format!("simjig/{}_shim.cpp", built.prefix));
+    // The shim is content-addressed in the cache's `inputs/<hash>/`.
+    let shim_name = format!("{}_shim.cpp", built.prefix);
+    let shim = std::fs::read_dir(env.cache_dir().join("inputs"))
+        .unwrap()
+        .map(|e| e.unwrap().path().join(&shim_name))
+        .find(|p| p.is_file())
+        .expect("the shim in the cache");
     let shim = std::fs::read_to_string(shim).unwrap();
     // The probe is found at create in the scope table that the `.vlt` fills.
     assert!(
         shim.contains(r#"SIMJIG_PROBE(t, m, "struct_pipe", "s1_valid""#),
         "{shim}"
     );
-    assert!(exports_vtable(&env.out_dir, &built));
+    assert!(exports_vtable(&env.cache_dir(), &built));
 }
 
 #[test]
@@ -83,7 +100,7 @@ fn an_interface_ported_dut_is_built_through_the_generated_wrapper() {
         names.contains(&"in_bus_valid") && names.contains(&"out_bus_data"),
         "{names:?}"
     );
-    assert!(exports_vtable(&env.out_dir, &built));
+    assert!(exports_vtable(&env.cache_dir(), &built));
 }
 
 fn failing_layout(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
@@ -129,12 +146,13 @@ fn codegen_errors_name_the_dut() {
         )
         .build_in(&s.env())
         .unwrap_err();
-    assert!(matches!(err, Error::Codegen { .. }), "{err}");
-    // The cause is the `source()`, not part of the message, so a reporter that walks
-    // the chain prints it once.
-    assert_eq!(err.to_string(), "generating code for DUT `inv`");
-    let source = std::error::Error::source(&err).expect("the codegen error");
-    assert!(source.to_string().starts_with("codegen: "), "{source}");
+    // A probe mistake reads like the probe checks after verilating (`Error::Config`).
+    assert!(matches!(err, Error::Config { .. }), "{err}");
+    assert_eq!(
+        err.to_string(),
+        "invalid DUT `inv` configuration: probe `inv.nope` (declared in build.rs): no type \
+         named `no::such_t` in the IR"
+    );
 }
 
 /// The header is checked against the IR's ports; also compare them here, sorted.

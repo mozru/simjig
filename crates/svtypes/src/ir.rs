@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::literal::Literal;
 
 /// Version of the serialized IR. Bumped on every change to the JSON form.
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 4;
 
 /// An elaborated design: types, modules and packages, as seen by one producer run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +172,7 @@ pub struct Type {
 /// The structure of a [`Type`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum TypeKind {
     /// An integral vector (`logic [7:0]`, `int`, `bit`).
     Bits {
@@ -256,7 +257,21 @@ pub struct Variant {
 }
 
 /// Whether a design unit is a module or an interface.
+///
+/// Like the IR's other enums that may grow, it is `#[non_exhaustive]`: a `match` outside
+/// `svtypes` needs a wildcard arm, so a new kind (a `program`, say) is not a breaking
+/// change.
+///
+/// ```compile_fail,E0004
+/// fn keyword(kind: svtypes::ir::ModuleKind) -> &'static str {
+///     match kind {
+///         svtypes::ir::ModuleKind::Module => "module",
+///         svtypes::ir::ModuleKind::Interface => "interface",
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ModuleKind {
     /// `module`.
     Module,
@@ -290,6 +305,76 @@ pub struct Module {
     pub iface_ports: Vec<IfacePort>,
     /// Modports, for an interface.
     pub modports: Vec<Modport>,
+    /// Module and interface instances declared directly in the body, in declaration order.
+    /// Instances inside generate blocks are in [`Module::generate_blocks`]. Omitted from
+    /// the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<Instance>,
+    /// Variables declared directly in the body (ports, signals, parameters, localparams),
+    /// in declaration order, without interface ports and without variables of generate
+    /// blocks, tasks or functions. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<Variable>,
+    /// The generate blocks of the body that elaboration kept, in declaration order.
+    /// Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generate_blocks: Vec<GenerateBlock>,
+}
+
+/// An elaborated generate block (IEEE 1800-2023 §27): a scope of its module, named as the
+/// producer names the scope. With Verilator, that is the block's label (`g_x`), the
+/// implicit name of an unnamed block (`genblk2`, §27.6), or the label with the iteration's
+/// index for each iteration of a generate-for loop (`g[0]`, §27.4). Its variables belong
+/// to the enclosing module.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerateBlock {
+    /// The scope name.
+    pub name: String,
+    /// Instances declared directly in the block. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<Instance>,
+    /// Variables declared directly in the block (not the loop's genvar). Omitted from the
+    /// JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<Variable>,
+    /// Nested generate blocks. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generate_blocks: Vec<GenerateBlock>,
+}
+
+/// An instance of a module or interface in a module body. With [`Module::variables`] it
+/// lets a build check a hierarchical path (`top.u_core.state`) before the model exists.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Instance {
+    /// Instance name.
+    pub name: String,
+    /// The specialisation instantiated.
+    pub module: ModuleId,
+    /// An array of instances (`leaf u[3:0] (..)`, IEEE 1800-2023 §23.3.3.5). Omitted from
+    /// the JSON when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub array: bool,
+}
+
+/// A variable declared in a module body: only its name and kind, not its type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Variable {
+    /// Variable name.
+    pub name: String,
+    /// What it is.
+    pub kind: VariableKind,
+}
+
+/// The kind of a [`Variable`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum VariableKind {
+    /// A port, net or variable: storage the simulation changes.
+    Signal,
+    /// A `parameter`: a constant, overridable per instance.
+    Parameter,
+    /// A `localparam`: a constant.
+    Localparam,
 }
 
 /// A package with its parameters and named types.
@@ -335,6 +420,7 @@ pub struct Param {
 
 /// The value of a parameter.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ParamValue {
     /// An integral value, as wide and as signed as the parameter's type.
     Bits(Literal),

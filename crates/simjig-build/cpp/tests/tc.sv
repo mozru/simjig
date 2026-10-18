@@ -25,9 +25,15 @@ module tc_sub (
     input  logic d,
     output logic q
 );
+  // Probed read-only and read-write by the probe tests (main.cpp): Verilator stores it as
+  // a `static constexpr` member, so a write through its address would hit read-only memory.
+  localparam logic [7:0] LP = 8'h5a;
   logic r;
+  // Probed as 1 bit by the probe tests: refused, it is not a packed vector.
+  real rv;
   always_ff @(posedge clk) begin
     r <= d;
     q <= r;
+    rv <= rv + 1.0;
   end
 endmodule

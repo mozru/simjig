@@ -1,3 +1,7 @@
 `verilator_config
 // Probe for the plain build: the create-time width check needs public_flat metadata.
 public_flat_rd -module "tc_sub" -var "r"
+// A localparam made public_flat_rw: find_probe must refuse to hand out a writable pointer.
+public_flat_rw -module "tc_sub" -var "LP"
+// A `real`, which Verilator records as 1 bit wide: find_probe must refuse it by its type.
+public_flat_rd -module "tc_sub" -var "rv"

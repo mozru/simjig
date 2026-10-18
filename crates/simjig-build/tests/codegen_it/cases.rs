@@ -203,6 +203,18 @@ pub fn wide() -> Case {
     }
 }
 
+/// `cases/nested_anon`: anonymous structs and unions nested in a package struct and in an
+/// anonymous struct port. Not in [`all`]: only the layout check is about it.
+pub fn nested_anon() -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/nested_anon/design.sv")];
+    Case {
+        name: "nested_anon".into(),
+        design: pass(&sources, "nested_top"),
+        config: CodegenConfig::default(),
+        sources,
+    }
+}
+
 /// Every case: the fixtures, then the Verilator-elaborated ones.
 pub fn all() -> Vec<Case> {
     let mut cases: Vec<Case> = fixture_names().iter().map(|n| fixture(n)).collect();

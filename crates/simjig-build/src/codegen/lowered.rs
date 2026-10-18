@@ -315,15 +315,31 @@ pub struct BundleMember {
 pub struct Layout {
     /// Module name (also the file stem).
     pub module: String,
+    /// Local typedefs naming every spelled-out aggregate, dependencies first.
+    pub typedefs: Vec<LayoutTypedef>,
     /// One check per generated type.
     pub checks: Vec<LayoutCheck>,
+}
+
+/// A typedef declared in the layout-check module for an anonymous or module-local
+/// aggregate, which cannot be named from outside the design.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutTypedef {
+    /// The typedef's name (`simjig_t<type id>`).
+    pub name: String,
+    /// The type it declares (`struct packed { .. }`), naming nested aggregates by their
+    /// typedefs.
+    pub decl: String,
 }
 
 /// What the layout check asserts about one type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutCheck {
-    /// The type, spelled in SystemVerilog (a name, or the structure of an anonymous or
-    /// module-local type).
+    /// The type as the messages name it: its SystemVerilog name, or where an anonymous
+    /// type was first used (`top.in_anon`).
+    pub sv_name: String,
+    /// The type, spelled in SystemVerilog: a nameable type's name, a [`LayoutTypedef`]
+    /// name, or a vector.
     pub sv_type: String,
     /// `$bits` per the IR.
     pub width: u32,

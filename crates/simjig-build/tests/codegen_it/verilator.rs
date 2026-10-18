@@ -67,6 +67,21 @@ fn layout_checks_pass_and_are_lint_clean() {
     }
 }
 
+/// Verilator 5.052 crashes on an aggregate spelled inline in `$bits(..)` when it nests
+/// another one; the check names each aggregate with a local typedef instead.
+#[test]
+fn layout_check_names_nested_anonymous_aggregates() {
+    let case = cases::nested_anon();
+    let lowered = lower(&case.design, &case.config).unwrap();
+    let out = run_layout_check(&case, &lowered);
+    assert!(
+        out.status.success(),
+        "layout check failed:\n{}",
+        stderr(&out)
+    );
+    insta::assert_snapshot!("nested_anon__layout", emit_layout_check(&lowered));
+}
+
 /// Damages a lowering the way a wrong IR would.
 type Corrupt = fn(&mut Lowered);
 

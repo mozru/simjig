@@ -18,7 +18,7 @@ mod wrapper;
 use svtypes::ir::{Design, Param, ParamValue, Storage, TypeId, TypeKind};
 use svtypes::width::packed_storage;
 
-use self::sv::{Mode, nameable, spell_packed};
+use self::sv::{LayoutSpeller, nameable};
 use self::types::{Root, Types, Use, bits, lower_types};
 pub use self::wrapper::{elab_module, lower_wrapper, wrapper_module};
 use super::names::{Namespace, camel, screaming, snake};
@@ -507,6 +507,7 @@ fn real_literal(text: &str) -> Option<String> {
 /// unions, and the constants of nameable enums.
 fn lower_layout(design: &Design, types: &Types) -> Layout {
     let mut checks = Vec::new();
+    let mut speller = LayoutSpeller::default();
     for (id, item) in &types.items {
         if item.storage.is_none() {
             continue;
@@ -518,7 +519,7 @@ fn lower_layout(design: &Design, types: &Types) -> Layout {
             continue;
         }
         // Only an unpacked aggregate fails to spell, and those have no storage.
-        let Ok(sv_type) = spell_packed(design, *id, Mode::Layout) else {
+        let Ok(sv_type) = speller.spell(design, *id) else {
             continue;
         };
         let members = match &ty.kind {
@@ -552,6 +553,7 @@ fn lower_layout(design: &Design, types: &Types) -> Layout {
             _ => Vec::new(),
         };
         checks.push(LayoutCheck {
+            sv_name: item.sv_name.clone(),
             sv_type,
             width: item.width,
             members,
@@ -560,6 +562,7 @@ fn lower_layout(design: &Design, types: &Types) -> Layout {
     }
     Layout {
         module: format!("simjig_layout_{}", design.top_module().orig_name),
+        typedefs: speller.into_typedefs(),
         checks,
     }
 }

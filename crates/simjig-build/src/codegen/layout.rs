@@ -7,6 +7,9 @@
 //!   member's IR range reads all ones through the member, and its complement reads zero;
 //! - each enum constant has its IR value.
 //!
+//! Anonymous and module-local aggregates are declared as local typedefs at the top of the
+//! module and checked through those names (see `lower/sv.rs` for why).
+//!
 //! A mismatch reaches `$fatal` in a generate block. Verilator reports an elaboration-time
 //! `$fatal` as the `USERFATAL` warning, so the check must run with
 //! [`LAYOUT_CHECK_FLAGS`]: under `-Wno-fatal` it would pass silently.
@@ -43,6 +46,9 @@ pub fn emit_layout_check(lowered: &Lowered) -> String {
         "// Elaborate with -Werror-USERFATAL: a $fatal below means the IR and Verilator disagree.",
     );
     w.open(format!("module {};", lowered.layout.module));
+    for t in &lowered.layout.typedefs {
+        w.line(format!("typedef {} {};", t.decl, t.name));
+    }
     for (i, check) in lowered.layout.checks.iter().enumerate() {
         emit_check(&mut w, i, check);
     }
@@ -58,7 +64,8 @@ fn fatal(w: &mut Writer, cond: &str, label: &str, msg: &str) {
 
 fn emit_check(w: &mut Writer, i: usize, check: &LayoutCheck) {
     let (ty, width) = (&check.sv_type, check.width);
-    let shown = ty.replace('"', "'");
+    // Names never hold a quote; the replacement only keeps the message literal intact.
+    let shown = check.sv_name.replace('"', "'");
     w.line("");
     w.line(format!("// {shown}"));
     fatal(

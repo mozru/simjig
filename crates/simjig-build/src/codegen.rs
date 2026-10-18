@@ -33,8 +33,8 @@ pub use layout::{LAYOUT_CHECK_FLAGS, emit_layout_check};
 pub use lower::{elab_module, lower, lower_wrapper, wrapper_module};
 pub use lowered::{
     Access, Bundle, BundleMember, Const, ConstGroup, ConstValue, DutField, EnumVariant, Item,
-    ItemKind, Layout, LayoutCheck, LayoutMember, LayoutValue, Lowered, RustType, Signal,
-    SignalTarget, StructField, UnionView, Wrapper, WrapperIface, WrapperPort,
+    ItemKind, Layout, LayoutCheck, LayoutMember, LayoutTypedef, LayoutValue, Lowered, RustType,
+    Signal, SignalTarget, StructField, UnionView, Wrapper, WrapperIface, WrapperPort,
 };
 pub use rust::emit_rust;
 pub use shim::{ShimOptions, emit_shim};

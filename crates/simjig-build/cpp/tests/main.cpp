@@ -550,6 +550,26 @@ void fork_child_with_an_uncreatable_path_leaves_the_parent_alone() {
     CHECK_EQ(p.end_time, m.time());
 }
 
+// A FATAL poisons the handle with its trace open: every trace call is then refused, and
+// destroy still closes the file, which ends at the last sample before the poisoning.
+void destroying_a_poisoned_handle_closes_its_trace() {
+    const std::string fst = path("poisoned.fst");
+    uint64_t last = 0;
+    {
+        Model m{simjig_vtable_Vtc_full(), "TOP"};
+        CHECK_EQ(m.vt()->trace_open(m.h(), fst.c_str()), SIMJIG_OK);
+        m.reset();
+        for (int i = 0; i < 3; ++i) m.cycle(true);
+        last = m.time();
+        m.h()->rt.poison();  // what a $fatal routed through the runtime leaves behind
+        CHECK_EQ(m.vt()->trace_dump(m.h(), m.time() + 5), SIMJIG_POISONED);
+        CHECK_EQ(m.vt()->trace_close(m.h()), SIMJIG_POISONED);
+    }
+    const Fst f = read_fst(fst);
+    CHECK(f.valid);
+    CHECK_EQ(f.end_time, last);
+}
+
 // The sum of every counter of every run, and (in *counters) how many counters there are.
 uint64_t runs_total(Model& m, size_t* counters = nullptr, size_t* runs = nullptr) {
     size_t n = 0;
@@ -838,6 +858,8 @@ int main(int argc, char** argv) {
         {"trace_from_t_has_no_sample_before_t", trace_from_t_has_no_sample_before_t},
         {"trace_depth_limits_the_signals", trace_depth_limits_the_signals},
         {"destroy_closes_an_open_trace", destroy_closes_an_open_trace},
+        {"destroying_a_poisoned_handle_closes_its_trace",
+         destroying_a_poisoned_handle_closes_its_trace},
         {"unwritable_paths_are_io_errors_not_fatals", unwritable_paths_are_io_errors_not_fatals},
         {"coverage_counters_count_and_zero", coverage_counters_count_and_zero},
         {"coverage_dat_is_written", coverage_dat_is_written},

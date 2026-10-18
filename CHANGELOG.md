@@ -52,6 +52,23 @@ the public API, the generated code or simulation semantics.
   gives every per-DUT test the one `init`, and each sweep member honours its own
   `Dut::x_initial`, which is part of its model digest (cache key), like every other
   `DutConfig` field. The `duts` snapshots gain `init: None`, as every expansion does.
+- A failed `Dut::build` prints its cause first, as `cargo::warning=simjig: ..` lines: its
+  hints, its headline and, when the headline cannot carry it (a fatal `%Warning-` under
+  the default lint), that diagnostic. Cargo shows the warnings above its dump of a failed
+  script's stdout, so the cause now leads the output as well as ending it. A script that
+  handles the error gets the same warning: one that also warns the error's first line,
+  as the README's optional-DUT example used to, now warns it twice and can drop it.
+- A build that stops on a width diagnostic (`%Warning-WIDTHTRUNC` under the default
+  fatal lint, or an `-Werror-WIDTH*` in the JSON pass) of a DUT whose module and a bound
+  interface default a shared parameter to different values starts its error with
+  ``hint: the width error may come from interface `out_if` (bound to `out`) defaulting
+  `W_OUT` to 8 while `gearbox` defaults it to 16; ..``. Before, the interface-parameter
+  warning was printed only by a build that succeeded.
+- The interface-parameter warning and hint also name the change-free way to silence
+  them: binding the interface's own value, `.bind_iface_with_params(.., [("W_OUT", 8)])`.
+- `Error::Command` has a new field, `hints`: what the configuration suggests about the
+  failure, printed first, one `hint:` line each (breaking for a pattern or literal that
+  names every field).
 - `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
   `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
   refused; `--threads 2147483648` is negative and left to Verilator's own error.

@@ -126,7 +126,7 @@ fn a_rerun_compiles_only_the_edited_model() {
 }
 /// A build script that handles `Dut::build`'s error (an optional model) and exits 0
 /// builds: `Dut::build` printed the error as `cargo::error=`, which fails the build even
-/// then.
+/// then. Its cause is warned once, by `Dut::build`, not again by the script.
 #[test]
 fn a_handled_build_error_does_not_fail_the_build() {
     let (krate, target, _lock) = fixture();
@@ -139,8 +139,21 @@ fn a_handled_build_error_does_not_fail_the_build() {
     ];
     // `cargo_with` checks that the build succeeded.
     let (_, stderr) = cargo_with(&krate, &target, &["build", "--offline", "-vv"], &envs);
+    // The cause is warned once, by `Dut::build`, and the script's own warning only says
+    // what it skipped (`-vv` also echoes the raw `cargo::` lines, which are not counted).
+    let warnings: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("warning: "))
+        .collect();
+    let cause = warnings
+        .iter()
+        .filter(|l| l.contains("invalid DUT `optional` configuration"))
+        .count();
+    assert_eq!(cause, 1, "{stderr}");
     assert!(
-        stderr.contains("optional DUT skipped: invalid DUT `optional` configuration"),
+        warnings
+            .iter()
+            .any(|l| l.ends_with(": optional DUT skipped")),
         "{stderr}"
     );
 }

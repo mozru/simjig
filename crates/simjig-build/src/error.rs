@@ -72,11 +72,12 @@ pub enum Error {
         /// Its `--version` output (first line).
         found: String,
     },
-    /// An external tool ran but failed. The message leads with a headline naming what
-    /// failed (``elaborating DUT `x` ``, ``verilating DUT `x` ``) and the first error's
-    /// `file:line:col` and message, then the rest of the stderr excerpt, a hint when one
-    /// applies, and last the command line.
-    #[error("{}", display_command_failure(what, command, *status, stderr, path.as_deref()))]
+    /// An external tool ran but failed. The message leads with the [`hints`](Self::Command::hints),
+    /// if any, then a headline naming what failed (``elaborating DUT `x` ``,
+    /// ``verilating DUT `x` ``) and the first error's `file:line:col` and message, then
+    /// the rest of the stderr excerpt, a hint read from the stderr when one applies, and
+    /// last the command line.
+    #[error("{}", display_command_failure(what, command, *status, stderr, path.as_deref(), hints))]
     Command {
         /// What the run was for, e.g. ``verilating DUT `counter` ``.
         what: String,
@@ -88,6 +89,12 @@ pub enum Error {
         stderr: String,
         /// The source file the tool complained about, when it named one.
         path: Option<PathBuf>,
+        /// What the configuration suggests about the failure, shown first, one `hint:`
+        /// line each: an interface parameter default that differs from the module's
+        /// when the run stopped on a width diagnostic. Boxed so that `Error` stays under
+        /// clippy's `result_large_err` threshold (128 bytes), which a user's function
+        /// returning it would otherwise trip.
+        hints: Box<Vec<String>>,
     },
     /// An external tool could not be started. The OS error is the
     /// [`source`](std::error::Error::source), not part of the message.
@@ -185,6 +192,7 @@ impl Error {
                     path: offending_path(&stderr),
                     stderr: excerpt(&stderr),
                     command,
+                    hints: Box::default(),
                 }
             }
             source => Self::Ir {
@@ -224,8 +232,42 @@ impl Error {
             status: output.status.code(),
             path: offending_path(&stderr),
             stderr: excerpt(&stderr),
+            hints: Box::default(),
         }
     }
+
+    /// The lines that say why the build failed, short enough to print as warnings above
+    /// Cargo's dump of a failed script's stdout: the hints and the headline (the message
+    /// up to its first line that is not a `hint:`), then, for a tool run whose headline
+    /// could not carry the first diagnostic (a fatal `%Warning-`, which Verilator's
+    /// default lint stops on), that diagnostic's line.
+    pub(crate) fn summary(&self) -> Vec<String> {
+        let text = self.to_string();
+        let mut out = Vec::new();
+        for line in text.lines() {
+            out.push(line.to_owned());
+            if !line.starts_with("hint: ") {
+                break;
+            }
+        }
+        if let Self::Command { stderr, .. } = self
+            && first_error(stderr).and_then(parse_error).is_none()
+            && let Some(d) = stderr.lines().find(|l| {
+                (l.starts_with("%Error") || l.starts_with("%Warning-"))
+                    && !l.starts_with("%Error: Exiting due to")
+            })
+        {
+            out.push(d.to_owned());
+        }
+        out
+    }
+}
+
+/// The first `%Error` line of a Verilator `stderr`, which the headline carries.
+fn first_error(stderr: &str) -> Option<&str> {
+    stderr
+        .lines()
+        .find(|l| is_error_line(l) && !l.starts_with("%Error: Exiting due to"))
 }
 
 impl fmt::Debug for Error {
@@ -443,17 +485,17 @@ fn display_command_failure(
     status: Option<i32>,
     stderr: &str,
     path: Option<&Path>,
+    hints: &[String],
 ) -> String {
     let status = status.map_or_else(
         || "killed by a signal".to_owned(),
         |s| format!("exit status: {s}"),
     );
-    // The headline is what a build script reporting a handled failure prints, so it
-    // carries the first error; the excerpt then shows it once, in the headline.
-    let first = stderr
-        .lines()
-        .find(|l| is_error_line(l) && !l.starts_with("%Error: Exiting due to"));
-    let mut out = match first.and_then(parse_error) {
+    // The headline (the first line after any hints) is what a build script reporting a
+    // handled failure prints, so it carries the first error; the excerpt then shows it
+    // once, in the headline.
+    let first = first_error(stderr);
+    let headline = match first.and_then(parse_error) {
         Some((code, Some(loc), msg)) => {
             let code = code.map(|c| format!("{c}: ")).unwrap_or_default();
             format!("{what} failed ({status}) at {loc}: {code}{msg}")
@@ -464,6 +506,13 @@ fn display_command_failure(
         }
         None => format!("{what} failed ({status}){}", on(path)),
     };
+    let mut out = String::new();
+    for h in hints {
+        out.push_str("hint: ");
+        out.push_str(h);
+        out.push('\n');
+    }
+    out.push_str(&headline);
     // The excerpt without the headline's line (once: the same text may recur).
     let mut rest: Vec<&str> = stderr.lines().collect();
     if let Some(i) = first.and_then(|f| rest.iter().position(|l| *l == f)) {
@@ -616,6 +665,63 @@ mod tests {
         );
     }
 
+    /// The configuration's hints come first, one `hint:` line each, so a build script
+    /// that prints only a failure's first line prints the most likely cause; the headline
+    /// follows them.
+    #[test]
+    fn hints_lead_the_headline() {
+        let err = Error::Command {
+            what: "verilating DUT `d`".into(),
+            command: "verilator --cc d.sv".into(),
+            status: Some(1),
+            stderr: "%Error-WIDTHTRUNC: /r/d.sv:2:3: too wide\n".into(),
+            path: None,
+            hints: Box::new(vec!["one".into(), "two".into()]),
+        };
+        assert_eq!(
+            err.to_string(),
+            "hint: one\nhint: two\nverilating DUT `d` failed (exit status: 1) at \
+             /r/d.sv:2:3: WIDTHTRUNC: too wide\ncommand: verilator --cc d.sv"
+        );
+    }
+
+    /// The summary is the hints and the headline, and the first diagnostic only when the
+    /// headline cannot carry it: a fatal `%Warning-` under the default lint.
+    #[test]
+    fn the_summary_is_the_hints_the_headline_and_an_unparsed_diagnostic() {
+        let command = |stderr: &str, hints: Vec<String>| Error::Command {
+            what: "verilating DUT `d`".into(),
+            command: "verilator --cc d.sv".into(),
+            status: Some(1),
+            stderr: stderr.into(),
+            path: None,
+            hints: Box::new(hints),
+        };
+        let lint = "%Warning-WIDTHTRUNC: /r/d.sv:2:3: too wide\n    2 | x\n\
+                    %Error: Exiting due to 1 warning(s)\n";
+        assert_eq!(
+            command(lint, vec!["one".into()]).summary(),
+            [
+                "hint: one",
+                "verilating DUT `d` failed (exit status: 1)",
+                "%Warning-WIDTHTRUNC: /r/d.sv:2:3: too wide",
+            ]
+        );
+        let error = "%Error: /r/d.sv:2:3: syntax error\n    2 | x\n";
+        assert_eq!(
+            command(error, Vec::new()).summary(),
+            ["verilating DUT `d` failed (exit status: 1) at /r/d.sv:2:3: syntax error"]
+        );
+        let config = Error::Config {
+            dut: "d".into(),
+            msg: "no sources\nhint: add one".into(),
+        };
+        assert_eq!(
+            config.summary(),
+            ["invalid DUT `d` configuration: no sources"]
+        );
+    }
+
     /// The headline names the location and the error once; the rest of the excerpt (its
     /// source context, later errors) follows it.
     #[test]
@@ -628,6 +734,7 @@ mod tests {
                      %Error: /r/e.sv:1:1: other\n%Error: Exiting due to 2 error(s)\n"
                 .into(),
             path: None,
+            hints: Box::default(),
         };
         assert_eq!(
             err.to_string(),
@@ -661,6 +768,7 @@ mod tests {
                 status: Some(1),
                 stderr: stderr.into(),
                 path: path.map(PathBuf::from),
+                hints: Box::default(),
             }
             .to_string()
         };
@@ -702,6 +810,7 @@ mod tests {
                 status: Some(1),
                 stderr: stderr.into(),
                 path: None,
+                hints: Box::default(),
             }
             .to_string();
             assert!(
@@ -722,6 +831,7 @@ mod tests {
                 status: Some(1),
                 stderr: stderr.into(),
                 path: None,
+                hints: Box::default(),
             }
             .to_string()
         };
@@ -754,6 +864,7 @@ mod tests {
                 status: Some(1),
                 stderr: stderr.into(),
                 path: None,
+                hints: Box::default(),
             }
             .to_string()
         };
@@ -804,6 +915,7 @@ mod tests {
             status: Some(1),
             stderr: stderr.into(),
             path: None,
+            hints: Box::default(),
         }
         .to_string();
         assert!(
@@ -836,6 +948,7 @@ mod tests {
             status: Some(1),
             stderr: excerpt(&stderr),
             path: offending_path(&stderr),
+            hints: Box::default(),
         }
         .to_string();
         assert!(

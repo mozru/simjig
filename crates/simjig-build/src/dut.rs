@@ -953,13 +953,19 @@ impl Dut {
     /// On success the directives include `cargo::rustc-cfg=simjig_dut_<name>` (with its
     /// `rustc-check-cfg`), so code can be gated on the model: `#[cfg(simjig_dut_<name>)]`.
     ///
-    /// On failure it returns the error, and prints only `rerun-if-changed` and
+    /// On failure it returns the error, and prints first the cause as `cargo::warning=`
+    /// lines (its hints, its headline and, when the headline cannot carry it, the first
+    /// diagnostic), which Cargo shows above everything else the script printed, whether
+    /// the script then fails or handles the error. Then only `rerun-if-changed` and
     /// `rerun-if-env-changed` lines for the inputs the configuration names (sources,
     /// include directories, `-f`/`-F` option files and the sources, `-v` files, `-y` and
     /// include directories they or the extra arguments name, the recipe's files) and the variables
     /// that locate Verilator, and the `rustc-check-cfg` line (no `rustc-cfg`): the script
-    /// decides. Returned from `main` with `?` (or unwrapped), the error is printed on
-    /// stderr, which Cargo shows last, after its dump of the script's stdout. A script
+    /// decides. Returned from `main` with `?` (or unwrapped), the error is printed in full
+    /// on stderr, which Cargo shows last, after its dump of the script's stdout; that dump
+    /// repeats every line above, the reruns included, and nothing a script prints can
+    /// shorten it (the reruns cannot wait for the script's exit status, which a handled
+    /// failure needs them for). A script
     /// that handles the error (an optional model) and exits 0 builds, and reruns when the
     /// failed DUT's inputs change: without those lines Cargo would rerun it only for the
     /// other DUTs' inputs. No `cargo::error=` line: it would fail the build even when the
@@ -982,7 +988,12 @@ impl Dut {
                 }
             })
             .and_then(|env| self.build_in(&env))
-            .inspect_err(|_| {
+            .inspect_err(|e| {
+                // Cargo prints warnings above its dump of a failed script's stdout, so
+                // the cause leads the output as well as ending it (on stderr).
+                for line in e.summary() {
+                    println!("cargo::warning=simjig: {line}");
+                }
                 for line in &reruns {
                     println!("{line}");
                 }
@@ -1027,7 +1038,9 @@ impl Dut {
         let top = self.config.validate()?;
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
-        let (front, ir, placed, mut warnings) = self.front_end(env, &cache, &verilator, top)?;
+        let (front, ir, placed, mismatches) = self.front_end(env, &cache, &verilator, top)?;
+        let mut warnings: Vec<String> =
+            mismatches.iter().map(|m| m.warning(&self.config)).collect();
         // After the front end's checks (the JSON pass, `dpi_in_c`, the emitters, the
         // layout check): a build they fail leaves no claim in the shared cache.
         pipeline::claim_prefix(&cache, &self.config, &prefix)?;
@@ -1037,13 +1050,12 @@ impl Dut {
         }
         let args = self.config.verilator_args(&prefix, &ir.top, &generated);
         let name = &self.config.name;
-        let model = cache.verilate(
-            name,
-            &verilator,
-            &args,
-            &self.config.include_dirs,
-            &env.out_dir,
-        )?;
+        let dirs = &self.config.include_dirs;
+        let model = cache.verilate(name, &verilator, &args, dirs, &env.out_dir);
+        // The default fatal lint stops a mismatch here, at a width warning inside the
+        // wrapper, before its warning could be printed.
+        let model =
+            model.map_err(|e| pipeline::hint_width_error(e, &self.config, || mismatches))?;
         warnings.extend(env.unshared_cache_warning());
         warnings.extend(
             model
@@ -1064,23 +1076,7 @@ impl Dut {
         warnings.extend(
             front_changed.map(|p| manifest::changed_warning(name, "the front end ran", &p)),
         );
-        let mut directives = compile::compile(&compile::Inputs {
-            env,
-            config: &self.config,
-            cache: &cache,
-            verilator: &verilator,
-            prefix: &prefix,
-            obj_dir: &model.obj_dir,
-            recipe: &self.recipe,
-            model_sources: &placed.model_sources,
-        })?;
-        directives.extend(rerun_directives(
-            &verilator,
-            &model.deps,
-            &cache.root().join("inputs"),
-            &self.recipe,
-            &env.out_dir,
-        ));
+        let mut directives = self.compile(env, &cache, &verilator, &prefix, &model, &placed)?;
         directives.extend(warnings);
         directives.extend(untested_warning(&verilator));
         Ok(Built {
@@ -1093,6 +1089,37 @@ impl Dut {
             rust_file: placed.rust,
             directives,
         })
+    }
+
+    /// Compiles and archives the verilated `model`, returning the link directives and
+    /// then the `rerun-if` lines for what Verilator read ([`rerun_directives`]).
+    fn compile(
+        &self,
+        env: &BuildEnv,
+        cache: &cache::Cache,
+        verilator: &Verilator,
+        prefix: &str,
+        model: &cache::Verilated,
+        placed: &emit::Placed,
+    ) -> Result<Vec<String>, Error> {
+        let mut directives = compile::compile(&compile::Inputs {
+            env,
+            config: &self.config,
+            cache,
+            verilator,
+            prefix,
+            obj_dir: &model.obj_dir,
+            recipe: &self.recipe,
+            model_sources: &placed.model_sources,
+        })?;
+        directives.extend(rerun_directives(
+            verilator,
+            &model.deps,
+            &cache.root().join("inputs"),
+            &self.recipe,
+            &env.out_dir,
+        ));
+        Ok(directives)
     }
 }
 
@@ -1135,15 +1162,23 @@ impl Dut {
     }
 
     /// The IR (cached or from the JSON pass), the emitted files placed, and the layout
-    /// check run unless it passed for this IR before; with the IR's warnings
-    /// ([`pipeline::iface_param_warnings`]), given on a cached IR too.
+    /// check run unless it passed for this IR before; with the IR's
+    /// [`pipeline::IfaceParamMismatch`]es, found on a cached IR too.
     fn front_end(
         &self,
         env: &BuildEnv,
         cache: &cache::Cache,
         verilator: &Verilator,
         top: &str,
-    ) -> Result<(Front, pipeline::Ir, emit::Placed, Vec<String>), Error> {
+    ) -> Result<
+        (
+            Front,
+            pipeline::Ir,
+            emit::Placed,
+            Vec<pipeline::IfaceParamMismatch>,
+        ),
+        Error,
+    > {
         let sv_inputs = self
             .config
             .sv_inputs()
@@ -1161,8 +1196,8 @@ impl Dut {
         {
             pipeline::layout_check(&self.config, &sv_inputs, verilator, cache, check)?;
         }
-        let warnings = pipeline::iface_param_warnings(&self.config, &ir.design);
-        Ok((front, ir, placed, warnings))
+        let mismatches = pipeline::iface_param_mismatches(&self.config, &ir.design);
+        Ok((front, ir, placed, mismatches))
     }
 }
 

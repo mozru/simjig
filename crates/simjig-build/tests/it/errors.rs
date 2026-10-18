@@ -448,8 +448,9 @@ fn differing_interface_parameter_defaults_warn() {
          same-named interface parameter only by name, a heuristic (interface ports carry \
          no parameters, IEEE 1800-2017 §25.5). If they are one quantity, set it with \
          `.bind_iface_with_params(\"up\", \"bus_if.sink\", [(\"WIDTH\", 16)])` or \
-         `.param(\"WIDTH\", 16)`, which reaches both; setting either explicitly silences \
-         this";
+         `.param(\"WIDTH\", 16)`, which reaches both; if the interface's 8 is intended, \
+         bind it: `.bind_iface_with_params(\"up\", \"bus_if.sink\", [(\"WIDTH\", 8)])` \
+         changes no width; setting either explicitly silences this";
     for _ in 0..2 {
         let built = up16(&s, "up16_unset")
             .bind_iface("up", "bus_if.sink")
@@ -490,4 +491,78 @@ fn an_explicit_interface_parameter_silences_the_warning() {
         let built = dut.build_in(&s.env()).unwrap();
         assert_eq!(simjig_warnings(&built), Vec::<&str>::new(), "{name}");
     }
+}
+
+/// A gearbox whose `W_OUT` defaults to 16, bound to an interface whose `W_OUT` defaults
+/// to `iface_w_out`, under Verilator's default lint (fatal warnings). It drives `out.d`
+/// with `reps` copies of its 4-bit input.
+fn gearbox(s: &Sandbox, name: &str, iface_w_out: u32, reps: &str) -> Dut {
+    let rtl = s.path().join(name);
+    std::fs::create_dir_all(&rtl).unwrap();
+    std::fs::write(
+        rtl.join("gearbox.sv"),
+        format!(
+            "interface out_if #(parameter int W_OUT = {iface_w_out});\n  logic [W_OUT-1:0] d;\n  \
+             modport src(output d);\nendinterface\n\
+             module gearbox #(parameter int W_IN = 4, parameter int W_OUT = 16)\
+             (input logic [W_IN-1:0] x, out_if.src out);\n  \
+             assign out.d = {{({reps}){{x}}}};\nendmodule\n"
+        ),
+    )
+    .unwrap();
+    Dut::new(name)
+        .sources([rtl.join("gearbox.sv")])
+        .top("gearbox")
+        .bind_iface("out", "out_if.src")
+}
+
+const GEARBOX_HINT: &str = "hint: the width error may come from interface `out_if` (bound \
+     to `out`) defaulting `W_OUT` to 8 while `gearbox` defaults it to 16; if they are one \
+     quantity, set it with `.bind_iface_with_params(\"out\", \"out_if.src\", \
+     [(\"W_OUT\", 16)])` or `.param(\"W_OUT\", 16)`, which reaches both; if the \
+     interface's 8 is intended, bind it: `.bind_iface_with_params(\"out\", \"out_if.src\", \
+     [(\"W_OUT\", 8)])` changes no width\n";
+
+/// Under the default fatal lint, a default mismatch stops the model build at a width
+/// warning inside the generated wrapper, before the mismatch warning could be printed: the
+/// error leads with a hint naming the two defaults. So does a JSON pass that a
+/// `-Werror-WIDTHTRUNC` stops, whose IR comes from a diagnosis pass.
+#[test]
+fn an_interface_default_mismatch_leads_a_width_error() {
+    let s = Sandbox::new();
+    let cases = [
+        (
+            "gb_lint",
+            gearbox(&s, "gb_lint", 8, "W_OUT/W_IN"),
+            "verilating DUT `gb_lint` failed",
+        ),
+        (
+            "gb_werror",
+            gearbox(&s, "gb_werror", 8, "W_OUT/W_IN").verilator_args(["-Werror-WIDTHTRUNC"]),
+            "elaborating DUT `gb_werror` failed",
+        ),
+    ];
+    for (name, dut, headline) in cases {
+        let msg = dut.build_in(&s.env()).unwrap_err().to_string();
+        let rest = msg
+            .strip_prefix(GEARBOX_HINT)
+            .unwrap_or_else(|| panic!("{name}: {msg}"));
+        assert!(rest.starts_with(headline), "{name}: {msg}");
+        assert!(rest.contains("WIDTHTRUNC"), "{name}: {msg}");
+    }
+}
+
+/// A width error with equal defaults (a bug in the RTL) gets no interface hint.
+#[test]
+fn equal_interface_defaults_leave_a_width_error_unhinted() {
+    let s = Sandbox::new();
+    let msg = gearbox(&s, "gb_same", 16, "W_OUT/W_IN+1")
+        .build_in(&s.env())
+        .unwrap_err()
+        .to_string();
+    assert!(msg.starts_with("verilating DUT `gb_same` failed"), "{msg}");
+    assert!(
+        msg.contains("WIDTHTRUNC") && !msg.contains("may come from"),
+        "{msg}"
+    );
 }

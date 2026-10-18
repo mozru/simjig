@@ -86,6 +86,11 @@ pub(crate) fn design_ir(
                     .or_else(|| unknown_params(config, generated, verilator, cache, &e))
                     .unwrap_or_else(|| Error::json_pass(&config.name, e, extra))
             })
+            .map_err(|e| {
+                hint_width_error(e, config, || {
+                    diagnosed_mismatches(config, generated, verilator, cache)
+                })
+            })
     };
     let Some(mut iface) = config.iface_top() else {
         return Ok(Ir {
@@ -119,7 +124,7 @@ pub(crate) fn design_ir(
 /// assignments, so nothing in the design says that a module's `W` and its interface
 /// port's `W` are one quantity; the shared name is only a heuristic. A module may read a
 /// wider interface's width through the port (`out.W`), and the binding is then the
-/// user's only say. Where the heuristic leaves the two apart, [`iface_param_warnings`]
+/// user's only say. Where the heuristic leaves the two apart, an [`IfaceParamMismatch`]
 /// says so.
 fn elaborate(
     iface: &mut codegen::IfaceTop,
@@ -182,15 +187,29 @@ fn declares(unit: &Module, name: &str) -> bool {
         || unit.unrepresentable.iter().any(|p| p.name == name)
 }
 
-/// The `cargo::warning`s for a parameter that the DUT module and a bound interface both
-/// declare, that neither the binding nor a [`crate::Dut::param`] sets, and whose
-/// elaborated values differ in `design` (for example, two different defaults). Under
-/// `-Wno-fatal` such a pair builds silently, with a port of the wrong width extended or
-/// truncated (checked against 5.052); the name tie of [`elaborate`] cannot settle it,
-/// because it applies only to a `.param`. An explicit value on either side silences it.
-///
-/// Read from the IR the emitter sees, so a build whose IR came from the cache warns too.
-pub(crate) fn iface_param_warnings(config: &DutConfig, design: &Design) -> Vec<String> {
+/// A parameter that the DUT module and a bound interface both declare, that neither the
+/// binding nor a [`crate::Dut::param`] sets, and whose elaborated values differ (for
+/// example, two different defaults). Under `-Wno-fatal` such a pair builds silently, with
+/// a port of the wrong width extended or truncated (checked against 5.052); under the
+/// default fatal lint it stops the model build at a `WIDTH*` warning inside the generated
+/// wrapper. The name tie of [`elaborate`] cannot settle it, because it applies only to a
+/// `.param`. An explicit value on either side silences it.
+#[derive(Debug)]
+pub(crate) struct IfaceParamMismatch {
+    binding: codegen::IfaceBinding,
+    name: String,
+    /// The module's value, then the interface's, as the user would write them.
+    ours: String,
+    theirs: String,
+}
+
+/// The [`IfaceParamMismatch`]es in `design`: the IR the emitter sees (the wrapper's, which
+/// holds the DUT and each bound interface specialisation), or the elaboration top's, which
+/// holds them too. Read from the IR, so a build whose IR came from the cache finds them too.
+pub(crate) fn iface_param_mismatches(
+    config: &DutConfig,
+    design: &Design,
+) -> Vec<IfaceParamMismatch> {
     let Some(iface) = config.iface_top() else {
         return Vec::new();
     };
@@ -204,7 +223,7 @@ pub(crate) fn iface_param_warnings(config: &DutConfig, design: &Design) -> Vec<S
             .map(|p| shown(&p.value))
     };
     let set = |params: &[(String, String)], name: &str| params.iter().any(|(n, _)| n == name);
-    let mut lines = Vec::new();
+    let mut found = Vec::new();
     for b in &iface.bindings {
         let Some(unit) = bound(design, dut, &b.port) else {
             continue;
@@ -217,38 +236,151 @@ pub(crate) fn iface_param_warnings(config: &DutConfig, design: &Design) -> Vec<S
                 continue;
             };
             if ours != theirs {
-                lines.push(iface_param_warning(config, b, &p.name, &ours, &theirs));
+                found.push(IfaceParamMismatch {
+                    binding: b.clone(),
+                    name: p.name.clone(),
+                    ours,
+                    theirs,
+                });
             }
         }
     }
-    lines
+    found
 }
 
-/// One line of [`iface_param_warnings`].
-fn iface_param_warning(
+impl IfaceParamMismatch {
+    /// The `cargo::warning` of a build that succeeded with the mismatch.
+    pub(crate) fn warning(&self, config: &DutConfig) -> String {
+        let Self {
+            binding: b,
+            name,
+            ours,
+            theirs,
+        } = self;
+        format!(
+            "cargo::warning=simjig: DUT `{dut}`: module `{module}` has `{name}` = {ours} but \
+             interface `{iface}` (bound to `{port}`) has `{name}` = {theirs}, and neither is \
+             set; simjig ties a `.param` to a same-named interface parameter only by name, a \
+             heuristic (interface ports carry no parameters, IEEE 1800-2017 §25.5). If they \
+             are one quantity, {settle}; \
+             setting either explicitly silences this",
+            dut = config.name,
+            module = config.top.as_deref().unwrap_or_default(),
+            iface = b.interface,
+            port = b.port,
+            settle = self.settle(),
+        )
+    }
+
+    /// The `hint:` of a build that stopped on a width diagnostic, which the mismatch may
+    /// explain: Verilator reports it inside the generated wrapper, not at the defaults.
+    pub(crate) fn hint(&self, config: &DutConfig) -> String {
+        let Self {
+            binding: b,
+            name,
+            ours,
+            theirs,
+        } = self;
+        format!(
+            "the width error may come from interface `{iface}` (bound to `{port}`) \
+             defaulting `{name}` to {theirs} while `{module}` defaults it to {ours}; if they \
+             are one quantity, {settle}",
+            iface = b.interface,
+            port = b.port,
+            module = config.top.as_deref().unwrap_or_default(),
+            settle = self.settle(),
+        )
+    }
+
+    /// The ways to settle the mismatch: one value for both, or the interface's own value
+    /// bound explicitly, which changes no width.
+    fn settle(&self) -> String {
+        let Self {
+            binding: b,
+            name,
+            ours,
+            theirs,
+        } = self;
+        let spec = match &b.modport {
+            Some(m) => format!("{}.{m}", b.interface),
+            None => b.interface.clone(),
+        };
+        let port = &b.port;
+        format!(
+            "set it with `.bind_iface_with_params(\"{port}\", \
+             \"{spec}\", [(\"{name}\", {ours})])` or `.param(\"{name}\", {ours})`, which \
+             reaches both; if the interface's {theirs} is intended, bind it: \
+             `.bind_iface_with_params(\"{port}\", \"{spec}\", [(\"{name}\", {theirs})])` \
+             changes no width"
+        )
+    }
+}
+
+/// Verilator 5.052's width warnings (`V3Error.h`): `WIDTH` and the codes it was split
+/// into.
+const WIDTH_CODES: [&str; 5] = [
+    "WIDTH",
+    "WIDTHCONCAT",
+    "WIDTHEXPAND",
+    "WIDTHTRUNC",
+    "WIDTHXZEXPAND",
+];
+
+/// `e` with a leading `hint:` per mismatch when it is a Verilator run that stopped on a
+/// width diagnostic (a fatal `%Warning-WIDTH*`, or an `%Error-WIDTH*` from `-Werror-`).
+/// `mismatches` is called only then.
+pub(crate) fn hint_width_error(
+    mut e: Error,
     config: &DutConfig,
-    b: &codegen::IfaceBinding,
-    name: &str,
-    ours: &str,
-    theirs: &str,
-) -> String {
-    let spec = match &b.modport {
-        Some(m) => format!("{}.{m}", b.interface),
-        None => b.interface.clone(),
+    mismatches: impl FnOnce() -> Vec<IfaceParamMismatch>,
+) -> Error {
+    if let Error::Command { stderr, hints, .. } = &mut e
+        && hints.is_empty()
+        && config.iface_top().is_some()
+        && has_width_diagnostic(stderr)
+    {
+        **hints = mismatches().iter().map(|m| m.hint(config)).collect();
+    }
+    e
+}
+
+/// Whether Verilator's `stderr` reports one of [`WIDTH_CODES`].
+fn has_width_diagnostic(stderr: &str) -> bool {
+    stderr.lines().any(|l| {
+        l.strip_prefix("%Warning-")
+            .or_else(|| l.strip_prefix("%Error-"))
+            .and_then(|r| r.split_once(':'))
+            .is_some_and(|(code, _)| WIDTH_CODES.contains(&code))
+    })
+}
+
+/// The mismatches of a DUT whose JSON pass failed, for [`hint_width_error`]: the failed
+/// pass wrote no IR, so this reruns the elaboration top (the DUT and its interfaces as
+/// configured) with the width codes downgraded to warnings, after the user's arguments
+/// (a later `-Wwarn-<CODE>` overrides an earlier `-Werror-<CODE>`, checked against 5.052),
+/// so a `-Werror-WIDTHTRUNC` does not stop it too. Only on this failure path.
+fn diagnosed_mismatches(
+    config: &DutConfig,
+    generated: &[PathBuf],
+    verilator: &Verilator,
+    cache: &Cache,
+) -> Vec<IfaceParamMismatch> {
+    let Some(iface) = config.iface_top() else {
+        return Vec::new();
     };
-    format!(
-        "cargo::warning=simjig: DUT `{dut}`: module `{module}` has `{name}` = {ours} but \
-         interface `{iface}` (bound to `{port}`) has `{name}` = {theirs}, and neither is \
-         set; simjig ties a `.param` to a same-named interface parameter only by name, a \
-         heuristic (interface ports carry no parameters, IEEE 1800-2017 §25.5). If they \
-         are one quantity, set it with `.bind_iface_with_params(\"{port}\", \"{spec}\", \
-         [(\"{name}\", {ours})])` or `.param(\"{name}\", {ours})`, which reaches both; \
-         setting either explicitly silences this",
-        dut = config.name,
-        module = config.top.as_deref().unwrap_or_default(),
-        iface = b.interface,
-        port = b.port,
-    )
+    let elab_top = codegen::elab_module(&iface.dut);
+    let Ok(elab) = cache.store_input(&GeneratedInput {
+        file_name: format!("{elab_top}.sv"),
+        contents: codegen::emit_elab_top(&iface),
+    }) else {
+        return Vec::new();
+    };
+    let mut opts = config.json_pass_opts(&elab_top, generated, &[elab], verilator);
+    opts.extra_args
+        .extend(WIDTH_CODES.iter().map(|c| format!("-Wwarn-{c}")));
+    svtypes::verilator::json_pass(&opts)
+        .map(|design| iface_param_mismatches(config, &design))
+        .unwrap_or_default()
 }
 
 /// A parameter value as the user wrote it: an integral one in decimal.

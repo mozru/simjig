@@ -326,3 +326,66 @@ fn cancelling_most_waiters_of_one_edge_or_deadline_leaves_the_rest_in_order() {
     assert_eq!(*order.borrow(), want);
     assert_clean(&d.sim);
 }
+
+/// Conformance README, "Known differences": a `first!` loser's `Drop` cleanup runs when
+/// the decider cancels it, before the tasks the decider's trigger woke after it (`z`).
+/// cocotb 2.1 throws `CancelledError` into the loser when it next runs, so its `finally`
+/// runs after `z` (seen in an experiment). The caller resumes last in both.
+#[test]
+fn a_cancelled_losers_drop_cleanup_runs_when_it_is_cancelled() {
+    let mut d = clocked();
+    let clk = d.clk;
+    let trace: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let ev = simjig::Event::new("ev");
+            let log = |name| {
+                let trace = Rc::clone(&t);
+                move || trace.borrow_mut().push(name)
+            };
+            let (set, wait) = (ev.clone(), ev.clone());
+            let (log_x, log_y, log_z) = (log("x"), log("y"), log("z"));
+            let tasks = [
+                spawn("x", async move {
+                    Timer::new(ticks(5)).await;
+                    rising(clk).await; // 10
+                    set.set();
+                    log_x();
+                }),
+                spawn("y", async move {
+                    Timer::new(ticks(5)).await;
+                    rising(clk).await;
+                    log_y();
+                }),
+                spawn("z", async move {
+                    Timer::new(ticks(1)).await; // waits on `ev` after the operand
+                    wait.wait().await;
+                    log_z();
+                }),
+            ];
+            let cleanup = log("cleanup");
+            simjig::first!(ev.wait(), async move {
+                let _guard = OnDrop(Some(cleanup));
+                Timer::new(ticks(100)).await;
+            });
+            log("main")();
+            for task in tasks {
+                task.await;
+            }
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["x", "y", "cleanup", "z", "main"]);
+    assert_clean(&d.sim);
+}
+
+/// Runs its closure when dropped.
+struct OnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(f) = self.0.take() {
+            f();
+        }
+    }
+}

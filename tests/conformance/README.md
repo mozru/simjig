@@ -296,14 +296,20 @@ Each with the reason; all are deliberate:
 - **Cancellation cleanup runs when the operand is cancelled.** simjig cancels by dropping
   the operand's future, at the moment cocotb deregisters a waiting helper; its `Drop`
   code runs then. cocotb throws `CancelledError` into the helper when it next runs, so its
-  `finally` blocks run one hop later. The order of the helpers and the caller is the same
-  (`kernel::combinator`).
-- **A `Lock` granted to a cancelled loser is passed on.** If a `First` loser waiting on
-  `Lock.acquire()` is granted the lock in the same callback that decides the `First`, and
-  then cancelled, cocotb leaves the lock held by the cancelled helper: nobody can acquire
-  it again (seen in an experiment: a later waiter never got it). simjig drops the granted
-  acquisition and gives the lock to the next waiter. A loser cancelled while still
-  waiting takes nothing in either (`sync_losers`).
+  `finally` blocks run one hop later, after the tasks queued before it (seen in an
+  experiment). The order of the helpers and the caller is the same (`kernel::combinator`;
+  `cancel::a_cancelled_losers_drop_cleanup_runs_when_it_is_cancelled`).
+- **A `Lock` or `Queue` wake granted to a cancelled loser is passed on.** A `First` loser
+  can be granted what it waits for and cancelled before it resumes: a `Lock` it acquired
+  (free when awaited, so during its hop, or released to it in the callback that decides
+  the `First`), or a `Queue.get()` (`put()`) woken by a `put` (`get`). cocotb throws
+  `CancelledError` into it: the Lock stays held by the cancelled helper and nobody can
+  acquire it again, and the Queue wake is lost, so the next getter never gets the item
+  (both seen in experiments). simjig releases the lock to the next waiter and passes the
+  wake on (`sync::a_lock_taken_by_a_cancelled_first_loser_is_released`,
+  `sync::a_queue_wake_of_a_cancelled_first_loser_goes_to_the_next_getter`,
+  `sync::lock_is_granted_in_arrival_order_and_passed_on_by_a_cancelled_waiter`). A loser
+  cancelled while still waiting takes nothing in either (`sync_losers`).
 
 ### Simulation end
 The simulation ends when no timed callback and no `--timing` event is left. A test that

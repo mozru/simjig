@@ -243,3 +243,63 @@ fn a_put_that_finds_room_fills_it_ahead_of_a_woken_putter() {
     assert_eq!(*trace.borrow(), ["10", "13", "12", "11"]);
     assert_clean(&d.sim);
 }
+
+/// Conformance README, "Known differences": a lock taken by a `first!` loser that is
+/// cancelled before it resumes is passed on. Here the loser takes the free lock and is
+/// cancelled during its hop; cocotb 2.1 leaves the lock held by the cancelled helper for
+/// good (seen in an experiment: `locked()` stays true and a later acquire times out).
+#[test]
+fn a_lock_taken_by_a_cancelled_first_loser_is_released() {
+    let mut d = dut();
+    let out = d.sim.run(async {
+        let (ev, lock) = (Event::new("ev"), Lock::new("bus"));
+        ev.set();
+        let won = first!(
+            async {
+                ev.wait().await;
+                "ev"
+            },
+            async {
+                drop(lock.lock().await);
+                "lock"
+            },
+        );
+        (won, lock.is_locked(), lock.try_lock().is_some())
+    });
+    assert_eq!(out.unwrap(), ("ev", false, true));
+    assert_clean(&d.sim);
+}
+
+/// Conformance README, "Known differences": a `first!` loser woken by a `put`, then
+/// cancelled before it runs, passes the wake to the next getter. cocotb 2.1 loses it (seen
+/// in an experiment: the next getter never got the item, which stayed in the queue).
+#[test]
+fn a_queue_wake_of_a_cancelled_first_loser_goes_to_the_next_getter() {
+    let mut d = dut();
+    let out = d.sim.run(async {
+        let (ev, q) = (Event::new("ev"), Queue::new("q", 1));
+        let (qn, qp, set) = (q.clone(), q.clone(), ev.clone());
+        let next = spawn("next", async move {
+            Timer::new(ticks(1)).await; // waits behind the loser
+            qn.get().await
+        });
+        let _x = spawn("x", async move {
+            Timer::new(ticks(2)).await;
+            set.set(); // wakes the deciding operand first
+            qp.try_put(7).unwrap(); // then the getter that will lose
+        });
+        let won = first!(
+            async {
+                ev.wait().await;
+                "ev"
+            },
+            async {
+                q.get().await;
+                "get"
+            },
+        );
+        (won, next.await, q.len())
+    });
+    assert_eq!(out.unwrap(), ("ev", 7, 0));
+    assert_clean(&d.sim);
+}

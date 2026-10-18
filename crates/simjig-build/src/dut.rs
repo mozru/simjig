@@ -496,7 +496,10 @@ impl Dut {
 
     /// Exposes an internal signal. `path` starts at the top module
     /// (`counter.u_core.state`); `module` is the module that declares the variable and
-    /// `ty` its type, because the type IR has no internal variables to look them up in.
+    /// `ty` its type, because the type IR has no types of internal variables to look them
+    /// up in. The build checks the path, module and access against the IR and the width
+    /// against Verilator's scope table. Paths through generate blocks (`top.g[0].u.x`) are
+    /// not supported yet.
     pub fn probe(
         mut self,
         path: impl Into<String>,

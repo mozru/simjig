@@ -25,6 +25,7 @@ mod dut;
 pub mod emit;
 mod env;
 mod error;
+mod front;
 mod hash;
 mod header;
 mod iface_diag;

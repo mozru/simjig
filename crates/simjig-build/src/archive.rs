@@ -369,7 +369,7 @@ fn flag_dirs(flags: &[String]) -> Vec<PathBuf> {
 }
 
 /// Hashes the sorted file names directly in `dir` (none when it cannot be listed).
-fn hash_listing(h: &mut KeyHasher, dir: &Path) {
+pub(crate) fn hash_listing(h: &mut KeyHasher, dir: &Path) {
     let mut names: Vec<_> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()

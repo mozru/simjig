@@ -7,10 +7,11 @@
 //! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
 //!    `-G`, extra arguments and `--timing` setting (one builder, `DutConfig::design`),
 //!    giving the type IR. A DUT with
-//!    interface ports takes two passes through generated tops (`pipeline::design_ir`);
+//!    interface ports takes two passes through generated tops (`pipeline::design_ir`).
+//!    The IR is cached (`front`): a rerun that changes nothing runs no JSON pass;
 //! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
-//!    is linted;
+//!    is linted, unless it passed for the same IR before (`front`);
 //! 5. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
 //! 6. cross-check the header's ports against the IR's (or the emitter's), each probe
 //!    against Verilator's scope table (`syms`), and check that no other DUT of this build
@@ -27,6 +28,7 @@ use svtypes::ir::Design;
 use crate::codegen::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 use crate::compile::{self, CppRecipe};
 use crate::emit::{self, Emitter};
+use crate::front::Front;
 use crate::hash::KeyHasher;
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
@@ -631,13 +633,19 @@ impl Dut {
             .sv_inputs()
             .map(|g| cache.store_input(g))
             .collect::<Result<Vec<_>, _>>()?;
-        let ir = pipeline::design_ir(&self.config, top, &sv_inputs, &verilator, &cache)?;
+        let (front, cached) = Front::lookup(&cache, &self.config, top, &sv_inputs, &verilator)?;
+        let ir = match cached {
+            Some(ir) => ir,
+            None => pipeline::design_ir(&self.config, top, &sv_inputs, &verilator, &cache)?,
+        };
         let emitted = (self.emitter)(&ir.design, &self.config)?;
         let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
-        if let Some(check) = &placed.layout_check {
+        if let Some(check) = &placed.layout_check
+            && !front.checked(&cache, check)
+        {
             pipeline::layout_check(&self.config, &sv_inputs, &verilator, &cache, check)?;
         }
-        let mut generated = ir.wrapper.into_iter().collect::<Vec<_>>();
+        let mut generated = ir.wrapper.iter().cloned().collect::<Vec<_>>();
         for g in placed.inputs.iter().chain(&self.config.generated) {
             generated.push(cache.store_input(g)?);
         }
@@ -648,6 +656,7 @@ impl Dut {
             &args,
             &self.config.include_dirs,
         )?;
+        front.record(&cache, &ir, placed.layout_check.as_ref(), &model.deps)?;
         let header_ports = check_model(env, &self.config, &prefix, &model.obj_dir, &placed)?;
         let mut directives = compile::compile(&compile::Inputs {
             env,

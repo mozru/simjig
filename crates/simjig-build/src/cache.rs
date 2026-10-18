@@ -3,12 +3,14 @@
 //! Layout under the cache root (see [`crate::BuildEnv::cache_dir`]):
 //! - `models/<full key>/obj/`: Verilator output; `models/<full key>/deps`: its inputs.
 //! - `manifests/<pre key>`: the input list of the last build with that pre key (of a
-//!   verilation, or of an archive compile, see `archive`).
+//!   verilation, of an archive compile, see `archive`, or of a DUT's IR, see `front`).
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
 //! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
 //! - `archives/<key>/`: compiled models (see `compile`).
+//! - `fronts/<key>`: the IR of a DUT; `checks/<key>`: a layout check that passed (see
+//!   `front`).
 //! - `tmp/`: work directories, renamed into place when complete; one left by a killed
 //!   build is removed an hour later.
 //!
@@ -59,6 +61,8 @@ impl Cache {
             "prefixes",
             "libverilated",
             "archives",
+            "fronts",
+            "checks",
             "tmp",
         ] {
             let dir = root.join(sub);
@@ -257,7 +261,7 @@ fn full_key(pre: &str, deps: &[PathBuf]) -> Option<String> {
 
 /// The Verilator executable shows up in its own `.d` file. Its version line is already in
 /// the pre key, and hashing a multi-megabyte binary on every build would be wasted work.
-fn is_verilator_binary(p: &Path) -> bool {
+pub(crate) fn is_verilator_binary(p: &Path) -> bool {
     p.file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.starts_with("verilator_bin"))

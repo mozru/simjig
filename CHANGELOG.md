@@ -17,6 +17,11 @@ the public API, the generated code or simulation semantics.
   status; a later build reads and hashes again only the files whose status (size,
   modification and change times, inode, device) changed. Every archive is compiled again
   once (`simjig-archive-deps-v2`).
+- The type IR of each DUT and the layout check's verdict are cached (`fronts/`,
+  `checks/` in the cache), keyed on the JSON pass's arguments and inputs and on every
+  file the model's verilation read: a rerun that changes nothing runs no JSON pass and
+  no layout check. A build script also locates Verilator, sets the C++ compiler up and
+  looks the Verilator runtime up once instead of once per DUT.
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

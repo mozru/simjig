@@ -86,3 +86,80 @@ fn the_compiler_is_set_up_once_per_build_script() {
         .collect();
     assert_eq!(ran, Vec::<String>::new(), "the compiler ran again");
 }
+
+/// How many times Verilator ran with `flag`.
+fn runs_with(s: &Sandbox, flag: &str) -> usize {
+    s.verilator_calls()
+        .lines()
+        .filter(|l| l.split(' ').any(|a| a == flag))
+        .count()
+}
+
+/// A rerun that changes nothing takes the IR and the layout check's verdict from the
+/// cache: Verilator runs no JSON pass and no layout check. An edit to a file the design
+/// includes runs both again.
+#[test]
+fn a_rerun_reuses_the_ir_and_the_layout_check() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    // Each build stands for one build-script run: its own `OUT_DIR`, one shared cache.
+    let build_in = |out: &str| {
+        let mut env = s.env();
+        env.out_dir = s.path().join(out);
+        Dut::new("counter")
+            .sources([rtl.join("counter.sv")])
+            .include_dirs([&rtl])
+            .top("counter")
+            .build_in(&env)
+            .unwrap()
+    };
+    let first = build_in("out1");
+    let passes = (runs_with(&s, "--json-only"), runs_with(&s, "--lint-only"));
+    assert_eq!(passes, (1, 1));
+    let again = build_in("out2");
+    assert_eq!(again.design, first.design);
+    assert_eq!(
+        (runs_with(&s, "--json-only"), runs_with(&s, "--lint-only")),
+        passes,
+        "nothing changed"
+    );
+    std::fs::write(rtl.join("defs.svh"), "`define STEP 2\n").unwrap();
+    build_in("out3");
+    assert_eq!(
+        (runs_with(&s, "--json-only"), runs_with(&s, "--lint-only")),
+        (2, 2),
+        "the include changed"
+    );
+}
+
+/// The cached IR of a DUT with interface ports brings its generated wrapper back, also
+/// into a cache that lost its stored inputs.
+#[test]
+fn a_cached_ir_restores_the_generated_wrapper() {
+    let s = Sandbox::new();
+    let d = dut("iface_top");
+    let build_in = |out: &str| {
+        let mut env = s.env();
+        env.out_dir = s.path().join(out);
+        Dut::new("iface_top")
+            .sources([
+                d.join("iface_pkg.sv"),
+                d.join("bus_if.sv"),
+                d.join("iface_top.sv"),
+            ])
+            .top("iface_top")
+            .bind_iface("in_bus", "bus_if")
+            .bind_iface("out_bus", "bus_if")
+            .build_in(&env)
+            .unwrap()
+    };
+    let first = build_in("out1");
+    std::fs::remove_dir_all(s.path().join("cache/inputs")).unwrap();
+    let again = build_in("out2");
+    assert_eq!(runs_with(&s, "--json-only"), 2, "two passes, once");
+    assert_eq!(again.design, first.design);
+    assert_eq!(
+        again.obj_dir, first.obj_dir,
+        "the same wrapper was verilated"
+    );
+}

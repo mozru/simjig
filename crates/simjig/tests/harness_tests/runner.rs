@@ -1,0 +1,278 @@
+//! The runner without the macro: seeds, determinism, timeouts, setup failures and the run
+//! directory, through `simjig::__private::run` with an explicit environment.
+
+use std::path::PathBuf;
+
+use serde_json::Value;
+use simjig::__private::{RunEnv, TestMeta, TestOutcome, Timeout, run};
+use simjig::{
+    DutModel, Failure, FakeModel, ModelOptions, Precision, Seed, SeedSource, Sim, SimTime, TestCtx,
+    TimeUnit, rising, yield_now,
+};
+
+use crate::counter;
+
+fn meta(name: &'static str) -> TestMeta {
+    TestMeta {
+        module_path: "harness_tests::runner",
+        name,
+        package: "simjig",
+        timeout: None,
+        ignored: false,
+    }
+}
+
+fn env(seed: Option<u64>, dir: &str) -> RunEnv {
+    RunEnv {
+        seed,
+        runs_root: Some(
+            PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+                .join("harness")
+                .join(dir),
+        ),
+    }
+}
+
+/// 20 cycles of random data from the stream `"stim"`.
+async fn random_stimulus(ctx: TestCtx, dut: counter::Dut) {
+    let mut rng = ctx.rng("stim");
+    dut.en.write_u64(1);
+    for _ in 0..20 {
+        dut.data.write_u64(rng.below(256));
+        rising(dut.clk).await;
+    }
+}
+
+fn run_stimulus(name: &'static str, seed: Option<u64>, dir: &str) -> TestOutcome {
+    run::<counter::Dut, _, _>(&meta(name), &env(seed, dir), random_stimulus)
+}
+
+#[test]
+fn the_same_seed_gives_the_same_trace_hash() {
+    let a = run_stimulus("det", Some(7), "det-a");
+    let b = run_stimulus("det", Some(7), "det-b");
+    let c = run_stimulus("det", Some(8), "det-c");
+    assert!(a.failure.is_none(), "{:?}", a.failure);
+    assert!(a.trace_hash.is_some());
+    assert_eq!(a.trace_hash, b.trace_hash);
+    assert_ne!(
+        a.trace_hash, c.trace_hash,
+        "the stimulus depends on the seed"
+    );
+}
+
+#[test]
+fn the_default_seed_comes_from_the_test_name() {
+    let a = run_stimulus("named", None, "named-a");
+    let b = run_stimulus("named", None, "named-b");
+    let other = run_stimulus("other", None, "named-c");
+    assert_eq!(a.test, "runner::named");
+    assert_eq!(a.seed, Seed::from_test_name("simjig", "runner::named"));
+    assert_eq!(a.seed.source(), SeedSource::TestName);
+    assert_eq!((a.seed, a.trace_hash), (b.seed, b.trace_hash));
+    assert_ne!(a.seed, other.seed);
+}
+
+#[test]
+fn an_env_seed_overrides_the_test_name_seed() {
+    let a = run_stimulus("env", Some(0x1234), "env");
+    assert_eq!(a.seed, Seed::new(0x1234, SeedSource::Env));
+}
+
+#[test]
+fn a_timeout_becomes_the_time_limit() {
+    let mut meta = meta("timeout");
+    meta.timeout = Some(Timeout {
+        value: 100,
+        unit: TimeUnit::Ns,
+    });
+    let outcome = run::<counter::Dut, _, _>(&meta, &env(None, "timeout"), |_, dut| forever(dut));
+    let report = outcome.failure.expect("the test times out");
+    assert_eq!(report.kind, "TimeLimit");
+    assert!(
+        report
+            .details
+            .contains(&"timeout:  100 ns (from `#[simjig::test(timeout = ...)]`)".to_owned()),
+        "{report}"
+    );
+    assert_eq!(outcome.end_time.map(SimTime::ticks), Some(100));
+}
+
+#[test]
+#[should_panic(expected = "is not a whole number of ticks")]
+fn a_timeout_finer_than_the_precision_is_rejected() {
+    let mut meta = meta("fine");
+    meta.timeout = Some(Timeout {
+        value: 1,
+        unit: TimeUnit::Fs,
+    });
+    run::<counter::Dut, _, _>(&meta, &env(None, "fine"), |_, _| async {});
+}
+
+async fn forever(dut: counter::Dut) {
+    loop {
+        rising(dut.clk).await;
+    }
+}
+
+/// The line of the `panic!` in [`panics`].
+const PANIC_LINE: u32 = line!() + 4;
+
+async fn panics() {
+    yield_now().await;
+    panic!("value {} out of range", 42);
+}
+
+#[test]
+fn a_task_panic_reports_its_source_location() {
+    let outcome = run::<(), _, _>(&meta("panics"), &env(None, "panics"), |_, ()| panics());
+    let report = outcome.failure.expect("the body panics");
+    assert_eq!(report.kind, "TaskPanic");
+    let location = report.location.as_deref().unwrap_or_default();
+    assert!(
+        location.ends_with(&format!("harness_tests/runner.rs:{PANIC_LINE}:5")),
+        "{location}"
+    );
+    assert_eq!(report.task.as_deref(), Some("main"));
+}
+
+/// A DUT whose model has none of the signals it looks for.
+struct NoSignals;
+
+impl DutModel for NoSignals {
+    fn instantiate(_options: &ModelOptions) -> Result<Sim, Failure> {
+        Ok(Sim::from_fake(FakeModel::new(Precision::NS)))
+    }
+
+    fn create(sim: &mut Sim) -> Result<Self, Failure> {
+        Err(counter::setup_failure(
+            sim,
+            "the model has no signal `clk`".into(),
+        ))
+    }
+}
+
+/// A DUT whose model cannot be built.
+struct NoModel;
+
+impl DutModel for NoModel {
+    fn instantiate(_options: &ModelOptions) -> Result<Sim, Failure> {
+        let sim = Sim::from_fake(FakeModel::new(Precision::NS));
+        Err(counter::setup_failure(
+            &sim,
+            "libVfifo.so: not found".into(),
+        ))
+    }
+
+    fn create(_sim: &mut Sim) -> Result<Self, Failure> {
+        unreachable!("instantiate fails")
+    }
+}
+
+async fn never() {
+    yield_now().await;
+    unreachable!("the body must not run");
+}
+
+#[test]
+fn setup_failures_are_reported_without_running_the_body() {
+    let created = run::<NoSignals, _, _>(&meta("create"), &env(None, "create"), |_, _| never());
+    let report = created.failure.expect("create fails");
+    assert_eq!(report.kind, "ModelFatal");
+    assert_eq!(report.message, "the model has no signal `clk`");
+    assert!(created.trace_hash.is_some(), "the model was built");
+
+    let built = run::<NoModel, _, _>(&meta("build"), &env(None, "build"), |_, _| never());
+    assert_eq!(built.failure.expect("instantiate fails").kind, "ModelFatal");
+    assert_eq!(built.trace_hash, None);
+    let dir = built.run_dir.expect("written");
+    assert!(!dir.join("events.jsonl").exists(), "no model, no events");
+    let summary = read_json(&dir.join("summary.json"));
+    assert_eq!(summary["precision"], Value::Null);
+    assert_eq!(summary["events"], Value::Null);
+}
+
+fn read_json(path: &std::path::Path) -> Value {
+    let text = std::fs::read_to_string(path).expect("readable");
+    serde_json::from_str(&text).expect("valid JSON")
+}
+
+async fn accumulate_then_panic(dut: counter::Dut) {
+    dut.en.write_u64(1);
+    dut.data.write_u64(1);
+    simjig::cycles(dut.clk, 3).await;
+    panic!("acc is {}", dut.acc.read_u64());
+}
+
+#[test]
+fn the_run_dir_holds_the_summary_and_the_events() {
+    let outcome = run::<counter::Dut, _, _>(&meta("dir"), &env(Some(0xabc), "dir"), |_, dut| {
+        accumulate_then_panic(dut)
+    });
+    let report = outcome.failure.expect("the body panics");
+    let dir = outcome.run_dir.expect("written");
+    assert!(
+        dir.ends_with("runner__dir/0000000000000abc"),
+        "{}",
+        dir.display()
+    );
+    assert_eq!(report.run_dir.as_ref(), Some(&dir));
+
+    let summary = read_json(&dir.join("summary.json"));
+    assert_eq!(summary["schema"], "simjig.run/1");
+    assert_eq!(summary["test"], "runner::dir");
+    assert_eq!(summary["package"], "simjig");
+    assert_eq!(summary["status"], "fail");
+    assert_eq!(summary["seed"], "0x0000000000000abc");
+    assert_eq!(summary["seed_source"], "env");
+    assert_eq!(
+        summary["verilator_seed"],
+        u64::from(Seed::new(0xabc, SeedSource::Env).verilator_seed())
+    );
+    assert_eq!(summary["precision"], "1ns");
+    assert_eq!(
+        summary["end_time"]["ticks"],
+        outcome.end_time.map(SimTime::ticks).unwrap_or_default()
+    );
+    assert_eq!(summary["timeout"], Value::Null);
+    let hash = format!("{:#018x}", outcome.trace_hash.unwrap_or_default());
+    assert_eq!(summary["trace_hash"], hash.as_str());
+    let failure = &summary["failure"];
+    assert_eq!(failure["kind"], "TaskPanic");
+    assert_eq!(failure["signature"], report.signature.to_string().as_str());
+    assert_eq!(failure["task"], "main");
+    assert_eq!(failure["repro"], report.run.repro().as_str());
+    assert_eq!(failure["report"], report.to_string().as_str());
+
+    let events = std::fs::read_to_string(dir.join("events.jsonl")).expect("readable");
+    let lines: Vec<Value> = events
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("one JSON object per line"))
+        .collect();
+    assert_eq!(summary["events"]["written"], lines.len());
+    assert_eq!(summary["events"]["file"], "events.jsonl");
+    assert!(
+        lines
+            .iter()
+            .any(|e| e["kind"] == "Poll" && e["task"].is_u64())
+    );
+    // The run stops at the failure; only the cancellation of the remaining tasks follows.
+    let failure_at = lines.iter().position(|e| e["kind"] == "Failure");
+    let after: Vec<&Value> = lines[failure_at.expect("a Failure event") + 1..]
+        .iter()
+        .map(|e| &e["kind"])
+        .collect();
+    assert!(
+        after.iter().all(|k| *k == "Cancel" || *k == "Done"),
+        "{after:?}"
+    );
+}
+
+#[test]
+fn a_passing_run_writes_a_passing_summary() {
+    let outcome = run_stimulus("pass", None, "pass");
+    let summary = read_json(&outcome.run_dir.expect("written").join("summary.json"));
+    assert_eq!(summary["status"], "pass");
+    assert_eq!(summary["failure"], Value::Null);
+    assert_eq!(summary["seed_source"], "test-name");
+}

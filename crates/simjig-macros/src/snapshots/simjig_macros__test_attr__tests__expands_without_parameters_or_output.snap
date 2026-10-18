@@ -1,0 +1,25 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(), quote!\n{ pub async fn smoke() { simjig::yield_now().await; } })"
+---
+#[::core::prelude::v1::test]
+pub fn smoke() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn smoke() {
+        simjig::yield_now().await;
+    }
+    ::simjig::__private::run_test::<
+        (),
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(smoke),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::core::option::Option::None,
+            ignored: false,
+        },
+        |_, _| async move { smoke().await },
+    );
+}

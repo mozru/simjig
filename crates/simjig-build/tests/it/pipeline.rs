@@ -7,6 +7,7 @@ use simjig_build::svtypes::ir::{Design, Storage};
 use simjig_build::svtypes::width::packed_storage;
 use simjig_build::{
     Built, CacheStatus, Dut, DutConfig, Emitted, Error, HeaderPort, PortDir, SvModule,
+    codegen_emitter,
 };
 
 use crate::support::Sandbox;
@@ -309,6 +310,40 @@ fn covergroup_models_with_mixed_coverage_fail() {
         err.contains("uses covergroups") && err.contains("DUT `plain"),
         "{err}"
     );
+}
+
+/// A real layout mismatch (the code generator run on an IR whose struct is one bit
+/// wider than Verilator lays it out) fails the build even under a user's
+/// `-Wno-USERFATAL`, with the check's own message.
+#[test]
+fn a_user_waiver_cannot_hide_a_real_layout_mismatch() {
+    fn widened(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
+        let mut wrong = design.clone();
+        let ty = wrong
+            .types
+            .iter_mut()
+            .find(|t| t.name.as_deref() == Some("struct_pipe_pkg::beat_t"))
+            .expect("struct_pipe_pkg::beat_t in the IR");
+        ty.width = ty.width.map(|w| w + 1);
+        codegen_emitter(&wrong, config)
+    }
+    let s = Sandbox::new();
+    let d = crate::support::dut("struct_pipe");
+    let err = Dut::new("struct_pipe")
+        .sources([d.join("struct_pipe_pkg.sv"), d.join("struct_pipe.sv")])
+        .top("struct_pipe")
+        .verilator_args(["-Wno-USERFATAL"])
+        .emitter(widened)
+        .build_in(&s.env())
+        .unwrap_err();
+    let Error::Command { stderr, .. } = &err else {
+        panic!("expected the layout check to fail, got {err}");
+    };
+    assert!(
+        stderr.contains("%Error-USERFATAL") && stderr.contains("differs from the IR width"),
+        "{stderr}"
+    );
+    assert_eq!(s.verilations(), 0);
 }
 
 /// Coverage switched on where simjig cannot see it (an option file) builds a model whose

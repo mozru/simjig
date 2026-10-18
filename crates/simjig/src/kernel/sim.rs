@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::future::Future;
+use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -243,7 +244,7 @@ impl Sim {
         let k = Rc::clone(&self.kernel);
         let guard = state::install(Rc::clone(&k));
         let capture = panics::capture();
-        let mut main = tasks::spawn_in(&k, None, "main", main);
+        let mut main = tasks::spawn_in(&k, None, "main", main, Location::caller());
         k.main.set(main.key());
         sched::run_loop(&k, self.time_limit);
         let result = main.take_result(&k);

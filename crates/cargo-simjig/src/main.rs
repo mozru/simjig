@@ -9,11 +9,13 @@ use std::env;
 use std::process::ExitCode;
 
 use cargo_simjig::doctor::{self, Format};
+use cargo_simjig::show::{self, ShowArgs};
 use cargo_simjig::waves::{self, WavesArgs};
 
 const USAGE: &str = "\
 usage: cargo simjig doctor [--json]
        cargo simjig waves <test> [--seed <seed>] [options]
+       cargo simjig show <dut> [-p <package>] [--path]
 
 commands:
   doctor    check that Verilator, the C++ toolchain and nextest are usable
@@ -39,15 +41,28 @@ fn main() -> ExitCode {
             }
         };
     }
+    if let ["show", rest @ ..] = args.as_slice() {
+        if rest.iter().any(|a| matches!(*a, "-h" | "--help")) {
+            eprintln!("{}", show::USAGE);
+            return ExitCode::SUCCESS;
+        }
+        return match ShowArgs::parse(rest) {
+            Ok(show_args) => show::run(&show_args),
+            Err(error) => {
+                eprintln!("error: {error}\n\n{}", show::USAGE);
+                ExitCode::from(2)
+            }
+        };
+    }
     let format = match args.as_slice() {
         ["doctor"] => Format::Text,
         ["doctor", "--json"] => Format::Json,
         ["--help" | "-h" | "help"] => {
-            eprintln!("{USAGE}\n{}", waves::USAGE);
+            eprintln!("{USAGE}\n{}\n{}", waves::USAGE, show::USAGE);
             return ExitCode::SUCCESS;
         }
         _ => {
-            eprintln!("{USAGE}\n{}", waves::USAGE);
+            eprintln!("{USAGE}\n{}\n{}", waves::USAGE, show::USAGE);
             return ExitCode::from(2);
         }
     };

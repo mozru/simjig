@@ -4,6 +4,11 @@
 //! - [`spawn`] returns a [`Task<T>`] handle that owns the task: dropping the handle cancels
 //!   the task. Cancellation is *only* dropping its future; cleanup is synchronous `Drop`,
 //!   which may still write signals (through the write log) or release locks.
+//! - Dropping a handle whose task never ran, and which was never awaited, fails the run
+//!   (`FailureKind::Setup`, at the `spawn` call): that is `let _ = spawn(..)`, a driver that
+//!   silently never runs. [`Task::cancel`] is the deliberate form. Drops that are a side
+//!   effect of a larger cancellation are exempt (see `cascading`): a combinator cancelling
+//!   an operand, a task being cancelled, the run ending, a panic unwinding.
 //! - [`Task::detach`] hands ownership to the task's nearest ancestor that is still running
 //!   (its parent, unless the parent already completed). A task's detached children are
 //!   cancelled when it completes or is cancelled, so no task outlives its scope, even when
@@ -27,7 +32,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::panic::{self, AssertUnwindSafe};
+use std::panic::{self, AssertUnwindSafe, Location};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
@@ -246,14 +251,16 @@ impl ReadyQueue {
 /// Spawns `future` as a child of the current task, named `parent.name`.
 ///
 /// The task is queued at once and first runs in the current delta, after the tasks
-/// already queued. The returned handle owns it: drop the handle to cancel the task, await
-/// it for the result, or [`detach`](Task::detach) it.
+/// already queued. The returned handle owns it: await it for the result,
+/// [`detach`](Task::detach) it, or [`cancel`](Task::cancel) it.
 ///
 /// # Fire and forget
 /// cocotb's `cocotb.start_soon(monitor())` keeps running on its own; here that is
 /// `spawn(..).detach()`. Dropping the handle instead, as `let _ = spawn(..)` does,
-/// cancels the task before it ever runs; the kernel prints a warning and records a
-/// [`TraceKind::DroppedUnpolled`](crate::TraceKind::DroppedUnpolled) when that happens.
+/// cancels the task before it ever runs, so the run fails (`FailureKind::Setup`, pointing
+/// at this call) and records a
+/// [`TraceKind::DroppedUnpolled`](crate::TraceKind::DroppedUnpolled). To cancel a task on
+/// purpose, call [`Task::cancel`].
 ///
 /// ```
 /// use simjig::{FakeModel, Precision, Sim, Timer, SimDuration, spawn};
@@ -279,17 +286,20 @@ impl ReadyQueue {
 /// Outside [`Sim::run`](crate::Sim::run), or if 65 536 tasks are alive at once.
 #[track_caller]
 pub fn spawn<T: 'static>(name: &str, future: impl Future<Output = T> + 'static) -> Task<T> {
+    let at = Location::caller();
     state::with_current("spawn", |k| {
         let parent = k.current.get();
-        spawn_in(k, parent, name, future)
+        spawn_in(k, parent, name, future, at)
     })
 }
 
+/// Spawns as [`spawn`] does; `at` is the call the handle's failures point at.
 pub(crate) fn spawn_in<T: 'static>(
     k: &Kernel,
     parent: Option<Key>,
     name: &str,
     future: impl Future<Output = T> + 'static,
+    at: &'static Location<'static>,
 ) -> Task<T> {
     let (full, ancestors): (Rc<str>, Rc<[Key]>) = {
         let tasks = k.tasks.borrow();
@@ -343,6 +353,7 @@ pub(crate) fn spawn_in<T: 'static>(
         key: Some(key),
         name: full,
         join: None,
+        spawned_at: at,
         _output: PhantomData,
     }
 }
@@ -364,12 +375,20 @@ pub async fn scope<T: 'static>(name: &str, future: impl Future<Output = T> + 'st
 /// Dropping the handle cancels the task (drops its future) unless it was
 /// [detached](Self::detach). Awaiting is cancel-safe: dropping the await cancels the task,
 /// it never loses a completed result to someone else.
-#[must_use = "dropping a Task cancels it; await it or call .detach()"]
+///
+/// Dropping a handle that was never awaited, before its task ever ran, fails the run: the
+/// task would silently never run. Call [`detach`](Self::detach) to run it in the
+/// background, `.await` it, or [`cancel`](Self::cancel) it.
+#[must_use = "dropping an unawaited Task cancels it before it runs and fails the test \
+              (`let _ = spawn(..)` does this); call .detach() to run it in the background, \
+              .await it, or .cancel() it"]
 pub struct Task<T> {
     sim_gen: u32,
     key: Option<Key>,
     name: Rc<str>,
     join: Option<Registration>,
+    /// The `spawn` call, where a failure for a dropped handle points.
+    spawned_at: &'static Location<'static>,
     _output: PhantomData<fn() -> T>,
 }
 
@@ -506,14 +525,14 @@ impl<T: 'static> Future for Task<T> {
 enum Release {
     /// [`Task::cancel`]: deliberate.
     Cancel,
-    /// The handle was dropped; cancelling a task that never ran is probably a mistake.
+    /// The handle was dropped; dropping one never awaited, whose task never ran, fails.
     Drop,
 }
 
 impl<T> Task<T> {
     /// Gives up the handle: frees a finished task, cancels a running one.
     fn release(&mut self, why: Release) {
-        self.join = None;
+        let awaited = self.join.take().is_some();
         let Some(key) = self.key.take() else { return };
         state::with_sim(self.sim_gen, |k| {
             let (done, never_ran) = {
@@ -528,8 +547,8 @@ impl<T> Task<T> {
                 free_task(k, key);
                 return;
             }
-            if why == Release::Drop && never_ran && !cascading(k) {
-                dropped_unpolled(k, key);
+            if why == Release::Drop && never_ran && !awaited && !cascading(k) {
+                dropped_unpolled(k, key, self.spawned_at);
             }
             cancel_task(k, key);
         });
@@ -544,7 +563,8 @@ impl<T> Drop for Task<T> {
 
 /// Whether a handle drop is a side effect of a larger cancellation rather than the
 /// testbench's own choice: the run is ending, the dropping task is itself being
-/// cancelled (its locals go with it), or a panic is unwinding.
+/// cancelled (its locals go with it), a combinator is cancelling an operand (a `Task`
+/// passed by value to `first!` or `with_timeout` that lost), or a panic is unwinding.
 fn cascading(k: &Kernel) -> bool {
     let owner_cancelled = k.current.get().is_some_and(|c| {
         k.tasks
@@ -552,23 +572,38 @@ fn cascading(k: &Kernel) -> bool {
             .get(c)
             .is_some_and(|e| e.state == TaskState::Cancelling)
     });
-    k.phase.get() == Phase::Ended || owner_cancelled || std::thread::panicking()
+    k.phase.get() == Phase::Ended
+        || owner_cancelled
+        || k.cancelling_operand.get()
+        || std::thread::panicking()
 }
 
-/// Records and reports a task cancelled by dropping its handle before it ever ran.
+/// Fails the run for a task cancelled by dropping its handle before it ever ran.
 ///
-/// A warning rather than a failure: dropping a fresh handle is also how a testbench
-/// abandons work it no longer needs (the loser of a race, a request made moot), and
-/// cancelling by drop is the one cancellation mechanism (DECISION §1). The warning names
-/// the fix for the common mistake; the trace record keeps it visible in run directories.
+/// A failure, not a warning: the usual cause is `let _ = spawn(..)` (rustc's `must_use`
+/// help suggests it), which cancels a driver or monitor before it does anything, and a
+/// warning on stderr is hidden by test runners that capture output, so the test would pass
+/// without the task (a false pass; correctness over ergonomics, constitution priorities).
+/// Dropping stays the one cancellation mechanism (DECISION §1): [`Task::cancel`] drops the
+/// future the same way, and says it is deliberate. The trace record keeps the event in run
+/// directories.
 #[cold]
-fn dropped_unpolled(k: &Kernel, key: Key) {
+fn dropped_unpolled(k: &Kernel, key: Key, spawned_at: &'static Location<'static>) {
     k.record(TraceKind::DroppedUnpolled, Some(key), 0, 0);
-    eprintln!(
-        "simjig: warning: task `{}` was cancelled before it ever ran, because its Task handle \
-         was dropped (as `let _ = spawn(..)` does); await the handle, keep it, or call \
-         .detach() to let the task run on its own",
+    let message = format!(
+        "the Task handle of `{}` was dropped before the task ever ran, so it was cancelled \
+         and never ran (`let _ = spawn(..)` does this); the location is its `spawn` call",
         k.task_name(key)
+    );
+    k.fail(
+        FailureKind::Setup {
+            message: message.clone(),
+            help: "call .detach() on the handle to run the task in the background, .await it \
+                   for its result, or call .cancel() if cancelling it is intended",
+        },
+        k.current.get(),
+        Some(spawned_at.into()),
+        message,
     );
 }
 

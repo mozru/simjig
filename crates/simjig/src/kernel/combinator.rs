@@ -242,7 +242,7 @@ impl<const N: usize> Run<N> {
                 if tasks::has_live_forks(k, h) {
                     tasks::requeue(k, h);
                 } else {
-                    ops[i].cancel();
+                    cancel_operand(k, &mut *ops[i]);
                     self.finished(k, wait, i, Outcome::Cancelled, ops);
                 }
             }
@@ -283,10 +283,24 @@ impl<const N: usize> Run<N> {
         self.cancelled = true;
         for (op, &h) in ops.iter_mut().zip(&self.helpers) {
             if tasks::helper_state(k, h) == HelperState::Running && tasks::cancel_helper(k, h) {
-                op.cancel();
+                cancel_operand(k, &mut **op);
             }
         }
     }
+}
+
+/// Cancels `op`, marking the drop as the combinator's: a `Task` passed by value that lost
+/// is cancelled by design (README, "Known differences from cocotb"), not dropped by
+/// mistake, even if it never ran.
+fn cancel_operand(k: &Kernel, op: &mut dyn Operand) {
+    struct Restore<'k>(&'k Kernel, bool);
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            self.0.cancelling_operand.set(self.1);
+        }
+    }
+    let _restore = Restore(k, k.cancelling_operand.replace(true));
+    op.cancel();
 }
 
 /// Polls `op` as helper `h`; returns whether it completed.

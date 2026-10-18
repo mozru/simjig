@@ -15,6 +15,26 @@ the public API, the generated code or simulation semantics.
   directory another tool created first (`--target-dir target/rust-analyzer` creates
   `target/`) has no tag, and every crate fell back to its own `OUT_DIR/simjig-cache`. A
   build that still falls back warns (`cargo::warning`).
+- `cargo simjig show <dut> [-p <package>] [--path]` prints the module that
+  `include_dut!(<dut>)` includes, or its path under `target/`. The README has a section
+  on the generated names (suffixes, enum prefixes, keywords, collisions).
+- An integer compares equal to a `Bits<N>`, `WideBits` or `Bit` from the left too
+  (`PartialEq<Bits<N>> for u8 ... u128, i8 ... i128, usize, isize`, and `bool == Bit`),
+  so `assert_eq!(4, x.get())` compiles. A negative integer equals no value.
+- A model that fails to verilate only because of lint warnings gets a `hint:` naming the
+  waivers: a `lint_off` comment, `.verilator_args(["-Wno-<CODE>"])`, or
+  `.verilator_args(["-Wno-fatal"])`.
+- A failed `Dut::build` prints the error as `cargo::error=` lines (one per line of the
+  message) and none of that DUT's directives. Cargo shows them as `error:` lines right
+  after `Compiling`, before its dump of the build script's stdout (the `rerun-if-changed`
+  lines of the DUTs built before), and the error is still the last stdout line.
+- Breaking: dropping a `Task` handle before its task ever ran, without awaiting it, fails
+  the run (`FailureKind::Setup`, at the `spawn` call, naming the task and the fixes:
+  `.detach()`, `.await`, `.cancel()`). It printed a warning that test runners capture, so
+  `let _ = spawn(..)`, which rustc's `must_use` help suggests, was a test that passed
+  without its driver. Cancel such a task with `Task::cancel`. A combinator dropping a
+  losing operand, a cancelled task's locals and the end of the run are unaffected; so is
+  dropping a handle whose task has run. The `must_use` message of `Task` says the same.
 - Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.

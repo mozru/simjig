@@ -128,6 +128,24 @@ impl PartialEq<u128> for Bit {
     }
 }
 
+/// `1 == b` as well as `b == 1` (see `Bits`).
+macro_rules! int_eq_bit {
+    ($($int:ty)*) => {$(
+        impl PartialEq<Bit> for $int {
+            fn eq(&self, other: &Bit) -> bool {
+                u128::try_from(*self).is_ok_and(|v| *other == v)
+            }
+        }
+    )*};
+}
+int_eq_bit!(u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize);
+
+impl PartialEq<Bit> for bool {
+    fn eq(&self, other: &Bit) -> bool {
+        *other == *self
+    }
+}
+
 impl Packed for Bit {
     const WIDTH: u32 = 1;
     type Raw = u8;

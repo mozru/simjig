@@ -15,7 +15,7 @@ projects built on top of simjig.
 | `simjig-build` | Build time: one lowering feeding every emitter (Rust, C++ vtable, `.vlt`, wrapper SV, layout check, DPI-C trait and trampolines in `codegen::dpi`, with `Dut::dpi_in_c` leaving chosen imports to C), probe path resolution (`codegen/lower/path.rs`), the probe check against Verilator's scope table (`syms.rs`), interface-binding diagnostics (`iface_diag.rs`), Verilator invocation, the content-addressed caches (`cache.rs`: Verilator output; `front.rs`: each DUT's IR and layout-check verdict; `archive.rs`: model and runtime archives keyed by sources, flags, compiler identity and `-MD` dependencies; `manifest.rs`: the dependency manifests they share), per-build-script checks (`script`: DUT names, DPI exports, covergroups, one `-rpath` per directory). |
 | `simjig` | Runtime: `kernel` (scheduler, triggers, tasks, failures, recorder; refuses every entry point inside a DPI-C call), `model` (Verilator backend over the C ABI; `model::trace`: FST waves sampled per timestep and moved to a per-branch file in a fork child; coverage counters via `Sim::coverage`), `signal` (typed handles), `dpi` (DPI-C imports implemented in Rust, dispatched per model instance; a panic is `FailureKind::DpiPanic`), `harness` (`#[simjig::test]` support, seeds, reports, run dirs; `harness::waves`/`replay`: waves on failure from a traced replay in a child process; `harness::multi`: several DUTs per test as one `DutModel` tuple, `Lockstep`, `Mirror`), `fork` (`run_from_checkpoint`: branches forked from a quiet point, results over a socket, `ForkHook`s for resources a child must not share). |
 | `simjig-macros` | `#[simjig::test]` attribute (thin; logic unit-tested). |
-| `cargo-simjig` | User CLI: `cargo simjig doctor` (environment checks with fixes) and `cargo simjig waves` (rerun a test with waves). Depends on `svtypes` for the version table. |
+| `cargo-simjig` | User CLI: `cargo simjig doctor` (environment checks with fixes), `cargo simjig waves` (rerun a test with waves) and `cargo simjig show` (print a DUT's generated module, found through Cargo's `build-script-executed` messages). Depends on `svtypes` for the version table. |
 | `xtask` | Repository automation: `cargo xtask ci`, `setup` (pinned tools), `doctor`. |
 
 ## Invariants
@@ -51,7 +51,7 @@ listed here with what keeps the copies equal.
 | The "did you mean" hint | `codegen::names::did_you_mean` |
 | Two-step cache keys | `cache.rs` (Verilator output), `front.rs` (IR), `archive.rs` (archives), over the manifests of `manifest.rs` |
 | An input edited during a run | `manifest::{Snapshot, Manifest::record}`, `cache::keep_unpublished` |
-| What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`) |
+| What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`); the path `OUT_DIR/simjig/<name>.rs` is read back by `simjig::include_dut!` and by `cargo-simjig`'s `show` (which may not depend on `simjig-build`), kept equal by their docs naming `emit.rs` |
 | Environment variables that rerun the build script | `BuildEnv::TRACKED_VARS` |
 | Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |
 | Rendering a failure | `Display` of `kernel::failure::Failure` and of `BlockedTask` (one blocked task); the harness's report (`harness::report::FailureReport`) builds on them |

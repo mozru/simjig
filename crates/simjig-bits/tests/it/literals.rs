@@ -50,6 +50,22 @@ fn literals_infer_at_every_width() {
     assert_eq!(one.0.unwrap(), 1);
 }
 
+#[test]
+fn an_integer_compares_equal_from_either_side() {
+    let x = Bits::<8>::new(4);
+    assert_eq!(4, x); // the literal infers, as with `x == 4`
+    assert_eq!(x, 4);
+    assert_ne!(5, x);
+    assert!(4_u8 == x && 4_i64 == x && 4_usize == x);
+    assert!(-4_i32 != x, "a negative integer equals no value");
+    let wide = WideBits::<200, 7>::from(7_u128);
+    assert_eq!(7, wide);
+    assert!(-7_i128 != wide);
+    assert_eq!(1, Bit::ONE);
+    assert_eq!(true, Bit::ONE);
+    assert!(2 != Bit::ZERO && 0 == Bit::ZERO);
+}
+
 thread_local! {
     static LAST_PANIC: RefCell<Option<(String, u32, String)>> = const { RefCell::new(None) };
 }

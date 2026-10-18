@@ -84,6 +84,9 @@ pub(crate) struct Kernel {
     pub(crate) route: Cell<Option<Key>>,
     pub(crate) main: Cell<Option<Key>>,
     pub(crate) main_done: Cell<bool>,
+    /// A combinator is dropping a cancelled operand: a `Task` handle dropped now is part
+    /// of that cancellation, not the testbench's `let _ = spawn(..)` (`tasks::cascading`).
+    pub(crate) cancelling_operand: Cell<bool>,
     pub(crate) waits: RefCell<WaitTable>,
     pub(crate) log: RefCell<WriteLog>,
     /// Kernel clocks, in declaration order (the order coincident edges are logged in).
@@ -187,6 +190,7 @@ impl Kernel {
             route: Cell::new(None),
             main: Cell::new(None),
             main_done: Cell::new(false),
+            cancelling_operand: Cell::new(false),
             failure: RefCell::new(None),
             recorder: RefCell::new(Recorder::default()),
             counters: Cell::new(KernelStats::default()),

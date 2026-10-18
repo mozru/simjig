@@ -693,13 +693,16 @@ impl Dut {
 
     /// Builds from a Cargo build script: reads the environment Cargo provides, runs
     /// [`Dut::build_in`], and prints the `cargo::` directives.
+    ///
+    /// On failure it prints no directive of this DUT, only the error as `cargo::error=`
+    /// lines, and returns it.
     #[expect(clippy::print_stdout, reason = "build scripts talk to Cargo on stdout")]
     pub fn build(self) -> Result<Built, Error> {
-        let built = self.build_in(&BuildEnv::from_cargo()?)?;
-        for line in &built.directives {
+        let result = BuildEnv::from_cargo().and_then(|env| self.build_in(&env));
+        for line in cargo_lines(&result) {
             println!("{line}");
         }
-        Ok(built)
+        result
     }
 
     /// Runs the whole pipeline (see the module docs) in an explicit environment and
@@ -772,6 +775,25 @@ impl Dut {
             rust_file: placed.rust,
             directives,
         })
+    }
+}
+
+/// What [`Dut::build`] prints for `result`: the directives of a build, or the error alone.
+///
+/// The error is printed as `cargo::error=` lines (one per line of its message), which Cargo
+/// shows as `error:` lines before anything else of the failed build script, so it is not
+/// buried under thousands of `rerun-if-changed` lines (Cargo dumps the script's whole
+/// stdout when the script fails). It is also the last stdout line, after the directives of
+/// the DUTs this script built before, and the script's `Error:` on stderr follows.
+fn cargo_lines(result: &Result<Built, Error>) -> Vec<String> {
+    match result {
+        Ok(built) => built.directives.clone(),
+        Err(error) => error
+            .to_string()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| format!("cargo::error={l}"))
+            .collect(),
     }
 }
 
@@ -901,6 +923,36 @@ mod tests {
             .param("DEPTH", 16)
             .top("fifo")
             .config
+    }
+
+    #[test]
+    fn a_failed_build_prints_only_the_error_as_cargo_errors() {
+        // A config error is found before anything is verilated.
+        let Err(error) = Dut::new("fifo").top("fifo").config.validate() else {
+            panic!("an empty source list is refused")
+        };
+        let lines = cargo_lines(&Err(error));
+        assert_ne!(lines, Vec::<String>::new());
+        assert!(
+            lines.iter().all(|l| l.starts_with("cargo::error=")),
+            "no directive of a failed DUT is printed: {lines:?}"
+        );
+        assert!(
+            lines[0].contains("invalid DUT `fifo` configuration"),
+            "{lines:?}"
+        );
+        // Every non-empty line of a multi-line message is its own `cargo::error`.
+        let multi = Error::Config {
+            dut: "fifo".into(),
+            msg: "first\n\n  add .bind_iface(\"in\", \"req_if.sink\")".into(),
+        };
+        assert_eq!(
+            cargo_lines(&Err(multi)),
+            [
+                "cargo::error=invalid DUT `fifo` configuration: first",
+                "cargo::error=  add .bind_iface(\"in\", \"req_if.sink\")",
+            ]
+        );
     }
 
     #[test]

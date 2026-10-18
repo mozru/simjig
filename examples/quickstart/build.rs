@@ -5,6 +5,8 @@ fn main() -> Result<(), simjig_build::Error> {
     simjig_build::Dut::new("inv")
         .sources(["rtl/inv.sv"])
         .top("inv")
+        // Verilator's lint warnings fail the build; to keep them as warnings:
+        // .verilator_args(["-Wno-fatal"])
         .build()?;
     // `.trace_fst(true)`: the flop can write FST waves, so its failures get waves from a
     // replay (`SIMJIG_WAVES_ON_FAIL=1`, `cargo simjig waves`). `.timing(true)` and

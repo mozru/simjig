@@ -58,6 +58,11 @@ pub type Result<T = (), E = crate::Failure> = core::result::Result<T, E>;
 ///
 /// The `@from <dir>` form reads `<dir>/<name>.rs` instead; simjig's own tests use it
 /// with hand-written files.
+///
+/// # Reading the generated module
+/// `cargo simjig show <name>` prints the file (`--path`: only its path), so the generated
+/// names (`Status::EMPTY`, `StatusVariant`, `r#in`) can be looked up; the README's
+/// "Generated names" section gives the rules.
 #[macro_export]
 macro_rules! include_dut {
     ($name:ident) => {

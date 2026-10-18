@@ -101,6 +101,13 @@ impl TraceOptions {
         self
     }
 
+    /// The same options, writing to `path` instead.
+    #[must_use]
+    pub fn with_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.path = path.into();
+        self
+    }
+
     /// Records only if the model supports FST; a model without it runs untraced instead of
     /// failing to build (the harness's replay uses this, and checks whether a file appeared).
     #[must_use]

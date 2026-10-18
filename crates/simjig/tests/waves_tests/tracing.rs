@@ -179,3 +179,40 @@ fn a_fifo_stream_is_traced_too() {
     assert_eq!(fst.times, steps);
     assert!(fst.vars >= 9, "{fst:?}");
 }
+
+#[test]
+fn each_model_of_a_multi_dut_simulation_writes_its_own_fst() {
+    let path = waves_path("two_models");
+    let second = path.with_file_name("two_models.model-1.fst");
+    std::fs::remove_file(&second).ok();
+    let options = options().with_trace(TraceOptions::new(&path));
+    let mut sim = <(counter_fst::Dut, fifo_fst::Dut)>::instantiate(&options).expect("loads");
+    let (counter, fifo) = <(counter_fst::Dut, fifo_fst::Dut)>::create(&mut sim).expect("binds");
+    sim.run(async move {
+        clock(counter.clk, ns(10)).start();
+        clock(fifo.clk, ns(4)).start();
+        counter.rst.set(1);
+        fifo.rst.set(1);
+        counter.clk.falling().await;
+        counter.rst.set(0);
+        fifo.rst.set(0);
+        for _ in 0..5 {
+            counter.clk.rising().await;
+        }
+    })
+    .expect("passes");
+    let steps = timesteps(&sim);
+    drop(sim);
+    let (a, b) = (fst::read(&path), fst::read(&second));
+    // Each model is sampled at the timesteps it was evaluated in (its own clock's edges),
+    // into its own file.
+    let edges =
+        |period: u64| -> Vec<u64> { steps.iter().copied().filter(|t| t % period == 0).collect() };
+    assert_eq!(a.times, edges(5_000), "the counter's 10 ns clock");
+    // The fifo's 4 ns clock, plus the timestep that released its reset.
+    let mut fifo = edges(2_000);
+    fifo.push(5_000);
+    fifo.sort_unstable();
+    assert_eq!(b.times, fifo);
+    assert_ne!(a.vars, b.vars, "two different designs");
+}

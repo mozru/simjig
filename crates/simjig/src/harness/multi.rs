@@ -63,7 +63,7 @@ macro_rules! tuple_dut {
         /// Several DUTs in one simulation, numbered in tuple order; see `harness::multi`.
         impl<$($dut: DutModel),+> DutModel for ($($dut,)+) {
             fn instantiate(options: &ModelOptions) -> Result<Sim, Failure> {
-                let models = vec![$($dut::load(options)?.into_backend()),+];
+                let models = vec![$($dut::load(&options.for_model($index))?.into_backend()),+];
                 Sim::from_backends(models).map_err(|e| model_set_failure(&e))
             }
 

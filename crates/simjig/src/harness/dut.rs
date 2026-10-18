@@ -34,6 +34,28 @@ pub struct ModelOptions {
 }
 
 impl ModelOptions {
+    /// The options of model `index` of a simulation with several: the same, except that a
+    /// trace of model `index > 0` goes to `<stem>.model-<index>.fst` beside the given file
+    /// (model 0 keeps it), since each model writes its own FST.
+    #[must_use]
+    pub fn for_model(&self, index: usize) -> Self {
+        let mut options = self.clone();
+        if index > 0
+            && let Some(trace) = &mut options.trace
+        {
+            let stem = trace
+                .path()
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let path = trace
+                .path()
+                .with_file_name(format!("{stem}.model-{index}.fst"));
+            *trace = trace.clone().with_path(path);
+        }
+        options
+    }
+
     /// The options for a run with root seed `seed`.
     #[must_use]
     pub fn new(seed: Seed) -> Self {

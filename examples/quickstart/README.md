@@ -18,13 +18,45 @@ that library does not link it, so the model would be missing (see the glue notes
 `docs/notes/glue.md`). Verilator 5.052 must be on `PATH` (in this repository: `pixi run`).
 
 `[lints] workspace = true` inherits the repository's lints, including `missing_docs`
-(warn), which is why every test file opens with a `//!` comment. A copy outside this
-workspace has nothing to inherit: give each `.workspace = true` key (the `[lints]` table
-included) its own value.
+(warn), which is why every test file opens with a `//!` comment.
 
 ```sh
 pixi run cargo nextest run -p quickstart
 ```
+
+## Using it outside this repository
+
+simjig is not on crates.io yet, so a copy of this directory elsewhere depends on a simjig
+checkout (`<simjig>` below; a path without spaces) and borrows its pixi environment:
+
+1. In `Cargo.toml`, replace each `.workspace = true` key with its own value, and the
+   dependencies with paths into the checkout. Drop `[lints]` or write your own:
+
+   ```toml
+   [package]
+   name = "my_tb"
+   version = "0.1.0"
+   edition = "2024"
+   publish = false
+
+   [dev-dependencies]
+   simjig = { path = "<simjig>/crates/simjig" }
+   simjig-bits = { path = "<simjig>/crates/simjig-bits" }
+
+   [build-dependencies]
+   simjig-build = { path = "<simjig>/crates/simjig-build" }
+   ```
+
+2. Copy `<simjig>/rust-toolchain.toml` next to your `Cargo.toml`: simjig needs that
+   exact toolchain (rustup installs it on the first cargo command).
+3. Run cargo through the checkout's pixi environment, which has Verilator:
+
+   ```sh
+   pixi run --manifest-path <simjig>/pixi.toml cargo nextest run
+   ```
+
+   The `repro:` line of a failure carries the same `--manifest-path`, so it can be pasted
+   as is. Install `cargo simjig` (below) from the checkout, and run it the same way.
 
 Each test file names a design with `simjig::include_dut!(inv);`, which brings in the
 module `inv` with `inv::Dut`: one typed handle per port (`In<Bit>` for inputs, `Out<..>`
@@ -64,7 +96,8 @@ pixi run cargo simjig waves q_follows_d -p quickstart --window 10ns..   # one te
 ```
 
 `cargo simjig` is a separate binary; install it once, from the simjig repository's root
-(from a copy of this directory, point `--path` at your simjig checkout):
+(from a copy of this directory, point `--path` at your simjig checkout). It goes to
+`~/.cargo/bin`, which must be on `PATH`:
 
 ```sh
 pixi run cargo install --locked --path crates/cargo-simjig

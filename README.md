@@ -43,10 +43,20 @@ async fn q_follows_d(dut: flop::Dut) {
 }
 ```
 
+From this repository's root:
+
 ```sh
-pixi install --locked                       # Verilator 5.052 and the C++ toolchain
+pixi install --locked          # Verilator 5.052 and the C++ toolchain, in .pixi/
+pixi run cargo xtask setup     # the pinned cargo tools: cargo-nextest, cargo-deny, ...
+pixi run cargo install --locked --path crates/cargo-simjig   # the `cargo simjig` command
+pixi run cargo simjig doctor   # checks Verilator, the compiler and nextest, with fixes
 pixi run cargo nextest run -p quickstart
 ```
+
+`cargo xtask setup` and `cargo install` put their binaries in `~/.cargo/bin`, which must
+be on `PATH`. Run cargo through `pixi run`, so that it finds Verilator. To use simjig
+outside this repository, see the quickstart's README ("Using it outside this
+repository").
 
 A failing test prints a report with the seed, the simulation time, the failing task and a
 one-line `repro:` command that reruns it with the same seed.
@@ -55,6 +65,59 @@ Every `#[simjig::test]` has a simulation-time budget: 10 ms unless it sets
 `timeout = "..."` (or `timeout = "none"`). For hangs that do not advance simulation time,
 the quickstart's `.config/nextest.toml` sets a wall-clock `slow-timeout` with
 `terminate-after`.
+
+## Coming from cocotb
+
+simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded cocotb runs
+(`tests/conformance/README.md`, "Observed semantics"). The same test, translated:
+
+| cocotb | simjig |
+|---|---|
+| `Clock(dut.clk, 10, "ns").start()` | `clock(dut.clk, ns(10)).start()` |
+| `await RisingEdge(dut.clk)`, `FallingEdge`, `ValueChange` | `dut.clk.rising().await`, `.falling()`, `.changed()` |
+| `await ClockCycles(dut.clk, 3)` | `simjig::cycles(dut.clk, 3).await` |
+| `await Timer(10, "ns")` | `Timer::new(ns(10)).await` |
+| `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `ReadOnly::new().await`, `ReadWrite::new()`, `NextTimeStep::new()` |
+| `cocotb.start_soon(coro)` | `spawn("name", fut).detach()` |
+| `task = cocotb.start_soon(coro)`; `await task` | `let task = spawn("name", fut);` `task.await` |
+| `task.cancel()` | `task.cancel()`, or drop the `Task` |
+| `await First(a, b)` | `first!(a, b)` (same output type; ties go to the leftmost) |
+| `await Combine(a, b)` | `join!(a, b)` (a tuple of the outputs) |
+| `await with_timeout(x, 10, "ns")`, `SimTimeoutError` | `with_timeout(ns(10), x).await`, `Err(Elapsed)` |
+| `dut.x.value = 5` | `dut.x.set(5)` |
+| `int(dut.x.value)`, `bool(dut.x.value)` | `dut.x.get().to_u128()`, `dut.bit.get().to_bool()` |
+| `get_sim_time("ns")` | `simjig::now()`; print it with `now().display(ctx.precision())` (`1250 ns`) |
+| `Event`, `Queue`, `Lock` | `simjig::{Event, Queue, Lock}` |
+
+What to keep in mind:
+- **Dropping a `Task` cancels it.** `spawn` returns a handle; `let _ = spawn(..)` drops it
+  at once, so the task never runs (simjig prints a warning). Keep the handle, await it, or
+  call `.detach()`, which lets it run until its parent finishes.
+- **Writes are deposits.** `set` is applied after the next eval, so reading a signal right
+  after setting it returns the old value, and a write right after `rising()` is not
+  captured by that edge.
+- **`rising()` of a testbench clock sees pre-edge values**; the flops' new values are
+  visible from `ReadOnly`, where everything has settled. A write in `ReadOnly` fails the
+  run (`WriteInReadOnly`; cocotb raises `RuntimeError`). Edges of design-driven signals
+  see post-eval values.
+- **A `Timer` due at an edge resumes first**, before the edge is applied: it sees the
+  pre-edge state, and wins a tie against the edge in `first!` and `with_timeout` (a
+  timeout due exactly at the edge times out).
+- **`set` takes** `impl Into<T>`: an integer literal (as `u128`) for any `Bit`/`Bits<N>`/
+  `WideBits` signal, a `bool` for a `Bit`, a value of the signal's own type, or a generated
+  enum's constant or packed struct. A literal that does not fit panics, naming the signal
+  and its width.
+- **Every test has a 10 ms simulation-time budget** (`#[simjig::test(timeout = "...")]`
+  changes it, `"none"` removes it); cocotb has none. A timestep that never settles fails
+  instead of hanging: more than `DELTA_MAX` (64) evals between `ReadWrite` rounds, or more
+  than `READ_WRITE_MAX` (10 000) `ReadWrite` rounds that wake a task (cocotb loops forever).
+- **A timeout is a value**, `Err(Elapsed)`, not an exception: handle it or `.unwrap()` it.
+- **Known differences** (`tests/conformance/README.md`, "Known differences from
+  cocotb"): a zero-tick `Timer` fails when it is awaited, not when it is built; and the
+  operands of `first!`, `join!` and `with_timeout` run in the caller, not each in its own
+  task, so code between two awaits *inside* an operand may run earlier or later relative
+  to other tasks woken by the same trigger (the caller itself resumes where cocotb's
+  does).
 
 ## Beyond one clocked DUT
 

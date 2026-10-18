@@ -263,3 +263,8 @@ the public API, the generated code or simulation semantics.
   model's prefix (kept where it is the point: two instances of one build, or another
   model's trampoline), and a `Setup` failure's message no longer repeats its help (DPI
   `Setup` failures, and a DUT type without `DutModel::load`).
+- Docs: README "Coming from cocotb" (equivalents, deferred writes, pre-edge values,
+  Timer ties, the time budget and limits, known differences); the Quick start installs
+  the pinned tools (`cargo xtask setup`) and runs `cargo simjig doctor`; the quickstart
+  README says how to use it outside this repository; `cargo simjig waves --help` says
+  which test name to give.

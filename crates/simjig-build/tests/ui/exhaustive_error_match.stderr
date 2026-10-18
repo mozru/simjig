@@ -1,7 +1,7 @@
 error[E0004]: non-exhaustive patterns: `&_` not covered
-  --> tests/ui/exhaustive_error_match.rs:7:11
+  --> tests/ui/exhaustive_error_match.rs:8:11
    |
- 7 |     match e {
+ 8 |     match e {
    |           ^ pattern `&_` not covered
    |
 note: `simjig_build::Error` defined here
@@ -13,14 +13,14 @@ note: `simjig_build::Error` defined here
    = note: `simjig_build::Error` is marked as non-exhaustive, so a wildcard `_` is necessary to match exhaustively
 help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
    |
-21 ~         Error::Ports(_) => 13,
-22 ~         &_ => todo!(),
+22 ~         Error::Ports(_) => 13,
+23 ~         &_ => todo!(),
    |
 
 error[E0004]: non-exhaustive patterns: `&_` not covered
-  --> tests/ui/exhaustive_error_match.rs:26:11
+  --> tests/ui/exhaustive_error_match.rs:27:11
    |
-26 |     match e {
+27 |     match e {
    |           ^ pattern `&_` not covered
    |
 note: `simjig_build::svtypes::error::Error` defined here
@@ -32,6 +32,25 @@ note: `simjig_build::svtypes::error::Error` defined here
    = note: `simjig_build::svtypes::error::Error` is marked as non-exhaustive, so a wildcard `_` is necessary to match exhaustively
 help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
    |
-30 ~         IrError::Io { .. } => 3,
-31 ~         &_ => todo!(),
+31 ~         IrError::Io { .. } => 3,
+32 ~         &_ => todo!(),
+   |
+
+error[E0004]: non-exhaustive patterns: `&_` not covered
+  --> tests/ui/exhaustive_error_match.rs:36:11
+   |
+36 |     match e {
+   |           ^ pattern `&_` not covered
+   |
+note: `simjig_build::codegen::Error` defined here
+  --> src/codegen/error.rs
+   |
+   | pub enum Error {
+   | ^^^^^^^^^^^^^^
+   = note: the matched value is of type `&simjig_build::codegen::Error`
+   = note: `simjig_build::codegen::Error` is marked as non-exhaustive, so a wildcard `_` is necessary to match exhaustively
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+   |
+38 ~         CodegenError::Config { .. } => 1,
+39 ~         &_ => todo!(),
    |

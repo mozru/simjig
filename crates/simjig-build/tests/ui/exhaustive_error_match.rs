@@ -1,6 +1,7 @@
 // The public error enums are `#[non_exhaustive]`: even a match naming every variant
 // needs a wildcard outside the crate, so adding a variant is not a breaking change.
 use simjig_build::Error;
+use simjig_build::codegen::Error as CodegenError;
 use simjig_build::svtypes::error::Error as IrError;
 
 fn build(e: &Error) -> u8 {
@@ -31,6 +32,13 @@ fn ir(e: &IrError) -> u8 {
     }
 }
 
+fn codegen(e: &CodegenError) -> u8 {
+    match e {
+        CodegenError::Unsupported { .. } => 0,
+        CodegenError::Config { .. } => 1,
+    }
+}
+
 fn main() {
-    let _ = (build, ir);
+    let _ = (build, ir, codegen);
 }

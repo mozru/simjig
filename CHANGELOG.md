@@ -4,6 +4,25 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Random initial values, to catch a register that reset never clears:
+  `#[simjig::test(init = random)]` (or `init = zero`), or `SIMJIG_INIT=random` for tests
+  without the argument. Each model draws from its own seed, `Seed::init_seed(index)`
+  (stream `init.model-<index>`); `$urandom` is unchanged. New public API:
+  `simjig::InitValues`, `ModelOptions::{init, init_seed, with_init, random_init}`,
+  `RunIdentity::init`, `RunEnv::init`, `TestMeta::init`, `LoadError::NoRandomInit`,
+  `simjig_build::XInitial` and `Dut::x_initial` (default `Unique`, which passes no flag).
+  A random run's report header says `init=random`, its repro starts with
+  `SIMJIG_INIT=random`, and `summary.json` gains `init` and `init_seed` (also written,
+  as `"zero"` and `null`, for zero runs). Zero runs, default builds, prefixes and cache keys
+  are unchanged. Breaking: a raw `--x-initial` in `verilator_args` or an option file is
+  refused (use `.x_initial(..)`); `TestMeta`, `RunEnv`, `RunIdentity`, `ShimOptions` and
+  `DutConfig` have a new field, and `LoadError` a new variant. Reviewed snapshot diff: every
+  `#[simjig::test]` expansion gains `init: None` (`simjig-macros` snapshots).
+- C ABI (version 1, append-only): `simjig_create_opts` gains `init` and `init_seed`
+  (size 32 to 40; a caller passing size 32 gets zeros), `SIMJIG_INIT_ZERO`/`SIMJIG_INIT_RANDOM`
+  and the feature bit `SIMJIG_FEATURE_RANDOM_INIT` (8), set unless the shim's traits say
+  `kXInitialUnique = false`. The vtable (size 192) is unchanged; generated shims change only
+  for a non-default `XInitial`. Every default model's `features` now has bit 8.
 - `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
   `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
   refused; `--threads 2147483648` is negative and left to Verilator's own error.

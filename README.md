@@ -205,6 +205,29 @@ What to keep in mind:
 
 ## Beyond one clocked DUT
 
+### Random initial values
+Verilator is 2-state and starts every register at 0, so a flop that reset never clears
+passes every test that resets at time 0. Ask for random initial values to catch it:
+
+```rust
+#[simjig::test(init = random)]   // or `init = zero`; without it, SIMJIG_INIT decides
+async fn fills_and_drains(dut: fifo::Dut) { /* ... */ }
+```
+
+`SIMJIG_INIT=random cargo nextest run` turns it on for every test without an `init`
+argument (the argument wins, so a test pinned to `init = zero` keeps zeros). Every variable
+without an initializer, undriven inputs included, then starts from a value drawn from the
+run's seed (`Seed::init_seed`), its scope and its name: the same seed gives the same start,
+and a failure's report says `init=random` and its `repro:` line starts with
+`SIMJIG_INIT=random SIMJIG_SEED=...`, which reproduces it exactly (`summary.json` records
+`init` and `init_seed`). Only the start changes: `$urandom` draws as with zeros. Each model
+of a multi-DUT test starts from its own stream; fork branches inherit the start they were
+forked from. The model must keep Verilator's default `--x-initial unique`
+(`.x_initial(XInitial::Unique)`); one built with `.x_initial(XInitial::Zero)` or
+`XInitial::Fast` compiles its initial values in and refuses `init = random`. A raw
+`--x-initial` among `verilator_args` is refused. `--x-assign` (explicit `X` in the source)
+is a separate option and not affected.
+
 ### Build options
 Each `simjig_build::Dut` takes what its tests need:
 

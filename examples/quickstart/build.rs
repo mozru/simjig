@@ -1,5 +1,5 @@
 //! Verilates each design, generates its Rust bindings and C++ glue, and links the model
-//! into this crate's tests. A test file then writes `simjig::include_dut!(inv);`.
+//! into this crate's tests. `src/lib.rs` then writes `simjig::include_dut!(inv);`.
 
 fn main() -> Result<(), simjig_build::Error> {
     simjig_build::Dut::new("inv")

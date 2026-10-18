@@ -9,43 +9,8 @@ See `ARCHITECTURE.md` for the code map and `docs/architecture/DECISION.md` for t
 ## Quick start
 
 The canonical starting point is [`examples/quickstart`](examples/quickstart): two tiny
-designs, a build script and tests. Copy it to start a project.
-
-```rust
-// build.rs
-//! Verilates the flop and links it into this crate's tests.
-fn main() -> Result<(), simjig_build::Error> {
-    simjig_build::Dut::new("flop")
-        .sources(["rtl/flop.sv"])
-        .top("flop")
-        .build()?;
-    Ok(())
-}
-```
-
-```rust
-// tests/flop.rs
-//! The flop captures `d` on the rising edge.
-use simjig::{ReadOnly, clock, ns};
-use simjig_bits::Bit;
-
-simjig::include_dut!(flop); // the generated `flop::Dut`
-
-#[simjig::test(timeout = "1us")]
-async fn q_follows_d(dut: flop::Dut) {
-    clock(dut.clk, ns(10)).start();
-    dut.rst.set(1);
-    dut.clk.rising().await;
-    dut.clk.falling().await;
-    dut.rst.set(0);
-    dut.d.set(1);
-    dut.clk.rising().await;
-    ReadOnly::new().await; // the values the edge produced
-    assert_eq!(dut.q.get(), Bit::ONE);
-}
-```
-
-From this repository's root:
+designs, a build script and tests, in the layout of "Project layout" below. Copy it to
+start a project. From this repository's root:
 
 ```sh
 pixi install --locked          # Verilator 5.052 and the C++ toolchain, in .pixi/
@@ -54,15 +19,6 @@ pixi run cargo install --locked --path crates/cargo-simjig   # the `cargo simjig
 pixi run cargo simjig doctor   # checks Verilator, the compiler and nextest, with fixes
 pixi run cargo nextest run -p quickstart
 ```
-
-A new crate needs a target before its first build: with only `Cargo.toml` and
-`build.rs`, cargo stops with `no targets specified in the manifest`. Add the first test
-file (`tests/<name>.rs`) or an empty `src/lib.rs`. A library target is fine, for
-helpers that several test files share: the models link into the tests either way.
-
-Each file opens with a `//!` line because the repository's lints (`[lints] workspace =
-true`, as in the quickstart) warn on `missing_docs`, and a build script and each test
-file are crates of their own.
 
 `cargo xtask setup` and `cargo install` put their binaries in `~/.cargo/bin`, which must
 be on `PATH`. Run cargo through `pixi run`, so that it finds Verilator. To use simjig
@@ -76,6 +32,161 @@ Every `#[simjig::test]` has a simulation-time budget: 10 ms unless it sets
 `timeout = "..."` (or `timeout = "none"`). For hangs that do not advance simulation time,
 the quickstart's `.config/nextest.toml` sets a wall-clock `slow-timeout` with
 `terminate-after`.
+
+## Project layout
+
+The recommended layout, the quickstart's: a build script builds the models, a library
+target includes them and holds what the tests share, and each test file starts with one
+`use` line. `Cargo.toml` depends on `simjig` (its `simjig::bits` has the value types) and
+builds with `simjig-build`, and its lint table is the repository's with `unwrap_used`,
+`expect_used` and `missing_docs` allowed, so tests may unwrap and need no doc comments.
+Cargo cannot add local entries to `[lints] workspace = true`, so the table lists every
+lint it keeps:
+
+```toml
+# Cargo.toml ([package] omitted)
+[dependencies]
+simjig.workspace = true
+
+[build-dependencies]
+simjig-build.workspace = true
+
+# A testbench's lints: the repository's, except that tests may unwrap and need no docs.
+# Cargo cannot extend `workspace = true` with local entries, so the table lists them all.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "allow"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unwrap_used = "allow"
+expect_used = "allow"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+todo = "warn"
+clone_on_ref_ptr = "warn"
+map_err_ignore = "warn"
+let_underscore_must_use = "warn"
+rc_buffer = "warn"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+```
+
+```rust
+// build.rs
+//! Verilates each design, generates its Rust bindings and C++ glue, and links the model
+//! into this crate's tests. `src/lib.rs` then writes `simjig::include_dut!(inv);`.
+
+fn main() -> Result<(), simjig_build::Error> {
+    simjig_build::Dut::new("inv")
+        .sources(["rtl/inv.sv"])
+        .top("inv")
+        // Verilator's lint warnings fail the build; to waive one code:
+        // .verilator_args(["-Wno-WIDTHEXPAND"])
+        // (`-Wno-fatal` keeps them all as warnings, but also hides a port width mismatch
+        // between an interface and the module bound to it.)
+        .build()?;
+    // `.trace_fst(true)`: the flop can write FST waves, so its failures get waves from a
+    // replay (`SIMJIG_WAVES_ON_FAIL=1`, `cargo simjig waves`). `.timing(true)` and
+    // `.coverage(true)` are the other model options.
+    simjig_build::Dut::new("flop")
+        .sources(["rtl/flop.sv"])
+        .top("flop")
+        .trace_fst(true)
+        .build()?;
+    Ok(())
+}
+```
+
+```rust
+// src/lib.rs
+//! The testbench library: what every test file of this package shares. Each
+//! `tests/*.rs` starts with `use quickstart::*;`, which brings the simjig prelude, the
+//! DUT modules (`inv::Dut`, `flop::Dut`) and [`reset`].
+
+pub use simjig::prelude::*;
+
+// The bindings `build.rs` generated: a module per design, with `Dut`, one typed handle per
+// port.
+simjig::include_dut!(inv);
+simjig::include_dut!(flop);
+
+/// Holds the flop in reset for one rising edge of its clock, and releases it right after
+/// that edge.
+pub async fn reset(dut: &flop::Dut) {
+    dut.rst.set(1);
+    dut.clk.rising().read_write().await;
+    dut.rst.set(0);
+}
+```
+
+```rust
+// tests/flop.rs
+//! A clocked design: a kernel-driven clock, and the value a clock edge produced, read in
+//! the same timestep with `.read_write()`.
+
+use quickstart::*;
+
+#[simjig::test(timeout = "1us")]
+async fn q_follows_d(dut: flop::Dut) {
+    clock(dut.clk, ns(10)).start();
+    reset(&dut).await;
+    for d in [true, false, true] {
+        dut.d.set(d);
+        // At the edge itself the flop has not updated yet; in the ReadWrite region of that
+        // timestep it has, and writes are still allowed (the next `d`).
+        dut.clk.rising().read_write().await;
+        assert_eq!(dut.q.get(), Bit::from(d));
+    }
+    // The falling-edge convention instead: `dut.clk.falling().await` before each `set`,
+    // and plain `dut.clk.rising().await` to sample what the edge acts on.
+}
+```
+
+`simjig::prelude` holds what nearly every testbench uses (`clock`, `cycles`, `ns`,
+`spawn`, `Timer`, `ReadWrite`, `ReadOnly`, `with_timeout`, `first!`, `join!`, `Queue`,
+`Event`, `TestCtx`, `Rng`, `tb_log!`, `Bit`, `Bits`, `Value`, `Vector`, `Packed` and the
+trait behind `.read_write()`); its rustdoc says why each is there and the rest is not.
+`simjig::include_dut!` in a test file works too, and the build script links the models
+into the tests either way; a crate with only `Cargo.toml` and `build.rs` has no target,
+and cargo stops with `no targets specified in the manifest` until `src/lib.rs` or a test
+file exists.
+
+## The three moments at a clock edge
+
+At a rising edge of a clock the testbench drives, a task can look at the design at three
+points of that timestep:
+
+| simjig | Sees | Writes | SystemVerilog | cocotb |
+|---|---|---|---|---|
+| `dut.clk.rising().await` | what the edge acts on: every signal still holds its pre-edge value, which is what the flops capture | allowed; the next edge captures them, not this one | Active region; a clocking block's input sample | `await RisingEdge(clk)` |
+| `dut.clk.rising().read_write().await` | what the edge produced: the flops' new values, with their combinational fan-out settled | allowed, but a later write in this timestep (by any task) may change combinational values again | Reactive region (a `program` block) | `await RisingEdge(clk)`, then `await ReadWrite()` |
+| `dut.clk.rising().read_only().await` | final values for the timestep | a failure (`WriteInReadOnly`) | Postponed region (`$strobe`) | `await RisingEdge(clk)`, then `await ReadOnly()` |
+
+So a monitor samples at `rising()`, a check of an edge's result uses `.read_write()`
+(and may then drive the next input), and `.read_only()` is for values nothing else may
+change. `.read_write()` and `.read_only()` also follow `falling()`, `changed()`,
+`cycles(..)` and `Timer::new(..)`, and always land in the timestep their trigger fired
+in. An edge of a signal the design drives fires after the eval that made it, so plain
+`rising()` already shows post-edge values there.
 
 ## The generated module
 `simjig::include_dut!(fifo)` includes the Rust module that the build script generated
@@ -119,15 +230,17 @@ An enum type is a newtype over its bits, so it also holds values outside its var
 ## Coming from cocotb
 
 simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded cocotb runs
-(`tests/conformance/README.md`, "Observed semantics"). The same test, translated:
+(`tests/conformance/README.md`, "Observed semantics"). The same test, translated; with
+`use simjig::prelude::*;`, the names without a `simjig::` path are in scope:
 
 | cocotb | simjig |
 |---|---|
 | `Clock(dut.clk, 10, "ns").start()` | `clock(dut.clk, ns(10)).start()` |
 | `await RisingEdge(dut.clk)`, `FallingEdge`, `ValueChange` | `dut.clk.rising().await`, `.falling()`, `.changed()` |
-| `await ClockCycles(dut.clk, 3)` | `simjig::cycles(dut.clk, 3).await` |
+| `await RisingEdge(dut.clk); await ReadWrite()` | `dut.clk.rising().read_write().await` (`.read_only()` for `ReadOnly()`; "The three moments at a clock edge") |
+| `await ClockCycles(dut.clk, 3)` | `cycles(dut.clk, 3).await` |
 | `await Timer(10, "ns")` | `Timer::new(ns(10)).await` |
-| `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `ReadOnly::new().await`, `ReadWrite::new()`, `NextTimeStep::new()` |
+| `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `ReadOnly::new().await`, `ReadWrite::new()`, `simjig::NextTimeStep::new()` |
 | `cocotb.start_soon(coro)` | `spawn("name", fut).detach()` |
 | `task = cocotb.start_soon(coro)`; `await task` | `let task = spawn("name", fut);` `task.await` |
 | `task.cancel()` | `task.cancel()` (or drop a `Task` that has run) |
@@ -137,8 +250,8 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `dut.x.value = 5` | `dut.x.set(5)` |
 | `int(dut.x.value)`, `bool(dut.x.value)` | `dut.x.get().to_u128()`, `dut.bit.get().to_bool()` |
 | `get_sim_time("ns")` | `simjig::now()`; print it with `simjig::now_display()` (`1250 ns`) |
-| `dut._log.info("x=%d", x)` | `simjig::tb_log!("x={x}")` (prints `[1250 ns main.monitor] x=3`) |
-| `Event`, `Queue`, `Lock` | `simjig::{Event, Queue, Lock}` |
+| `dut._log.info("x=%d", x)` | `tb_log!("x={x}")` (prints `[1250 ns main.monitor] x=3`) |
+| `Event`, `Queue`, `Lock` | `Event`, `Queue`, `simjig::Lock` |
 | `random.random() < 0.5`, `random.randrange(n)` | `rng.bool()`, `rng.below(n)` on a seeded `ctx.rng("name")` |
 
 A seeded stimulus stream and an in-order scoreboard, in a test taking `ctx: &TestCtx`
@@ -167,9 +280,9 @@ What to keep in mind:
   after setting it returns the old value, and a write right after `rising()` is not
   captured by that edge.
 - **`rising()` of a testbench clock sees pre-edge values**; the flops' new values are
-  visible from `ReadOnly`, where everything has settled. A write in `ReadOnly` fails the
-  run (`WriteInReadOnly`; cocotb raises `RuntimeError`). Edges of design-driven signals
-  see post-eval values.
+  visible from `.read_write()` on (`rising().read_write()`), and final in
+  `.read_only()`. A write in `ReadOnly` fails the run (`WriteInReadOnly`; cocotb raises
+  `RuntimeError`). Edges of design-driven signals see post-eval values.
 - **A combinational design advances with a `Timer` per vector**: `set` the inputs, then
   `Timer::new(ns(1)).await` and `get` the outputs (the quickstart's `tests/inv.rs`).
   `ReadOnly` is read-only: a `set` after it in the same timestep fails the run
@@ -380,8 +493,7 @@ async fn count_climbs_to_the_depth<D: Ports>(dut: D) {
     let depth = u128::from(D::DEPTH.unsigned_abs());
     for n in 1..=depth {
         dut.wr_data().set(n); // a `u128` that fits every configuration's `WIDTH`
-        dut.clk().rising().await;
-        ReadOnly::new().await;
+        dut.clk().rising().read_only().await;
         assert_eq!(dut.count().get(), n, "after {n} pushes, DEPTH {depth}");
         assert_eq!(dut.full().get(), n == depth);
         dut.clk().falling().await;
@@ -437,8 +549,7 @@ async fn a_beat_hops_with_its_tag_incremented<D: Ports>(dut: D) {
         let beat = D::Beat::new(tag, data); // fields in declaration order
         dut.up().beat().set(beat);
         dut.up().valid().set(1);
-        dut.clk().rising().await;
-        ReadOnly::new().await;
+        dut.clk().rising().read_only().await;
         let hopped: D::Beat = dut.down().beat().get(); // one type on both ports
         assert_eq!(hopped, beat.with_tag((beat.tag().to_u128() + 1) % wrap));
         assert_eq!(hopped.data(), beat.data());
@@ -535,8 +646,7 @@ async fn rev2_matches_rev1(old: counter::Dut, new: counter_rev2::Dut) {
     Mirror::new(old.en, new.en).set(1);
     let mut lockstep = Lockstep::new().output(old.count, new.count);
     for _ in 0..100 {
-        old.clk.rising().await;
-        ReadOnly::new().await;
+        old.clk.rising().read_only().await;
         lockstep.step(); // panics with the divergence
     }
 }

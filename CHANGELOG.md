@@ -4,6 +4,14 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- README: a "Project layout" section with the recommended `Cargo.toml` (lint table),
+  `build.rs`, `src/lib.rs` and test file, which `xtask`'s
+  `the_readme_project_layout_is_the_quickstart` checks against `examples/quickstart`;
+  "The three moments at a clock edge" (`rising()`, `.read_write()`, `.read_only()`, with
+  their SystemVerilog regions and cocotb spellings); the "Coming from cocotb" table gains
+  `.read_write()` and uses the prelude's short names. The sweep and lockstep examples
+  (and `examples/lib`'s `sync_fifo` and `hop_stage` tests) use
+  `rising().read_only()`.
 - `examples/lib` uses the lib-target layout too: `src/lib.rs` re-exports the prelude (and
   `In`, `Out`), includes every DUT and holds `assert_param_checks` (from
   `tests/common/mod.rs`, removed); each test file starts with `use

@@ -80,6 +80,13 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
     let opts = ShimOptions {
         prefix: config.prefix(),
         timing: config.timing,
+        trace_fst: config.trace_fst,
+        // Any `--coverage-*` flag in the extra arguments also builds coverage counters.
+        coverage: config.coverage
+            || config
+                .verilator_args
+                .iter()
+                .any(|a| a.trim_start_matches('-').starts_with("coverage")),
     };
     Ok(Emitted {
         rust: Some(codegen::emit_rust(&lowered)),

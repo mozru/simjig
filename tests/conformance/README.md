@@ -250,6 +250,24 @@ simjig mirrors this with one wait group per (signal, edge kind), ordered by the
 registration that primed it (`kernel::waits`, "Value-change groups"), and a walk that runs
 tasks to quiescence after each group that fires (`kernel::sched::fire_value_changes`).
 
+### Event, Lock and Queue
+- **`Event.wait()` on a set Event and `Lock.acquire()` on a free Lock take one hop.**
+  `_Event._prime` and `Lock._prime_lock` fire the trigger while it is primed, which
+  schedules the task at the back: it resumes after the tasks already queued (`event_ready`
+  15 ns, `lock_ready` 15 ns), and still resumes if the Event is cleared meanwhile. The
+  Lock is taken at that moment, so a task that runs in between sees `locked()` true.
+- A set or a release schedules the waiter at the back too, after the tasks queued before
+  it (`event_ready` 25 ns, `lock_ready` 17 and 25 ns). Inside a `First`, the hop is the
+  helper's (`event_ready` 35 ns).
+- **`Queue.get()` on a non-empty queue and `Queue.put()` on a non-full one take no hop**:
+  they await nothing (`queue_get_ready` and `queue_put_ready` 15 ns).
+- **A woken getter (putter) can lose its item (slot)** to a task that runs before it:
+  `put_nowait` wakes the oldest getter, which loops on `while self.empty()`, while a task
+  scheduled earlier calls `get()` and takes the item without waiting; the woken getter
+  waits again, last in line (`queue_get_ready` 25 and 27 ns; `queue_put_ready` 25 to 31 ns).
+
+simjig matches all of these (`kernel::sync`).
+
 ### Further rules, confirmed but not in a golden
 Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel_tests`).
 - `NextTimeStep` waiters resume before that time step's `Timer` waiters (step 1 above;
@@ -269,7 +287,7 @@ Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel
   (`timing::a_timer_resumes_before_the_designs_event_at_the_same_time`).
 
 ### Known differences from cocotb
-Each with the reason; all but the last are deliberate:
+Each with the reason; all are deliberate:
 - **`Timer` of zero ticks** is rejected when it is first **awaited** (a `TaskPanic` naming
   the line that built it); cocotb raises `ValueError` when `Timer(0)` is **built**.
   `Timer::new` is a `const fn`, which can neither report a run failure nor put the call
@@ -286,11 +304,6 @@ Each with the reason; all but the last are deliberate:
   it again (seen in an experiment: a later waiter never got it). simjig drops the granted
   acquisition and gives the lock to the next waiter. A loser cancelled while still
   waiting takes nothing in either (`sync_losers`).
-- **A wait that is ready when awaited resumes at once.** Awaiting an `Event` that is
-  already set (or, by cocotb's source, acquiring a free `Lock`) schedules the waiter
-  behind the tasks already queued in cocotb (seen in an experiment for `Event`); simjig
-  returns at once. Found while checking this suite; not yet changed, and no golden
-  exercises it.
 
 ### Simulation end
 The simulation ends when no timed callback and no `--timing` event is left. A test that

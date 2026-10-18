@@ -177,3 +177,69 @@ fn a_get_that_loses_a_race_loses_no_item() {
     assert_eq!(out.unwrap(), (None, Some(7)));
     assert_clean(&d.sim);
 }
+
+/// cocotb's `Queue.get()` loops on `while self.empty()`: a get that finds an item takes it
+/// at once, even when a woken getter has not run yet; that one waits again, last in line.
+#[test]
+fn a_get_that_finds_an_item_takes_it_ahead_of_a_woken_getter() {
+    let mut d = dut();
+    let trace: Trace = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let q = Queue::new("q", 4);
+            let mut getters = Vec::new();
+            for name in ["ga", "gc"] {
+                let (q, t) = (q.clone(), Rc::clone(&t));
+                getters.push(spawn(name, async move {
+                    let v = q.get().await;
+                    t.borrow_mut().push(format!("{name} got {v}"));
+                }));
+            }
+            Timer::new(ticks(1)).await;
+            q.try_put(1).unwrap(); // wakes ga
+            let v = q.get().await; // runs before ga
+            t.borrow_mut().push(format!("main got {v}"));
+            Timer::new(ticks(1)).await; // ga found the queue empty and waits behind gc
+            q.try_put(2).unwrap();
+            q.try_put(3).unwrap();
+            for g in getters {
+                g.await;
+            }
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["main got 1", "gc got 2", "ga got 3"]);
+    assert_clean(&d.sim);
+}
+
+/// The same for `put`: a put that finds room fills it ahead of a woken putter.
+#[test]
+fn a_put_that_finds_room_fills_it_ahead_of_a_woken_putter() {
+    let mut d = dut();
+    let trace: Trace = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let q = Queue::new("q", 1);
+            q.try_put(10).unwrap();
+            let mut putters = Vec::new();
+            for (name, v) in [("pa", 11), ("pc", 12)] {
+                let q = q.clone();
+                putters.push(spawn(name, async move { q.put(v).await }));
+            }
+            Timer::new(ticks(1)).await;
+            let mut got = vec![q.try_get().unwrap()]; // wakes pa
+            q.put(13).await; // runs before pa
+            for _ in 0..3 {
+                Timer::new(ticks(1)).await;
+                got.push(q.try_get().unwrap());
+            }
+            t.borrow_mut().extend(got.iter().map(ToString::to_string));
+            for p in putters {
+                p.await;
+            }
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["10", "13", "12", "11"]);
+    assert_clean(&d.sim);
+}

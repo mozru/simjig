@@ -2,7 +2,7 @@
 //!
 //! Each primitive keeps its waiters in kernel wait lists, so a blocked task shows up in
 //! `Deadlock` reports with what it waits for, and every waiting future deregisters in
-//! `Drop`. Waiters are served first-come first-served, which keeps runs deterministic.
+//! `Drop`. Waiters are woken first-come first-served, which keeps runs deterministic.
 //! Handles are cheap `Rc` clones; move a clone into each task that needs it.
 //!
 //! # Readiness, as in cocotb 2.1 (goldens `event_ready`, `lock_ready`)
@@ -348,7 +348,9 @@ struct QueueInner<T> {
 }
 
 /// A bounded FIFO queue between tasks. `put` waits while it is full, `get` while it is
-/// empty; both serve waiters in arrival order.
+/// empty; waiters are woken in arrival order. As in cocotb, a `get` (`put`) that can
+/// complete does so at once, even ahead of a woken getter (putter) that has not run yet;
+/// that one waits again, last in line.
 pub struct Queue<T> {
     inner: Rc<QueueInner<T>>,
 }
@@ -422,12 +424,12 @@ impl<T> Queue<T> {
         Some(item)
     }
 
-    /// Adds `item` if there is room and no `put` is waiting; otherwise returns it.
+    /// Adds `item` if there is room (cocotb's `put_nowait`); otherwise returns it.
     ///
     /// # Errors
-    /// Gives `item` back when the queue is full or other puts are queued ahead.
+    /// Gives `item` back when the queue is full.
     pub fn try_put(&self, item: T) -> Result<(), T> {
-        if self.len() >= self.inner.capacity || self.inner.putters.has_waiters() {
+        if self.len() >= self.inner.capacity {
             return Err(item);
         }
         self.push(item);
@@ -483,17 +485,15 @@ impl<T> fmt::Debug for Put<'_, T> {
 impl<T> Future for Put<'_, T> {
     type Output = ();
 
+    // cocotb's `while self.full(): wait` loop: a woken putter that finds the queue full
+    // again registers anew, behind the others.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = &mut *self;
-        let woken = match &this.reg {
-            None => false,
-            Some(r) if r.poll_fired(cx) => true,
-            Some(_) => return Poll::Pending,
-        };
+        if this.reg.as_ref().is_some_and(|r| !r.poll_fired(cx)) {
+            return Poll::Pending;
+        }
         let queue = this.queue;
-        let room = queue.len() < queue.inner.capacity;
-        // A woken putter goes ahead of the others; a fresh one queues behind them.
-        if room && (woken || !queue.inner.putters.has_waiters()) {
+        if queue.len() < queue.inner.capacity {
             this.reg = None;
             let item = this
                 .item
@@ -537,15 +537,14 @@ impl<T> fmt::Debug for Get<'_, T> {
 impl<T> Future for Get<'_, T> {
     type Output = T;
 
+    // cocotb's `while self.empty(): wait` loop, as for `Put`.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let this = &mut *self;
-        let woken = match &this.reg {
-            None => false,
-            Some(r) if r.poll_fired(cx) => true,
-            Some(_) => return Poll::Pending,
-        };
+        if this.reg.as_ref().is_some_and(|r| !r.poll_fired(cx)) {
+            return Poll::Pending;
+        }
         let queue = this.queue;
-        if !queue.is_empty() && (woken || !queue.inner.getters.has_waiters()) {
+        if !queue.is_empty() {
             this.reg = None;
             let item = queue
                 .pop()

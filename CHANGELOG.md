@@ -44,6 +44,12 @@ the public API, the generated code or simulation semantics.
   `event_ready`, `lock_ready`); they used to continue at once. The free lock is taken
   before the hop, so a task that runs in between sees it locked. Trace hashes of runs
   that await a set event or a free lock change.
+- `Queue::get` and `Queue::put` that can complete do so at once even when other getters
+  (putters) wait or were woken and have not run yet, as cocotb 2.1's `Queue` does (goldens
+  `queue_get_ready`, `queue_put_ready`); the woken one finds the item (slot) gone and
+  waits again, last in line. They used to queue behind every waiter. `Queue::try_put`
+  likewise fails only when the queue is full (cocotb's `put_nowait`), no longer when
+  puts are waiting.
 - `yield_now()` ends only in a run of the task (or combinator helper) that awaits it. A
   hand-written join in a task's future that also awaits `first!`/`join!` used to see it
   end early, when the combinator's helpers ran.

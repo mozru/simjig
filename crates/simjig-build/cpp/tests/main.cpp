@@ -479,7 +479,8 @@ void fork_child_detaches_and_reopens() {
     const pid_t pid = fork();
     if (pid == 0) {
         int bad = 0;
-        // Reopening on the inherited file itself would truncate the parent's waves.
+        // Reopening on the inherited file itself would truncate the parent's waves. The
+        // failed call has already detached the inherited writer, so the retry opens afresh.
         bad |= m.vt()->trace_reopen(m.h(), parent.c_str()) != SIMJIG_IO_ERROR;
         bad |= m.vt()->trace_reopen(m.h(), child.c_str()) != SIMJIG_OK;
         for (int i = 0; i < 5; ++i) {
@@ -512,6 +513,41 @@ void fork_child_detaches_and_reopens() {
     CHECK_EQ(p.end_time, m.time());
     CHECK_EQ(c.start_time, fork_time + 5);
     CHECK_EQ(c.end_time, fork_time + 50);
+}
+
+// A child whose branch file cannot be created: trace_reopen fails, and nothing the child does
+// with the model afterwards (close, destroy) reaches the parent's file, because the inherited
+// writer was detached before the reopen checked the new path.
+void fork_child_with_an_uncreatable_path_leaves_the_parent_alone() {
+    CHECK_EQ(thread_count(), 1u);
+    Model m{simjig_vtable_Vtc_full(), "TOP"};
+    const std::string parent = path("parent_blocked.fst");
+    const std::string blocked = path("no/such/dir/child.fst");
+    CHECK_EQ(m.vt()->trace_open(m.h(), parent.c_str()), SIMJIG_OK);
+    m.reset();
+    for (int i = 0; i < 10; ++i) m.cycle(true);
+    CHECK_EQ(m.vt()->trace_flush(m.h()), SIMJIG_OK);
+    const std::string before_fork = slurp(parent);
+    std::fflush(nullptr);
+    const pid_t pid = fork();
+    if (pid == 0) {
+        int bad = 0;
+        bad |= m.vt()->trace_reopen(m.h(), blocked.c_str()) != SIMJIG_IO_ERROR;
+        bad |= m.vt()->trace_dump(m.h(), m.time() + 1) != SIMJIG_OK;  // no trace: a no-op
+        bad |= m.vt()->trace_close(m.h()) != SIMJIG_OK;
+        m.vt()->destroy(m.h());
+        _exit(bad);
+    }
+    CHECK(pid > 0);
+    int status = -1;
+    waitpid(pid, &status, 0);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(slurp(parent) == before_fork);
+    for (int i = 0; i < 10; ++i) m.cycle(true);
+    CHECK_EQ(m.vt()->trace_close(m.h()), SIMJIG_OK);
+    const Fst p = read_fst(parent);
+    CHECK(p.valid);
+    CHECK_EQ(p.end_time, m.time());
 }
 
 // The sum of every counter of every run, and (in *counters) how many counters there are.
@@ -791,6 +827,8 @@ int main(int argc, char** argv) {
         {"vtable_describes_the_build", vtable_describes_the_build},
         // Fork first, while the process certainly has a single thread.
         {"fork_child_detaches_and_reopens", fork_child_detaches_and_reopens},
+        {"fork_child_with_an_uncreatable_path_leaves_the_parent_alone",
+         fork_child_with_an_uncreatable_path_leaves_the_parent_alone},
         {"plain_model_reports_unsupported", plain_model_reports_unsupported},
         {"probe_width_is_checked_at_create", probe_width_is_checked_at_create},
         {"probe_access_is_checked_at_create", probe_access_is_checked_at_create},

@@ -215,9 +215,11 @@ typedef struct simjig_model_vtable {
      * descriptor on the inherited trace file at /dev/null, closes the inherited writer (its
      * output goes to /dev/null, so the parent's file is untouched), then opens `path` with the
      * same depth and start time. With no trace open it is trace_open_ex(h, path, 0, 0).
-     * IO_ERROR, with the old trace still attached, if `path` is the inherited file itself or
-     * cannot be created. The child must never close, flush or destroy an inherited trace
-     * before this call. */
+     * The inherited writer is detached before anything can fail: IO_ERROR (if `path` is the
+     * inherited file itself or cannot be created, or the inherited descriptor cannot be
+     * redirected, in which case the writer is abandoned unclosed) leaves no trace open, so a
+     * later close or destroy cannot reach the parent's file. The child must never close,
+     * flush or destroy an inherited trace before this call. */
     simjig_status (*trace_reopen)(simjig_handle* h, const char* path);
     /* Sets every coverage counter of the model to 0, covergroup bins included. UNSUPPORTED
      * without --coverage. */

@@ -338,6 +338,8 @@ struct Vtable final {
     // docs/notes/spikes.md §1 surprise 3: a fork child shares the trace file's descriptor and
     // offset with its parent, so any write or close through the inherited writer corrupts the
     // parent's file. Redirecting the descriptor to /dev/null first makes the close harmless.
+    // The detach comes before every check of the new path: a reopen that fails must not leave
+    // the inherited writer attached, where a later close or destroy would write through it.
     static simjig_status trace_reopen(simjig_handle* h, const char* path) noexcept {
         if constexpr (!kTrace) {
             return SIMJIG_UNSUPPORTED;
@@ -346,22 +348,23 @@ struct Vtable final {
             if (h->rt.poisoned()) return SIMJIG_POISONED;
             auto& t = handle(h)->trace;
             if (!t.writer) return open_trace(h, path, 0, 0);
-            if (!t.file.valid) {
-                h->rt.on_warn("", 0, "", "trace_reopen: the inherited trace file is unknown");
+            if (!t.file.valid || redirect_to_devnull(t.file) < 0) {
+                // The descriptor cannot be moved, so the writer is never closed: it is
+                // abandoned (its destructor would flush and write the header to the parent's
+                // file). The process is a fork child, so this leaks only its own copy.
+                static_cast<void>(t.writer.release());
+                h->rt.on_warn("", 0, "",
+                              t.file.valid ? "trace_reopen: cannot open /dev/null"
+                                           : "trace_reopen: the inherited trace file is unknown");
                 return SIMJIG_IO_ERROR;
             }
+            const simjig_status closed = observe(h, [&t] { t.reset(); });
+            if (closed != SIMJIG_OK) return closed;
             const FileId target = file_id(path);
             if (target.valid && target.dev == t.file.dev && target.ino == t.file.ino) {
                 h->rt.on_warn("", 0, "", "trace_reopen: the new trace path is the inherited file");
                 return SIMJIG_IO_ERROR;
             }
-            if (!probe_writable(h->rt, path, "trace file")) return SIMJIG_IO_ERROR;
-            if (redirect_to_devnull(t.file) < 0) {
-                h->rt.on_warn("", 0, "", "trace_reopen: cannot open /dev/null");
-                return SIMJIG_IO_ERROR;
-            }
-            const simjig_status closed = observe(h, [&t] { t.reset(); });
-            if (closed != SIMJIG_OK) return closed;
             return open_trace(h, path, t.depth, t.start_time);
         }
     }

@@ -654,6 +654,8 @@ const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
         SIMJIG_FIELD(simjig_create_opts, error_limit),
         SIMJIG_FIELD(simjig_create_opts, argc),
         SIMJIG_FIELD(simjig_create_opts, argv),
+        SIMJIG_FIELD(simjig_create_opts, init),
+        SIMJIG_FIELD(simjig_create_opts, init_seed),
         SIMJIG_FIELD(simjig_cov_run, counters),
         SIMJIG_FIELD(simjig_cov_run, len),
     };

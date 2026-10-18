@@ -130,7 +130,27 @@ typedef struct simjig_create_opts {
     uint32_t error_limit;    /* $error count that turns into STOP; 0 = Verilator's (default 1) */
     uint32_t argc;           /* plusargs for VerilatedContext::commandArgs */
     const char* const* argv; /* argc entries; may be NULL when argc is 0 */
+
+    /* ---- Appended after size 32 (SIMJIG_ABI_VERSION 1). A caller compiled before them
+     * passes a smaller `size`, and create reads them as SIMJIG_INIT_ZERO. ---- */
+
+    /* SIMJIG_INIT_*: the initial values of the model's variables (docs/notes/n-xinit.md). */
+    uint32_t init;
+    /* With SIMJIG_INIT_RANDOM: the seed the initial values are drawn from, in 1..=INT32_MAX
+     * (VerilatedContext::randSeed while the model is constructed). Ignored otherwise. */
+    uint32_t init_seed;
 } simjig_create_opts;
+
+/* Values of `simjig_create_opts.init`, numbered as Verilator's randReset. */
+/* Whatever the plusargs say (+verilator+rand+reset+, default 0: every variable without an
+ * initializer starts at 0). */
+#define SIMJIG_INIT_ZERO 0u
+/* Each variable without an initializer starts at a value drawn from `init_seed`, the variable's
+ * scope and its name (Verilator's VL_SCOPED_RAND_RESET_*, randReset 2), and only while the
+ * model is constructed: afterwards the context's randReset and randSeed are what the plusargs
+ * set, so `$urandom`, class objects and `$readmem` draw exactly as with SIMJIG_INIT_ZERO.
+ * Needs SIMJIG_FEATURE_RANDOM_INIT; without it the values are whatever Verilator compiled in. */
+#define SIMJIG_INIT_RANDOM 2u
 
 /* One contiguous array of coverage counters (see `cov_runs`). */
 typedef struct simjig_cov_run {
@@ -142,6 +162,9 @@ typedef struct simjig_cov_run {
 #define SIMJIG_FEATURE_TIMING 1u    /* --timing */
 #define SIMJIG_FEATURE_TRACE_FST 2u /* --trace-fst: the trace_* entries work */
 #define SIMJIG_FEATURE_COVERAGE 4u  /* --coverage (any of its kinds): the cov_* entries work */
+/* Verilated with --x-initial unique (Verilator's default) by a shim that reads
+ * `simjig_create_opts.init`: SIMJIG_INIT_RANDOM randomizes the initial values. */
+#define SIMJIG_FEATURE_RANDOM_INIT 8u
 
 typedef struct simjig_model_vtable {
     uint32_t abi_version;          /* SIMJIG_ABI_VERSION the model was built against */

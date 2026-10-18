@@ -77,9 +77,10 @@ std::string path(const char* name) { return g_dir + "/" + name; }
 class Model {
 public:
     Model(const simjig_model_vtable* vt, const char* name, const char* const* argv = nullptr,
-          uint32_t argc = 0)
+          uint32_t argc = 0, uint32_t init = SIMJIG_INIT_ZERO, uint32_t init_seed = 0)
         : m_vt{vt} {
-        simjig_create_opts opts{sizeof(simjig_create_opts), 0, name, 0, argc, argv};
+        simjig_create_opts opts{sizeof(simjig_create_opts), 0, name, 0, argc, argv, init,
+                                init_seed};
         m_status = vt->create(&opts, &m_h);
         uint32_t n = 0;
         m_sigs = vt->signals(m_h, &n);
@@ -246,11 +247,12 @@ void vtable_describes_the_build() {
     const simjig_model_vtable* full = simjig_vtable_Vtc_full();
     CHECK_EQ(full->abi_version, SIMJIG_ABI_VERSION);
     CHECK_EQ(full->size, sizeof(simjig_model_vtable));
-    CHECK_EQ(full->features, SIMJIG_FEATURE_TRACE_FST | SIMJIG_FEATURE_COVERAGE);
-    CHECK_EQ(simjig_vtable_Vtc_plain()->features, 0u);
-    CHECK_EQ(simjig_vtable_Vtc_hier()->features, SIMJIG_FEATURE_COVERAGE);
+    CHECK_EQ(full->features,
+             SIMJIG_FEATURE_TRACE_FST | SIMJIG_FEATURE_COVERAGE | SIMJIG_FEATURE_RANDOM_INIT);
+    CHECK_EQ(simjig_vtable_Vtc_plain()->features, SIMJIG_FEATURE_RANDOM_INIT);
+    CHECK_EQ(simjig_vtable_Vtc_hier()->features, SIMJIG_FEATURE_COVERAGE);  // kXInitialUnique
     CHECK_EQ(simjig_vtable_Vtc_timing()->features,
-             SIMJIG_FEATURE_TIMING | SIMJIG_FEATURE_TRACE_FST);
+             SIMJIG_FEATURE_TIMING | SIMJIG_FEATURE_TRACE_FST | SIMJIG_FEATURE_RANDOM_INIT);
 }
 
 void probe_width_is_checked_at_create() {
@@ -354,7 +356,7 @@ void a_real_is_refused_by_its_type() {
 void abi_field_table_covers_every_field() {
     size_t n = 0;
     const simjig_abi_field* f = simjig_rt_abi_fields(&n);
-    CHECK_EQ(n, 49u);
+    CHECK_EQ(n, 51u);
     const std::pair<const char*, size_t> types[] = {
         {"simjig_model_vtable", sizeof(simjig_model_vtable)},
         {"simjig_signal", sizeof(simjig_signal)},
@@ -827,6 +829,41 @@ void urandom_streams_are_per_model_and_reproducible() {
     CHECK(draws(p, 8) != alone);
 }
 
+// SIMJIG_INIT_RANDOM draws every initial value from init_seed: the same seed gives the same
+// values and another seed others, while SIMJIG_INIT_ZERO (and a caller compiled before the
+// field, whose `size` ends at argv) gets zeros. Nothing else changes: after a reset the model's
+// `$urandom` stream is the one it has with zeros, since the plusargs' seed still sets it.
+void random_init_draws_from_its_seed_alone() {
+    struct Start {
+        uint64_t state;  // cnt and rnd as constructed, before any eval
+        std::vector<uint32_t> urandom;
+    };
+    const auto start = [](uint32_t init, uint32_t seed, uint32_t size) {
+        simjig_create_opts opts{size, 0, "TOP", 0, 0, nullptr, init, seed};
+        const simjig_model_vtable* vt = simjig_vtable_Vtc_plain();
+        simjig_handle* h = nullptr;
+        CHECK_EQ(vt->create(&opts, &h), SIMJIG_OK);
+        uint32_t n = 0;
+        const simjig_signal* sigs = vt->signals(h, &n);
+        const uint64_t cnt = *static_cast<uint8_t*>(sigs[2].ptr);
+        const uint64_t rnd = *static_cast<uint32_t*>(sigs[3].ptr);
+        vt->destroy(h);
+        Model m{vt, "TOP", nullptr, 0, init, seed};
+        m.reset();
+        return Start{cnt | rnd << 8, draws(m, 4)};
+    };
+    const uint32_t full = sizeof(simjig_create_opts);
+    const uint32_t old = offsetof(simjig_create_opts, init);
+    const Start zero = start(SIMJIG_INIT_ZERO, 0, full);
+    CHECK_EQ(zero.state, 0u);
+    CHECK_EQ(start(SIMJIG_INIT_RANDOM, 5, old).state, 0u);
+    const Start five = start(SIMJIG_INIT_RANDOM, 5, full);
+    CHECK(five.state != 0);
+    CHECK_EQ(start(SIMJIG_INIT_RANDOM, 5, full).state, five.state);
+    CHECK(start(SIMJIG_INIT_RANDOM, 6, full).state != five.state);
+    CHECK(five.urandom == zero.urandom);
+}
+
 void display_is_attributed_to_its_model() {
     Model a{simjig_vtable_Vtc_full(), "A"};
     Model b{simjig_vtable_Vtc_plain(), "B"};
@@ -919,6 +956,7 @@ int main(int argc, char** argv) {
          covergroup_bins_are_written_but_not_in_runs},
         {"urandom_streams_are_per_model_and_reproducible",
          urandom_streams_are_per_model_and_reproducible},
+        {"random_init_draws_from_its_seed_alone", random_init_draws_from_its_seed_alone},
         {"display_is_attributed_to_its_model", display_is_attributed_to_its_model},
         {"contexts_start_no_threads", contexts_start_no_threads},
         {"timing_model_traces_its_own_slots", timing_model_traces_its_own_slots},

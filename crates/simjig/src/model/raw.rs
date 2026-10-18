@@ -141,12 +141,14 @@ pub(crate) enum CreateError {
 
 impl RawModel {
     /// Creates a model through `vt` (which [`ModelVtable::check`] accepted), passing `args`
-    /// to `VerilatedContext::commandArgs` after a program name. Returns the model and
-    /// `create`'s raw status: a non-OK status still yields a model, to drain its messages and
-    /// destroy it.
+    /// to `VerilatedContext::commandArgs` after a program name, and with `random_init` its
+    /// initial values drawn from that seed (`SIMJIG_INIT_RANDOM`; the caller checks
+    /// `SIMJIG_FEATURE_RANDOM_INIT`). Returns the model and `create`'s raw status: a non-OK
+    /// status still yields a model, to drain its messages and destroy it.
     pub(crate) fn create(
         vt: &'static ModelVtable,
         args: &[String],
+        random_init: Option<u32>,
     ) -> Result<(Self, i32), CreateError> {
         let mut owned = vec![c"simjig".to_owned()];
         for arg in args {
@@ -162,6 +164,8 @@ impl RawModel {
             error_limit: 0,
             argc: u32::try_from(pointers.len()).unwrap_or(u32::MAX),
             argv: pointers.as_ptr(),
+            init: random_init.map_or(abi::INIT_ZERO, |_| abi::INIT_RANDOM),
+            init_seed: random_init.unwrap_or(0),
         };
         let mut raw = ptr::null_mut();
         // SAFETY: `opts`, `raw` and the `argc` NUL-terminated strings behind `argv` (`owned`)
@@ -471,6 +475,8 @@ pub(crate) mod fake {
         pub(crate) calls: Vec<String>,
         /// Statuses the next trace calls of the traced vtable return (then OK).
         pub(crate) trace_statuses: VecDeque<Status>,
+        /// The last create's `init` and `init_seed`.
+        pub(crate) init: Option<(u32, u32)>,
         rows: Vec<Signal>,
     }
 
@@ -492,8 +498,11 @@ pub(crate) mod fake {
         }
     }
 
-    extern "C" fn create(_opts: *const CreateOpts, out: *mut *mut Handle) -> i32 {
+    extern "C" fn create(opts: *const CreateOpts, out: *mut *mut Handle) -> i32 {
+        // SAFETY: `opts` is the caller's valid options, of this mirror's size.
+        let opts = unsafe { opts.read() };
         STATE.with_borrow_mut(|s| {
+            s.init = Some((opts.init, opts.init_seed));
             let base = s.members.as_mut_ptr();
             let mut a = row(0, 4, Dir::In, ACCESS_READ | ACCESS_WRITE, c"fake.a");
             let mut y = row(1, 8, Dir::Out, ACCESS_READ, c"fake.y");
@@ -684,6 +693,14 @@ pub(crate) mod fake {
             trace_flush: rec_flush,
             trace_close: rec_close,
             trace_reopen: rec_reopen,
+            ..vtable()
+        }
+    }
+
+    /// The fake's vtable with `SIMJIG_FEATURE_RANDOM_INIT`.
+    pub(crate) fn random_init_vtable() -> ModelVtable {
+        ModelVtable {
+            features: super::super::abi::FEATURE_RANDOM_INIT,
             ..vtable()
         }
     }

@@ -36,6 +36,16 @@ pub(crate) const FEATURE_TRACE_FST: u64 = 2;
 /// `SIMJIG_FEATURE_COVERAGE`: verilated with `--coverage` (any kind), so the `cov_*`
 /// entries work.
 pub(crate) const FEATURE_COVERAGE: u64 = 4;
+/// `SIMJIG_FEATURE_RANDOM_INIT`: verilated with `--x-initial unique` by a shim that reads
+/// [`CreateOpts::init`], so [`INIT_RANDOM`] randomizes the initial values.
+pub(crate) const FEATURE_RANDOM_INIT: u64 = 8;
+
+/// `SIMJIG_INIT_ZERO`: the initial values the plusargs ask for (zeros: simjig passes no
+/// `+verilator+rand+reset+`).
+pub(crate) const INIT_ZERO: u32 = 0;
+/// `SIMJIG_INIT_RANDOM`: initial values drawn from [`CreateOpts::init_seed`] while the model
+/// is constructed, and nothing else changed.
+pub(crate) const INIT_RANDOM: u32 = 2;
 
 /// `SIMJIG_ACCESS_READ`.
 pub(crate) const ACCESS_READ: u8 = 1;
@@ -202,13 +212,17 @@ pub(crate) struct CreateOpts {
     pub(crate) error_limit: u32,
     pub(crate) argc: u32,
     pub(crate) argv: *const *const c_char,
+    /// `SIMJIG_INIT_*`; appended after size 32.
+    pub(crate) init: u32,
+    /// The seed of [`INIT_RANDOM`]'s values, in `1..=i32::MAX`.
+    pub(crate) init_seed: u32,
 }
 
 impl CreateOpts {
     /// `sizeof(simjig_create_opts)`, the value of its `size` field.
     #[expect(
         clippy::cast_possible_truncation,
-        reason = "32 bytes, pinned by the asserts below"
+        reason = "40 bytes, pinned by the asserts below"
     )]
     pub(crate) const SIZE: u32 = size_of::<Self>() as u32;
 }
@@ -358,13 +372,15 @@ abi_fields! {
         msg @ 32,
         msg_len @ 40,
     }
-    "simjig_create_opts" CreateOpts = 32 {
+    "simjig_create_opts" CreateOpts = 40 {
         size @ 0,
         flags @ 4,
         name @ 8,
         error_limit @ 16,
         argc @ 20,
         argv @ 24,
+        init @ 32,
+        init_seed @ 36,
     }
     "simjig_cov_run" CovRun = 16 {
         counters @ 0,

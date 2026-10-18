@@ -14,6 +14,8 @@
 //       static constexpr bool kTiming = false;   // verilated with --timing (coroutines)?
 //       static constexpr bool kTraceFst = false; // verilated with --trace-fst? (default false)
 //       static constexpr bool kCoverage = false; // verilated with --coverage*? (default false)
+//       // Only for --x-initial 0 or fast (default true: Verilator's own --x-initial unique).
+//       static constexpr bool kXInitialUnique = false;
 //       static void bind(Vcounter& m, simjig::SignalTable& t) {
 //           SIMJIG_SIGNAL(t, m.clk, "clk", 1, SIMJIG_DIR_IN, SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE);
 //           SIMJIG_PROBE(t, m, "counter.u_core", "state", "counter.u_core.state", 4,
@@ -99,6 +101,24 @@ constexpr bool coverage_of() {
     } else {
         return false;
     }
+}
+// Verilator's default is --x-initial unique, so a shim says so only when the model was built
+// with another mode (`--x-initial 0` or `fast`), whose initial values are compiled in.
+template <class Traits>
+constexpr bool x_initial_unique_of() {
+    if constexpr (requires { Traits::kXInitialUnique; }) {
+        return Traits::kXInitialUnique;
+    } else {
+        return true;
+    }
+}
+
+// simjig_create_opts.init and .init_seed, or SIMJIG_INIT_ZERO from a caller compiled before
+// they were appended.
+inline bool random_init(const simjig_create_opts* opts) {
+    return opts != nullptr
+           && opts->size >= offsetof(simjig_create_opts, init_seed) + sizeof(opts->init_seed)
+           && opts->init == SIMJIG_INIT_RANDOM;
 }
 
 // An open FST trace. A template only so that nothing names VerilatedFstC's out-of-line members
@@ -193,7 +213,11 @@ struct Vtable final {
             // constructor may already draw (class objects seed from the current stream).
             h->rt.reseed(h->rt.context_seed());
             const char* name = opts != nullptr && opts->name != nullptr ? opts->name : "TOP";
-            h->model = std::make_unique<Model>(&ctx, name);
+            if (random_init(opts)) {
+                construct_randomized(ctx, h, name, opts->init_seed);
+            } else {
+                h->model = std::make_unique<Model>(&ctx, name);
+            }
             // The constructor registered every coverage point (note_cov_counter).
             if constexpr (kCoverage) {
                 const auto [syms, size] = syms_object(*h->model);
@@ -203,6 +227,31 @@ struct Vtable final {
             }
             Traits::bind(*h->model, h->table);
         });
+    }
+
+    // The constructor's _ctor_var_reset draws every initial value with VL_SCOPED_RAND_RESET_*
+    // from the context's randReset and randSeed, so both are set for the construction alone
+    // and put back after it: `$urandom` (seeded above from the plusargs' seed) and every later
+    // draw stay as without SIMJIG_INIT_RANDOM. Each randSeed() bumps Verilator's global seed
+    // epoch; thread_rng() catches the thread up without losing the model's stream.
+    static void construct_randomized(VerilatedContext& ctx, Handle* h, const char* name,
+                                     uint32_t seed) {
+        const int reset = ctx.randReset();
+        const int plusarg_seed = ctx.randSeed();
+        ctx.randReset(2);
+        ctx.randSeed(static_cast<int>(seed));
+        (void)thread_rng();
+        struct Restore {
+            VerilatedContext& ctx;
+            int reset;
+            int seed;
+            ~Restore() {
+                ctx.randReset(reset);
+                ctx.randSeed(seed);
+                (void)thread_rng();
+            }
+        } restore{ctx, reset, plusarg_seed};
+        h->model = std::make_unique<Model>(&ctx, name);
     }
 
     static simjig_status eval(simjig_handle* h) noexcept {
@@ -385,7 +434,10 @@ struct Vtable final {
 
     static constexpr uint64_t kFeatures = (Traits::kTiming ? SIMJIG_FEATURE_TIMING : 0)
                                           | (kTrace ? SIMJIG_FEATURE_TRACE_FST : 0)
-                                          | (kCoverage ? SIMJIG_FEATURE_COVERAGE : 0);
+                                          | (kCoverage ? SIMJIG_FEATURE_COVERAGE : 0)
+                                          | (x_initial_unique_of<Traits>()
+                                                 ? SIMJIG_FEATURE_RANDOM_INIT
+                                                 : 0);
 
     static constexpr simjig_model_vtable table{
         SIMJIG_ABI_VERSION,

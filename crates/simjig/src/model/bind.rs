@@ -128,12 +128,16 @@ pub fn instantiate(meta: &'static ModelMeta, options: &ModelOptions) -> Result<S
     reason = "the DutModel signature; called once per test"
 )]
 pub fn load(meta: &'static ModelMeta, options: &ModelOptions) -> Result<LoadedModel, Failure> {
-    let model = VerilatorModel::load(meta, &options.verilator_args(), options.trace.as_ref())
-        .map_err(|e| {
-            let precision =
-                Precision::from_exponent(meta.precision_exponent).unwrap_or(Precision::PS);
-            load_failure(meta, &e, precision)
-        })?;
+    let model = VerilatorModel::load(
+        meta,
+        &options.verilator_args(),
+        None,
+        options.trace.as_ref(),
+    )
+    .map_err(|e| {
+        let precision = Precision::from_exponent(meta.precision_exponent).unwrap_or(Precision::PS);
+        load_failure(meta, &e, precision)
+    })?;
     Ok(LoadedModel::from_backend(Box::new(model)))
 }
 

@@ -120,10 +120,9 @@ pub enum FailureKind {
     WriteConflict {
         /// The signal.
         signal: String,
-        /// The writer that wrote first: a task's hierarchical name (`main.a`), or
-        /// `clock` for a kernel clock, or `kernel` for writes outside any task.
+        /// The writer that wrote first.
         first: String,
-        /// The writer that wrote second, named like `first`.
+        /// The writer that wrote second.
         second: String,
     },
     /// A task wrote a signal during the `ReadOnly` phase.

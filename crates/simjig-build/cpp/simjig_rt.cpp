@@ -223,7 +223,11 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
         throw std::runtime_error("simjig: probe '" + std::string{or_empty(display)} + "': " + why);
     };
     const VerilatedScope* s = ctx.scopeFind(scope_name.c_str());
-    if (s == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
+    // One diagnosis per case, the same as the build-time check's (syms.rs).
+    if (s == nullptr) {
+        fail("no public scope '" + scope_name + "' in the model: Verilator made nothing in it "
+             "public");
+    }
     const VerilatedVar* v = s->varFind(or_empty(var));
     if (v == nullptr) {
         fail("no public variable '" + std::string{or_empty(var)} + "' in scope '" + scope_name

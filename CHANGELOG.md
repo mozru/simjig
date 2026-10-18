@@ -35,6 +35,11 @@ the public API, the generated code or simulation semantics.
 - A probe path that ends at a generate-for iteration or an instance array element
   (`top.g[0]`, `top.arr[1]`) says that it names a generate block or an instance array,
   instead of "not a plain identifier".
+- A probe whose scope or variable Verilator did not make public gets the same diagnosis
+  at build time and at `create`: "no public scope `s` in the model: Verilator made nothing
+  in it public", or "no public variable `v` in scope `s` (a probe inside a hierarchical
+  block, `hier_block`, is in another model)". The build-time check gave the
+  hierarchical-block reason for a missing scope, where it cannot apply.
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

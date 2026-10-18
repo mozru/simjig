@@ -4,8 +4,8 @@
 //! the scope table that `V<prefix>__Syms__Slow.cpp` builds. The same table is plain C++
 //! text, so the build reads it right after verilating and fails there, with the probe's
 //! name, instead of at the first `create`:
-//! - a scope or variable the table lacks (a probe inside a hierarchical block, or a
-//!   `.vlt` that did not make it public);
+//! - a scope the table lacks (nothing in it is public), or a variable its scope lacks (a
+//!   probe inside a hierarchical block, which is a model of its own);
 //! - a width other than the probe's;
 //! - an unpacked variable, or one that is not stored as a packed vector (a `real`, a
 //!   `string`: its `VLVT_*` type), or whose storage is not the one its width has;
@@ -278,19 +278,21 @@ pub(crate) fn check_probes(
 }
 
 fn check(scopes: &Scopes, p: &ProbeSite) -> Result<(), String> {
+    // One diagnosis per case, the same as `simjig::find_probe`'s at create: a probe inside
+    // a hierarchical block (`hier_block`, a model of its own) finds its scope, which the
+    // block's instance has in this model, but not its variable.
     let Some(vars) = scopes.0.get(&p.scope) else {
         return Err(format!(
-            "Verilator made no variable of `{}` public, so the model has no scope `{}` to \
-             find it in (a probe inside a hierarchical block, `hier_block`, is in another \
-             model)",
-            p.path, p.scope
+            "no public scope `{}` in the model: Verilator made nothing in it public",
+            p.scope
         ));
     };
     let Some(v) = vars.iter().find(|v| v.name == p.var) else {
         let hint = did_you_mean(&p.var, vars.iter().map(|v| v.name.as_str()));
         return Err(format!(
-            "Verilator did not make `{}` of `{}` public{hint}",
-            p.var, p.module
+            "no public variable `{}` in scope `{}` (a probe inside a hierarchical block, \
+             `hier_block`, is in another model){hint}",
+            p.var, p.scope
         ));
     };
     if v.unpacked {
@@ -437,8 +439,15 @@ extern const VlScopeTableEntry Vx__Syms__VpiScopeTable[] = {
             msg(site("x.r", 5, false))
                 .contains("`r` is 8 bits wide in the design, but the probe's type is 5 bits")
         );
-        assert!(msg(site("x.rr", 8, false)).contains("did you mean `r`?"));
-        assert!(msg(site("x.v.r", 8, false)).contains("no scope `x.v`"));
+        assert_eq!(
+            msg(site("x.rr", 8, false)),
+            "no public variable `rr` in scope `x` (a probe inside a hierarchical block, \
+             `hier_block`, is in another model); did you mean `r`?"
+        );
+        assert_eq!(
+            msg(site("x.v.r", 8, false)),
+            "no public scope `x.v` in the model: Verilator made nothing in it public"
+        );
         assert!(msg(site("x.un", 8, false)).contains("unpacked"));
         assert!(msg(site("x.LP", 70, true)).contains("parameter"));
         assert!(msg(site("x.r", 8, true)).contains("not public_flat_rw"));

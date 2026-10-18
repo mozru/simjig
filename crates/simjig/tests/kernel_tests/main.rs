@@ -10,6 +10,7 @@ mod multi;
 mod phases;
 mod swarm;
 mod sync;
+mod timing;
 
 use simjig::{Clock, FakeModel, Precision, RawSig, Sim, SimDuration};
 

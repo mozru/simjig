@@ -16,12 +16,22 @@
 //!    design-driven signals change in an eval, so their waiters see post-eval values.
 //! 3. **`ReadWrite` region.** Wake `ReadWrite` waiters, run tasks, apply the log, compare and
 //!    wake; if anything was applied, go back to 2.
+//!    Before leaving the deltas, a model whose next event is *now* (a `#0` still pending
+//!    after its eval) is evaluated again, as another delta of the same timestep.
 //! 4. **`ReadOnly` region.** Wake `ReadOnly` waiters and run tasks; any write fails the run.
-//! 5. **Advance** to the earliest of: the timer wheel, the next clock edge, and the model's
-//!    `next_time_slot()` if it has `events_pending()`. If there is none and the main task
-//!    is still blocked, the run fails as `Starved` or `Deadlock`.
+//! 5. **Advance** to the earliest of: the timer wheel, the next clock edge, and every
+//!    model's `next_time_slot()` among those with `events_pending()`. If there is none and
+//!    the main task is still blocked, the run fails as `Starved` or `Deadlock`.
 //!
 //! More than [`DELTA_MAX`] evals in one timestep is a `DeltaLimit` failure.
+//!
+//! # `--timing` safety (Verilator 5.052, docs/notes/spikes.md §4)
+//! Verilator exits the process if `nextTimeSlot()` is called while `eventsPending()` is
+//! false, or if the time is set past a pending slot. So `next_time_slot` is asked only of
+//! models with events pending, the next timestep is never later than any model's next
+//! slot (it is the minimum), and the kernel asserts that time strictly increases between
+//! timesteps (Verilator does not check). A model reporting a slot before now is a
+//! `ModelFatal` failure.
 
 use super::backend::EvalStatus;
 use super::clock::ClockEntry;
@@ -70,8 +80,21 @@ pub(crate) fn run_loop(k: &Kernel, limit: Option<SimTime>) {
             k.fail(FailureKind::TimeLimit { limit }, None, None, message);
             return;
         }
+        // Verilator does not check that time moves forward; the kernel must.
+        assert!(
+            next > k.now.get(),
+            "invariant: time moves forward (from t={} to t={})",
+            k.now.get().ticks(),
+            next.ticks()
+        );
         k.now.set(next);
     }
+}
+
+/// Whether a model has an event due at the current time (a pending `#0`).
+fn model_event_now(k: &Kernel) -> bool {
+    let next = k.models.borrow().next_event();
+    next.is_some_and(|(_, t)| t == k.now.get())
 }
 
 fn step(k: &Kernel) {
@@ -119,7 +142,7 @@ fn step(k: &Kernel) {
         }
         let applied = apply_and_compare(k);
         run_ready(k);
-        if !applied {
+        if !applied && !model_event_now(k) {
             break;
         }
     }
@@ -235,14 +258,14 @@ fn next_time(k: &Kernel) -> Option<SimTime> {
     }
     let model_next = k.models.borrow().next_event();
     if let Some((model, m)) = model_next {
-        if m <= now {
+        if m < now {
             let which = if k.models.borrow().len() > 1 {
                 format!("model {model}")
             } else {
                 "the model".to_owned()
             };
             let message = format!(
-                "{which} reported its next event at t={}, not after now",
+                "{which} reported its next event at t={}, before now; it missed a time slot",
                 m.display(k.precision)
             );
             k.fail(

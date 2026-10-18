@@ -19,7 +19,7 @@ pub use harness::dut::{DutModel, ModelOptions};
 pub use harness::report::{FailureReport, RunIdentity, Signature};
 pub use harness::runner::TestOutput;
 pub use harness::seed::{Rng, Seed, SeedSource};
-pub use kernel::clock::{Clock, ClockError};
+pub use kernel::clock::{Clock, ClockError, ClockHandle, clock};
 pub use kernel::failure::{BlockedTask, Failure, FailureKind, SourceLocation};
 pub use kernel::fake::{FakeModel, FakeSig, FakeState};
 pub use kernel::recorder::{TraceKind, TraceRecord};

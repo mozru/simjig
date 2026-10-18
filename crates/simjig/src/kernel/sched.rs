@@ -24,6 +24,7 @@
 //! More than [`DELTA_MAX`] evals in one timestep is a `DeltaLimit` failure.
 
 use super::backend::EvalStatus;
+use super::clock::ClockEntry;
 use super::failure::{BlockedTask, FailureKind};
 use super::recorder::TraceKind;
 use super::signal::{self, Writer};
@@ -86,8 +87,10 @@ fn step(k: &Kernel) {
         .clocks
         .borrow_mut()
         .iter_mut()
-        .filter(|c| c.next_time == t)
-        .map(|c| (c.slot, c.take_edge()))
+        .filter_map(|c| {
+            let schedule = c.running.as_mut().filter(|r| r.next_time == t)?;
+            Some((c.slot, schedule.take_edge()))
+        })
         .collect();
     for (slot, level) in edges {
         signal::write(k, slot, &[level], Writer::Clock, None);
@@ -220,8 +223,8 @@ fn apply_and_compare(k: &Kernel) -> bool {
 fn next_time(k: &Kernel) -> Option<SimTime> {
     let now = k.now.get();
     let mut next = k.waits.borrow().next_timer();
-    for clock in k.clocks.borrow().iter() {
-        next = Some(next.map_or(clock.next_time, |n| n.min(clock.next_time)));
+    for edge in k.clocks.borrow().iter().filter_map(ClockEntry::next_edge) {
+        next = Some(next.map_or(edge, |n| n.min(edge)));
     }
     let model_next = {
         let model = k.model.borrow();

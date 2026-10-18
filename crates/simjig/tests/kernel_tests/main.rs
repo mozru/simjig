@@ -2,6 +2,7 @@
 #![expect(clippy::unwrap_used, reason = "test helpers outside #[test] functions")]
 
 mod cancel;
+mod clocks;
 mod conflog;
 mod conformance;
 mod failures;

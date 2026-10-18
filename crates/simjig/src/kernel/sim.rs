@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::OrInvariant;
 use super::backend::ModelBackend;
-use super::clock::{Clock, ClockError, ClockState};
+use super::clock::{Clock, ClockEntry, ClockError, ClockHandle, ClockState};
 use super::failure::Failure;
 use super::fake::FakeModel;
 use super::panics;
@@ -89,14 +89,15 @@ impl Sim {
         self.kernel.precision
     }
 
-    /// Adds a kernel-driven clock. Clocks start at time 0, in the order they are added.
+    /// Adds a kernel-driven clock, running from time 0. Coincident edges are applied in
+    /// the order clocks are added. The handle stops and restarts it from inside the run.
     ///
     /// # Errors
     /// See [`ClockError`].
     ///
     /// # Panics
     /// If the signal belongs to another simulation.
-    pub fn add_clock(&mut self, clock: Clock) -> Result<(), ClockError> {
+    pub fn add_clock(&mut self, clock: Clock) -> Result<ClockHandle, ClockError> {
         let sig = clock.sig();
         assert_eq!(
             sig.sim_gen(),
@@ -111,9 +112,13 @@ impl Sim {
                 signal: name.to_string(),
             });
         }
-        let state = ClockState::new(&clock, self.kernel.widths[slot], name)?;
-        clocks.push(state);
-        Ok(())
+        let state = ClockState::new(&clock, self.kernel.widths[slot], name, SimTime::ZERO)?;
+        clocks.push(ClockEntry {
+            config: clock,
+            slot: sig.slot(),
+            running: Some(state),
+        });
+        Ok(ClockHandle::new(self.kernel.sim_gen, clocks.len() - 1))
     }
 
     /// Fails the run with [`FailureKind::TimeLimit`](crate::FailureKind::TimeLimit) instead

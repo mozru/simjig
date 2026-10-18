@@ -18,7 +18,7 @@ use std::sync::{Mutex, PoisonError};
 use std::thread::{self, ThreadId};
 
 use super::backend::ModelBackend;
-use super::clock::ClockState;
+use super::clock::ClockEntry;
 use super::failure::{Failure, FailureKind, SourceLocation};
 use super::recorder::{Recorder, TraceKind, TraceRecord};
 use super::signal::WriteLog;
@@ -75,7 +75,7 @@ pub(crate) struct Kernel {
     pub(crate) waits: RefCell<WaitTable>,
     pub(crate) log: RefCell<WriteLog>,
     /// Kernel clocks, in declaration order (the order coincident edges are logged in).
-    pub(crate) clocks: RefCell<Vec<ClockState>>,
+    pub(crate) clocks: RefCell<Vec<ClockEntry>>,
     pub(crate) failure: RefCell<Option<Failure>>,
     pub(crate) recorder: RefCell<Recorder>,
     pub(crate) counters: Cell<KernelStats>,

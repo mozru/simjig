@@ -15,9 +15,15 @@
 #include "simjig_rt.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <utility>
+
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace simjig {
 namespace {
@@ -48,20 +54,106 @@ const char* or_empty(const char* s) { return s != nullptr ? s : ""; }
 
 Runtime* active() noexcept { return t_active; }
 
-Scope::Scope(Runtime& rt) noexcept : m_previous{t_active} {
-    t_active = &rt;
-    // Verilator's hooks and VL_*_MT wrappers use the thread context, not the model's: point it
-    // at this model's context so several models on one thread stay separate.
-    Verilated::threadContextp(&rt.context());
+VlRNG& thread_rng() noexcept {
+    // The address of a thread_local is fixed for the thread's lifetime, so it is taken once.
+    // The first call may reseed: the state then belongs to no model yet.
+    static thread_local VlRNG* t_rng = nullptr;
+    if (t_rng == nullptr) {
+        t_rng = &VlRNG::vl_thread_rng();
+        return *t_rng;
+    }
+    const VlRNG keep = *t_rng;
+    (void)VlRNG::vl_thread_rng();  // syncs the thread's seed epoch; may overwrite the state
+    *t_rng = keep;
+    return *t_rng;
 }
 
-Scope::~Scope() { t_active = m_previous; }
+Scope::Scope(Runtime& rt) noexcept : m_rt{rt}, m_previous{t_active} {
+    t_active = &rt;
+    // Verilator's hooks and VL_*_MT wrappers use the thread context, not the model's: point it
+    // at this model's context so several models on one thread stay separate. It must be set
+    // before thread_rng(), whose reseed path reads it.
+    Verilated::threadContextp(&rt.context());
+    std::swap(thread_rng(), rt.rng());
+}
+
+Scope::~Scope() {
+    std::swap(thread_rng(), m_rt.rng());
+    t_active = m_previous;
+    if (m_previous != nullptr) Verilated::threadContextp(&m_previous->context());
+}
+
+FileId file_id(const char* path) noexcept {
+    struct stat st{};
+    if (path == nullptr || ::stat(path, &st) != 0) return FileId{};
+    return FileId{static_cast<uint64_t>(st.st_dev), static_cast<uint64_t>(st.st_ino), true};
+}
+
+int redirect_to_devnull(const FileId& id) noexcept {
+    if (!id.valid) return 0;
+    const int null_fd = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
+    if (null_fd < 0) return -1;
+    // Descriptors are small integers below the soft limit; cap the scan for "unlimited".
+    struct rlimit lim{};
+    rlim_t max_fd = 1024;
+    if (::getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != RLIM_INFINITY) {
+        max_fd = std::min<rlim_t>(lim.rlim_cur, 65536);
+    }
+    int moved = 0;
+    for (int fd = 0; fd < static_cast<int>(max_fd); ++fd) {
+        struct stat st{};
+        if (fd == null_fd || ::fstat(fd, &st) != 0) continue;
+        if (static_cast<uint64_t>(st.st_dev) == id.dev
+            && static_cast<uint64_t>(st.st_ino) == id.ino && ::dup2(null_fd, fd) == fd) {
+            ++moved;
+        }
+    }
+    ::close(null_fd);
+    return moved;
+}
+
+bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
+    if (path != nullptr) {
+        if (std::FILE* f = std::fopen(path, "wb")) {
+            std::fclose(f);
+            return true;
+        }
+    }
+    try {
+        const std::string msg = std::string{"cannot create "} + what + " '" + or_empty(path)
+                                + "': " + (path != nullptr ? std::strerror(errno) : "no path");
+        rt.on_warn("", 0, "", msg.c_str());
+    } catch (...) {
+        rt.on_warn("", 0, "", "cannot create an output file");
+    }
+    return false;
+}
 
 Runtime::Runtime(const simjig_create_opts* opts, bool coroutines)
     : m_context{std::make_unique<VerilatedContext>()}, m_coroutines{coroutines} {
     // Only Verilator's default vl_stop reads this; set it anyway so nothing else exits.
     m_context->fatalOnError(false);
+    // The default is the hardware concurrency, and the first model added to the context then
+    // starts that many - 1 pool threads even for a --threads 1 model (docs/notes/spikes.md §1,
+    // surprise 1). Threads break fork() and are never used by simjig's --threads 1 models.
+    m_context->threads(1);
     if (opts != nullptr) m_echo = (opts->flags & SIMJIG_CREATE_ECHO) != 0;
+}
+
+void Runtime::reseed(uint64_t seed) noexcept {
+    if (active() == this) {
+        thread_rng() = VlRNG{seed};
+    } else {
+        m_rng = VlRNG{seed};
+    }
+}
+
+uint64_t Runtime::context_seed() const {
+    // Verilator's formula, including its sign extension of a negative seed. Verilator draws a
+    // nondeterministic seed for randSeed 0; +verilator+seed+0 already replaces 0 with a drawn
+    // seed at parse time, so 0 only comes from code and is kept as the (deterministic) 0.
+    const auto s = static_cast<uint64_t>(m_context->randSeed());
+    return (s << 32) ^ s;
 }
 
 void Runtime::push(Record record) noexcept {
@@ -304,13 +396,16 @@ extern "C" {
 
 void simjig_rt_destroy(simjig_handle* h) {
     if (h == nullptr) return;
-    // The model's destructor may consult the thread context, so make this model's current.
-    const simjig::Scope scope{h->rt};
-    try {
-        delete h;
-    } catch (...) {
-        // Destructors are noexcept; nothing reaches here in practice. Never let it escape.
+    {
+        // The model's destructor may consult the thread context, so make this model's current.
+        const simjig::Scope scope{h->rt};
+        h->teardown();
     }
+    // Outside the Scope: it swaps the RNG back through `h->rt`, which delete frees.
+    delete h;
+    // ~VerilatedContext leaves the thread context null; an enclosing entry point (a DPI call
+    // that destroyed another model) needs its own back.
+    if (simjig::Runtime* outer = simjig::active()) Verilated::threadContextp(&outer->context());
 }
 
 void simjig_rt_set_time(simjig_handle* h, uint64_t time) {
@@ -321,17 +416,11 @@ size_t simjig_rt_drain_msgs(simjig_handle* h, simjig_msg* out, size_t cap) {
     return h != nullptr ? h->rt.drain(out, cap) : 0;
 }
 
-simjig_status simjig_rt_trace_open_unsupported(simjig_handle*, const char*) {
-    return SIMJIG_UNSUPPORTED;
-}
-simjig_status simjig_rt_trace_dump_unsupported(simjig_handle*, uint64_t) {
-    return SIMJIG_UNSUPPORTED;
-}
-simjig_status simjig_rt_trace_close_unsupported(simjig_handle*) { return SIMJIG_UNSUPPORTED; }
-
-uint32_t* simjig_rt_cov_counters_none(simjig_handle*, size_t* count) {
-    if (count != nullptr) *count = 0;
-    return nullptr;
+simjig_status simjig_rt_rng_seed(simjig_handle* h, uint64_t seed) {
+    if (h == nullptr) return SIMJIG_EXCEPTION;
+    if (h->rt.poisoned()) return SIMJIG_POISONED;
+    h->rt.reseed(seed);
+    return SIMJIG_OK;
 }
 
 size_t simjig_rt_abi_layout(uint32_t* out, size_t cap) {

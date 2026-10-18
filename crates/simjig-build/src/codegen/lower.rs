@@ -460,11 +460,11 @@ fn int_const(lit: &svtypes::literal::Literal) -> ConstValue {
             value: (raw == 1).to_string(),
         };
     }
-    let bytes = [8, 16, 32, 64, 128]
+    let bits = [8, 16, 32, 64, 128]
         .into_iter()
         .find(|&b| width <= b)
         .unwrap_or(128);
-    let ty = match (signed, bytes) {
+    let ty = match (signed, bits) {
         (false, 8) => "u8",
         (false, 16) => "u16",
         (false, 32) => "u32",

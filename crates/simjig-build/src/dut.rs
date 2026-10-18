@@ -3,7 +3,7 @@
 //! [`Dut`] records configuration only. [`Dut::build_in`] then runs the pipeline in a
 //! fixed order:
 //! 1. locate and version-check Verilator;
-//! 2. claim the prefix (see `pipeline::claim`): two configurations must never share one;
+//! 2. claim the DUT name in this build script (`script::claim_name`);
 //! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
 //!    `-G`, extra arguments and `--timing` setting (one builder, `DutConfig::design`),
 //!    giving the type IR. A DUT with
@@ -11,7 +11,8 @@
 //!    The IR is cached (`front`): a rerun that changes nothing runs no JSON pass;
 //! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
-//!    is linted, unless it passed for the same IR before (`front`);
+//!    is linted, unless it passed for the same IR before (`front`); then claim the prefix
+//!    in the cache (`pipeline::claim_prefix`): two configurations must never share one;
 //! 5. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
 //! 6. cross-check the header's ports against the IR's (or the emitter's), each probe
 //!    against Verilator's scope table (`syms`), the DPI-C prototypes in `V<prefix>__Dpi.h`
@@ -30,7 +31,7 @@ use crate::codegen::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, 
 use crate::compile::{self, CppRecipe};
 use crate::emit::{self, Emitter};
 use crate::front::Front;
-use crate::hash::KeyHasher;
+use crate::hash::{self, KeyHasher};
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
 use crate::{BuildEnv, Error, cache, manifest, pipeline, script};
@@ -242,47 +243,70 @@ impl DutConfig {
     }
 
     /// The Verilator `--prefix`: `V<name>_<hash8>`, unique per configuration so several
-    /// variants of one design can link into one binary.
-    ///
-    /// It covers every setting that changes the model's code (sources by path, flags,
-    /// params, probes, bindings, user-supplied generated inputs) but not file contents
-    /// or emitter outputs, so emitters can compute it before generating anything.
+    /// variants of one design can link into one binary. The hash is the first 8 hex
+    /// digits of a digest of every setting that changes the model's C++ (all but
+    /// [`Dut::dpi_in_c`], which changes only the generated Rust).
     pub fn prefix(&self) -> String {
+        format!("V{}_{}", self.name, &self.model_digest()[..8])
+    }
+
+    /// The digest the prefix is cut from: every setting that changes the model's C++
+    /// (sources by path, flags, params, probes, bindings, user-supplied generated inputs),
+    /// but not file contents or emitter outputs, so emitters can compute it before
+    /// generating anything. Two configurations with one prefix and different digests are
+    /// a collision of the prefix's 32 bits (`pipeline::claim_prefix`).
+    pub(crate) fn model_digest(&self) -> String {
+        // No `..`: a new field must be placed in the digest, or out of it on purpose.
+        let Self {
+            name,
+            sources,
+            include_dirs,
+            defines,
+            params,
+            top,
+            probes,
+            ifaces,
+            timing,
+            trace_fst,
+            coverage,
+            verilator_args,
+            generated,
+            // Out: it only drops Rust trampolines from the generated Rust. The model's C++
+            // calls the same C names either way, so moving an import to C is the same model.
+            dpi_in_c: _,
+        } = self;
         // Every entry is tagged with its list, so an entry cannot move to another list (a
-        // define `W=8` to a parameter `W=8`) without changing the prefix.
-        let mut h = KeyHasher::new("simjig-prefix-v2");
-        h.str("name").str(&self.name);
-        h.str("top").str(self.top.as_deref().unwrap_or(""));
-        for s in &self.sources {
+        // define `W=8` to a parameter `W=8`) without changing the digest.
+        let mut h = KeyHasher::new("simjig-prefix-v3");
+        h.str("name").str(name);
+        h.str("top").str(top.as_deref().unwrap_or(""));
+        for s in sources {
             h.str("source").path(s);
         }
-        for d in &self.include_dirs {
+        for d in include_dirs {
             h.str("include").path(d);
         }
-        for (k, v) in &self.defines {
+        for (k, v) in defines {
             h.str("define").str(k).str(v);
         }
-        for (k, v) in &self.params {
+        for (k, v) in params {
             h.str("param").str(k).str(v);
         }
-        for p in &self.probes {
-            h.str("probe").str(&format!("{p:?}"));
+        for p in probes {
+            hash::probe(h.str("probe"), p);
         }
-        for b in &self.ifaces {
-            h.str("iface").str(&format!("{b:?}"));
+        for b in ifaces {
+            hash::binding(h.str("iface"), b);
         }
-        h.str("switches").field(&[
-            u8::from(self.timing),
-            u8::from(self.trace_fst),
-            u8::from(self.coverage),
-        ]);
-        for a in &self.verilator_args {
+        h.str("switches")
+            .field(&[u8::from(*timing), u8::from(*trace_fst), u8::from(*coverage)]);
+        for a in verilator_args {
             h.str("arg").str(a);
         }
-        for g in &self.generated {
+        for g in generated {
             h.str("generated").str(&g.file_name).str(&g.contents);
         }
-        format!("V{}_{}", self.name, &h.finish()[..8])
+        h.finish()
     }
 
     /// The Verilator arguments, without `-Mdir`. `top` is the module to verilate (the
@@ -712,8 +736,11 @@ impl Dut {
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
-        pipeline::claim(env, &cache, &self.config, &prefix)?;
+        script::claim_name(env, &self.config, &prefix)?;
         let (front, ir, placed) = self.front_end(env, &cache, &verilator, top)?;
+        // After the front end's checks (the JSON pass, `dpi_in_c`, the emitters, the
+        // layout check): a build they fail leaves no claim in the shared cache.
+        pipeline::claim_prefix(&cache, &self.config, &prefix)?;
         let mut generated = ir.wrapper.iter().cloned().collect::<Vec<_>>();
         for g in placed.inputs.iter().chain(&self.config.generated) {
             generated.push(cache.store_input(g)?);
@@ -1099,6 +1126,17 @@ mod tests {
             assert!(!seen.contains(&p), "{v:?} collides");
             seen.push(p);
         }
+    }
+
+    /// `dpi_in_c` only drops Rust trampolines; the model's C++ (so its prefix) is the same.
+    #[test]
+    fn dpi_in_c_is_not_part_of_the_prefix() {
+        let in_c = DutConfig {
+            dpi_in_c: vec!["f".into()],
+            ..cfg()
+        };
+        assert_eq!(in_c.prefix(), cfg().prefix());
+        assert_eq!(in_c.model_digest(), cfg().model_digest());
     }
 
     /// Each list is tagged, so moving an entry from one list to another (a define to a

@@ -8,7 +8,7 @@
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
 //! - `prefixes/<scheme>/<prefix>`: the identity of the configuration that owns a model
-//!   prefix, per identity scheme (see `pipeline::claim`).
+//!   prefix, per identity scheme (see `pipeline::claim_prefix`).
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
 //! - `archives/<key>/`: compiled models (see `compile`).
 //! - `fronts/<key>`: the IR of a DUT; `checks/<key>`: a layout check that passed (see
@@ -236,7 +236,7 @@ impl Cache {
     }
 
     /// Records that `identity` owns `prefix` under identity `scheme` (see
-    /// `pipeline::claim`), unless another identity already does: then
+    /// `pipeline::claim_prefix`), unless another identity already does: then
     /// returns that one. A race between two different identities may let both pass;
     /// a collision of the 32-bit prefix hash is already unlikely, and the loser's next
     /// build reports it.

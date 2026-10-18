@@ -35,6 +35,29 @@ the public API, the generated code or simulation semantics.
   without its driver. Cancel such a task with `Task::cancel`. A combinator dropping a
   losing operand, a cancelled task's locals and the end of the run are unaffected; so is
   dropping a handle whose task has run. The `must_use` message of `Task` says the same.
+- IR schema 5: no new fields; it marks the DPI fields stage 3 added under schema 4
+  (`Design::dpi_imports`, `Design::dpi_exports`), so schema 4 no longer has two JSON forms
+  and a front-cache entry from a build without them is not served. Every `IR_HASH` (and
+  so every generated binding and shim) changes, and every DUT's JSON pass runs once more.
+- `Dut::dpi_in_c` is no longer part of a DUT's identity: moving a DPI-C import from Rust
+  to C (it changes only the generated Rust, not the model) failed the next build with
+  "model prefix ... is already used by a different configuration; rename the DUT" until
+  the cache was cleared. A prefix claim now records the full digest the prefix is cut
+  from (`DutConfig::model_digest`), and the prefix hashes probes and interface bindings
+  field by field instead of through their `Debug` form (`simjig-prefix-v3`), so every
+  model prefix changes and every model is verilated and compiled again once. Within one
+  build script, a DUT name rebuilt with another `dpi_in_c` is still refused.
+- A DUT's model prefix is claimed in the cache after the front end's checks (the JSON
+  pass, `dpi_in_c`, the emitters, the layout check), so a build that fails them leaves no
+  claim behind.
+- `fork::run_from_checkpoint` inside an operand of a `join!`, `first!` or `with_timeout`
+  of the main task returns the new `ForkError::InCombinator`. It forked: the other
+  operands ran on inside every branch, and an operand that won a `first!` in the child
+  cancelled the branch body, so the child ran the rest of the test as if it were the
+  parent.
+- A fork branch's child whose `run_from_checkpoint` future is dropped before the branch
+  body returns (by a hand-written poll) ends with a failed branch ("the branch body was
+  dropped before it returned"). It ran on as if it were the parent.
 - Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.

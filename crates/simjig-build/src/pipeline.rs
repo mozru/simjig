@@ -12,59 +12,41 @@ use crate::dut::{DutConfig, GeneratedInput};
 use crate::emit::SvModule;
 use crate::hash::KeyHasher;
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error, iface_diag, script};
+use crate::{Error, iface_diag};
 
-/// Makes sure no two configurations share a model prefix.
+/// Makes sure no two configurations share a model prefix across the crates sharing the
+/// cache.
 ///
 /// Why: two models with the same `--prefix` define the same C++ symbols, and a static
 /// link silently keeps one copy (88 of 88 strong symbols collide for the counter;
-/// docs/notes/spikes.md), so one model would run the other's code. Two checks:
-/// - in this build script, a DUT name may be built again only with the same
-///   configuration ([`script::claim_name`]);
-/// - across crates sharing the cache, `prefixes/<scheme>/<prefix>` records the full
-///   identity of the configuration that first used the prefix; a different one with the
-///   same prefix (a collision of its 32-bit hash) is an error.
+/// docs/notes/spikes.md), so one model would run the other's code. The prefix is 32 bits
+/// of [`DutConfig::model_digest`]; `prefixes/<scheme>/<prefix>` records the full digest
+/// of the configuration that first used the prefix, and another digest with the same
+/// prefix (a collision of the 32 bits) is an error. Within one build script, a DUT name
+/// may be built again only with the same configuration ([`crate::script::claim_name`]).
 ///
-/// The identity hashes the configuration's `Debug` form, which changes whenever
-/// simjig-build changes [`DutConfig`] (a new field). `<scheme>` ([`identity_scheme`])
-/// changes with it, so a cache written by another simjig-build is not mistaken for a
-/// collision of every one of its prefixes.
-pub(crate) fn claim(
-    env: &BuildEnv,
-    cache: &Cache,
-    config: &DutConfig,
-    prefix: &str,
-) -> Result<(), Error> {
-    let identity = identity(config);
-    let fail = |msg: String| {
-        Err(Error::Config {
-            dut: config.name.clone(),
-            msg,
-        })
-    };
-    script::claim_name(env, config, &identity, prefix)?;
+/// The record is the digest itself, so a configuration that changes the model always
+/// changes its prefix too, and a claim a failed build left behind is never mistaken for
+/// a collision. `<scheme>` ([`identity_scheme`]) is the simjig-build version.
+pub(crate) fn claim_prefix(cache: &Cache, config: &DutConfig, prefix: &str) -> Result<(), Error> {
+    let identity = config.model_digest();
     match cache.claim_prefix(&identity_scheme(), prefix, &identity)? {
         None => Ok(()),
-        Some(other) => fail(format!(
-            "model prefix `{prefix}` is already used by a different configuration (identity \
-             {other}, this one {identity}); rename the DUT"
-        )),
+        Some(other) => Err(Error::Config {
+            dut: config.name.clone(),
+            msg: format!(
+                "model prefix `{prefix}` is already used by a different configuration \
+                 (identity {other}, this one {identity}); rename the DUT"
+            ),
+        }),
     }
 }
 
-/// What [`identity`] means: the simjig-build version and the shape of [`DutConfig`].
+/// The claims' namespace: the simjig-build version (whose `model_digest` may differ).
 fn identity_scheme() -> String {
-    let mut h = KeyHasher::new("simjig-dut-identity-scheme-v1");
-    h.str(env!("CARGO_PKG_VERSION"))
-        .str(&format!("{:?}", DutConfig::default()));
+    let mut h = KeyHasher::new("simjig-dut-identity-scheme-v2");
+    h.str(env!("CARGO_PKG_VERSION"));
     h.finish()[..16].to_owned()
-}
-
-/// A hash of the whole configuration: equal exactly when two configurations are equal.
-fn identity(config: &DutConfig) -> String {
-    let mut h = KeyHasher::new("simjig-dut-identity-v1");
-    h.str(&format!("{config:?}"));
-    h.finish()
 }
 
 /// The IR the emitter sees, and what the model build needs from getting it.
@@ -201,23 +183,6 @@ mod tests {
             "-Wno-fatal --no-timing --top-module simjig_layout_c -DK=V /g/pkg.sv /r/c.sv /g/l.sv \
              -Wwarn-USERFATAL --lint-only -Werror-USERFATAL"
         );
-    }
-
-    #[test]
-    fn identity_tracks_the_whole_configuration() {
-        let a = DutConfig {
-            name: "c".into(),
-            ..DutConfig::default()
-        };
-        let b = DutConfig {
-            generated: vec![GeneratedInput {
-                file_name: "x.vlt".into(),
-                contents: String::new(),
-            }],
-            ..a.clone()
-        };
-        assert_eq!(identity(&a), identity(&a.clone()));
-        assert_ne!(identity(&a), identity(&b));
     }
 
     #[test]

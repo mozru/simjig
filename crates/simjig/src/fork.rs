@@ -34,12 +34,16 @@
 //!   `cargo test` there are more, and the call returns [`ForkError::Threads`], naming
 //!   nextest. The same check catches a Verilator thread pool: simjig's runtime builds every
 //!   `VerilatedContext` with `threads(1)`, and a model built otherwise would show up here.
-//! - **A quiet point.** The caller is the main task and no other task is unfinished
-//!   ([`ForkError::OtherTasks`]), so a branch is exactly "the checkpoint, then this body".
+//! - **A quiet point.** The caller is the main task, outside every `join!`, `first!` and
+//!   `with_timeout` ([`ForkError::InCombinator`]: their operands are helpers polled inside
+//!   `main`, not tasks), and no other task is unfinished ([`ForkError::OtherTasks`]), so a
+//!   branch is exactly "the checkpoint, then this body".
 //! - **The child never returns into the harness.** It ends with `_exit` after writing its
 //!   report: on success from inside the branch's poll, and on any failure (a panic, a
 //!   `TimeLimit`, a model `$fatal`, ...) from the `Drop` of a sentinel task, which the
-//!   kernel runs when it ends the child's run. No destructor, atexit handler or
+//!   kernel runs when it ends the child's run. Should the call's own future be dropped in
+//!   the child before the body returns, a guard held across the body ends the child with
+//!   a failure too. No destructor, atexit handler or
 //!   copied stdio buffer runs in the child, so nothing outside memory may rely on `Drop`
 //!   there.
 //! - **Stdio is flushed before each fork** (Rust's and C's), so buffered output is not
@@ -158,6 +162,13 @@ pub enum ForkError {
         /// The calling task.
         task: String,
     },
+    /// Called inside an operand of a `join!`, `first!` or `with_timeout` of the main task:
+    /// the other operands run beside the call, so the checkpoint is not a quiet point.
+    InCombinator {
+        /// How many operands the main task's unfinished combinators have, the caller's
+        /// own included.
+        operands: usize,
+    },
     /// Other tasks are still running, so the checkpoint is not a quiet point.
     OtherTasks {
         /// Their hierarchical names.
@@ -196,6 +207,13 @@ impl fmt::Display for ForkError {
             Self::NotMainTask { task } => write!(
                 f,
                 "run_from_checkpoint was called from task `{task}`; call it from the main task"
+            ),
+            Self::InCombinator { operands } => write!(
+                f,
+                "run_from_checkpoint was called inside a `join!`, `first!` or `with_timeout` \
+                 of the main task ({operands} combinator operands are unfinished), so the \
+                 other operands would run on inside every branch, and one could end it; \
+                 call it from the main task directly, outside every combinator"
             ),
             Self::OtherTasks { tasks } => write!(
                 f,
@@ -571,6 +589,12 @@ fn check_quiet() -> Result<Precision, ForkError> {
             let task = current.map_or_else(|| "<kernel>".to_owned(), |key| k.task_name(key));
             return Err(ForkError::NotMainTask { task });
         }
+        // A combinator operand of `main` runs as a helper inside `main`'s poll (`current`
+        // is `main`), and helpers are not tasks: they are checked here, not below.
+        let operands = main.map_or(0, |m| k.tasks.borrow().helpers_of(m));
+        if operands > 0 || k.context.get() != main {
+            return Err(ForkError::InCombinator { operands });
+        }
         let others: Vec<String> = k
             .tasks
             .borrow()
@@ -625,6 +649,9 @@ where
             imp::Forked::Parent(child) => outcomes.push(child.collect(branch)?),
             imp::Forked::Child => {
                 crate::spawn("fork_sentinel", Sentinel).detach();
+                // Dropped only if this future is dropped before the body returns: the
+                // child then ends there, instead of running on as if it were the parent.
+                let _never_return = ChildGuard;
                 let result = body(branch).await;
                 imp::finish_child(&match &result {
                     Ok(value) => wire::value_report(value),
@@ -650,16 +677,42 @@ impl Future for Sentinel {
 
 impl Drop for Sentinel {
     fn drop(&mut self) {
-        let failure = state::try_current("a fork branch", |k| k.failure.borrow().clone())
-            .flatten()
-            .unwrap_or_else(ended_without_result);
-        imp::finish_child(&wire::failure_report(&failure));
+        end_child_early("the branch's run ended before the branch body returned");
     }
 }
 
+/// Held across the branch body's `await` in a branch's child. `run_from_checkpoint`'s
+/// future can be dropped there only if whoever polls it drops it unfinished, which the
+/// quiet-point check rules out for every combinator; should it happen anyway, the child
+/// must still never return into the harness, so this ends it with a failure.
+struct ChildGuard;
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        // A panic in the body drops it (and this guard) while unwinding to the task's
+        // `catch_unwind`; the kernel then records the panic, and the sentinel reports it.
+        if std::thread::panicking() {
+            return;
+        }
+        end_child_early(
+            "the branch body was dropped before it returned (the future of \
+             run_from_checkpoint was cancelled inside the branch)",
+        );
+    }
+}
+
+/// Ends a branch's child that has no result: with the kernel's failure if one was
+/// recorded, else with a failure saying `why`.
+fn end_child_early(why: &str) -> ! {
+    let failure = state::try_current("a fork branch", |k| k.failure.borrow().clone())
+        .flatten()
+        .unwrap_or_else(|| ended_without_result(why));
+    imp::finish_child(&wire::failure_report(&failure))
+}
+
 /// The failure of a branch whose run ended with neither a result nor a kernel failure.
-fn ended_without_result() -> Failure {
-    let message = "the branch's run ended before the branch body returned".to_owned();
+fn ended_without_result(why: &str) -> Failure {
+    let message = why.to_owned();
     Failure {
         kind: crate::FailureKind::TaskPanic {
             message: message.clone(),
@@ -899,6 +952,7 @@ mod tests {
         for error in [
             ForkError::NoSimulation,
             ForkError::Threads { count: 9 },
+            ForkError::InCombinator { operands: 2 },
             ForkError::OtherTasks {
                 tasks: vec!["main.driver".to_owned()],
             },

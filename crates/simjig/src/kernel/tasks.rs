@@ -185,6 +185,15 @@ impl TaskTable {
             .collect()
     }
 
+    /// How many combinator helpers of `root`'s combinators are in the table (finished or
+    /// not): nonzero while `root` awaits a `join!`, `first!` or `with_timeout`.
+    pub(crate) fn helpers_of(&self, root: Key) -> usize {
+        self.slab
+            .iter()
+            .filter(|(_, e)| matches!(e, Entry::Helper(h) if h.root == root))
+            .count()
+    }
+
     pub(crate) fn keys(&self) -> Vec<Key> {
         self.tasks().map(|(k, _)| k).collect()
     }

@@ -288,3 +288,67 @@ fn an_unshared_cache_warns() {
         built.directives
     );
 }
+/// `dpi_in_c` changes only the generated Rust, so it is not part of a DUT's prefix; it
+/// must not be part of the identity its prefix claim records either, or moving an import
+/// from Rust to C (an edit to the build script) finds the previous build's claim and fails
+/// with "rename the DUT". Another `OUT_DIR` stands in for the next run of the build
+/// script (the per-script name check is per process). From the s3c4 review.
+#[test]
+fn s3c4m_moving_a_dpi_import_to_c_is_not_a_prefix_collision() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    std::fs::write(rtl.join("imp.sv"), IMPORTS_F).unwrap();
+    let dut = || Dut::new("imp").sources([rtl.join("imp.sv")]).top("imp");
+    let first = dut().build_in(&s.env()).unwrap();
+    let mut next_run = s.env();
+    next_run.out_dir = s.path().join("next-out");
+    let second = dut().dpi_in_c(["f"]).build_in(&next_run);
+    let second = second.unwrap_or_else(|e| panic!("moving `f` to C failed the build: {e}"));
+    assert_eq!(first.prefix, second.prefix, "the same model");
+}
+
+/// A design with one DPI-C import, `f`.
+const IMPORTS_F: &str = "module imp(input logic [31:0] a, output logic [31:0] y);\n  \
+    import \"DPI-C\" pure function int f(input int x);\n  assign y = f(a);\nendmodule\n";
+
+/// Within one build script, the DUT name names the generated Rust, which `dpi_in_c`
+/// changes: rebuilding a name with another `dpi_in_c` is refused although the model (and
+/// its prefix) is the same.
+#[test]
+fn a_dut_name_rebuilt_with_another_dpi_in_c_is_refused() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    std::fs::write(rtl.join("imp.sv"), IMPORTS_F).unwrap();
+    let dut = || Dut::new("imp").sources([rtl.join("imp.sv")]).top("imp");
+    dut().build_in(&s.env()).unwrap();
+    let err = dut().dpi_in_c(["f"]).build_in(&s.env()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("a DUT of this name was already built with a different configuration"),
+        "{err}"
+    );
+}
+
+/// A build that fails a check of the front end (here `dpi_in_c` naming an import the
+/// design lacks) records no prefix claim in the shared cache.
+#[test]
+fn a_build_that_fails_its_checks_leaves_no_prefix_claim() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    std::fs::write(rtl.join("imp.sv"), IMPORTS_F).unwrap();
+    let dut = Dut::new("imp")
+        .sources([rtl.join("imp.sv")])
+        .top("imp")
+        .dpi_in_c(["g"]);
+    let prefix = dut.config().prefix();
+    let err = dut.build_in(&s.env()).unwrap_err();
+    assert!(err.to_string().contains("`dpi_in_c` names `g`"), "{err}");
+    let prefixes = s.path().join("cache/prefixes");
+    let claims: Vec<_> = std::fs::read_dir(&prefixes)
+        .into_iter()
+        .flatten()
+        .map(|scheme| scheme.unwrap().path().join(&prefix))
+        .filter(|claim| claim.is_file())
+        .collect();
+    assert!(claims.is_empty(), "{claims:?}");
+}

@@ -4,13 +4,14 @@
 //! One function per DUT, each in its own block, so modules can be added independently.
 //! Every DUT is linted with `-Wall`; Verilator's warnings fail the build.
 
-use simjig_build::{Dut, Error};
+use simjig_build::{Dut, Error, IfaceBinding};
 
 /// Verilator arguments shared by every DUT of this crate.
 const LINT: [&str; 1] = ["-Wall"];
 
 fn main() -> Result<(), Error> {
     sync_fifo()?;
+    skid_buffer()?;
     Ok(())
 }
 
@@ -33,6 +34,33 @@ fn sync_fifo() -> Result<(), Error> {
         .top("item_fifo")
         .param("DEPTH", 4)
         .param("FWFT", 1)
+        .verilator_args(LINT)
+        .build()?;
+    Ok(())
+}
+
+// ---- skid_buffer (rtl/skid_buffer.sv, rtl/stream_if.sv) ---------------------------------
+
+/// Beat width of the `skid_buffer` model.
+const SKID_WIDTH: u32 = 16;
+
+/// `skid_buffer` with 16-bit beats. Its ports are `stream_if` modports, which a Verilator
+/// top cannot have, so the generated wrapper instantiates one `stream_if` per port. The
+/// interface's `WIDTH` is its own parameter: `.param` sets only the module's, so each
+/// binding passes it too (`bind_iface` alone would give the interface its default, 8).
+fn skid_buffer() -> Result<(), Error> {
+    let stream = |port: &str, modport: &str| IfaceBinding {
+        port: port.into(),
+        interface: "stream_if".into(),
+        params: vec![("WIDTH".into(), SKID_WIDTH.to_string())],
+        modport: Some(modport.into()),
+    };
+    Dut::new("skid_buffer")
+        .sources(["rtl/stream_if.sv", "rtl/skid_buffer.sv"])
+        .top("skid_buffer")
+        .param("WIDTH", SKID_WIDTH)
+        .bind_iface_with(stream("up", "sink"))
+        .bind_iface_with(stream("down", "source"))
         .verilator_args(LINT)
         .build()?;
     Ok(())

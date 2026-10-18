@@ -64,3 +64,40 @@ one `Fifo<T>` struct, so one driver, monitor and model serve both.
 | `registered_read_waits_for_a_pop`, `first_word_falls_through` | the two read modes |
 | `random_continuations_from_full` | fills once, then `fork::run_from_checkpoint` runs four random branches from that full state, each with its own seed (needs nextest) |
 | `depth_must_be_a_power_of_two` | runs `verilator --lint-only -Wall` on other parameter sets, and on DEPTHs it must refuse |
+
+## skid_buffer
+
+`rtl/skid_buffer.sv`: a valid/ready pipeline register (two entries: output and skid) that
+cuts every combinational path between its sides, moving one beat per cycle while `down`
+is ready. Its ports are `stream_if` modports (`rtl/stream_if.sv`): `up` is a
+`stream_if.sink`, `down` a `stream_if.source`.
+
+A Verilator top cannot have interface ports, so `build.rs` binds each port to an
+interface instance in the generated wrapper. `stream_if` has its own `WIDTH` parameter,
+which `.param("WIDTH", ..)` on the module does not reach, so the binding sets it:
+
+```rust
+let stream = |port: &str, modport: &str| IfaceBinding {
+    port: port.into(),
+    interface: "stream_if".into(),
+    params: vec![("WIDTH".into(), "16".into())],
+    modport: Some(modport.into()),
+};
+Dut::new("skid_buffer")
+    .sources(["rtl/stream_if.sv", "rtl/skid_buffer.sv"])
+    .top("skid_buffer")
+    .param("WIDTH", 16)
+    .bind_iface_with(stream("up", "sink"))
+    .bind_iface_with(stream("down", "source"))
+    .build()?;
+```
+
+For an interface without parameters, `.bind_iface("up", "stream_if.sink")` is enough. In
+the test, `dut.up` and `dut.down` are bundles typed from the modports: `dut.up.valid` is
+an `In<Bit>` the testbench writes, `dut.up.ready` an `Out<Bit>` it reads.
+
+| Test | Checks |
+|---|---|
+| `random_valid_and_ready_lose_nothing` | 1000 beats with random `valid` (held until taken) and bursty random `ready`: no loss, no duplicate, order kept, `down` stable while stalled, at most two beats inside, and both sides saw backpressure |
+| `full_throughput_while_ready_is_high` | with `ready` high and a beat every cycle, `up.ready` never drops and the beats leave on consecutive edges |
+| `a_stall_fills_the_skid_then_drains_in_order` | `up.ready` drops only once both registers hold a beat, and returns two edges after the release |

@@ -165,7 +165,8 @@ impl SimTime {
         }
     }
 
-    /// A value that prints this time in physical units of `precision` (`1250 ps`).
+    /// A value that prints this time in physical units, in the largest unit that shows
+    /// it exactly (`1 us`, `1250 ns`).
     #[must_use]
     pub const fn display(self, precision: Precision) -> TimeDisplay {
         TimeDisplay {
@@ -182,11 +183,33 @@ pub struct TimeDisplay {
     precision: Precision,
 }
 
+/// Units from the largest down, for [`TimeDisplay`].
+const UNITS_DOWN: [TimeUnit; 6] = [
+    TimeUnit::S,
+    TimeUnit::Ms,
+    TimeUnit::Us,
+    TimeUnit::Ns,
+    TimeUnit::Ps,
+    TimeUnit::Fs,
+];
+
+/// Prints in the largest unit that shows the time as a whole number (`1 us`, `250 ns`,
+/// `1250 ns`); zero prints in the precision's unit (`0 ps`).
 impl fmt::Display for TimeDisplay {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (unit, scale) = self.precision.display_scale();
-        let value = u128::from(self.ticks) * u128::from(scale);
-        write!(f, "{value} {}", unit.symbol())
+        let (base, _) = self.precision.display_scale();
+        if self.ticks == 0 {
+            return write!(f, "0 {}", base.symbol());
+        }
+        // Femtoseconds fit u128: at most 2^64 ticks of 10^15 fs.
+        let fs = u128::from(self.ticks)
+            * 10u128.pow(u32::from((self.precision.exponent + 15).unsigned_abs()));
+        let unit_fs = |u: TimeUnit| 10u128.pow(u32::from((u.exponent() + 15).unsigned_abs()));
+        let unit = UNITS_DOWN
+            .into_iter()
+            .find(|&u| fs.is_multiple_of(unit_fs(u)))
+            .unwrap_or(base);
+        write!(f, "{} {}", fs / unit_fs(unit), unit.symbol())
     }
 }
 
@@ -383,9 +406,22 @@ mod tests {
     }
 
     #[test]
-    fn times_display_in_physical_units() {
+    fn times_display_in_the_largest_exact_unit() {
+        let ps = |t| SimTime(t).display(Precision::PS).to_string();
+        assert_eq!(ps(1_000_000), "1 us");
+        assert_eq!(ps(250_000), "250 ns");
+        assert_eq!(ps(1_250_000), "1250 ns");
+        assert_eq!(ps(7), "7 ps");
+        assert_eq!(ps(0), "0 ps", "zero prints in the precision's unit");
+        assert_eq!(ps(3_000_000_000_000), "3 s");
         let ten_ps = Precision::from_exponent(-11).unwrap();
         assert_eq!(SimTime(125).display(ten_ps).to_string(), "1250 ps");
+        assert_eq!(SimTime(100).display(ten_ps).to_string(), "1 ns");
+        assert_eq!(SimTime(0).display(ten_ps).to_string(), "0 ps");
         assert_eq!(SimTime(7).display(Precision::NS).to_string(), "7 ns");
+        assert_eq!(
+            SimTime(u64::MAX).display(Precision::NS).to_string(),
+            "18446744073709551615 ns"
+        );
     }
 }

@@ -4,8 +4,8 @@ expression: report.to_string()
 ---
 FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [TimeLimit sig=fdf71904d7d910ee]
   message:  the next timestep, t=1250 ns, is past the time limit
-  limit:    t=1000 ns
-  timeout:  1000 ns (from `#[simjig::test(timeout = ...)]`)
+  limit:    t=1 us
+  timeout:  1 us (from `#[simjig::test(timeout = ...)]`)
   blocked:  `main` awaits rising(`top.clk`)
   help:     the test ran too long; a listed task is probably waiting for something that never happens
   repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'

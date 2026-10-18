@@ -43,12 +43,15 @@ enum Shell {
     Pixi,
 }
 
-/// Runs [`seeded_failure`] in a child process of this test binary.
+/// Runs [`seeded_failure`] in a child process of this test binary, writing its run
+/// directory under `$CARGO_TARGET_TMPDIR/harness/<runs>` (emptied first, so a leftover from
+/// an earlier run cannot pass for this one's).
 fn run_child(seed: &str, runs: &str, shell: Shell) -> Output {
     let exe = std::env::current_exe().expect("the test binary");
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("harness")
         .join(runs);
+    std::fs::remove_dir_all(&dir).ok(); // absent on a first run
     let mut command = Command::new(exe);
     command
         .args([

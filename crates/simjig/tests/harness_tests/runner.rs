@@ -23,14 +23,16 @@ fn meta(name: &'static str) -> TestMeta {
     }
 }
 
+/// A run environment writing under `$CARGO_TARGET_TMPDIR/harness/<dir>`, emptied first so a
+/// run directory left by an earlier run cannot pass for this one's.
 fn env(seed: Option<u64>, dir: &str) -> RunEnv {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("harness")
+        .join(dir);
+    std::fs::remove_dir_all(&root).ok(); // absent on a first run
     RunEnv {
         seed,
-        runs_root: Some(
-            PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-                .join("harness")
-                .join(dir),
-        ),
+        runs_root: Some(root),
         launcher: None,
         binary: Some("harness_tests".to_owned()),
     }
@@ -122,9 +124,7 @@ async fn tick_20ms() {
 
 #[test]
 fn a_test_without_a_timeout_stops_at_the_default() {
-    let outcome = run::<(), _, _>(&meta("default"), &env(None, "default"), |_, ()| {
-        tick_20ms()
-    });
+    let outcome = run::<(), _, _>(&meta("default"), &env(None, "default"), |_, ()| tick_20ms());
     let report = outcome.failure.expect("the default timeout fires");
     assert_eq!(report.kind, "TimeLimit");
     let line = report

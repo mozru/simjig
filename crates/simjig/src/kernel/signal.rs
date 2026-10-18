@@ -251,19 +251,52 @@ impl Writer {
     }
 }
 
+/// Values of at most this many words are stored in the entry itself.
+const INLINE: usize = 2;
+
 #[derive(Debug)]
 struct Entry {
     slot: u32,
+    len: u32,
     /// The first writer of the entry's current value this delta; writers that agreed with
     /// it are in [`WriteLog::agreeing`].
     writer: Writer,
-    start: u32,
-    len: u32,
+    /// The value if it fits (`len <= INLINE`); else `[start in WriteLog::words, 0]`.
+    value: [u32; INLINE],
 }
 
 impl Entry {
-    fn range(&self) -> std::ops::Range<usize> {
-        self.start as usize..(self.start + self.len) as usize
+    fn value<'a>(&'a self, words: &'a [u32]) -> &'a [u32] {
+        let len = self.len as usize;
+        if len <= INLINE {
+            &self.value[..len]
+        } else {
+            let start = self.value[0] as usize;
+            &words[start..start + len]
+        }
+    }
+
+    fn value_mut<'a>(&'a mut self, words: &'a mut [u32]) -> &'a mut [u32] {
+        let len = self.len as usize;
+        if len <= INLINE {
+            &mut self.value[..len]
+        } else {
+            let start = self.value[0] as usize;
+            &mut words[start..start + len]
+        }
+    }
+}
+
+/// `dst.copy_from_slice(src)`, without a `memcpy` call for the usual one or two words.
+#[inline]
+fn copy_small(dst: &mut [u32], src: &[u32]) {
+    match (dst, src) {
+        ([d], [s]) => *d = *s,
+        ([d0, d1], [s0, s1]) => {
+            *d0 = *s0;
+            *d1 = *s1;
+        }
+        (dst, src) => dst.copy_from_slice(src),
     }
 }
 
@@ -276,10 +309,11 @@ impl Entry {
 pub(crate) struct WriteLog {
     entries: Vec<Entry>,
     words: Vec<u32>,
-    /// Current delta number; bumped by every `take`.
-    epoch: u64,
-    /// Per slot: (epoch of its last write, index into `entries`).
-    last: Vec<(u64, usize)>,
+    /// Current delta number, never 0; bumped by every `take`.
+    epoch: u32,
+    /// Per slot: (epoch of its last write, index into `entries`). Eight bytes, so the
+    /// lookup is one load; `take` clears it when the epoch wraps.
+    last: Vec<(u32, u32)>,
     /// `(entry index, writer)` of every further writer that wrote an entry's current
     /// value this delta; rare (agreeing writers), so kept out of the entries.
     agreeing: Vec<(usize, Writer)>,
@@ -297,9 +331,7 @@ pub(crate) struct Batch {
 impl Batch {
     /// `(slot, value)` of every write, in write order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &[u32])> {
-        self.entries
-            .iter()
-            .map(|e| (e.slot, &self.words[e.range()]))
+        self.entries.iter().map(|e| (e.slot, e.value(&self.words)))
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -321,43 +353,78 @@ impl WriteLog {
 
     /// Appends a write. Returns another writer of `slot` this delta if it wrote a
     /// different value.
+    ///
+    /// The two common cases (the first write of a slot this delta, and its only writer
+    /// writing it again) are inline and short; agreeing and conflicting writers take the
+    /// out-of-line [`push_shared`](Self::push_shared).
     #[inline]
     fn push(&mut self, slot: u32, value: &[u32], writer: Writer) -> Result<(), Writer> {
         let (epoch, index) = self.last[slot as usize];
-        if epoch == self.epoch {
-            let entry = &self.entries[index];
-            let current = &mut self.words[entry.range()];
-            let first = entry.writer;
-            let mut others = self
-                .agreeing
-                .iter()
-                .filter(|(i, _)| *i == index)
-                .map(|&(_, w)| w);
-            if current == value {
-                if first != writer && !others.any(|w| w == writer) {
-                    self.agreeing.push((index, writer));
-                }
-                return Ok(());
-            }
-            if first != writer {
-                return Err(first);
-            }
-            if let Some(other) = others.find(|&w| w != writer) {
-                return Err(other);
-            }
-            current.copy_from_slice(value);
+        if epoch != self.epoch {
+            self.push_new(slot, value, writer);
             return Ok(());
         }
-        self.last[slot as usize] = (self.epoch, self.entries.len());
-        let start = u32::try_from(self.words.len()).or_invariant("invariant: < 2^32 words");
+        let entry = &mut self.entries[index as usize];
+        if entry.writer == writer && self.agreeing.is_empty() {
+            // The last write wins; there is no one to conflict with.
+            copy_small(entry.value_mut(&mut self.words), value);
+            return Ok(());
+        }
+        self.push_shared(index as usize, value, writer)
+    }
+
+    #[inline]
+    fn push_new(&mut self, slot: u32, value: &[u32], writer: Writer) {
+        let entry = u32::try_from(self.entries.len()).or_invariant("invariant: < 2^32 writes");
+        self.last[slot as usize] = (self.epoch, entry);
         let len = u32::try_from(value.len()).or_invariant("invariant: < 2^32 words");
+        // Most signals fit in the entry, which saves a second buffer and a `memcpy`.
+        let inline = match *value {
+            [w] => [w, 0],
+            [w0, w1] => [w0, w1],
+            _ => self.spill(value),
+        };
         self.entries.push(Entry {
             slot,
-            writer,
-            start,
             len,
+            writer,
+            value: inline,
         });
+    }
+
+    /// Stores a value too wide for an entry; returns the entry's `value` field.
+    #[cold]
+    fn spill(&mut self, value: &[u32]) -> [u32; INLINE] {
+        let start = u32::try_from(self.words.len()).or_invariant("invariant: < 2^32 words");
         self.words.extend_from_slice(value);
+        [start, 0]
+    }
+
+    /// A write of an entry that another writer wrote, or that agreeing writers share.
+    #[cold]
+    #[inline(never)]
+    fn push_shared(&mut self, index: usize, value: &[u32], writer: Writer) -> Result<(), Writer> {
+        let entry = &mut self.entries[index];
+        let first = entry.writer;
+        let current = entry.value_mut(&mut self.words);
+        let mut others = self
+            .agreeing
+            .iter()
+            .filter(|(i, _)| *i == index)
+            .map(|&(_, w)| w);
+        if current == value {
+            if first != writer && !others.any(|w| w == writer) {
+                self.agreeing.push((index, writer));
+            }
+            return Ok(());
+        }
+        if first != writer {
+            return Err(first);
+        }
+        if let Some(other) = others.find(|&w| w != writer) {
+            return Err(other);
+        }
+        copy_small(current, value);
         Ok(())
     }
 
@@ -369,7 +436,12 @@ impl WriteLog {
     /// Takes every logged write and starts a new delta; hand the batch back with
     /// [`recycle`](Self::recycle) once applied.
     pub(crate) fn take(&mut self) -> Batch {
-        self.epoch += 1;
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            // Wrapped: forget every slot's epoch so no stale one can match.
+            self.last.fill((0, 0));
+            self.epoch = 1;
+        }
         self.agreeing.clear();
         let mut spare = self.spare.take().unwrap_or_default();
         std::mem::swap(&mut spare.entries, &mut self.entries);

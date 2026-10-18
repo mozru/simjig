@@ -296,7 +296,8 @@ fn details(
             second,
         } => vec![
             format!("signal:   {signal}"),
-            format!("writers:  `{first}`, then `{second}`"),
+            // The kernel's labels are already quoted (`task `main.a``, `the kernel`).
+            format!("writers:  {first}, then {second}"),
         ],
         FailureKind::WriteInReadOnly { signal } => vec![format!("signal:   {signal}")],
         FailureKind::Starved { blocked } | FailureKind::Deadlock { blocked } => blocked

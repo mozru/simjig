@@ -63,13 +63,20 @@ fn write_conflict() {
     let f = failure(
         FailureKind::WriteConflict {
             signal: "top.valid".into(),
-            first: "main.a".into(),
-            second: "main.b".into(),
+            // The kernel's writer labels, quoted by the kernel.
+            first: "task `main.a`".into(),
+            second: "the clock on `top.valid`".into(),
         },
         Some("main.b"),
-        "`top.valid` written with 1 by `main.a` and 0 by `main.b` in one delta",
+        "signal `top.valid` written with different values by task `main.a` and by the clock \
+         on `top.valid` in the same delta",
     );
-    insta::assert_snapshot!(render(&f, Some("tests/fifo.rs:7:5")));
+    let text = render(&f, Some("tests/fifo.rs:7:5"));
+    assert!(
+        text.contains("  writers:  task `main.a`, then the clock on `top.valid`\n"),
+        "{text}"
+    );
+    insta::assert_snapshot!(text);
 }
 
 #[test]

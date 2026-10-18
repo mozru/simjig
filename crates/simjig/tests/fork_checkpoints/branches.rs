@@ -148,3 +148,37 @@ async fn a_branch_that_returns_an_error_is_a_failed_branch(ctx: &TestCtx, dut: c
     assert_eq!(failure.kind, "DesignFinished");
     assert_eq!(failure.message, "returned by the body");
 }
+
+/// The open descriptors of this process, by number.
+fn open_descriptors() -> Vec<String> {
+    let mut fds: Vec<String> = std::fs::read_dir("/dev/fd")
+        .unwrap_or_else(|e| panic!("/dev/fd lists this process's descriptors: {e}"))
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    fds.sort();
+    fds
+}
+
+/// Each branch's socket is closed in the parent and every child is reaped: a checkpoint
+/// leaves no descriptor open and no zombie process.
+#[simjig::test(timeout = "1us")]
+async fn branches_leave_no_descriptor_or_process_behind(ctx: &TestCtx, dut: counter::Dut) {
+    count_to_ten(dut).await;
+    let before = open_descriptors();
+    let branches = fork::run_from_checkpoint(ctx.seed(), 3, |_| async move {
+        dut.clk.rising().await;
+        Ok(u64::from(std::process::id()))
+    })
+    .await
+    .unwrap();
+    assert_eq!(open_descriptors(), before, "the parent's descriptors");
+    for pid in branches.into_values() {
+        let ps = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps runs");
+        let state = String::from_utf8_lossy(&ps.stdout);
+        assert!(state.trim().is_empty(), "child {pid} still exists: {state}");
+    }
+}

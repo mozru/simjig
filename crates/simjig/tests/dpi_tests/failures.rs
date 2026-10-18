@@ -228,3 +228,20 @@ fn two_instances_of_one_dpi_build_fail_with_the_workaround() {
     assert_eq!(failure.kind.name(), "Setup");
     insta::assert_snapshot!(mask_prefixes(&failure.to_string()));
 }
+
+#[test]
+fn forking_inside_a_dpi_call_fails_with_the_rule() {
+    let message = misuse(|_| {
+        Box::new(|| {
+            let seed = simjig::Seed::new(1, simjig::SeedSource::Env);
+            let checkpoint = simjig::fork::run_from_checkpoint(seed, 1, |_| async { Ok(()) });
+            let mut checkpoint = std::pin::pin!(checkpoint);
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            let _poll = checkpoint.as_mut().poll(&mut cx);
+        })
+    });
+    assert!(
+        message.contains(&rule("fork::run_from_checkpoint")),
+        "{message}"
+    );
+}

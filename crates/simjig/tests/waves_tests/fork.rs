@@ -372,3 +372,74 @@ fn two_models_with_a_blocked_branch_file(name: &str, blocked: &str) {
         assert_eq!(parent.end, *steps.last().expect("timesteps"), "{file}");
     }
 }
+
+/// A hook's `before_fork` fails before the second of three forks: the checkpoint returns
+/// `ForkError::Hook` without forking again, branch 0's waves are complete, no later
+/// branch has a file, and the parent's file holds exactly its own timesteps.
+#[test]
+fn a_before_fork_failure_cancels_the_rest_of_the_checkpoint() {
+    let path = scratch("before_fork");
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted = std::rc::Rc::clone(&calls);
+    let _guard = fork::register_hook(ForkHook::new(
+        move || {
+            counted.set(counted.get() + 1);
+            if counted.get() == 2 {
+                Err("the second before_fork fails".to_owned())
+            } else {
+                Ok(())
+            }
+        },
+        |_| Ok(()),
+    ));
+    let seed = Seed::new(1, SeedSource::Env);
+    let options = ModelOptions::new(seed).with_trace(TraceOptions::new(&path));
+    let mut sim = counter_fst::Dut::instantiate(&options).expect("loads");
+    let dut = counter_fst::Dut::create(&mut sim).expect("binds");
+    let error = sim
+        .run(async move {
+            clock(dut.clk, ns(10)).start();
+            dut.rst.set(1);
+            dut.en.set(1);
+            dut.clk.falling().await;
+            dut.rst.set(0);
+            for _ in 0..5 {
+                dut.clk.rising().await;
+            }
+            let error = fork::run_from_checkpoint(seed, 3, |_| async move {
+                for _ in 0..3 {
+                    dut.clk.rising().await;
+                }
+                Ok(())
+            })
+            .await
+            .expect_err("the second fork is cancelled");
+            for _ in 0..10 {
+                dut.clk.rising().await;
+            }
+            error
+        })
+        .expect("the parent passes");
+    assert_eq!(
+        error,
+        fork::ForkError::Hook {
+            message: "the second before_fork fails".to_owned()
+        }
+    );
+    assert_eq!(calls.get(), 2);
+    let steps = steps(&sim);
+    drop(sim);
+    let parent = fst::read(&path);
+    assert_eq!(
+        parent.times, steps,
+        "the parent's file holds only its own waves"
+    );
+    let branch = fst::read(&path.with_file_name("before_fork.branch-0.fst"));
+    assert_eq!(
+        branch.end, 80_000,
+        "branch 0 ran its 3 cycles past the checkpoint at 50 ns"
+    );
+    for later in ["before_fork.branch-1.fst", "before_fork.branch-2.fst"] {
+        assert!(!path.with_file_name(later).exists(), "{later}");
+    }
+}

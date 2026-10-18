@@ -166,3 +166,48 @@ fn coverage_errors_name_the_model_and_the_fix() {
     sim.write_coverage(0, &path).unwrap();
     assert!(path.is_file());
 }
+
+/// Each fork branch counts on from the checkpoint's counters in its own copy of the model
+/// (one zeroes them), and the parent's counters are untouched by every branch.
+#[simjig::test(timeout = "10us")]
+async fn each_fork_branch_counts_its_own_coverage(ctx: &TestCtx, dut: counter_cov::Dut) {
+    clock(dut.clk, ns(10)).start();
+    dut.rst.set(1);
+    dut.en.set(1);
+    dut.clk.falling().await;
+    dut.rst.set(0);
+    for _ in 0..10 {
+        dut.clk.rising().await;
+    }
+    ReadOnly::new().await;
+    let at_checkpoint = ctx.coverage(0).unwrap();
+    // The `else if (en)` branch's counter: one per rising edge after reset.
+    let en = at_checkpoint
+        .iter()
+        .position(|&c| c == 10)
+        .expect("the en counter");
+    let branches = simjig::fork::run_from_checkpoint(ctx.seed(), 4, |b| async move {
+        if b.index() == 3 {
+            ctx.zero_coverage(0).unwrap();
+        }
+        for _ in 0..5 * (b.index() + 1) {
+            dut.clk.rising().await;
+        }
+        ReadOnly::new().await;
+        Ok(ctx.coverage(0).unwrap())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        ctx.coverage(0).unwrap(),
+        at_checkpoint,
+        "the parent's counters"
+    );
+    let counts: Vec<u32> = branches.into_values().iter().map(|c| c[en]).collect();
+    assert_eq!(counts, [15, 20, 25, 20]);
+    for _ in 0..3 {
+        dut.clk.rising().await;
+    }
+    ReadOnly::new().await;
+    assert_eq!(ctx.coverage(0).unwrap()[en], 13);
+}

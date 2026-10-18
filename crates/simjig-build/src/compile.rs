@@ -32,6 +32,9 @@
 //! 4. native libraries the extras need (`lz4`, `z` for FST), then the C++ standard
 //!    library.
 //!
+//! Each is emitted both as `rustc-link-lib` and as `rustc-link-arg` (see [`link_args`]),
+//! so the models link into every target of the package, whether or not it has a library.
+//!
 //! ccache is used when available (see [`ccache_compiler`]).
 
 use std::path::{Path, PathBuf};
@@ -240,8 +243,13 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     sources.extend(i.recipe.global_sources.iter().cloned());
     let shared = tc.cached_archive("verilated", &sources, &runtime_defines, &[])?;
 
+    let archives: Vec<&Archive> = std::iter::once(&model)
+        .chain(&extras)
+        .chain([&shared])
+        .collect();
+    let stdlib = cxx_stdlib(i.env);
     let mut d = Vec::new();
-    for a in std::iter::once(&model).chain(&extras).chain([&shared]) {
+    for a in &archives {
         d.push(format!(
             "cargo::rustc-link-search=native={}",
             a.dir.display()
@@ -251,8 +259,37 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     for n in &natives {
         d.extend(n.directives());
     }
-    d.extend(cxx_stdlib(i.env).map(|l| format!("cargo::rustc-link-lib={l}")));
+    d.extend(stdlib.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
+    d.extend(link_args(&archives, &natives, stdlib.as_deref()));
     Ok(d)
+}
+
+/// The same libraries again, as `cargo::rustc-link-arg` lines, in link order.
+///
+/// Why both: in a package with a library target, Cargo passes `rustc-link-lib` to the
+/// library only. The rlib bundles the archives, but a test, example or binary that
+/// `include!`s the generated `Dut` without naming the library never links that rlib, and
+/// the vtable symbol is undefined. `rustc-link-arg` reaches every linked target of the
+/// package (tests, examples, benches, binaries, cdylib), and only those, while
+/// `rustc-link-lib` still carries the archives into the rlib for crates that depend on
+/// the library. Listing an archive twice links each object at most once (a static
+/// linker pulls an archive member only to resolve a symbol that is still undefined), so
+/// a target that does link the library gets no duplicate symbols. The natives and the
+/// C++ standard library are repeated after the archives because `--as-needed` linkers
+/// only keep a shared library for the references that come before it.
+fn link_args(archives: &[&Archive], natives: &[NativeLib], stdlib: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = archives
+        .iter()
+        .map(|a| a.dir.join(format!("lib{}.a", a.name)).display().to_string())
+        .collect();
+    for n in natives {
+        args.extend(n.dir.as_ref().map(|dir| format!("-L{}", dir.display())));
+        args.push(format!("-l{}", n.name));
+    }
+    args.extend(stdlib.map(|l| format!("-l{l}")));
+    args.into_iter()
+        .map(|a| format!("cargo::rustc-link-arg={a}"))
+        .collect()
 }
 
 fn compile_model(

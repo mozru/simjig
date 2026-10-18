@@ -11,11 +11,14 @@
 //! - [`emit_wrapper`] and [`emit_elab_top`]: the flat-port top for a DUT with interface
 //!   ports.
 //! - [`emit_shim`]: the per-model C++ shim that exports the model's vtable.
+//! - [`emit_dpi`]: the Rust side of the design's DPI-C imports (a trait, `Dut::set_dpi`
+//!   and `extern "C"` trampolines), appended to the Rust bindings.
 //!
 //! The module is pure: no file system, no processes. Output is deterministic (a plain
 //! indenting writer, IR order everywhere).
 
 mod config;
+mod dpi;
 mod error;
 mod layout;
 mod lower;
@@ -28,6 +31,7 @@ mod wrapper;
 mod writer;
 
 pub use config::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
+pub use dpi::{DpiHeaderMismatch, check_dpi_header, dpi_prototypes, emit_dpi};
 pub use error::Error;
 pub use layout::{LAYOUT_CHECK_FLAGS, emit_layout_check};
 pub use lower::{DUT_INSTANCE, elab_module, lower, lower_wrapper, wrapper_module};

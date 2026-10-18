@@ -12,8 +12,9 @@
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
 //!    is linted;
 //! 5. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
-//! 6. cross-check the header's ports against the IR's (or the emitter's), and check that
-//!    no other DUT of this build script exports the same DPI names (`script`);
+//! 6. cross-check the header's ports against the IR's (or the emitter's), the DPI-C
+//!    prototypes in `V<prefix>__Dpi.h` against the IR's, and check that no other DUT of
+//!    this build script exports the same DPI names (`script`);
 //! 7. compile and link the C++ (see `compile`), and collect the `cargo::` directives.
 //!
 //! The IR comes before verilation because the emitters' outputs are Verilator inputs.
@@ -499,6 +500,7 @@ impl Dut {
         let header_ports =
             header::read_header_ports(&verilator::output_file(&model.obj_dir, &prefix, ".h"))?;
         header::check_ports(&header_ports, &placed.ports)?;
+        check_dpi_header(&ir.design, &model.obj_dir, &prefix)?;
         let dpi_header = verilator::output_file(&model.obj_dir, &prefix, "__Dpi.h");
         script::claim_dpi_exports(
             env,
@@ -528,6 +530,21 @@ impl Dut {
             directives,
         })
     }
+}
+
+/// Cross-checks the DPI-C trampolines' prototypes against `V<prefix>__Dpi.h`, which
+/// Verilator writes only for a design with DPI functions.
+fn check_dpi_header(design: &Design, obj_dir: &Path, prefix: &str) -> Result<(), Error> {
+    if design.dpi_imports.is_empty() {
+        return Ok(());
+    }
+    let path = verilator::output_file(obj_dir, prefix, "__Dpi.h");
+    let text = std::fs::read_to_string(&path).map_err(Error::io("reading", &path))?;
+    crate::codegen::check_dpi_header(&design.dpi_imports, &text).map_err(|m| Error::Parse {
+        path,
+        line: m.line,
+        msg: m.message,
+    })
 }
 
 /// `std::path::absolute` fails only on an empty path, which `validate` then rejects.

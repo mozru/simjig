@@ -1,0 +1,161 @@
+---
+source: crates/simjig-build/tests/codegen_it/dpi.rs
+expression: text
+---
+
+/// The DPI-C imports of `dpi_types`, implemented in Rust; register an implementation with
+/// [`Dut::set_dpi`]. Each method runs inside the model's eval, in the middle of a
+/// time step: it cannot read or write signals or await, and a panic fails the run.
+pub trait Dpi {
+    /// `bit ty_bits(input bit b, input logic l, output bit ob, output logic ol, inout bit iob)` (`dpi_types.sv:32`).
+    fn ty_bits(&mut self, b: ::simjig::__private::bits::Bit, l: ::simjig::__private::bits::Bit, ob: &mut ::simjig::__private::bits::Bit, ol: &mut ::simjig::__private::bits::Bit, iob: &mut ::simjig::__private::bits::Bit) -> ::simjig::__private::bits::Bit;
+
+    /// `byte ty_byte(input byte x)` (`dpi_types.sv:37`).
+    fn ty_byte(&mut self, x: i8) -> i8;
+
+    /// `int ty_aliased(input int x)` (`dpi_types.sv:42`; C name `ty_c_alias`).
+    fn ty_aliased(&mut self, x: i32) -> i32;
+
+    /// `chandle ty_handle(input chandle c)` (`dpi_types.sv:43`).
+    fn ty_handle(&mut self, c: ::simjig::Chandle) -> ::simjig::Chandle;
+
+    /// `int ty_ints(input byte b, input shortint s, input int i, input longint l, input byte unsigned ub, input shortint unsigned us, input int unsigned ui, input longint unsigned ul, output longint sum)` (`dpi_types.sv:28`).
+    #[expect(clippy::too_many_arguments, reason = "one parameter per SV argument")]
+    fn ty_ints(&mut self, b: i8, s: i16, i: i32, l: i64, ub: u8, us: u16, ui: u32, ul: u64, sum: &mut i64) -> i32;
+
+    /// `logic ty_logic(input logic x)` (`dpi_types.sv:40`).
+    fn ty_logic(&mut self, x: ::simjig::__private::bits::Bit) -> ::simjig::__private::bits::Bit;
+
+    /// `shortint ty_short(input shortint x)` (`dpi_types.sv:38`).
+    fn ty_short(&mut self, x: i16) -> i16;
+
+    /// `void ty_task(input int x)` (`dpi_types.sv:44`).
+    ///
+    /// A task or a `void` function: it returns nothing.
+    fn ty_task(&mut self, x: i32);
+
+    /// `longint unsigned ty_ulong(input longint unsigned x)` (`dpi_types.sv:39`).
+    fn ty_ulong(&mut self, x: u64) -> u64;
+
+    /// `bit [15:0] ty_vec(input bit [7:0] v8, input logic [40:0] l41, input bit signed [63:0] s64, output bit [40:0] o41, inout logic [63:0] io64, output logic [7:0] ol8)` (`dpi_types.sv:34`).
+    fn ty_vec(&mut self, v8: ::simjig::__private::bits::Bits<8>, l41: ::simjig::__private::bits::Bits<41>, s64: ::simjig::__private::bits::Bits<64>, o41: &mut ::simjig::__private::bits::Bits<41>, io64: &mut ::simjig::__private::bits::Bits<64>, ol8: &mut ::simjig::__private::bits::Bits<8>) -> ::simjig::__private::bits::Bits<16>;
+
+    /// `void ty_void(output int o)` (`dpi_types.sv:41`).
+    ///
+    /// A task or a `void` function: it returns nothing.
+    fn ty_void(&mut self, o: &mut i32);
+}
+
+impl Dut {
+    /// Registers `imp` as this model instance's implementation of [`Dpi`],
+    /// replacing any earlier one. Register it before the first eval: before
+    /// `Sim::run`, or first thing in the test, before any await.
+    ///
+    /// # Panics
+    /// If another model loaded in this process imports one of the same C names
+    /// (a DPI-C import is one C symbol per binary).
+    #[track_caller]
+    pub fn set_dpi(&self, imp: impl Dpi + 'static) {
+        let imp: ::std::boxed::Box<dyn Dpi> = ::std::boxed::Box::new(imp);
+        ::simjig::__private::dpi::install::<dyn Dpi>(
+            "Vprefix",
+            &["ty_bits", "ty_byte", "ty_c_alias", "ty_handle", "ty_ints", "ty_logic", "ty_short", "ty_task", "ty_ulong", "ty_vec", "ty_void"],
+            self.clk.raw(),
+            imp,
+        );
+    }
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_bits => ty_bits(
+        b: InArg ::simjig::__private::dpi::Bit,
+        l: InArg ::simjig::__private::dpi::Logic,
+        ob: OutArg ::simjig::__private::dpi::Bit,
+        ol: OutArg ::simjig::__private::dpi::Logic,
+        iob: InOutArg ::simjig::__private::dpi::Bit,
+    ) -> ::simjig::__private::dpi::Bit
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_byte => ty_byte(
+        x: InArg ::simjig::__private::dpi::I8,
+    ) -> ::simjig::__private::dpi::I8
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_c_alias => ty_aliased(
+        x: InArg ::simjig::__private::dpi::I32,
+    ) -> ::simjig::__private::dpi::I32
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_handle => ty_handle(
+        c: InArg ::simjig::__private::dpi::Handle,
+    ) -> ::simjig::__private::dpi::Handle
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_ints => ty_ints(
+        b: InArg ::simjig::__private::dpi::I8,
+        s: InArg ::simjig::__private::dpi::I16,
+        i: InArg ::simjig::__private::dpi::I32,
+        l: InArg ::simjig::__private::dpi::I64,
+        ub: InArg ::simjig::__private::dpi::U8,
+        us: InArg ::simjig::__private::dpi::U16,
+        ui: InArg ::simjig::__private::dpi::U32,
+        ul: InArg ::simjig::__private::dpi::U64,
+        sum: OutArg ::simjig::__private::dpi::I64,
+    ) -> ::simjig::__private::dpi::I32
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_logic => ty_logic(
+        x: InArg ::simjig::__private::dpi::Logic,
+    ) -> ::simjig::__private::dpi::Logic
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_short => ty_short(
+        x: InArg ::simjig::__private::dpi::I16,
+    ) -> ::simjig::__private::dpi::I16
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_task => ty_task(
+        x: InArg ::simjig::__private::dpi::I32,
+    )
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_ulong => ty_ulong(
+        x: InArg ::simjig::__private::dpi::U64,
+    ) -> ::simjig::__private::dpi::U64
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_vec => ty_vec(
+        v8: InArg ::simjig::__private::dpi::BitVec<8>,
+        l41: InArg ::simjig::__private::dpi::LogicVec<41>,
+        s64: InArg ::simjig::__private::dpi::BitVec<64>,
+        o41: OutArg ::simjig::__private::dpi::BitVec<41>,
+        io64: InOutArg ::simjig::__private::dpi::LogicVec<64>,
+        ol8: OutArg ::simjig::__private::dpi::LogicVec<8>,
+    ) -> ::simjig::__private::dpi::BitVec<16>
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn ty_void => ty_void(
+        o: OutArg ::simjig::__private::dpi::I32,
+    )
+}

@@ -150,6 +150,8 @@ mod tests {
                 modports: Vec::new(),
             }],
             packages: Vec::new(),
+            dpi_imports: Vec::new(),
+            dpi_exports: Vec::new(),
         }
     }
 

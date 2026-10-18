@@ -71,7 +71,7 @@ impl<'a> Index<'a> {
     }
 
     /// `file:line:col` of a node's `loc` (`"e,13:8,13:9"`).
-    fn source_loc(&self, node: &Node<'_>) -> Option<String> {
+    pub(crate) fn source_loc(&self, node: &Node<'_>) -> Option<String> {
         let loc = node.obj.get("loc")?.as_str()?;
         let (file, rest) = loc.split_once(',')?;
         let start = rest.split(',').next()?;

@@ -8,6 +8,9 @@
 //!   `link_name` must be a literal), returning the includer's `Vtable` type (a pointer).
 //! - `tests/model_tests` and `tests/e2e_*` include the generated bindings with
 //!   `simjig::include_dut!` (`OUT_DIR/simjig/<name>.rs`).
+//! - `tests/dpi_tests` adds the DPI-C models `dpi` (`tests/duts/dpi`) and `dpi_types`
+//!   (every DPI type simjig implements), whose generated code includes the `Dpi` trait and
+//!   the trampolines.
 //!
 //! Cargo has no test-only build scripts, so two rules keep this away from simjig's users:
 //! - models are built only when `SIMJIG_TEST_MODELS=1`, which the repository's
@@ -94,6 +97,12 @@ fn duts() -> Vec<Dut> {
         shared("iface_top", &["iface_pkg.sv", "bus_if.sv", "iface_top.sv"])
             .bind_iface("in_bus", "bus_if.dst")
             .bind_iface("out_bus", "bus_if.src"),
+        Dut::new("dpi")
+            .sources(["../../tests/duts/dpi/dpi.sv"])
+            .top("dpi"),
+        Dut::new("dpi_types")
+            .sources(["tests/dpi_tests/dpi_types.sv"])
+            .top("dpi_types"),
     ]
 }
 

@@ -1,0 +1,48 @@
+---
+source: crates/simjig-build/tests/codegen_it/dpi.rs
+expression: text
+---
+
+/// The DPI-C imports of `dpi`, implemented in Rust; register an implementation with
+/// [`Dut::set_dpi`]. Each method runs inside the model's eval, in the middle of a
+/// time step: it cannot read or write signals or await, and a panic fails the run.
+pub trait Dpi {
+    /// `int dpi_add(input int x, input int y)` (`dpi.sv:11`).
+    fn dpi_add(&mut self, x: i32, y: i32) -> i32;
+
+    /// `int dpi_tick()` (`dpi.sv:12`).
+    fn dpi_tick(&mut self) -> i32;
+}
+
+impl Dut {
+    /// Registers `imp` as this model instance's implementation of [`Dpi`],
+    /// replacing any earlier one. Register it before the first eval: before
+    /// `Sim::run`, or first thing in the test, before any await.
+    ///
+    /// # Panics
+    /// If another model loaded in this process imports one of the same C names
+    /// (a DPI-C import is one C symbol per binary).
+    #[track_caller]
+    pub fn set_dpi(&self, imp: impl Dpi + 'static) {
+        let imp: ::std::boxed::Box<dyn Dpi> = ::std::boxed::Box::new(imp);
+        ::simjig::__private::dpi::install::<dyn Dpi>(
+            "Vprefix",
+            &["dpi_add", "dpi_tick"],
+            self.clk.raw(),
+            imp,
+        );
+    }
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn dpi_add => dpi_add(
+        x: InArg ::simjig::__private::dpi::I32,
+        y: InArg ::simjig::__private::dpi::I32,
+    ) -> ::simjig::__private::dpi::I32
+}
+
+::simjig::__private::dpi_import! {
+    prefix = "Vprefix", imp = dyn Dpi,
+    fn dpi_tick => dpi_tick() -> ::simjig::__private::dpi::I32
+}

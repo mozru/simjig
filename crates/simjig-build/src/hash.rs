@@ -64,14 +64,10 @@ impl KeyHasher {
 
 /// The IR hash that the generated Rust and the C++ shim both carry, so a model built from
 /// another IR is rejected at load: the first 64 bits of a [`KeyHasher`] digest of the IR
-/// (as JSON, the IR's versioned form) and of every field of `config`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "replaces codegen::lower's FNV `ir_hash`; remove this when lower.rs calls it"
-    )
-)]
+/// (as JSON, the IR's versioned form) and of every field of `config` that shapes the
+/// generated code. `verilator_args` and `control_files` are left out: `lower` reads them
+/// only to reject a configuration, so they never change the generated Rust or C++ (and
+/// the model's cache key already covers the build's arguments and files).
 pub(crate) fn ir_hash(design: &Design, config: &CodegenConfig) -> u64 {
     let mut h = KeyHasher::new("simjig-ir-hash-v1");
     // Serialising plain derived structs to a Vec cannot fail.
@@ -170,10 +166,12 @@ mod tests {
     fn ir_hash_is_pinned() {
         // Pinned: the hash is compiled into generated Rust and C++ and compared at load,
         // so it must not depend on the Rust release (as `Debug` output may). Changing it
-        // needs a CHANGELOG entry.
+        // needs a CHANGELOG entry. Reference value from Python: sha256 over (u64 LE length,
+        // bytes) of the domain, the IR JSON (schema 2), a zero probe count and
+        // "no-iface-top"; the first 8 bytes, big-endian.
         assert_eq!(
             ir_hash(&design("t"), &CodegenConfig::default()),
-            0x1f0d_95f3_7741_bfd0
+            0x7602_a740_1ba1_fbe5
         );
     }
 
@@ -243,6 +241,20 @@ mod tests {
             ir_hash(&design("t"), &base),
             ir_hash(&design("t"), &base.clone())
         );
+    }
+
+    #[test]
+    fn ir_hash_ignores_the_reject_only_fields() {
+        let base = CodegenConfig {
+            probes: vec![probe(ProbeAccess::Read)],
+            ..CodegenConfig::default()
+        };
+        let with = CodegenConfig {
+            verilator_args: vec!["-fno-inline".into()],
+            control_files: vec!["`verilator_config\n".into()],
+            ..base.clone()
+        };
+        assert_eq!(ir_hash(&design("t"), &base), ir_hash(&design("t"), &with));
     }
 
     #[test]

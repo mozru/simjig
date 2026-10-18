@@ -14,7 +14,7 @@ constexpr uint8_t kReadWrite = SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE;
 struct Traits {
     using Model = Vtop;
     static constexpr const char* kPrefix = "Vtop";
-    static constexpr uint64_t kIrHash = 0x9dd9de6898054f90ull;
+    static constexpr uint64_t kIrHash = 0xbcb1bc35c7d1b15aull;
     static constexpr bool kTiming = false;
     static constexpr bool kTraceFst = false;
     static constexpr bool kCoverage = false;

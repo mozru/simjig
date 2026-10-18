@@ -77,7 +77,7 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
     Ok(Lowered {
         top: top.orig_name.clone(),
         producer: format!("{} {}", design.producer.tool, design.producer.version),
-        ir_hash: ir_hash(design, config),
+        ir_hash: crate::hash::ir_hash(design, config),
         items: types.items.into_iter().map(|(_, item)| item).collect(),
         packages,
         dut_params,
@@ -87,26 +87,6 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
         layout,
         wrapper,
     })
-}
-
-/// FNV-1a 64 over the IR's JSON form and the `Debug` form of the configuration fields that
-/// shape the generated code; both are deterministic (the IR holds no maps, the
-/// configuration only vectors).
-fn ir_hash(design: &Design, config: &CodegenConfig) -> u64 {
-    // Serialising plain derived structs to a Vec cannot fail.
-    let json = serde_json::to_vec(design).unwrap_or_default();
-    // The derived `Debug` text of a configuration with only these two fields, so adding
-    // fields that can only reject a configuration (`verilator_args`, `control_files`)
-    // changes no hash.
-    let config = format!(
-        "CodegenConfig {{ probes: {:?}, iface_top: {:?} }}",
-        config.probes, config.iface_top
-    );
-    json.iter()
-        .chain(config.as_bytes())
-        .fold(0xcbf2_9ce4_8422_2325, |h, &b| {
-            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
-        })
 }
 
 /// The traversal roots: ports and probes (required), then package typedefs (optional).

@@ -6,10 +6,9 @@
 #![forbid(unsafe_code)]
 
 use std::env;
-use std::io::{self, Write as _};
 use std::process::ExitCode;
 
-use cargo_simjig::doctor::Report;
+use cargo_simjig::doctor::{self, Format};
 
 const USAGE: &str = "\
 usage: cargo simjig doctor [--json]
@@ -25,9 +24,9 @@ fn main() -> ExitCode {
         args.remove(0);
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let json = match args.as_slice() {
-        ["doctor"] => false,
-        ["doctor", "--json"] => true,
+    let format = match args.as_slice() {
+        ["doctor"] => Format::Text,
+        ["doctor", "--json"] => Format::Json,
         ["--help" | "-h" | "help"] => {
             eprintln!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -37,19 +36,5 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let report = Report::gather();
-    let text = if json {
-        report.to_json()
-    } else {
-        report.to_string()
-    };
-    if let Err(error) = io::stdout().lock().write_all(text.as_bytes()) {
-        eprintln!("error: cannot write the report: {error}");
-        return ExitCode::FAILURE;
-    }
-    if report.has_failures() {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    doctor::run(format)
 }

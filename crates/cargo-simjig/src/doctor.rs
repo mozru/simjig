@@ -11,8 +11,38 @@ mod checks;
 mod facts;
 
 use std::fmt;
+use std::io::{self, Write as _};
+use std::process::ExitCode;
 
 use crate::json;
+
+/// How [`run`] prints the report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// [`Report`]'s `Display` form, for people.
+    Text,
+    /// [`Report::to_json`], for CI and scripts.
+    Json,
+}
+
+/// Runs every check, prints the report to stdout and returns the process exit code:
+/// failure when any check failed or stdout could not be written.
+pub fn run(format: Format) -> ExitCode {
+    let report = Report::gather();
+    let text = match format {
+        Format::Text => report.to_string(),
+        Format::Json => report.to_json(),
+    };
+    if let Err(error) = io::stdout().lock().write_all(text.as_bytes()) {
+        eprintln!("error: cannot write the doctor report: {error}");
+        return ExitCode::FAILURE;
+    }
+    if report.has_failures() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
 
 /// How bad a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

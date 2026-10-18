@@ -570,8 +570,16 @@ fn cxx_stdlib(env: &BuildEnv) -> Option<String> {
 /// GCC 10). Rust's `compiler_builtins` defines them too, but its archive comes before
 /// ours, so a static linker never goes back to it. On Apple targets all of these are
 /// part of libSystem.
+///
+/// Android's Bionic has pthreads in libc and ships no libpthread, so Android gets `-lm`
+/// alone. A GNU target whose compiler uses compiler-rt instead of libgcc (`clang
+/// --rtlib=compiler-rt`) cannot be told from the target, and still gets `-lgcc`; such a
+/// toolchain provides its own runtime library to the link, and an unwanted `-lgcc` may
+/// need removing with its own `-C link-arg`s.
 fn system_libs(target: &str) -> &'static [&'static str] {
-    if !target.contains("linux") {
+    if target.contains("android") {
+        &["m"]
+    } else if !target.contains("linux") {
         &[]
     } else if target.contains("-gnu") {
         &["m", "pthread", "gcc"]
@@ -741,6 +749,7 @@ mod tests {
             ["m", "pthread", "gcc"]
         );
         assert_eq!(system_libs("aarch64-unknown-linux-musl"), ["m", "pthread"]);
+        assert_eq!(system_libs("aarch64-linux-android"), ["m"]);
         assert_eq!(system_libs("aarch64-apple-darwin"), [""; 0]);
         let a = Archive {
             dir: PathBuf::from("/c/a"),

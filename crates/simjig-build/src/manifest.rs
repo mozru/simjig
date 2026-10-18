@@ -345,6 +345,13 @@ const TICK_PROBES: u32 = 50;
 /// the next build. After the tick, every file written before the start is strictly older
 /// than it. macOS stamps files with the nanosecond clock, so there the first probe is
 /// already past.
+///
+/// A filesystem with a coarser clock than [`TICK_PROBES`] milliseconds (FAT and some
+/// network filesystems stamp whole seconds, or two) does not tick in time: the start is
+/// the work directory's time, an input written in the same second has that time too, and
+/// [`Manifest::record`] counts it as changed. Such a build is correct but never cached
+/// (each build verilates again and warns `changed while verilating`); waiting up to two
+/// seconds per DUT for a tick would cost every build on every filesystem.
 #[expect(
     clippy::disallowed_methods,
     reason = "waits for the filesystem clock's tick in a build script, not a testbench"

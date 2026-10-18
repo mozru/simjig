@@ -72,6 +72,7 @@ fn a_model_with_compiled_in_initial_values_refuses_random_ones() {
         "{text}"
     );
     assert!(text.contains("XInitial::Unique"), "{text}");
+    assert!(text.contains("simjig-build older than random"), "{text}");
     assert!(no_reset_fast::Dut::instantiate(&options(1, InitValues::Zero)).is_ok());
 }
 

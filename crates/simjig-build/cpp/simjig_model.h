@@ -233,7 +233,10 @@ struct Vtable final {
     // from the context's randReset and randSeed, so both are set for the construction alone
     // and put back after it: `$urandom` (seeded above from the plusargs' seed) and every later
     // draw stay as without SIMJIG_INIT_RANDOM. Each randSeed() bumps Verilator's global seed
-    // epoch; thread_rng() catches the thread up without losing the model's stream.
+    // epoch; thread_rng() catches the thread up without losing the model's stream. The two
+    // thread_rng() calls are defensive: they matter only to a constructor that draws from
+    // the thread's stream (none of the test designs does, and removing them passes every
+    // test; docs/notes/n-xinit.md), and keep such a draw on the model's stream.
     static void construct_randomized(VerilatedContext& ctx, Handle* h, const char* name,
                                      uint32_t seed) {
         const int reset = ctx.randReset();

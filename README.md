@@ -79,6 +79,9 @@ pixi run cargo simjig show fifo -p mycrate # the DUT of one package of a workspa
 
 `show` runs `cargo check --tests` first (which runs the build scripts), so the file is
 current; run it in the crate whose `build.rs` builds the DUT, or name that crate with `-p`.
+The module is printed shortened for reading (`In<Bit>` for
+`::simjig::__private::In<::simjig::__private::bits::Bit>`); the file at the path is the
+exact text.
 
 ### Generated names
 Each SystemVerilog name becomes a Rust name by these rules (`codegen::names`,
@@ -132,7 +135,10 @@ What to keep in mind:
   the task in the background (cocotb's `start_soon`; it runs until its parent finishes),
   `.await` the handle, or `.cancel()` it. Only a handle dropped before its task ever ran,
   and never awaited, fails: dropping one whose task has run cancels it, as does a
-  combinator dropping a losing operand.
+  combinator dropping a losing operand. Leaving a handle's scope early (`?`, `return`)
+  drops it too: when that returns from the test's body, the run ends with the body's
+  result (its error, for `?`); anywhere else, `.cancel()` the handle first or spawn it
+  after the checks that may return.
 - **Writes are deposits.** `set` is applied after the next eval, so reading a signal right
   after setting it returns the old value, and a write right after `rising()` is not
   captured by that edge.
@@ -146,7 +152,11 @@ What to keep in mind:
 - **`set` takes** `impl Into<T>`: an integer literal (as `u128`) for any `Bit`/`Bits<N>`/
   `WideBits` signal, a `bool` for a `Bit`, a value of the signal's own type, or a generated
   enum's constant or packed struct. A literal that does not fit panics, naming the signal
-  and its width.
+  and its width. A typed integer converts with `u128::from`: `sig.set(u128::from(byte))`
+  for a `byte: u8`. Comparisons work the same way: `x.get() == 0x12` and `0x12 == x.get()`
+  infer the literal; a typed integer is compared as `x.get() == u128::from(byte)`.
+  (`From<u8>` for `Bits<N>`, or `PartialEq<Bits<N>>` for `u8`, would make
+  `set(1)` and `assert_eq!(n, xs.iter().sum())` fail to infer, so neither exists.)
 - **Every test has a 10 ms simulation-time budget** (`#[simjig::test(timeout = "...")]`
   changes it, `"none"` removes it); cocotb has none. A timestep that never settles fails
   instead of hanging: more than `DELTA_MAX` (64) evals between `ReadWrite` rounds, or more
@@ -177,6 +187,11 @@ simjig_build::Dut::new("core")
     .coverage(true)    // --coverage: Sim::coverage, write_coverage, zero_coverage
     .build()?;
 ```
+
+If any source declares a `timeunit` (or `` `timescale ``), every module, interface and
+package must, a package included: Verilator stops on a mix with `%Warning-TIMESCALEMOD`
+(IEEE 1800-2023 §3.14.2.3). Add the `timeunit`, or give the rest a default with
+`.verilator_args(["--timescale", "1ns/1ps"])`.
 
 ### Waves on failure
 A run is never traced while it first runs. When waves are asked for, the harness replays

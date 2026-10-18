@@ -4,6 +4,27 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `cargo simjig show` prints the file's path relative to the current directory, and the
+  module with `::simjig::__private::` and `::core::primitive::` removed (`In<Bit>`, `u8`),
+  saying so in its first line; `--path` still prints the absolute path.
+- A failed JSON pass reads "parsing DUT `x` (Verilator JSON pass) failed ..." (was
+  "JSON pass for DUT `x` failed ...").
+- `cycles(clk, n)` takes any integer count (`n: impl TryInto<u64>`: `u32`, `usize`,
+  `u64`, and an unsuffixed literal, which falls back to `i32`); a negative count panics
+  at the call. It is a plain `fn` returning the future now, so the panic points there.
+- `Queue::new(name, 0)` is an unbounded queue (`put` never waits), as cocotb's
+  `Queue(maxsize=0)`; it panicked. `Queue::capacity` is 0 for it.
+- `with_timeout(..).await?` works in a test returning `simjig::Result`: `Failure`
+  implements `From<Elapsed>`, as the new `FailureKind::Timeout { after }`, a failure of
+  the awaiting task at the time the timeout elapsed. Breaking: `Elapsed` is
+  `#[non_exhaustive]` and also carries `at` and `precision`, and its `Display` prints the
+  timeout in physical units (`timed out after 400 us`, was `400000000 ticks`).
+- A `Task` handle dropped before its task ran no longer masks the test's own error:
+  dropped in the poll in which `main` returns (an early `return`, or `?` with the test's
+  error, including a `run_from_checkpoint` refusal), it no longer fails the run, which
+  ends with `main`'s result. Anywhere else it still fails as `Setup`, now when the poll
+  ends, naming every handle that poll dropped (with its `spawn` line), saying it was
+  dropped by `let _ = spawn(..)` or by leaving the scope early, and naming the fixes.
 - Breaking: `simjig_build::CacheStatus` and `simjig::SeedSource` are `#[non_exhaustive]`,
   so a `match` on them outside their crate needs a wildcard arm.
 - A model archive compiled from a verilation kept out of the cache (an input edited while
@@ -18,16 +39,18 @@ the public API, the generated code or simulation semantics.
 - `cargo simjig show <dut> [-p <package>] [--path]` prints the module that
   `include_dut!(<dut>)` includes, or its path under `target/`. The README has a section
   on the generated names (suffixes, enum prefixes, keywords, collisions).
-- An integer compares equal to a `Bits<N>`, `WideBits` or `Bit` from the left too
-  (`PartialEq<Bits<N>> for u8 ... u128, i8 ... i128, usize, isize`, and `bool == Bit`),
-  so `assert_eq!(4, x.get())` compiles. A negative integer equals no value.
+- An integer literal compares equal to a `Bits<N>`, `WideBits` or `Bit` from the left too
+  (`PartialEq<Bits<N>> for u128`), so `assert_eq!(4, x.get())` compiles. Only `u128`:
+  an impl for another integer type (`u32`, `usize`, ...) or `bool` makes
+  `n == "3".parse().unwrap()` and `assert_eq!(total, xs.iter().sum())` ambiguous (E0283)
+  in every crate linking simjig, so a typed `n_u8 == x` is written `x == u128::from(n_u8)`.
 - A model that fails to verilate only because of lint warnings gets a `hint:` naming the
   waivers: a `lint_off` comment, `.verilator_args(["-Wno-<CODE>"])`, or
   `.verilator_args(["-Wno-fatal"])`.
-- A failed `Dut::build` prints the error as `cargo::error=` lines (one per line of the
-  message) and none of that DUT's directives. Cargo shows them as `error:` lines right
-  after `Compiling`, before its dump of the build script's stdout (the `rerun-if-changed`
-  lines of the DUTs built before), and the error is still the last stdout line.
+- A failed `Dut::build` prints nothing (none of that DUT's directives, and no
+  `cargo::error=`, which fails the build even when the script handles the `Err` and exits
+  0) and returns the error. With `?` from `main` or `unwrap`, the error is on stderr,
+  which Cargo shows last, after its dump of the script's stdout.
 - Breaking: dropping a `Task` handle before its task ever ran, without awaiting it, fails
   the run (`FailureKind::Setup`, at the `spawn` call, naming the task and the fixes:
   `.detach()`, `.await`, `.cancel()`). It printed a warning that test runners capture, so

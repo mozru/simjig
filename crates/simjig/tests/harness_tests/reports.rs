@@ -168,6 +168,18 @@ fn design_finished() {
 }
 
 #[test]
+fn timeout() {
+    let f = failure(
+        FailureKind::Timeout {
+            after: SimDuration::from_ticks(400_000),
+        },
+        Some("fifo::backpressure.waiter"),
+        "timed out after 400 us",
+    );
+    insta::assert_snapshot!(render(&f, None));
+}
+
+#[test]
 fn time_limit_with_the_run_dir() {
     let f = failure(
         FailureKind::TimeLimit {

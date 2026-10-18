@@ -1,0 +1,10 @@
+---
+source: crates/simjig/tests/harness_tests/reports.rs
+expression: "render(&f, None)"
+---
+FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [Timeout sig=60431c5a23a3f234]
+  task:     fifo::backpressure.waiter
+  message:  timed out after 400 us
+  help:     what the task awaited did not happen within the timeout; check that it is driven, or give it longer
+  repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'
+  waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'

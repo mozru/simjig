@@ -347,8 +347,8 @@ struct QueueInner<T> {
     putters: OwnedList,
 }
 
-/// A bounded FIFO queue between tasks. `put` waits while it is full, `get` while it is
-/// empty; waiters are woken in arrival order. As in cocotb, a `get` (`put`) that can
+/// A FIFO queue between tasks, bounded or not. `put` waits while it is full, `get` while
+/// it is empty; waiters are woken in arrival order. As in cocotb, a `get` (`put`) that can
 /// complete does so at once, even ahead of a woken getter (putter) that has not run yet;
 /// that one waits again, last in line.
 pub struct Queue<T> {
@@ -374,17 +374,14 @@ impl<T> fmt::Debug for Queue<T> {
 }
 
 impl<T> Queue<T> {
-    /// An empty queue named `name` holding at most `capacity` items.
+    /// An empty queue named `name` holding at most `capacity` items; a `capacity` of 0
+    /// is unbounded (`put` never waits), as cocotb's `Queue(maxsize=0)` is.
     ///
     /// # Panics
-    /// Outside [`Sim::run`](crate::Sim::run), or if `capacity` is 0.
+    /// Outside [`Sim::run`](crate::Sim::run).
     #[track_caller]
     #[must_use]
     pub fn new(name: &str, capacity: usize) -> Self {
-        assert!(
-            capacity > 0,
-            "Queue `{name}` needs a capacity of at least 1"
-        );
         Self {
             inner: Rc::new(QueueInner {
                 items: RefCell::new(VecDeque::with_capacity(capacity)),
@@ -407,10 +404,15 @@ impl<T> Queue<T> {
         self.len() == 0
     }
 
-    /// The maximum number of items.
+    /// The maximum number of items; 0 for an unbounded queue.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.inner.capacity
+    }
+
+    /// Whether a `put` must wait (cocotb's `full()`, which is never true for `maxsize=0`).
+    fn is_full(&self) -> bool {
+        self.inner.capacity != 0 && self.len() >= self.inner.capacity
     }
 
     fn push(&self, item: T) {
@@ -429,7 +431,7 @@ impl<T> Queue<T> {
     /// # Errors
     /// Gives `item` back when the queue is full.
     pub fn try_put(&self, item: T) -> Result<(), T> {
-        if self.len() >= self.inner.capacity {
+        if self.is_full() {
             return Err(item);
         }
         self.push(item);
@@ -493,7 +495,7 @@ impl<T> Future for Put<'_, T> {
             return Poll::Pending;
         }
         let queue = this.queue;
-        if queue.len() < queue.inner.capacity {
+        if !queue.is_full() {
             this.reg = None;
             let item = this
                 .item
@@ -514,7 +516,7 @@ impl<T> Drop for Put<'_, T> {
             && reg.is_fired()
         {
             drop(reg);
-            if self.queue.len() < self.queue.inner.capacity {
+            if !self.queue.is_full() {
                 self.queue.inner.putters.wake_one();
             }
         }

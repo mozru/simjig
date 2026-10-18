@@ -282,7 +282,8 @@ fn details(
         | FailureKind::ModelFatal { .. }
         | FailureKind::DpiPanic { .. }
         | FailureKind::Setup { .. }
-        | FailureKind::DesignFinished => Vec::new(),
+        | FailureKind::DesignFinished
+        | FailureKind::Timeout { .. } => Vec::new(),
         FailureKind::DeltaLimit { limit, signals } => vec![
             format!("limit:    {limit} evals in one timestep"),
             format!("signals:  {}", signals.join(", ")),

@@ -27,3 +27,5 @@ mod failures;
 mod rules;
 #[cfg(all(unix, simjig_test_models))]
 mod s3c4m;
+#[cfg(all(unix, simjig_test_models))]
+mod s3c5m;

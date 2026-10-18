@@ -28,7 +28,10 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
   type. They are resolved through the running kernel. No Rust reference to model memory
   ever exists, and a stale handle panics, naming the signal.
 - **One cancellation mechanism: drop.** Cleanup is synchronous `Drop`; a graceful stop is a
-  cooperative stop token. There is no soft-cancel protocol.
+  cooperative stop token. There is no soft-cancel protocol. Dropping a `Task` handle
+  before its task ever ran is still a cancellation, but fails the run as `Setup`
+  (`let _ = spawn(..)` would otherwise pass silently); the rule and its exemptions are in
+  `simjig::kernel::tasks` (`settle_unrun_drops`).
 - **Structured tasks.** Each poll runs under `catch_unwind`, and a panic becomes a
   `TaskPanic` failure carrying the hierarchical task name.
 - **Normative scheduler loop, once per distinct timestamp:**

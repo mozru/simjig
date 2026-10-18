@@ -12,8 +12,13 @@
 //! package id). So a dependency's own build script, which may build test models of its
 //! own, is left out. Cargo's progress and errors still go to stderr.
 //!
-//! It prints the file, after a `//` line naming its path, or only the path (`--path`).
-//! Several packages of a workspace can have a DUT of one name: each match is printed.
+//! It prints the file, after a `//` line naming its path (relative to the current
+//! directory when they share more than the root), or only the absolute path (`--path`, for
+//! tools). The printed text is shortened for reading: generated code names everything by
+//! absolute path (`::simjig::__private::bits::Bits<8>`, `::core::primitive::u8`, so a
+//! user's own items cannot shadow it), and those prefixes are removed (`Bits<8>`, `u8`).
+//! The file at the printed path is the exact text. Several packages of a workspace can
+//! have a DUT of one name: each match is printed.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -238,7 +243,18 @@ pub fn run(args: &ShowArgs) -> ExitCode {
             continue;
         }
         match std::fs::read_to_string(&file) {
-            Ok(text) => print!("// {}\n{text}", file.display()),
+            Ok(text) => {
+                let shown = std::env::current_dir()
+                    .ok()
+                    .and_then(|cwd| relative_to(&file, &cwd))
+                    .unwrap_or_else(|| file.clone());
+                print!(
+                    "// {} (paths shortened: `::simjig::__private::` and `::core::primitive::` \
+                     removed)\n{}",
+                    shown.display(),
+                    readable(&text)
+                );
+            }
             Err(error) => {
                 eprintln!("error: cannot read {}: {error}", file.display());
                 return ExitCode::FAILURE;
@@ -248,9 +264,59 @@ pub fn run(args: &ShowArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The generated text with its absolute-path prefixes removed (see the module docs).
+#[must_use]
+pub fn readable(text: &str) -> String {
+    // Longest first: `bits::` is under `__private::`.
+    [
+        "::simjig::__private::bits::",
+        "::simjig::__private::",
+        "::core::primitive::",
+    ]
+    .iter()
+    .fold(text.to_owned(), |t, prefix| t.replace(prefix, ""))
+}
+
+/// `path` relative to the directory `base` (both absolute), through `..` where needed;
+/// `None` when they share only the root, where the absolute path reads better.
+#[must_use]
+pub fn relative_to(path: &Path, base: &Path) -> Option<PathBuf> {
+    let (p, b): (Vec<_>, Vec<_>) = (path.components().collect(), base.components().collect());
+    let common = p.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    if common <= 1 {
+        return None;
+    }
+    let ups = std::iter::repeat_n(std::path::Component::ParentDir, b.len() - common);
+    Some(ups.chain(p[common..].iter().copied()).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_display_strips_absolute_path_prefixes() {
+        let text = "pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,\n\
+                    fn to_raw(self) -> ::core::primitive::u8 { ::std::vec::Vec::new() }";
+        assert_eq!(
+            readable(text),
+            "pub clk: In<Bit>,\nfn to_raw(self) -> u8 { ::std::vec::Vec::new() }"
+        );
+    }
+
+    #[test]
+    fn paths_are_shown_relative_to_the_current_directory() {
+        let file = Path::new("/w/target/debug/build/q-1/out/simjig/fifo.rs");
+        assert_eq!(
+            relative_to(file, Path::new("/w")).unwrap(),
+            Path::new("target/debug/build/q-1/out/simjig/fifo.rs")
+        );
+        assert_eq!(
+            relative_to(file, Path::new("/w/q")).unwrap(),
+            Path::new("../target/debug/build/q-1/out/simjig/fifo.rs")
+        );
+        assert_eq!(relative_to(file, Path::new("/elsewhere")), None);
+    }
 
     #[test]
     fn arguments_parse_in_any_order() {

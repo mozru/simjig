@@ -283,6 +283,88 @@ fn a_handle_dropped_before_its_task_ever_ran_fails_the_run_at_the_spawn() {
     assert_clean(&d.sim);
 }
 
+/// `let a = spawn(..); let b = spawn(..); check?;` inside a helper whose caller handles the
+/// `Err` and goes on: both handles are dropped together, and the one failure names both,
+/// says how a handle gets dropped early, and names the fixes.
+#[test]
+fn handles_dropped_unrun_together_are_all_named_in_one_failure() {
+    async fn setup() -> Result<(), &'static str> {
+        let a = spawn("a", async {});
+        let b = spawn("b", async {});
+        Err("not needed")?;
+        a.await;
+        b.await;
+        Ok(())
+    }
+    let mut d = dut();
+    let f = d
+        .sim
+        .run(async move {
+            assert!(setup().await.is_err());
+            Timer::new(ticks(1)).await;
+        })
+        .unwrap_err();
+    let FailureKind::Setup { message, help } = &f.kind else {
+        panic!("{f}")
+    };
+    for part in [
+        "`main.a`",
+        "`main.b`",
+        "let _ = spawn(..)",
+        "leaving the handle's scope early",
+    ] {
+        assert!(message.contains(part), "{part}: {f}");
+    }
+    for fix in [".detach()", ".await", ".cancel()"] {
+        assert!(help.contains(fix), "{fix}: {f}");
+    }
+    assert_clean(&d.sim);
+}
+
+/// An early `return` from `main` after deciding a monitor is not needed ends the run: the
+/// monitor would not have run even if detached, so the run passes.
+#[test]
+fn an_early_return_from_main_drops_an_unrun_handle_without_failing() {
+    let mut d = dut();
+    let needed = false;
+    let out = d.sim.run(async move {
+        Timer::new(ticks(1)).await;
+        let monitor = spawn("monitor", Timer::new(ticks(10)));
+        if !needed {
+            return 7;
+        }
+        monitor.await;
+        0
+    });
+    assert_eq!(out.unwrap(), 7);
+    assert_clean(&d.sim);
+}
+
+/// The exemption is `main`'s alone: a child that drops an unrun handle and returns in the
+/// same poll still fails, since a detached grandchild would have run under `main`.
+#[test]
+fn a_child_that_returns_after_dropping_an_unrun_handle_fails() {
+    let mut d = dut();
+    let ran = Rc::new(RefCell::new(false));
+    let flag = Rc::clone(&ran);
+    let f = d
+        .sim
+        .run(async move {
+            spawn("child", async move {
+                #[expect(clippy::let_underscore_future, reason = "the mistake under test")]
+                let _ = spawn("lost", async move { *flag.borrow_mut() = true });
+            })
+            .await;
+            Timer::new(ticks(1)).await;
+        })
+        .unwrap_err();
+    assert!(!*ran.borrow());
+    assert!(matches!(f.kind, FailureKind::Setup { .. }), "{f}");
+    assert!(f.message.contains("`main.child.lost`"), "{f}");
+    assert_eq!(f.task.as_deref(), Some("main.child"), "{f}");
+    assert_clean(&d.sim);
+}
+
 #[test]
 fn deliberate_and_cascading_drops_of_a_task_that_never_ran_pass() {
     let mut d = dut();

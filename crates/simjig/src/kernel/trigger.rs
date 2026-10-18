@@ -32,11 +32,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use super::combinator::{Fork, MaybeDone};
+use super::failure::{Failure, FailureKind};
 use super::panics;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
 use super::tasks;
-use super::time::{SimDuration, SimTime};
+use super::time::{Precision, SimDuration, SimTime};
 use super::waits::{EdgeKind, Registration, WaitOn};
 
 /// Shared poll logic: register on first poll, then complete once fired.
@@ -146,12 +147,22 @@ impl Future for Edge {
 
 /// Waits for `n` rising edges of `sig`; `n == 0` returns at once.
 ///
+/// `n` is any integer (`u32`, `usize`, `u64`, ...): `TryInto<u64>` rather than
+/// `Into<u64>`, because `usize` has no `Into<u64>`, and because an unsuffixed literal
+/// (`cycles(clk, 5)`) falls back to `i32`, which has none either.
+///
 /// # Panics
-/// As [`rising`].
-pub async fn cycles(sig: impl Into<RawSig>, n: u64) {
+/// Here, if `n` is negative (or does not fit in a `u64`); otherwise as [`rising`].
+#[track_caller]
+pub fn cycles(sig: impl Into<RawSig>, n: impl TryInto<u64>) -> impl Future<Output = ()> {
     let sig = sig.into();
-    for _ in 0..n {
-        rising(sig).await;
+    let Ok(n) = n.try_into() else {
+        panic!("cycles: the count of edges must be a non-negative integer that fits in u64")
+    };
+    async move {
+        for _ in 0..n {
+            rising(sig).await;
+        }
     }
 }
 
@@ -340,19 +351,46 @@ pub fn now() -> SimTime {
 }
 
 /// [`with_timeout`] ran out of time.
+///
+/// It converts into a [`Failure`] ([`FailureKind::Timeout`]), so `with_timeout(..).await?`
+/// works in a test returning [`simjig::Result`](crate::Result).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Elapsed {
     /// The timeout that elapsed.
     pub after: SimDuration,
+    /// When it elapsed.
+    pub at: SimTime,
+    /// The design's precision, to print `after` and `at` in physical units.
+    pub precision: Precision,
 }
 
 impl fmt::Display for Elapsed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "timed out after {} ticks", self.after.ticks())
+        let after = SimTime(self.after.ticks()).display(self.precision);
+        write!(f, "timed out after {after}")
     }
 }
 
 impl std::error::Error for Elapsed {}
+
+impl From<Elapsed> for Failure {
+    /// A failure of the task converting it (the one that awaited [`with_timeout`], for `?`).
+    fn from(e: Elapsed) -> Self {
+        let task = state::try_current("Failure::from(Elapsed)", |k| {
+            k.current.get().map(|key| k.task_name(key))
+        })
+        .flatten();
+        Self {
+            kind: FailureKind::Timeout { after: e.after },
+            time: e.at,
+            precision: e.precision,
+            task,
+            location: None,
+            message: e.to_string(),
+        }
+    }
+}
 
 /// Runs `future` for at most `duration`; on timeout it is cancelled (dropped).
 ///
@@ -385,7 +423,12 @@ pub async fn with_timeout<T>(
     let decided = std::future::poll_fn(|cx| fork.poll([&mut timer, &mut inner], cx)).await;
     drop(fork);
     if decided == 0 {
-        Err(Elapsed { after: duration })
+        let (at, precision) = state::with_current("with_timeout", |k| (k.now.get(), k.precision));
+        Err(Elapsed {
+            after: duration,
+            at,
+            precision,
+        })
     } else {
         Ok(inner.take())
     }

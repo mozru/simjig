@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The shim is stored content-addressed in the cache (`inputs/<hash>/<prefix>_shim.cpp`)
+  and compiled from there; it is no longer written to `OUT_DIR/simjig/<name>/`. A model
+  archive's key has the shim's path, so crates and target directories that build the same
+  configuration now share one model archive (each compiled its own). Every model archive
+  is compiled again once.
 - `create` refuses a probe of a `real`, a `string` or another variable that is not a
   packed vector by its type, with the build-time check's words ("`r` is a `real`
   (Verilator stores it as VLVT_REAL) ..."), before comparing widths: a 1-bit probe of a

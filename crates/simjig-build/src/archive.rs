@@ -11,8 +11,8 @@
 //!    [`compiler_identity`]), the target, optimisation and debug settings, the defines,
 //!    every source (path and contents), the include paths, and the file names in every
 //!    directory a quoted include may be found in ([`search_dirs`]), so a new file that
-//!    would shadow a header changes the key; directories simjig generates are not listed
-//!    (`Toolchain::is_generated`);
+//!    would shadow a header changes the key (a source's directory in the cache holds
+//!    that source alone, and its listing never changes);
 //! 2. every compile runs with `-MD`, and the manifest `manifests/<pre key>` lists every
 //!    file the compiler read (system headers included); the *full key* adds their current
 //!    contents (read again only for files whose status changed, see `manifest`). The
@@ -194,21 +194,9 @@ impl Toolchain<'_> {
             h.str(f);
         }
         for d in search_dirs(i, spec) {
-            if !self.is_generated(&d) {
-                hash_listing(&mut h, &d);
-            }
+            hash_listing(&mut h, &d);
         }
         Ok(h.finish())
-    }
-
-    /// Whether simjig generates the files in `dir`: the cache, whose entries never change
-    /// once published, and `OUT_DIR/simjig/`, whose files are named after the DUT and the
-    /// prefix, which the key has already. Nothing else writes there, so no new file in
-    /// them can shadow a header; and listing `OUT_DIR/simjig/`, which holds every DUT's
-    /// files, made every model's key change with every other DUT.
-    fn is_generated(&self, dir: &Path) -> bool {
-        dir.starts_with(self.i.cache.root())
-            || dir.starts_with(crate::emit::generated_dir(&self.i.env.out_dir))
     }
 
     /// Compiles `spec` in `work` with `-MD`; returns the archive and every file read.

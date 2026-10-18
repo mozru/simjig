@@ -41,6 +41,9 @@ fn second_build_hits_the_cache_without_running_verilator() {
     other_crate.out_dir = s.path().join("other-out");
     let third = counter(&rtl, 8).build_in(&other_crate).unwrap();
     assert_eq!((third.cache, s.verilations()), (CacheStatus::Hit, 1));
+    // And links the same model archive: the shim it compiles is content-addressed.
+    assert_eq!(model_entry(&third), model_entry(&first));
+    assert_eq!(count_entries(&s.path().join("cache/archives")), 1);
 
     // A different parameter is a different model, but reuses the same libverilated.
     // (Another crate: one build script may not reuse a DUT name for another config.)

@@ -728,7 +728,7 @@ impl Dut {
             None => pipeline::design_ir(&self.config, top, &sv_inputs, verilator, cache)?,
         };
         let emitted = (self.emitter)(&ir.design, &self.config)?;
-        let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
+        let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir, cache)?;
         if let Some(check) = &placed.layout_check
             && !front.checked(cache, check)
         {

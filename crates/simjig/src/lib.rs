@@ -49,7 +49,7 @@ pub use kernel::models::ModelSetError;
 pub use kernel::recorder::{TraceKind, TraceRecord};
 pub use kernel::sched::{DELTA_MAX, READ_WRITE_MAX};
 pub use kernel::signal::RawSig;
-pub use kernel::sim::Sim;
+pub use kernel::sim::{CoverageError, Sim};
 pub use kernel::state::KernelStats;
 pub use kernel::sync::{Event, EventWait, Get, Lock, LockFuture, LockGuard, Put, Queue};
 pub use kernel::tasks::{Task, scope, spawn};

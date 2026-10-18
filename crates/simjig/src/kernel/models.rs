@@ -107,6 +107,11 @@ impl Models {
         self.backends.get(model)?.coverage()
     }
 
+    /// Model `model`'s backend, for the coverage operations of `Sim`.
+    pub(crate) fn backend_mut(&mut self, model: usize) -> Option<&mut dyn ModelBackend> {
+        Some(&mut **self.backends.get_mut(model)?)
+    }
+
     pub(crate) fn precision(&self) -> Precision {
         self.backends[0].precision()
     }

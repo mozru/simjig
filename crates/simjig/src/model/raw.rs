@@ -237,6 +237,20 @@ impl RawModel {
         Some(out)
     }
 
+    /// Sets every coverage counter to zero; the raw status (`UNSUPPORTED` without coverage).
+    pub(crate) fn cov_zero(&mut self) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.cov_zero)(self.handle.as_ptr()) }
+    }
+
+    /// Writes the model's coverage file (`coverage.dat` format) to `path`; the raw status
+    /// (`UNSUPPORTED` without coverage, `IO_ERROR` for a file that cannot be written).
+    pub(crate) fn cov_write(&mut self, path: &CStr) -> i32 {
+        // SAFETY: as in `eval`; `path` is NUL-terminated and valid for the call, which
+        // copies it.
+        unsafe { (self.vt.cov_write)(self.handle.as_ptr(), path.as_ptr()) }
+    }
+
     /// The validated signal table, in slot order.
     pub(crate) fn signals(&self) -> &[Decoded] {
         &self.signals

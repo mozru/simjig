@@ -97,6 +97,11 @@ the public API, the generated code or simulation semantics.
 #### Coverage counters
 - New `Sim::coverage(model) -> Option<Vec<u32>>`: the counters of a model built with
   coverage, in the order of the ABI's `cov_runs`.
+- New `Sim::zero_coverage(model)` (the ABI's `cov_zero`) and
+  `Sim::write_coverage(model, path)` (`cov_write`: Verilator's `coverage.dat`, which names
+  every point), both returning `Result<(), CoverageError>` (new `simjig::CoverageError`).
+- New `TestCtx::{coverage, zero_coverage, write_coverage}`: the same, on the running
+  simulation of a `#[simjig::test]`.
 
 #### Build (`simjig-build`)
 - An `-rpath` link argument is emitted once per build script, so FST models no longer

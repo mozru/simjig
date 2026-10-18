@@ -3,10 +3,11 @@
 
 use std::fmt;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::OrInvariant;
-use super::backend::ModelBackend;
+use super::backend::{CoverageFault, ModelBackend};
 use super::clock::{Clock, ClockEntry, ClockError, ClockHandle, ClockState};
 use super::failure::Failure;
 use super::fake::FakeModel;
@@ -134,11 +135,37 @@ impl Sim {
     ///
     /// The counters come in the order of the model's counter arrays (the ABI's `cov_runs`),
     /// one entry per counter; an index names the same coverage point for one build of the
-    /// model, not across builds (docs/notes/tracecov.md). Read them between runs; the
-    /// model's `coverage.dat` names every point.
+    /// model, not across builds (docs/notes/tracecov.md). Read them before or after
+    /// [`run`](Self::run); inside a `#[simjig::test]`, while the simulation runs, use
+    /// [`TestCtx::coverage`](crate::TestCtx::coverage). An index is not a name:
+    /// [`write_coverage`](Self::write_coverage) writes every point with its name.
     #[must_use]
     pub fn coverage(&self, model: usize) -> Option<Vec<u32>> {
         self.kernel.models.borrow().coverage(model)
+    }
+
+    /// Sets every coverage counter of model `model` to zero (Verilator's
+    /// `VerilatedCovContext::zero`, the ABI's `cov_zero`), to count only what follows.
+    ///
+    /// # Errors
+    /// See [`CoverageError`].
+    pub fn zero_coverage(&self, model: usize) -> Result<(), CoverageError> {
+        zero_coverage_in(&self.kernel, model)
+    }
+
+    /// Writes model `model`'s coverage file to `path`: Verilator's `coverage.dat`, with
+    /// every point's name (file, line, hierarchy, kind) and count, as `verilator_coverage`
+    /// reads it (the ABI's `cov_write`). The counts are the ones [`coverage`](Self::coverage)
+    /// returns.
+    ///
+    /// # Errors
+    /// See [`CoverageError`].
+    pub fn write_coverage(
+        &self,
+        model: usize,
+        path: impl AsRef<Path>,
+    ) -> Result<(), CoverageError> {
+        write_coverage_in(&self.kernel, model, path.as_ref())
     }
 
     /// The length of one tick.
@@ -256,4 +283,105 @@ impl Sim {
         stats.records = self.kernel.recorder.borrow().count();
         stats
     }
+}
+
+/// Why a coverage operation of [`Sim`] (or [`TestCtx`](crate::TestCtx)) did nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CoverageError {
+    /// The simulation has no model `model`.
+    NoModel {
+        /// The model asked for.
+        model: usize,
+        /// How many models the simulation has.
+        count: usize,
+    },
+    /// Model `model` has no coverage counters.
+    NotBuilt {
+        /// The model.
+        model: usize,
+    },
+    /// The coverage file could not be written.
+    Write {
+        /// The model.
+        model: usize,
+        /// The file.
+        path: PathBuf,
+        /// Why.
+        reason: String,
+    },
+    /// The model refused (it was poisoned by an earlier fatal error, ...).
+    Failed {
+        /// The model.
+        model: usize,
+        /// Why.
+        reason: String,
+    },
+}
+
+impl fmt::Display for CoverageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoModel { model, count } => write!(
+                f,
+                "the simulation has no model {model} (it has {count}, numbered from 0 in the \
+                 order of the test's DUTs)"
+            ),
+            Self::NotBuilt { model } => write!(
+                f,
+                "model {model} has no coverage counters; build it with `.coverage(true)` on its \
+                 `simjig_build::Dut` in build.rs"
+            ),
+            Self::Write {
+                model,
+                path,
+                reason,
+            } => write!(
+                f,
+                "model {model} cannot write its coverage to {}: {reason}",
+                path.display()
+            ),
+            Self::Failed { model, reason } => {
+                write!(f, "model {model} cannot do coverage now: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CoverageError {}
+
+/// Runs `op` on model `model` of `kernel`, mapping its fault to a [`CoverageError`].
+fn on_model(
+    kernel: &Kernel,
+    model: usize,
+    path: Option<&Path>,
+    op: impl FnOnce(&mut dyn ModelBackend) -> Result<(), CoverageFault>,
+) -> Result<(), CoverageError> {
+    let mut models = kernel.models.borrow_mut();
+    let count = models.len();
+    let backend = models
+        .backend_mut(model)
+        .ok_or(CoverageError::NoModel { model, count })?;
+    op(backend).map_err(|fault| match fault {
+        CoverageFault::NotBuilt => CoverageError::NotBuilt { model },
+        CoverageFault::Failed(reason) => CoverageError::Failed { model, reason },
+        CoverageFault::Write(reason) => CoverageError::Write {
+            model,
+            path: path.map(Path::to_path_buf).unwrap_or_default(),
+            reason,
+        },
+    })
+}
+
+/// [`Sim::zero_coverage`] on `kernel`.
+pub(crate) fn zero_coverage_in(kernel: &Kernel, model: usize) -> Result<(), CoverageError> {
+    on_model(kernel, model, None, |b| b.zero_coverage())
+}
+
+/// [`Sim::write_coverage`] on `kernel`.
+pub(crate) fn write_coverage_in(
+    kernel: &Kernel,
+    model: usize,
+    path: &Path,
+) -> Result<(), CoverageError> {
+    on_model(kernel, model, Some(path), |b| b.write_coverage(path))
 }

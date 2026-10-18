@@ -24,6 +24,7 @@
 //!   model's (docs/notes/spikes.md §2). The kernel never switches contexts itself.
 
 use std::fmt;
+use std::path::Path;
 
 use super::failure::SourceLocation;
 use super::time::{Precision, SimTime};
@@ -103,6 +104,17 @@ impl fmt::Display for ModelError {
     }
 }
 
+/// Why a coverage operation on a backend did nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CoverageFault {
+    /// The model has no coverage counters (not built with coverage, or not Verilator).
+    NotBuilt,
+    /// The model refused or failed; why.
+    Failed(String),
+    /// The file could not be written; why.
+    Write(String),
+}
+
 /// Number of `u32` words that hold a value of `width` bits.
 #[must_use]
 pub(crate) const fn words(width: u32) -> usize {
@@ -136,5 +148,14 @@ pub(crate) trait ModelBackend {
     /// `--coverage`); `None` by default.
     fn coverage(&self) -> Option<Vec<u32>> {
         None
+    }
+    /// Sets every coverage counter to zero.
+    fn zero_coverage(&mut self) -> Result<(), CoverageFault> {
+        Err(CoverageFault::NotBuilt)
+    }
+    /// Writes Verilator's coverage file (`coverage.dat`: every point's name and count) to
+    /// `path`.
+    fn write_coverage(&mut self, _path: &Path) -> Result<(), CoverageFault> {
+        Err(CoverageFault::NotBuilt)
     }
 }

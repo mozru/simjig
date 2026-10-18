@@ -13,9 +13,12 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::fmt;
 use std::panic::Location;
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use super::seed::{Rng, Seed};
+use crate::CoverageError;
+use crate::kernel::{sim, state};
 
 /// The running test's identity and seeds, passed to a `#[simjig::test]` body that takes a
 /// `&TestCtx` parameter.
@@ -30,7 +33,21 @@ use super::seed::{Rng, Seed};
 ///
 /// It is not the [`Sim`](crate::Sim): the simulation is running while the body runs, so
 /// its time and tasks are reached through the free functions ([`now`](crate::now),
-/// [`spawn`](crate::spawn), ...).
+/// [`spawn`](crate::spawn), ...). Its coverage methods ([`coverage`](Self::coverage),
+/// [`zero_coverage`](Self::zero_coverage), [`write_coverage`](Self::write_coverage)) are
+/// the running simulation's, as the `Sim` methods of the same names are before and after
+/// a run:
+///
+/// ```ignore
+/// #[simjig::test]
+/// async fn reset_is_covered(ctx: &TestCtx, dut: counter::Dut) {
+///     reset(dut).await;
+///     ctx.zero_coverage(0).expect("built with coverage");   // count only what follows
+///     run_traffic(dut).await;
+///     // Every point with its name, for `verilator_coverage`.
+///     ctx.write_coverage(0, "coverage.dat").expect("written");
+/// }
+/// ```
 ///
 /// Clones share the record of which streams were taken.
 #[derive(Clone)]
@@ -117,6 +134,52 @@ impl TestCtx {
             );
         }
         self.seed.rng(path)
+    }
+
+    /// The coverage counters of model `model` of the running simulation (0 for the first
+    /// DUT): [`Sim::coverage`](crate::Sim::coverage), while the test runs.
+    ///
+    /// # Panics
+    /// Outside the test's run (or inside a DPI-C call).
+    #[must_use]
+    #[track_caller]
+    pub fn coverage(&self, model: usize) -> Option<Vec<u32>> {
+        state::with_current("TestCtx::coverage", |k| k.models.borrow().coverage(model))
+    }
+
+    /// Sets every coverage counter of model `model` to zero:
+    /// [`Sim::zero_coverage`](crate::Sim::zero_coverage), while the test runs.
+    ///
+    /// # Errors
+    /// See [`CoverageError`].
+    ///
+    /// # Panics
+    /// Outside the test's run (or inside a DPI-C call).
+    #[track_caller]
+    pub fn zero_coverage(&self, model: usize) -> Result<(), CoverageError> {
+        state::with_current("TestCtx::zero_coverage", |k| {
+            sim::zero_coverage_in(k, model)
+        })
+    }
+
+    /// Writes model `model`'s `coverage.dat` (every point's name and count) to `path`:
+    /// [`Sim::write_coverage`](crate::Sim::write_coverage), while the test runs.
+    ///
+    /// # Errors
+    /// See [`CoverageError`].
+    ///
+    /// # Panics
+    /// Outside the test's run (or inside a DPI-C call).
+    #[track_caller]
+    pub fn write_coverage(
+        &self,
+        model: usize,
+        path: impl AsRef<Path>,
+    ) -> Result<(), CoverageError> {
+        let path = path.as_ref();
+        state::with_current("TestCtx::write_coverage", |k| {
+            sim::write_coverage_in(k, model, path)
+        })
     }
 
     /// The seed the model was given for Verilator's own random number generator

@@ -25,12 +25,15 @@
 //! `$finish` is reported as [`EvalStatus::Finished`]; `$error` stops the run at Verilator's
 //! default error limit of 1, as in cocotb on Verilator.
 
-use super::abi::{ACCESS_WRITE, Dir, MsgKind, OwnedMsg, Status};
+use std::ffi::CString;
+use std::path::Path;
+
+use super::abi::{ACCESS_WRITE, Dir, FEATURE_COVERAGE, MsgKind, OwnedMsg, Status};
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
 use super::trace::{TraceOptions, Tracer};
 use crate::dpi::{DpiFailure, ModelDpi};
-use crate::kernel::backend::{EvalStatus, ModelBackend, ModelError};
+use crate::kernel::backend::{CoverageFault, EvalStatus, ModelBackend, ModelError};
 use crate::kernel::time::{Precision, SimTime};
 
 /// A generated Verilator model behind the kernel's backend interface.
@@ -310,6 +313,48 @@ impl ModelBackend for VerilatorModel {
     // no model code.
     fn coverage(&self) -> Option<Vec<u32>> {
         self.raw.coverage()
+    }
+
+    fn zero_coverage(&mut self) -> Result<(), CoverageFault> {
+        self.coverage_call(RawModel::cov_zero)
+    }
+
+    fn write_coverage(&mut self, path: &Path) -> Result<(), CoverageFault> {
+        let path = CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_nul| CoverageFault::Write("the path contains a NUL byte".to_owned()))?;
+        self.coverage_call(|raw| raw.cov_write(&path))
+    }
+}
+
+impl VerilatorModel {
+    /// Runs one `cov_*` entry point, unless the model has no coverage or is poisoned (no
+    /// call reaches a poisoned model), and maps its status.
+    fn coverage_call(
+        &mut self,
+        call: impl FnOnce(&mut RawModel) -> i32,
+    ) -> Result<(), CoverageFault> {
+        if self.raw.features() & FEATURE_COVERAGE == 0 {
+            return Err(CoverageFault::NotBuilt);
+        }
+        if let Some(reason) = &self.poisoned {
+            return Err(CoverageFault::Failed(format!(
+                "it was poisoned by an earlier failure ({reason}); read its counters with \
+                 `coverage` instead"
+            )));
+        }
+        let status = call(&mut self.raw);
+        // A coverage call runs no design code, but drains like any entry point.
+        self.msgs.clear();
+        self.raw.drain(&mut self.msgs);
+        match Status::try_from(status) {
+            Ok(Status::Ok) => Ok(()),
+            Ok(Status::IoError) => Err(CoverageFault::Write(
+                "the file cannot be created (does its directory exist?)".to_owned(),
+            )),
+            other => Err(CoverageFault::Failed(format!(
+                "the model returned {other:?}"
+            ))),
+        }
     }
 }
 

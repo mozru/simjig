@@ -131,6 +131,8 @@ impl Toolchain<'_> {
         let out_dir = &self.i.env.out_dir;
         let manifest = cache.root().join("manifests").join(pre);
         let label = format!("{}-{}", spec.kind, spec.what);
+        // Per DUT (see `cache::drop_unpublished`).
+        let owned = spec.kind == "archives";
         // Compiled from an output kept out of the cache (a model verilated while its input
         // changed): its path names no entry a later build finds, so neither is this.
         let transient = spec
@@ -143,7 +145,12 @@ impl Toolchain<'_> {
             lookup(cache, spec, pre, &manifest)
         };
         let known = match found {
-            Ok(hit) => return Ok(hit),
+            Ok(hit) => {
+                if owned {
+                    cache::drop_unpublished(out_dir, &label);
+                }
+                return Ok(hit);
+            }
             Err(known) => known,
         };
         let work = cache.work_dir()?;
@@ -175,6 +182,9 @@ impl Toolchain<'_> {
         let full = recorded.recorded_key(DEPS_DOMAIN, pre);
         let (dir, name) = publish(cache, spec, &full, &lib, &work)?;
         cache.write_atomic(&manifest, &recorded.text())?;
+        if owned {
+            cache::drop_unpublished(out_dir, &label);
+        }
         Ok(Archive {
             dir,
             name,

@@ -181,6 +181,11 @@ fn an_include_edited_while_verilating_is_not_cached() {
     assert!(no_warning(&second), "{:?}", second.directives);
     assert_ne!(first_text, model_text(&second));
     assert_eq!(entries(&s.path().join("cache/archives")), 1);
+    assert_eq!(
+        entries(&unpublished),
+        0,
+        "a good build removes what the earlier one kept"
+    );
     let third = build();
     assert_eq!((third.cache, s.verilations()), (CacheStatus::Hit, 2));
     assert_eq!(third.obj_dir, second.obj_dir);

@@ -147,12 +147,22 @@ impl Future for Edge {
 
 /// Waits for `n` rising edges of `sig`; `n == 0` returns at once.
 ///
+/// `n` is any integer (`u32`, `usize`, `u64`, ...): `TryInto<u64>` rather than
+/// `Into<u64>`, because `usize` has no `Into<u64>`, and because an unsuffixed literal
+/// (`cycles(clk, 5)`) falls back to `i32`, which has none either.
+///
 /// # Panics
-/// As [`rising`].
-pub async fn cycles(sig: impl Into<RawSig>, n: u64) {
+/// Here, if `n` is negative (or does not fit in a `u64`); otherwise as [`rising`].
+#[track_caller]
+pub fn cycles(sig: impl Into<RawSig>, n: impl TryInto<u64>) -> impl Future<Output = ()> {
     let sig = sig.into();
-    for _ in 0..n {
-        rising(sig).await;
+    let Ok(n) = n.try_into() else {
+        panic!("cycles: the count of edges must be a non-negative integer that fits in u64")
+    };
+    async move {
+        for _ in 0..n {
+            rising(sig).await;
+        }
     }
 }
 

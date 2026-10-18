@@ -270,3 +270,28 @@ fn a_handle_outside_its_run_panics() {
         "{message}"
     );
 }
+
+/// `cycles` counts in any integer type, a literal still infers, and a negative count
+/// panics at the call.
+#[test]
+fn cycles_takes_any_integer_count() {
+    let mut d = clocked();
+    let clk = d.clk;
+    let out = d.sim.run(async move {
+        let (n32, nsize, n64): (u32, usize, u64) = (1, 2, 3);
+        cycles(clk, n32).await;
+        cycles(clk, nsize).await;
+        cycles(clk, n64).await;
+        cycles(clk, 1).await;
+        now()
+    });
+    assert_eq!(out.unwrap(), SimTime(60), "7 edges, the first at 0");
+    assert_clean(&d.sim);
+
+    let mut d = clocked();
+    let clk = d.clk;
+    let f = d.sim.run(async move { cycles(clk, -1).await }).unwrap_err();
+    assert!(matches!(f.kind, FailureKind::TaskPanic { .. }), "{f}");
+    assert!(f.message.contains("non-negative"), "{f}");
+    assert!(f.location.unwrap().file().ends_with("clocks.rs"), "{f}");
+}

@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `cycles(clk, n)` takes any integer count (`n: impl TryInto<u64>`: `u32`, `usize`,
+  `u64`, and an unsuffixed literal, which falls back to `i32`); a negative count panics
+  at the call. It is a plain `fn` returning the future now, so the panic points there.
 - `Queue::new(name, 0)` is an unbounded queue (`put` never waits), as cocotb's
   `Queue(maxsize=0)`; it panicked. `Queue::capacity` is 0 for it.
 - `with_timeout(..).await?` works in a test returning `simjig::Result`: `Failure`

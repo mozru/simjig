@@ -1,0 +1,446 @@
+//! Rust mirror of the simjig C ABI (`crates/simjig-build/cpp/simjig_abi.h`).
+//!
+//! A generated model exports one symbol, `simjig_vtable_<prefix>()`, returning a
+//! [`ModelVtable`]. Everything the runtime does with the model goes through that table: create,
+//! eval, time, the signal table ([`Signal`]) and the message ring ([`Msg`]).
+//!
+//! Invariants:
+//! - The `#[repr(C)]` structs match the header byte for byte. Compile-time asserts below pin
+//!   their sizes and field offsets for 64-bit targets; a test compares them with what the C++
+//!   compiler reports (`simjig_rt_abi_layout`).
+//! - Integers coming from C (status codes, message kinds, storage classes) are kept as
+//!   integers and decoded with `TryFrom`: a Rust enum holding an unknown discriminant is UB.
+//! - The table is append-only. [`ModelVtable::check`] rejects a model whose `abi_version`
+//!   differs or whose `size` is smaller than this mirror, so no field past the model's end is
+//!   ever read.
+//! - Model memory is only touched through raw pointers at the point of use
+//!   ([`read_narrow`], [`write_narrow`], [`read_wide`], [`write_wide`]); no Rust reference to
+//!   it is ever created.
+
+use std::ffi::{CStr, c_char, c_void};
+use std::marker::{PhantomData, PhantomPinned};
+use std::mem::{align_of, offset_of, size_of};
+
+/// `SIMJIG_ABI_VERSION`: bumped only on an incompatible change.
+pub(crate) const ABI_VERSION: u32 = 1;
+
+/// `SIMJIG_TIME_NONE`: `next_time_slot` found no pending timed event.
+pub(crate) const TIME_NONE: u64 = u64::MAX;
+
+/// `SIMJIG_CREATE_ECHO`: also print captured messages to stdout.
+pub(crate) const CREATE_ECHO: u32 = 1;
+
+/// `SIMJIG_ACCESS_READ`.
+pub(crate) const ACCESS_READ: u8 = 1;
+/// `SIMJIG_ACCESS_WRITE`.
+pub(crate) const ACCESS_WRITE: u8 = 2;
+
+/// An integer from C that is not a known value of the named C enumeration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Unknown {
+    pub(crate) what: &'static str,
+    pub(crate) value: i64,
+}
+
+/// Declares a Rust enum for a C `#define` enumeration plus its fallible decoding.
+macro_rules! c_enum {
+    ($(#[$m:meta])* $name:ident: $raw:ty { $($(#[$vm:meta])* $variant:ident = $value:expr,)+ }) => {
+        $(#[$m])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[repr($raw)]
+        pub(crate) enum $name { $($(#[$vm])* $variant = $value,)+ }
+
+        impl TryFrom<$raw> for $name {
+            type Error = Unknown;
+            fn try_from(raw: $raw) -> Result<Self, Unknown> {
+                match raw {
+                    $($value => Ok(Self::$variant),)+
+                    _ => Err(Unknown { what: stringify!($name), value: i64::from(raw) }),
+                }
+            }
+        }
+    };
+}
+
+c_enum! {
+    /// `simjig_status`: the outcome of an entry point that ran model code.
+    Status: i32 {
+        /// The call completed.
+        Ok = 0,
+        /// `$finish` has run (sticky).
+        Finish = 1,
+        /// `$stop`, or `$error` over the error limit, has run (sticky).
+        Stop = 2,
+        /// `$fatal` or an internal Verilator fatal; the model is now poisoned.
+        Fatal = 3,
+        /// A C++ exception escaped model code; the model is now poisoned.
+        Exception = 4,
+        /// The model was already poisoned; nothing ran.
+        Poisoned = 5,
+        /// The entry point is reserved but not built into this model.
+        Unsupported = 6,
+    }
+}
+
+c_enum! {
+    /// `SIMJIG_STORAGE_*`: the C++ type Verilator stores a signal in.
+    Storage: u8 {
+        /// `CData`, 1..=8 bits.
+        C = 1,
+        /// `SData`, 9..=16 bits.
+        S = 2,
+        /// `IData`, 17..=32 bits.
+        I = 3,
+        /// `QData`, 33..=64 bits.
+        Q = 4,
+        /// `VlWide<words>`, more than 64 bits, least significant word first.
+        W = 5,
+    }
+}
+
+c_enum! {
+    /// `SIMJIG_DIR_*`.
+    Dir: u8 {
+        /// A public internal member, not a port.
+        Internal = 0,
+        /// Input port.
+        In = 1,
+        /// Output port.
+        Out = 2,
+        /// Bidirectional port.
+        Inout = 3,
+    }
+}
+
+c_enum! {
+    /// `SIMJIG_MSG_*`: what produced a message record.
+    MsgKind: u32 {
+        /// `$display`/`$write`/`$warning`/`$info` text or other Verilator output.
+        Display = 0,
+        /// Internal Verilator warning.
+        Warning = 1,
+        /// `$error` or a failed assertion.
+        Error = 2,
+        /// `$stop`.
+        Stop = 3,
+        /// `$fatal` or an internal Verilator fatal.
+        Fatal = 4,
+        /// `$finish`.
+        Finish = 5,
+        /// A C++ exception caught by the barrier.
+        Exception = 6,
+        /// The ring overflowed; `line` is the number of records lost.
+        Dropped = 7,
+    }
+}
+
+impl Storage {
+    /// Verilator's storage rule for a signal of `width` bits.
+    pub(crate) fn for_width(width: u32) -> Self {
+        match width {
+            0..=8 => Self::C,
+            9..=16 => Self::S,
+            17..=32 => Self::I,
+            33..=64 => Self::Q,
+            _ => Self::W,
+        }
+    }
+}
+
+/// Opaque `simjig_handle`: zero-sized, `!Send`, `!Sync`, `!Unpin`, never constructed in Rust.
+#[repr(C)]
+pub(crate) struct Handle {
+    _priv: [u8; 0],
+    _pin: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// `simjig_signal`: one row of a model's signal table.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Signal {
+    pub(crate) id: u32,
+    pub(crate) width: u32,
+    pub(crate) words: u32,
+    pub(crate) storage: u8,
+    pub(crate) dir: u8,
+    pub(crate) access: u8,
+    pub(crate) reserved: u8,
+    pub(crate) name: *const c_char,
+    pub(crate) ptr: *mut c_void,
+}
+
+/// `simjig_msg`: a borrowed view of one drained message record.
+#[repr(C)]
+#[expect(clippy::struct_field_names, reason = "field names mirror simjig_msg")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Msg {
+    pub(crate) kind: u32,
+    pub(crate) line: u32,
+    pub(crate) time: u64,
+    pub(crate) file: *const c_char,
+    pub(crate) hier: *const c_char,
+    pub(crate) msg: *const c_char,
+    pub(crate) msg_len: usize,
+}
+
+/// `simjig_create_opts`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CreateOpts {
+    pub(crate) size: u32,
+    pub(crate) flags: u32,
+    pub(crate) name: *const c_char,
+    pub(crate) error_limit: u32,
+    pub(crate) argc: u32,
+    pub(crate) argv: *const *const c_char,
+}
+
+impl CreateOpts {
+    /// `sizeof(simjig_create_opts)`, the value of its `size` field.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "32 bytes, pinned by the asserts below"
+    )]
+    pub(crate) const SIZE: u32 = size_of::<Self>() as u32;
+}
+
+/// `simjig_model_vtable`. Field order and types match the header exactly.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct ModelVtable {
+    pub(crate) abi_version: u32,
+    pub(crate) size: u32,
+    pub(crate) prefix: *const c_char,
+    pub(crate) verilator_version: *const c_char,
+    pub(crate) ir_hash: u64,
+    pub(crate) create: unsafe extern "C" fn(*const CreateOpts, *mut *mut Handle) -> i32,
+    pub(crate) destroy: unsafe extern "C" fn(*mut Handle),
+    pub(crate) eval: unsafe extern "C" fn(*mut Handle) -> i32,
+    pub(crate) final_: unsafe extern "C" fn(*mut Handle) -> i32,
+    pub(crate) set_time: unsafe extern "C" fn(*mut Handle, u64),
+    pub(crate) events_pending: unsafe extern "C" fn(*mut Handle) -> u32,
+    pub(crate) next_time_slot: unsafe extern "C" fn(*mut Handle) -> u64,
+    pub(crate) signals: unsafe extern "C" fn(*mut Handle, *mut u32) -> *const Signal,
+    pub(crate) drain_msgs: unsafe extern "C" fn(*mut Handle, *mut Msg, usize) -> usize,
+    pub(crate) trace_open: unsafe extern "C" fn(*mut Handle, *const c_char) -> i32,
+    pub(crate) trace_dump: unsafe extern "C" fn(*mut Handle, u64) -> i32,
+    pub(crate) trace_close: unsafe extern "C" fn(*mut Handle) -> i32,
+    pub(crate) cov_counters: unsafe extern "C" fn(*mut Handle, *mut usize) -> *mut u32,
+}
+
+// The header is written for LP64/LLP64 targets with 8-byte pointers; pin every offset there.
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(size_of::<Signal>() == 32 && align_of::<Signal>() == 8);
+    assert!(offset_of!(Signal, words) == 8 && offset_of!(Signal, storage) == 12);
+    assert!(offset_of!(Signal, reserved) == 15);
+    assert!(offset_of!(Signal, name) == 16 && offset_of!(Signal, ptr) == 24);
+
+    assert!(size_of::<Msg>() == 48 && align_of::<Msg>() == 8);
+    assert!(offset_of!(Msg, time) == 8 && offset_of!(Msg, file) == 16);
+    assert!(offset_of!(Msg, msg) == 32 && offset_of!(Msg, msg_len) == 40);
+
+    assert!(size_of::<CreateOpts>() == 32 && align_of::<CreateOpts>() == 8);
+    assert!(offset_of!(CreateOpts, name) == 8 && offset_of!(CreateOpts, error_limit) == 16);
+    assert!(offset_of!(CreateOpts, argv) == 24);
+
+    assert!(size_of::<ModelVtable>() == 136 && align_of::<ModelVtable>() == 8);
+    assert!(offset_of!(ModelVtable, prefix) == 8 && offset_of!(ModelVtable, ir_hash) == 24);
+    assert!(offset_of!(ModelVtable, create) == 32);
+    assert!(offset_of!(ModelVtable, drain_msgs) == 96);
+    assert!(offset_of!(ModelVtable, cov_counters) == 128);
+};
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("simjig's C ABI is defined for 64-bit targets only");
+
+/// Why a vtable cannot be used by this runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AbiError {
+    /// The model was built against a different `SIMJIG_ABI_VERSION`.
+    Version { model: u32, runtime: u32 },
+    /// The model's table is shorter than this runtime's mirror.
+    Size { model: u32, runtime: usize },
+    /// The model's IR hash differs from the generated Rust's.
+    IrHash { model: u64, expected: u64 },
+}
+
+impl ModelVtable {
+    /// Checks that this runtime can use the table and that it belongs to the generated Rust
+    /// with `ir_hash`.
+    pub(crate) fn check(&self, ir_hash: u64) -> Result<(), AbiError> {
+        if self.abi_version != ABI_VERSION {
+            return Err(AbiError::Version {
+                model: self.abi_version,
+                runtime: ABI_VERSION,
+            });
+        }
+        if (self.size as usize) < size_of::<Self>() {
+            return Err(AbiError::Size {
+                model: self.size,
+                runtime: size_of::<Self>(),
+            });
+        }
+        if self.ir_hash != ir_hash {
+            return Err(AbiError::IrHash {
+                model: self.ir_hash,
+                expected: ir_hash,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// An owned copy of a drained [`Msg`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedMsg {
+    pub(crate) kind: Result<MsgKind, Unknown>,
+    pub(crate) line: u32,
+    pub(crate) time: u64,
+    pub(crate) file: String,
+    pub(crate) hier: String,
+    pub(crate) msg: String,
+}
+
+/// Copies a C string, replacing invalid UTF-8; null reads as "".
+///
+/// # Safety
+/// `s` is null or points to a NUL-terminated string that stays valid during the call.
+unsafe fn c_string(s: *const c_char) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    // SAFETY: non-null, and the caller guarantees NUL termination and validity.
+    let text = unsafe { CStr::from_ptr(s) };
+    text.to_string_lossy().into_owned()
+}
+
+impl Msg {
+    /// Copies the record out of the model's drain buffer.
+    ///
+    /// # Safety
+    /// `self` was filled by `drain_msgs`, and no entry point has been called on the handle
+    /// since (the strings live in the model's buffer until then).
+    pub(crate) unsafe fn copy_out(self) -> OwnedMsg {
+        let msg = if self.msg.is_null() {
+            String::new()
+        } else {
+            // SAFETY: drain_msgs guarantees `msg` points to `msg_len` initialised bytes, valid
+            // until the next entry point call (caller's precondition).
+            let bytes = unsafe { std::slice::from_raw_parts(self.msg.cast::<u8>(), self.msg_len) };
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        OwnedMsg {
+            kind: MsgKind::try_from(self.kind),
+            line: self.line,
+            time: self.time,
+            // SAFETY: drain_msgs hands out NUL-terminated strings valid until the next call.
+            file: unsafe { c_string(self.file) },
+            // SAFETY: as for `file`.
+            hier: unsafe { c_string(self.hier) },
+            msg,
+        }
+    }
+}
+
+impl Signal {
+    /// The signal's hierarchical name.
+    ///
+    /// # Safety
+    /// The row came from a live model's `signals` table (names are static strings).
+    pub(crate) unsafe fn name(&self) -> String {
+        // SAFETY: the table's names are NUL-terminated static strings (caller's precondition).
+        unsafe { c_string(self.name) }
+    }
+
+    /// Mask of the bits the signal's width allows in its lowest 64 bits.
+    fn mask(&self) -> u64 {
+        if self.width >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << self.width) - 1
+        }
+    }
+}
+
+/// Reads a signal of at most 64 bits (storage C, S, I or Q).
+///
+/// # Safety
+/// - `sig` is a row of a live model's signal table, with `ACCESS_READ`, and its storage is
+///   not `W`;
+/// - no entry point of that model runs concurrently.
+#[inline]
+pub(crate) unsafe fn read_narrow(sig: &Signal) -> u64 {
+    let p = sig.ptr;
+    // The row's `ptr` points to a live, aligned member of exactly the storage type named by
+    // `storage` (the C++ shim static_asserts type and size); the caller guarantees liveness.
+    match sig.storage {
+        // SAFETY: storage C: `p` is a live CData (u8).
+        1 => u64::from(unsafe { p.cast::<u8>().read() }),
+        // SAFETY: storage S: `p` is a live, 2-aligned SData (u16).
+        2 => u64::from(unsafe { p.cast::<u16>().read() }),
+        // SAFETY: storage I: `p` is a live, 4-aligned IData (u32).
+        3 => u64::from(unsafe { p.cast::<u32>().read() }),
+        // SAFETY: storage Q (the only narrow class left): `p` is a live, 8-aligned QData.
+        _ => unsafe { p.cast::<u64>().read() },
+    }
+}
+
+/// Writes a signal of at most 64 bits, masking `value` to its width: Verilator assumes the
+/// unused upper bits are zero.
+///
+/// # Safety
+/// As for [`read_narrow`], with `ACCESS_WRITE`.
+#[inline]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the value is masked to the storage width"
+)]
+pub(crate) unsafe fn write_narrow(sig: &Signal, value: u64) {
+    let p = sig.ptr;
+    let v = value & sig.mask();
+    // As in read_narrow; after masking, `v` fits the storage type, so the casts lose nothing.
+    match sig.storage {
+        // SAFETY: storage C: `p` is a live, writable CData (u8).
+        1 => unsafe { p.cast::<u8>().write(v as u8) },
+        // SAFETY: storage S: `p` is a live, writable, 2-aligned SData (u16).
+        2 => unsafe { p.cast::<u16>().write(v as u16) },
+        // SAFETY: storage I: `p` is a live, writable, 4-aligned IData (u32).
+        3 => unsafe { p.cast::<u32>().write(v as u32) },
+        // SAFETY: storage Q: `p` is a live, writable, 8-aligned QData (u64).
+        _ => unsafe { p.cast::<u64>().write(v) },
+    }
+}
+
+/// Reads a wide (`W`) signal into `out`, least significant word first.
+///
+/// # Safety
+/// - `sig` is a `W` row of a live model's table with `ACCESS_READ`, and `out.len() ==
+///   sig.words`;
+/// - no entry point of that model runs concurrently.
+pub(crate) unsafe fn read_wide(sig: &Signal, out: &mut [u32]) {
+    debug_assert_eq!(out.len(), sig.words as usize);
+    // SAFETY: `ptr` points to a live VlWide<words> (`words` u32s, 4-aligned) that does not
+    // overlap `out` (Rust-owned memory).
+    unsafe { std::ptr::copy_nonoverlapping(sig.ptr.cast::<u32>(), out.as_mut_ptr(), out.len()) }
+}
+
+/// Writes a wide (`W`) signal from `words`, masking the top word to the width.
+///
+/// # Safety
+/// As for [`read_wide`], with `ACCESS_WRITE` and `words.len() == sig.words`.
+pub(crate) unsafe fn write_wide(sig: &Signal, words: &[u32]) {
+    debug_assert_eq!(words.len(), sig.words as usize);
+    let dst = sig.ptr.cast::<u32>();
+    let top_bits = sig.width % 32;
+    for (i, &w) in words.iter().enumerate() {
+        let v = if i + 1 == words.len() && top_bits != 0 {
+            w & ((1u32 << top_bits) - 1)
+        } else {
+            w
+        };
+        // SAFETY: `i < words`, so the offset stays inside the live VlWide member.
+        let word = unsafe { dst.add(i) };
+        // SAFETY: `word` is a live, writable, 4-aligned u32 of that member.
+        unsafe { word.write(v) }
+    }
+}

@@ -259,3 +259,7 @@ the public API, the generated code or simulation semantics.
   naming the branch's internal `main.fork_sentinel` task. `WavesFile::branch` becomes
   `Option<usize>` (it was a path of branch indices, one per checkpoint level), and the
   replay recognises only one `.branch-<j>` in a trace file name.
+- DPI-C failures name the DUT (`ModelMeta::dut_name`, ``DUT `dpi` ``) instead of the
+  model's prefix (kept where it is the point: two instances of one build, or another
+  model's trampoline), and a `Setup` failure's message no longer repeats its help (DPI
+  `Setup` failures, and a DUT type without `DutModel::load`).

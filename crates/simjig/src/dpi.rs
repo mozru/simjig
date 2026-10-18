@@ -126,6 +126,9 @@ impl fmt::Debug for Chandle {
 struct Slot {
     /// The model's prefix (`Vdpi`).
     prefix: &'static str,
+    /// The DUT's name for messages (`ModelMeta::dut_name`), set by the model that uses the
+    /// slot; the prefix until then (no call reaches a slot before a model uses it).
+    dut: Cell<&'static str>,
     /// The registered implementation: a `Box<Box<dyn Trait>>` for the model's generated
     /// trait, so [`call`] can downcast without knowing the trait.
     imp: RefCell<Option<Box<dyn Any>>>,
@@ -141,9 +144,10 @@ struct Slot {
 }
 
 impl Slot {
-    fn new(prefix: &'static str, ambiguous: bool) -> Rc<Self> {
+    fn new(prefix: &'static str, dut: &'static str, ambiguous: bool) -> Rc<Self> {
         Rc::new(Self {
             prefix,
+            dut: Cell::new(dut),
             imp: RefCell::new(None),
             failure: RefCell::new(None),
             failed: Cell::new(false),
@@ -197,19 +201,20 @@ pub(crate) enum DpiFailureKind {
     },
 }
 
+// A `Setup` failure's message says what is wrong and its help what to do; the report
+// prints both, so neither repeats the other.
+
 /// The advice for a call that reached no implementation.
 const REGISTER_HELP: &str = "register the DPI implementation with `dut.set_dpi(..)` before \
      the first eval: before `Sim::run`, or first thing in the test body, before any await";
 
 /// The advice for two instances of one build in one simulation.
-const SECOND_BUILD_HELP: &str = "two instances of one DPI build cannot run in one \
-     simulation: build the design a second time under another `Dut::new` name in build.rs, \
-     and use one instance of each";
+const SECOND_BUILD_HELP: &str = "build the design a second time under another `Dut::new` \
+     name in build.rs (it gets its own prefix), and use one instance of each";
 
 /// The advice for two models whose imports share a C name in one binary.
-const SEPARATE_BINARIES_HELP: &str = "a DPI-C import is one C symbol per test binary: put \
-     the tests of models that import the same name in separate test binaries, or leave the \
-     import to C with `Dut::dpi_in_c`";
+const SEPARATE_BINARIES_HELP: &str = "put the tests of models that import the same name in \
+     separate test binaries, or leave the import to C with `Dut::dpi_in_c`";
 
 impl DpiFailure {
     /// The eval's error: `DpiPanic` for a panic, `Setup` for the rest.
@@ -246,7 +251,7 @@ fn registered(sim_gen: u32, prefix: &'static str) -> Rc<Slot> {
     SLOTS.with_borrow_mut(|s| {
         let slot = s
             .entry((sim_gen, prefix))
-            .or_insert_with(|| Slot::new(prefix, false));
+            .or_insert_with(|| Slot::new(prefix, prefix, false));
         Rc::clone(slot)
     })
 }
@@ -335,10 +340,10 @@ fn dispatch<T: ?Sized + 'static, R>(
     if slot.ambiguous {
         slot.fail(
             format!(
-                "the design called DPI-C import `{name}`, but two models with prefix \
-                 `{prefix}` run in one simulation, so `set_dpi` cannot tell their \
-                 implementations apart; build the design a second time under another \
-                 `Dut::new` name"
+                "the design called DPI-C import `{name}`, but two instances of DUT `{}` (one \
+                 build, prefix `{prefix}`) run in one simulation, so `set_dpi` cannot tell \
+                 their implementations apart",
+                slot.dut.get()
             ),
             SECOND_BUILD_HELP,
         );
@@ -348,11 +353,10 @@ fn dispatch<T: ?Sized + 'static, R>(
     if !std::ptr::eq(slot.prefix, prefix) && slot.prefix != prefix {
         slot.fail(
             format!(
-                "model `{}` called DPI-C import `{name}`, but the `{name}` linked into this \
-                 binary is the one generated for model `{prefix}`; a DPI-C import is one C \
-                 symbol per binary, so models that import the same name need separate test \
-                 binaries",
-                slot.prefix
+                "DUT `{}` called DPI-C import `{name}`, but the `{name}` linked into this \
+                 binary is the one generated for another model (prefix `{prefix}`): a DPI-C \
+                 import is one C symbol per binary",
+                slot.dut.get()
             ),
             SEPARATE_BINARIES_HELP,
         );
@@ -362,9 +366,9 @@ fn dispatch<T: ?Sized + 'static, R>(
     let Some(imp) = imp.as_mut().and_then(|b| b.downcast_mut::<Box<T>>()) else {
         slot.fail(
             format!(
-                "the design called DPI-C import `{name}`, but model `{prefix}` has no DPI \
-                 implementation; call `dut.set_dpi(..)` before the first eval (before \
-                 `Sim::run`, or first thing in the test, before any await)"
+                "the design called DPI-C import `{name}`, but DUT `{}` has no DPI \
+                 implementation",
+                slot.dut.get()
             ),
             REGISTER_HELP,
         );
@@ -381,9 +385,10 @@ fn dispatch<T: ?Sized + 'static, R>(
             let at = location.map(|l| format!(" at {l}")).unwrap_or_default();
             slot.record(DpiFailure {
                 message: format!(
-                    "DPI-C import `{name}` of model `{prefix}` panicked{at}: {}. The design \
+                    "DPI-C import `{name}` of DUT `{}` panicked{at}: {}. The design \
                      received zero as its result, so the model is poisoned and is not \
                      evaluated again",
+                    slot.dut.get(),
                     panic_message(&*payload)
                 ),
                 kind: DpiFailureKind::Panic,
@@ -431,6 +436,8 @@ fn drop_payload(payload: Box<dyn Any + Send>) {
 #[derive(Debug)]
 pub(crate) struct ModelDpi {
     prefix: &'static str,
+    /// The DUT's name (`ModelMeta::dut_name`), for messages.
+    dut: &'static str,
     /// The (simulation id, slot) once the first eval inside a run found it.
     bound: Option<(u32, Rc<Slot>)>,
 }
@@ -446,10 +453,11 @@ impl fmt::Debug for Slot {
 }
 
 impl ModelDpi {
-    /// The DPI state of a model with prefix `prefix`.
-    pub(crate) fn new(prefix: &'static str) -> Self {
+    /// The DPI state of DUT `dut`, a model with prefix `prefix`.
+    pub(crate) fn new(prefix: &'static str, dut: &'static str) -> Self {
         Self {
             prefix,
+            dut,
             bound: None,
         }
     }
@@ -472,12 +480,13 @@ impl ModelDpi {
             return Rc::clone(slot);
         }
         let Some(sim_gen) = state::try_current("a model eval", |k| k.sim_gen) else {
-            return Slot::new(self.prefix, false);
+            return Slot::new(self.prefix, self.dut, false);
         };
         let shared = registered(sim_gen, self.prefix);
         let slot = if shared.claimed.replace(true) {
-            Slot::new(self.prefix, true)
+            Slot::new(self.prefix, self.dut, true)
         } else {
+            shared.dut.set(self.dut);
             shared
         };
         self.bound = Some((sim_gen, Rc::clone(&slot)));

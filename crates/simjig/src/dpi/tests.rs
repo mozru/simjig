@@ -30,10 +30,13 @@ fn plus(n: i32) -> Box<dyn Adder> {
 pub(super) fn bound<T: ?Sized + 'static>(prefix: &'static str, imp: Option<Box<T>>) -> ModelDpi {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX / 2);
     let sim_gen = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // The DUT is named after the prefix without its `V`, as generated prefixes are.
+    let dut = prefix.strip_prefix('V').unwrap_or(prefix);
     let slot = registered(sim_gen, prefix);
     slot.claimed.set(true);
+    slot.dut.set(dut);
     *slot.imp.borrow_mut() = imp.map(|i| Box::new(i) as Box<dyn Any>);
-    let mut model = ModelDpi::new(prefix);
+    let mut model = ModelDpi::new(prefix, dut);
     model.bound = Some((sim_gen, slot));
     model
 }
@@ -61,7 +64,7 @@ fn a_panic_becomes_a_failure_and_later_calls_return_zero() {
     );
     let failure = failure.unwrap().message;
     assert!(
-        failure.starts_with("DPI-C import `add` of model `Vpanic` panicked: negative input -1."),
+        failure.starts_with("DPI-C import `add` of DUT `panic` panicked: negative input -1."),
         "{failure}"
     );
     // The failure was taken; the next scope starts clean (the backend poisons the model).
@@ -73,12 +76,16 @@ fn a_call_without_an_implementation_says_how_to_register_one() {
     let mut a = bound::<dyn Adder>("Vnone", None);
     let (value, failure) = a.scope(|| add("Vnone", 1, 2));
     assert_eq!(value, 0);
-    let failure = failure.unwrap().message;
-    assert!(
-        failure.contains("model `Vnone` has no DPI implementation"),
-        "{failure}"
+    let failure = failure.unwrap();
+    assert_eq!(
+        failure.message,
+        "the design called DPI-C import `add`, but DUT `none` has no DPI implementation",
+        "the problem only: the advice is the help's"
     );
-    assert!(failure.contains("dut.set_dpi(..)"), "{failure}");
+    assert!(matches!(
+        failure.kind,
+        DpiFailureKind::Setup { help } if help.contains("dut.set_dpi(..)")
+    ));
 }
 
 #[test]
@@ -89,8 +96,8 @@ fn a_call_into_another_models_trampoline_names_both() {
     let failure = failure.unwrap().message;
     assert!(
         failure.starts_with(
-            "model `Vb` called DPI-C import `add`, but the `add` linked into this binary is \
-             the one generated for model `Va`"
+            "DUT `b` called DPI-C import `add`, but the `add` linked into this binary is \
+             the one generated for another model (prefix `Va`)"
         ),
         "{failure}"
     );
@@ -165,17 +172,16 @@ fn a_second_model_with_the_same_slot_fails_only_when_it_calls() {
     let shared = registered(sim_gen, "Vtwin");
     shared.claimed.set(true);
     *shared.imp.borrow_mut() = Some(Box::new(plus(0)) as Box<dyn Any>);
-    let mut twin = ModelDpi::new("Vtwin");
+    let mut twin = ModelDpi::new("Vtwin", "twin");
     // As `slot()` does inside a run, with the slot already claimed by the first model.
-    let private = Slot::new("Vtwin", true);
+    let private = Slot::new("Vtwin", "twin", true);
     twin.bound = Some((sim_gen, Rc::clone(&private)));
     assert_eq!(twin.scope(|| ()), ((), None), "no call, no failure");
     let (_, failure) = twin.scope(|| add("Vtwin", 1, 1));
     assert!(
-        failure
-            .unwrap()
-            .message
-            .contains("two models with prefix `Vtwin` run in one simulation"),
+        failure.unwrap().message.contains(
+            "two instances of DUT `twin` (one build, prefix `Vtwin`) run in one simulation"
+        ),
     );
     drop(twin);
     assert!(

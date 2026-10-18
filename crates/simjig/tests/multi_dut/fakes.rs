@@ -86,6 +86,10 @@ fn a_dut_without_load_cannot_share_a_simulation() {
         "{failure}"
     );
     assert!(failure.message.contains("Alone"), "{failure}");
+    assert!(
+        !failure.message.contains("implement `load`"),
+        "the advice is the help's alone: {failure}"
+    );
 }
 
 #[test]

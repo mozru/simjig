@@ -2,5 +2,5 @@
 source: crates/simjig/tests/dpi_tests/failures.rs
 expression: mask_prefixes(&failure.to_string())
 ---
-simjig Setup at t=0 ps: the design called DPI-C import `dpi_add`, but model `Vdpi_<hash>` has no DPI implementation; call `dut.set_dpi(..)` before the first eval (before `Sim::run`, or first thing in the test, before any await)
+simjig Setup at t=0 ps: the design called DPI-C import `dpi_add`, but DUT `dpi` has no DPI implementation
   help: register the DPI implementation with `dut.set_dpi(..)` before the first eval: before `Sim::run`, or first thing in the test body, before any await

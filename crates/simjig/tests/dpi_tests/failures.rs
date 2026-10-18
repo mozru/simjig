@@ -55,7 +55,7 @@ fn a_panic_fails_the_run_and_poisons_the_model() {
         .unwrap_err();
     let message = dpi_panic(&failure);
     assert!(
-        message.starts_with("DPI-C import `dpi_add` of model `Vdpi_"),
+        message.starts_with("DPI-C import `dpi_add` of DUT `dpi` panicked"),
         "{message}"
     );
     let location = failure.location.expect("the panicking line");
@@ -210,6 +210,11 @@ fn a_missing_implementation_is_a_setup_failure_that_says_how_to_register_one() {
     let (mut sim, _dut) = sim::<dpi::Dut>();
     let failure = sim.run(async move { Timer::new(TICK).await }).unwrap_err();
     assert_eq!(failure.kind.name(), "Setup");
+    assert!(failure.message.contains("DUT `dpi`"), "{failure}");
+    assert!(
+        !failure.message.contains("set_dpi"),
+        "the help alone says what to do"
+    );
     insta::assert_snapshot!(mask_prefixes(&failure.to_string()));
 }
 

@@ -198,14 +198,14 @@ impl fmt::Debug for LoadedModel {
 fn unsupported<D>(method: &str) -> Failure {
     let message = format!(
         "`{}` does not implement `DutModel::{method}`, so it cannot share a simulation with \
-         other DUTs; implement `load` and `bind` (generated `Dut` types do)",
+         other DUTs",
         std::any::type_name::<D>()
     );
     Failure {
         kind: FailureKind::Setup {
             message: message.clone(),
-            help: "implement `DutModel::load` and `DutModel::bind` for this DUT type, or \
-                   use it as the test's only DUT",
+            help: "implement `DutModel::load` and `DutModel::bind` for this DUT type \
+                   (generated `Dut` types do), or use it as the test's only DUT",
         },
         time: SimTime::ZERO,
         precision: Precision::PS,

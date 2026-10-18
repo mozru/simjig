@@ -102,7 +102,8 @@ impl VerilatorModel {
             precision,
             poisoned: None,
             msgs: Vec::new(),
-            dpi: (!meta.dpi_imports.is_empty()).then(|| ModelDpi::new(meta.prefix)),
+            dpi: (!meta.dpi_imports.is_empty())
+                .then(|| ModelDpi::new(meta.prefix, meta.dut_name())),
             tracer: None,
             now: SimTime::ZERO,
         };

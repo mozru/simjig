@@ -571,6 +571,24 @@ mod tests {
     }
 
     #[test]
+    fn reruns_track_the_resolved_verilator_not_path() {
+        let verilator = Verilator {
+            exe: PathBuf::from("/opt/v/bin/verilator"),
+            version: svtypes::version::VerilatorVersion::new(5, 52),
+            version_line: "Verilator 5.052".into(),
+            include_dir: PathBuf::from("/opt/v/share/verilator/include"),
+            verilator_root: None,
+        };
+        let reruns = rerun_directives(&verilator, &[], &CppRecipe::default());
+        assert!(reruns.contains(&"cargo::rerun-if-changed=/opt/v/bin/verilator".to_owned()));
+        assert!(reruns.contains(&"cargo::rerun-if-env-changed=SIMJIG_VERILATOR".to_owned()));
+        assert!(
+            !reruns.contains(&"cargo::rerun-if-env-changed=PATH".to_owned()),
+            "{reruns:?}"
+        );
+    }
+
+    #[test]
     fn verilator_args_follow_the_config() {
         let c = Dut {
             config: cfg(),

@@ -102,7 +102,6 @@ fn check_reruns(rtl: &Path, directives: &[String]) {
         "{reruns:?}"
     );
     for var in [
-        "PATH",
         "SIMJIG_CXX_OPT",
         "VERILATOR_ROOT",
         "CXX",
@@ -112,6 +111,8 @@ fn check_reruns(rtl: &Path, directives: &[String]) {
         let line = format!("cargo::rerun-if-env-changed={var}");
         assert!(directives.contains(&line), "{var}");
     }
+    // The resolved Verilator is tracked instead (see the caller).
+    assert!(!directives.contains(&"cargo::rerun-if-env-changed=PATH".to_owned()));
 }
 
 /// An emitter that claims `count` is 8 bits wide.

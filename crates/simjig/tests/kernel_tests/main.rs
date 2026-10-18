@@ -6,6 +6,7 @@ mod clocks;
 mod conflog;
 mod conformance;
 mod failures;
+mod multi;
 mod phases;
 mod swarm;
 mod sync;

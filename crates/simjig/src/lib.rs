@@ -22,6 +22,7 @@ pub use harness::seed::{Rng, Seed, SeedSource};
 pub use kernel::clock::{Clock, ClockError, ClockHandle, clock};
 pub use kernel::failure::{BlockedTask, Failure, FailureKind, SourceLocation};
 pub use kernel::fake::{FakeModel, FakeSig, FakeState};
+pub use kernel::models::ModelSetError;
 pub use kernel::recorder::{TraceKind, TraceRecord};
 pub use kernel::sched::DELTA_MAX;
 pub use kernel::signal::RawSig;

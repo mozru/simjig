@@ -76,7 +76,7 @@ pub(crate) fn run_loop(k: &Kernel, limit: Option<SimTime>) {
 
 fn step(k: &Kernel) {
     let t = k.now.get();
-    k.model.borrow_mut().set_time(t);
+    k.models.borrow_mut().set_time(t);
     k.record(TraceKind::Step, None, 0, 0);
     k.bump(|c| c.steps += 1);
 
@@ -162,33 +162,40 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         );
         return false;
     }
-    let status = k.model.borrow_mut().eval();
+    let status = k.models.borrow_mut().eval();
     k.record(TraceKind::Eval, None, u64::from(*evals), 0);
     k.bump(|c| c.evals += 1);
     *evals += 1;
+    let Err((model, status)) = status else {
+        return true;
+    };
+    // With one model, messages stay as they were; with several, they name the model.
+    let which = if k.models.borrow().len() > 1 {
+        format!("model {model}: ")
+    } else {
+        String::new()
+    };
     match status {
-        Ok(EvalStatus::Running) => true,
-        Ok(EvalStatus::Finished) => {
-            k.fail(
-                FailureKind::DesignFinished,
-                None,
-                None,
-                "the design executed $finish before the main task returned".to_owned(),
-            );
-            false
-        }
+        Ok(EvalStatus::Running) => unreachable!("invariant: Models::eval stops on non-Running"),
+        Ok(EvalStatus::Finished) => k.fail(
+            FailureKind::DesignFinished,
+            None,
+            None,
+            format!("{which}the design executed $finish before the main task returned"),
+        ),
         Err(e) => {
+            let message = format!("{which}{}", e.message);
             k.fail(
                 FailureKind::ModelFatal {
-                    message: e.message.clone(),
+                    message: message.clone(),
                 },
                 None,
                 None,
-                e.message,
+                message,
             );
-            false
         }
     }
+    false
 }
 
 /// Applies the write log, then wakes waiters of watched slots that changed since the
@@ -196,7 +203,7 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
 fn apply_and_compare(k: &Kernel) -> bool {
     let writes = k.log.borrow_mut().drain();
     {
-        let mut model = k.model.borrow_mut();
+        let mut model = k.models.borrow_mut();
         for (slot, value) in &writes {
             model.write(*slot, value);
         }
@@ -211,8 +218,8 @@ fn apply_and_compare(k: &Kernel) -> bool {
     }
     let mut wakes = Vec::new();
     {
-        let model = k.model.borrow();
-        k.waits.borrow_mut().compare(&**model, &mut wakes);
+        let model = k.models.borrow();
+        k.waits.borrow_mut().compare(&model, &mut wakes);
     }
     wake_sorted(wakes);
     !writes.is_empty()
@@ -226,14 +233,16 @@ fn next_time(k: &Kernel) -> Option<SimTime> {
     for edge in k.clocks.borrow().iter().filter_map(ClockEntry::next_edge) {
         next = Some(next.map_or(edge, |n| n.min(edge)));
     }
-    let model_next = {
-        let model = k.model.borrow();
-        model.events_pending().then(|| model.next_time_slot())
-    };
-    if let Some(m) = model_next {
+    let model_next = k.models.borrow().next_event();
+    if let Some((model, m)) = model_next {
         if m <= now {
+            let which = if k.models.borrow().len() > 1 {
+                format!("model {model}")
+            } else {
+                "the model".to_owned()
+            };
             let message = format!(
-                "the model reported its next event at t={}, not after now",
+                "{which} reported its next event at t={}, not after now",
                 m.display(k.precision)
             );
             k.fail(

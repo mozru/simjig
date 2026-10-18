@@ -16,6 +16,12 @@
 //! - `next_time_slot` is called only when `events_pending` returned `true` (Verilator's
 //!   `nextTimeSlot()` aborts otherwise).
 //! - No method calls back into the kernel.
+//! - A simulation may drive several backends on one thread, calling them in turn. Each
+//!   backend must make itself the current model before it runs model code: a Verilator
+//!   backend sets `Verilated::threadContextp()` to its own context (and swaps in its own
+//!   `$urandom` state) in `eval`, and in any other call that runs generated code, because
+//!   `$time`, `$finish`, `$fatal` and `$urandom` go through the thread's context, not the
+//!   model's (docs/notes/spikes.md §2). The kernel never switches contexts itself.
 
 use std::fmt;
 
@@ -65,7 +71,8 @@ pub(crate) trait ModelBackend {
     fn write(&mut self, slot: u32, value: &[u32]);
     /// Sets the model's notion of current time; called before every `eval` at a new time.
     fn set_time(&mut self, time: SimTime);
-    /// Evaluates the model until it is stable at the current time.
+    /// Evaluates the model until it is stable at the current time. Switches the thread's
+    /// Verilator context to this model first (see the module docs).
     fn eval(&mut self) -> Result<EvalStatus, ModelError>;
     /// Whether the model has scheduled events of its own (`--timing` delays).
     fn events_pending(&self) -> bool;

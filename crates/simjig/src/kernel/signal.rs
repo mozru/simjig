@@ -1,8 +1,9 @@
 //! [`RawSig`] handles and the write log.
 //!
-//! A `RawSig` is a `Copy` id (simulation, slot) resolved through the current kernel on
-//! every access; no Rust reference to model memory ever exists. A handle used outside its
-//! own running simulation panics, naming the signal.
+//! A `RawSig` is a `Copy` id (simulation, model, slot) resolved through the current kernel
+//! on every access; no Rust reference to model memory ever exists. A handle used outside
+//! its own running simulation panics, naming the signal. The model index says which of
+//! the simulation's models (in declaration order) the slot belongs to.
 //!
 //! **Reads** return the model's current value: a write is never visible before it is
 //! applied. **Writes** are deposits (VPI inertial puts, as cocotb 2.1 uses on Verilator):
@@ -31,15 +32,17 @@ use super::state::{self, Kernel, Phase};
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RawSig {
     sim_gen: u32,
+    model: u32,
     slot: u32,
     _single_thread: PhantomData<*const ()>,
 }
 
 impl fmt::Debug for RawSig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = state::retired_name(self.sim_gen, self.slot);
+        let name = state::retired_name(self.sim_gen, self.model(), self.slot);
         f.debug_struct("RawSig")
             .field("sim", &self.sim_gen)
+            .field("model", &self.model)
             .field("slot", &self.slot)
             .field("name", &name)
             .finish()
@@ -47,40 +50,54 @@ impl fmt::Debug for RawSig {
 }
 
 impl RawSig {
-    pub(crate) const fn new(sim_gen: u32, slot: u32) -> Self {
+    /// The handle of slot `slot` of model `model` (declaration order).
+    pub(crate) const fn in_model(sim_gen: u32, model: u32, slot: u32) -> Self {
         Self {
             sim_gen,
+            model,
             slot,
             _single_thread: PhantomData,
         }
-    }
-
-    pub(crate) const fn slot(self) -> u32 {
-        self.slot
     }
 
     pub(crate) const fn sim_gen(self) -> u32 {
         self.sim_gen
     }
 
+    /// The slot within its own model (not the kernel's flat slot).
+    pub(crate) const fn local_slot(self) -> u32 {
+        self.slot
+    }
+
+    /// Which of its simulation's models the signal belongs to (0 for the first).
+    #[must_use]
+    pub const fn model(self) -> usize {
+        self.model as usize
+    }
+
     fn label(self) -> String {
-        state::retired_name(self.sim_gen, self.slot).map_or_else(
-            || format!("slot {} of simulation #{}", self.slot, self.sim_gen),
+        state::retired_name(self.sim_gen, self.model(), self.slot).map_or_else(
+            || {
+                format!(
+                    "slot {} of model {} of simulation #{}",
+                    self.slot, self.model, self.sim_gen
+                )
+            },
             |n| format!("`{n}`"),
         )
     }
 
-    /// Resolves the handle on the current kernel.
+    /// Resolves the handle on the current kernel, passing its flat slot to `f`.
     ///
     /// # Panics
     /// Outside a running simulation, or in a different simulation than the handle's.
     #[track_caller]
     pub(crate) fn with<R>(self, f: impl FnOnce(&Kernel, u32) -> R) -> R {
         let resolved = state::try_current(|k| {
-            if k.sim_gen == self.sim_gen && (self.slot as usize) < k.widths.len() {
-                Some(f(k, self.slot))
-            } else {
-                None
+            let flat = state::flat_slot(&k.starts, self.model(), self.slot);
+            match flat {
+                Some(flat) if k.sim_gen == self.sim_gen => Some(f(k, flat)),
+                _ => None,
             }
         });
         match resolved {
@@ -133,7 +150,7 @@ impl RawSig {
                 "signal `{}` needs a {n}-word buffer",
                 k.names[slot as usize]
             );
-            k.model.borrow().read(slot, out);
+            k.models.borrow().read(slot, out);
         });
     }
 
@@ -153,7 +170,7 @@ impl RawSig {
             );
             let mut buf = [0u32; 2];
             let buf = &mut buf[..words(width)];
-            k.model.borrow().read(slot, buf);
+            k.models.borrow().read(slot, buf);
             buf.iter()
                 .rev()
                 .fold(0u64, |acc, &w| acc << 32 | u64::from(w))

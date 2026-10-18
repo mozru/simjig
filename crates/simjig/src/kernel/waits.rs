@@ -19,7 +19,8 @@ use std::rc::Rc;
 use std::task::{Context, Waker};
 
 use super::OrInvariant;
-use super::backend::{ModelBackend, words};
+use super::backend::words;
+use super::models::Models;
 use super::slab::{Key, Slab};
 use super::state::{self, Kernel};
 use super::time::{Precision, SimTime};
@@ -110,13 +111,7 @@ impl WaitTable {
         }
     }
 
-    fn add(
-        &mut self,
-        on: WaitOn,
-        task: Option<Key>,
-        waker: Waker,
-        model: &dyn ModelBackend,
-    ) -> Key {
+    fn add(&mut self, on: WaitOn, task: Option<Key>, waker: Waker, model: &Models) -> Key {
         self.seq += 1;
         let key = self.waiters.insert(Waiter {
             task,
@@ -231,7 +226,7 @@ impl WaitTable {
     }
 
     /// Compares watched slots with their snapshot and fires matching waiters.
-    pub(crate) fn compare(&mut self, model: &dyn ModelBackend, out: &mut Vec<Wake>) {
+    pub(crate) fn compare(&mut self, model: &Models, out: &mut Vec<Wake>) {
         let mut scratch = Vec::new();
         for slot in self.active.clone() {
             let watch = &mut self.watch[slot as usize];
@@ -403,11 +398,11 @@ pub(crate) struct Registration {
 impl Registration {
     /// Registers the current task as waiting on `on`, to be woken through `cx`'s waker.
     pub(crate) fn new(k: &Kernel, on: WaitOn, cx: &Context<'_>) -> Self {
-        let model = k.model.borrow();
+        let model = k.models.borrow();
         let key = k
             .waits
             .borrow_mut()
-            .add(on, k.current.get(), cx.waker().clone(), &**model);
+            .add(on, k.current.get(), cx.waker().clone(), &model);
         Self {
             sim_gen: k.sim_gen,
             key,

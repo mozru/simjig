@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn edge_schedules_follow_period_high_and_phase() {
-        let sig = RawSig::new(0, 0);
+        let sig = RawSig::in_model(0, 0, 0);
         let plain = Clock::new(sig, SimDuration(10));
         assert_eq!(edges(&plain, 4), [(0, 1), (5, 0), (10, 1), (15, 0)]);
         let shaped = plain.high_for(SimDuration(3)).first_rise_at(SimDuration(4));
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn invalid_clocks_are_rejected() {
-        let sig = RawSig::new(0, 0);
+        let sig = RawSig::in_model(0, 0, 0);
         let odd = Clock::new(sig, SimDuration(7));
         assert!(matches!(
             ClockState::new(&odd, 1, "c", SimTime::ZERO),

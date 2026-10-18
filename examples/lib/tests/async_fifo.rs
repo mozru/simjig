@@ -1,8 +1,9 @@
 //! Testbench for `rtl/async_fifo.sv`, built with `WIDTH = 8`, `DEPTH = 8`.
 //!
 //! Two kernel clocks with unrelated periods drive the two domains. The two resets always
-//! fall together, as the RTL requires, and each rises on its own clock. Each driver drives at the falling edge of its own
-//! domain's clock, and each monitor samples at the rising edge. The testbench is split by
+//! fall together, as the RTL requires, and each rises on its own clock. Each driver
+//! drives at the falling edge of its own domain's clock, and each monitor samples at the
+//! rising edge. The testbench is split by
 //! role, one task each:
 //! - the **writer** drives `winc`/`wdata` on `wclk`, stalling at random; it keeps `winc`
 //!   high while `wfull` is, so the FIFO must refuse those writes;
@@ -34,8 +35,8 @@ use std::rc::Rc;
 
 use simjig::bits::{Bit, Bits};
 use simjig::{
-    In, Out, Queue, ReadOnly, Rng, SimDuration, TestCtx, clock, cycles, join, ns, ps, spawn, us,
-    with_timeout,
+    In, Out, Queue, ReadOnly, Rng, SimDuration, TestCtx, Timer, clock, cycles, join, ns, ps, spawn,
+    us, with_timeout,
 };
 
 mod common;
@@ -406,6 +407,77 @@ fn directed_clocks() -> Clocks {
         rclk: ns(11),
         rclk_phase: ps(1300),
     }
+}
+
+/// Directed: each reset clears its side asynchronously, with no clock edge. Two words
+/// written and read move the read pointer off zero; `DEPTH` more fill the FIFO (`wfull`
+/// high) and reach the read side (`rempty` low). Then both resets fall together 1 ns
+/// after a falling edge of `wclk`, away from every edge of both clocks: in `ReadOnly` of
+/// that same instant, `wfull` is low and `rempty` high. Both are released and the FIFO
+/// works again: three words written are read back in order. Random traffic resets at a
+/// falling edge with the flags as they happen to be, which shows neither.
+#[simjig::test(timeout = "10us")]
+async fn resets_clear_both_flags_without_a_clock_edge(dut: Dut) {
+    start_clocks(dut, directed_clocks());
+    reset(dut).await;
+    write_words(dut, 0..2).await;
+    edges_until_low(dut.rclk, dut.rempty).await;
+    read_words(dut, 0..2).await;
+    write_words(dut, 2..2 + DEPTH).await;
+    edges_until_low(dut.rclk, dut.rempty).await; // returns in `ReadOnly`
+    assert_eq!(
+        (dut.wfull.get(), dut.rempty.get()),
+        (Bit::ONE, Bit::ZERO),
+        "full"
+    );
+    // `wclk` edges fall on whole or half ns, `rclk` edges 0.3 ns off them (see
+    // [`directed_clocks`]); the next `wclk` edge is 2.5 ns away.
+    dut.wclk.falling().await;
+    Timer::new(ns(1)).await;
+    dut.wrst_n.set(0);
+    dut.rrst_n.set(0);
+    ReadOnly::new().await;
+    assert_eq!(
+        (dut.wfull.get(), dut.rempty.get()),
+        (Bit::ZERO, Bit::ONE),
+        "both flags as soon as both resets fall, before any clock edge"
+    );
+    join!(release(dut.wclk, dut.wrst_n), release(dut.rclk, dut.rrst_n));
+    write_words(dut, 100..103).await;
+    edges_until_low(dut.rclk, dut.rempty).await;
+    read_words(dut, 100..103).await;
+}
+
+/// Writes the words `values`, one per `wclk` cycle, each at a falling edge; each must be
+/// taken (`wfull` low at its edge).
+async fn write_words(dut: Dut, values: std::ops::Range<usize>) {
+    for v in values {
+        dut.wclk.falling().await;
+        dut.winc.set(1);
+        dut.wdata.set(Word::new_truncating(v as u128));
+        dut.wclk.rising().await;
+        assert_eq!(dut.wfull.get(), Bit::ZERO, "write of {v} refused");
+    }
+    dut.wclk.falling().await;
+    dut.winc.set(0);
+}
+
+/// Reads one word per `rclk` cycle and checks it against `values`, in order; each read
+/// must find the FIFO non-empty (`rempty` low at its edge).
+async fn read_words(dut: Dut, values: std::ops::Range<usize>) {
+    for v in values {
+        dut.rclk.falling().await;
+        dut.rinc.set(1);
+        dut.rclk.rising().await;
+        assert_eq!(dut.rempty.get(), Bit::ZERO, "read of {v} on an empty FIFO");
+        assert_eq!(
+            dut.rdata.get(),
+            Word::new_truncating(v as u128),
+            "read #{v}"
+        );
+    }
+    dut.rclk.falling().await;
+    dut.rinc.set(0);
 }
 
 /// Directed: with the reader idle, the FIFO takes exactly `DEPTH` writes, then holds

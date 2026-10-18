@@ -197,6 +197,7 @@ two-flop synchronizers, no other signal crossing) is verified by review and by C
 | `traffic_with_a_fast_writer_and_a_slow_reader` | 3.1 ns / 29 ns; fills up |
 | `traffic_with_a_slow_writer_and_a_fast_reader` | 29 ns / 3.1 ns; runs dry |
 | `both_resets_mid_traffic_empty_both_sides` | 7 ns / 11 ns; both resets asserted together mid-traffic, with entries inside and both pointers away from zero: `rempty` high and `wfull` low at once and for two edges of each clock after release; then traffic runs on, every later write read back |
+| `resets_clear_both_flags_without_a_clock_edge` | directed: FIFO full on the write side (`wfull` high) and non-empty on the read side (`rempty` low), read pointer off zero; both resets fall together 1 ns after a `wclk` falling edge, away from every edge of both clocks: in `ReadOnly` of that instant `wfull` is low and `rempty` high (the resets are asynchronous); released, three words go through in order |
 | `full_after_depth_writes` | directed: exactly `DEPTH` writes before `wfull`, and `rempty` low |
 | `flags_see_the_other_side_three_edges_later` | directed: the synchronizer latency of both flags |
 | `parameters_are_checked_at_elaboration` | `$fatal` on a DEPTH that is not a power of 2 (or below 2), or a WIDTH below 1 |

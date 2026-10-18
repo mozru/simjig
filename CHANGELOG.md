@@ -36,3 +36,8 @@ the public API, the generated code or simulation semantics.
 - The build no longer emits `cargo::rerun-if-changed` for the generated inputs it stores in
   the cache (`inputs/<hash>/`: the `.vlt`, the interface wrapper, `verilator_input`s), so
   the first no-op build after a new DUT configuration no longer reruns the build script.
+- A DUT whose interface ports are not all bound fails with one line per unbound port and
+  the `.bind_iface(..)` call that binds it (`Error::Config`), instead of Verilator's error
+  dump.
+- `svtypes::error::Error::Tool::stderr` now holds the tool's whole stderr (it held the last
+  40 lines); `Display` still shows the last 40.

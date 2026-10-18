@@ -33,7 +33,8 @@ pub enum Error {
         command: String,
         /// Exit status, if the process exited normally.
         status: Option<i32>,
-        /// The tail of the tool's standard error.
+        /// The tool's whole standard error (its standard output when stderr is empty), so
+        /// a caller can read every diagnostic; `Display` shows the last 40 lines.
         stderr: String,
     },
     /// An I/O operation failed.
@@ -75,7 +76,8 @@ impl fmt::Display for Error {
             } => {
                 let status =
                     status.map_or_else(|| "a signal".to_owned(), |s| format!("status {s}"));
-                write!(f, "`{command}` failed with {status}\n{stderr}")
+                let tail = crate::verilator::excerpt(stderr, 40);
+                write!(f, "`{command}` failed with {status}\n{tail}")
             }
             Error::Io { context, source } => write!(f, "{context}: {source}"),
         }

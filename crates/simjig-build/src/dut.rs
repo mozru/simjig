@@ -1002,23 +1002,7 @@ impl Dut {
         warnings.extend(
             front_changed.map(|p| manifest::changed_warning(name, "the front end ran", &p)),
         );
-        let mut directives = compile::compile(&compile::Inputs {
-            env,
-            config: &self.config,
-            cache: &cache,
-            verilator: &verilator,
-            prefix: &prefix,
-            obj_dir: &model.obj_dir,
-            recipe: &self.recipe,
-            model_sources: &placed.model_sources,
-        })?;
-        directives.extend(rerun_directives(
-            &verilator,
-            &model.deps,
-            &cache.root().join("inputs"),
-            &self.recipe,
-            &env.out_dir,
-        ));
+        let mut directives = self.compile(env, &cache, &verilator, &prefix, &model, &placed)?;
         directives.extend(warnings);
         directives.extend(untested_warning(&verilator));
         Ok(Built {
@@ -1031,6 +1015,37 @@ impl Dut {
             rust_file: placed.rust,
             directives,
         })
+    }
+
+    /// Compiles and archives the verilated `model`, returning the link directives and
+    /// then the `rerun-if` lines for what Verilator read ([`rerun_directives`]).
+    fn compile(
+        &self,
+        env: &BuildEnv,
+        cache: &cache::Cache,
+        verilator: &Verilator,
+        prefix: &str,
+        model: &cache::Verilated,
+        placed: &emit::Placed,
+    ) -> Result<Vec<String>, Error> {
+        let mut directives = compile::compile(&compile::Inputs {
+            env,
+            config: &self.config,
+            cache,
+            verilator,
+            prefix,
+            obj_dir: &model.obj_dir,
+            recipe: &self.recipe,
+            model_sources: &placed.model_sources,
+        })?;
+        directives.extend(rerun_directives(
+            verilator,
+            &model.deps,
+            &cache.root().join("inputs"),
+            &self.recipe,
+            &env.out_dir,
+        ));
+        Ok(directives)
     }
 }
 

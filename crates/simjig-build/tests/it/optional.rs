@@ -56,7 +56,8 @@ fn command(krate: &Path, target: &Path, args: &[&str]) -> Command {
         .env("SIMJIG_TEST_MODELS", "0")
         .env_remove("SIMJIG_CACHE_DIR")
         .env_remove("FIXTURE_BREAK")
-        .env_remove("FIXTURE_FATAL");
+        .env_remove("FIXTURE_FATAL")
+        .env_remove("FIXTURE_SWEEP");
     command
 }
 
@@ -194,4 +195,33 @@ fn a_failed_scripts_output_leads_with_the_cause() {
     );
     let dump = stderr.find("--- stdout").expect(&stderr);
     assert!(stderr.find(first).unwrap() < dump, "{stderr}");
+}
+
+/// A failed `Sweep::build` leads with its cause as `Dut::build` does, warned once: the
+/// sweep's own error (no members) by the sweep, a member's error by the member alone.
+#[test]
+fn a_failed_sweep_warns_its_cause_once() {
+    let (krate, target, _lock) = fixture();
+    for (kind, cause) in [
+        ("empty", "a sweep needs at least one DUT"),
+        ("member", "Cannot find file containing module"),
+    ] {
+        let out = command(&krate, &target, &["build", "--offline", "--tests"])
+            .env("FIXTURE_SWEEP", kind)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{stderr}");
+        let first = stderr.lines().find(|l| !is_progress(l)).unwrap_or_default();
+        assert!(
+            first.starts_with("warning: simjig-fixture-optional@0.0.0: simjig: ")
+                && first.contains(cause),
+            "{kind}: {stderr}"
+        );
+        let warned = stderr
+            .lines()
+            .filter(|l| l.starts_with("warning: ") && l.contains(cause))
+            .count();
+        assert_eq!(warned, 1, "{kind}: {stderr}");
+    }
 }

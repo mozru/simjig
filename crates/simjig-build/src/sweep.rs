@@ -99,9 +99,11 @@ impl Sweep {
     }
 
     /// Builds from a Cargo build script, like [`Dut::build`]: builds every member (each
-    /// printing its directives, or on failure its `rerun-if-changed` lines), then the
-    /// sweep module, and prints the sweep's directives. On success it sets
-    /// `cfg(simjig_dut_<name>)`; on failure it only declares it.
+    /// printing its directives, or on failure its cause as `cargo::warning=` lines and its
+    /// `rerun-if-changed` lines), then the sweep module, and prints the sweep's
+    /// directives. On success it sets `cfg(simjig_dut_<name>)`; on failure it only
+    /// declares it. A failure of the sweep itself warns its cause first, as a member's
+    /// does; a member's failure is warned once, by the member.
     ///
     /// # Errors
     /// The first member's error, or the sweep's: its name taken, members of different
@@ -109,18 +111,23 @@ impl Sweep {
     /// The sweep module is then a stub whose `compile_error!` names the error.
     #[expect(clippy::print_stdout, reason = "build scripts talk to Cargo on stdout")]
     pub fn build(self) -> Result<BuiltSweep, Error> {
-        let env = BuildEnv::from_cargo()?;
+        let env = BuildEnv::from_cargo().inspect_err(crate::dut::warn_cause)?;
         let configs = self.configs();
         let name = self.name.clone();
         let mut duts = Vec::new();
         let mut rest = self.duts.clone().into_iter();
+        // Whether the error is a member's, which `Dut::build` has warned already.
+        let mut member_failed = false;
         let result = self.check(&env).and_then(|()| {
             for dut in rest.by_ref() {
-                duts.push(dut.build()?);
+                duts.push(dut.build().inspect_err(|_| member_failed = true)?);
             }
             finish(&env, &name, &duts, &configs)
         });
         let built = result.inspect_err(|e| {
+            if !member_failed {
+                crate::dut::warn_cause(e);
+            }
             // Members not built after an earlier failure still rerun the script when their
             // inputs change.
             for dut in rest {

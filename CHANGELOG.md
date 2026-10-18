@@ -66,6 +66,9 @@ the public API, the generated code or simulation semantics.
   warning was printed only by a build that succeeded.
 - The interface-parameter warning and hint also name the change-free way to silence
   them: binding the interface's own value, `.bind_iface_with_params(.., [("W_OUT", 8)])`.
+- A failed `Sweep::build` warns its cause first too: the sweep's own error (no members,
+  its name taken, members of two modules) as `cargo::warning=simjig: ..` lines, a
+  member's error once, by the member's `Dut::build`.
 - `Error::Command` has a new field, `hints`: what the configuration suggests about the
   failure, printed first, one `hint:` line each (breaking for a pattern or literal that
   names every field).

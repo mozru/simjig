@@ -293,8 +293,16 @@ fn time_limit_stops_a_run_that_would_go_on_forever() {
     assert_eq!(
         f.kind,
         FailureKind::TimeLimit {
-            limit: SimTime(100)
+            limit: SimTime(100),
+            blocked: vec![BlockedTask {
+                task: "main".into(),
+                awaiting: vec!["Event `never`".into()],
+            }],
         }
+    );
+    assert!(
+        f.to_string().contains("task `main` awaits Event `never`"),
+        "{f}"
     );
     assert!(d.sim.now() <= SimTime(100));
     assert_clean(&d.sim);

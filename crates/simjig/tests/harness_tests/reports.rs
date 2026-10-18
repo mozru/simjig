@@ -162,6 +162,10 @@ fn time_limit_with_the_run_dir() {
     let f = failure(
         FailureKind::TimeLimit {
             limit: SimTime(1000),
+            blocked: vec![BlockedTask {
+                task: "main".into(),
+                awaiting: vec!["rising(`top.clk`)".into()],
+            }],
         },
         None,
         "the next timestep, t=1250 ns, is past the time limit",

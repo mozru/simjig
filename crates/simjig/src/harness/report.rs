@@ -21,7 +21,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::{Failure, FailureKind, Precision, SimDuration, SimTime};
+use crate::{BlockedTask, Failure, FailureKind, Precision, SimDuration, SimTime};
 
 use super::seed::{Fnv, Seed};
 
@@ -207,18 +207,10 @@ fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration
             format!("writers:  `{first}`, then `{second}`"),
         ],
         FailureKind::WriteInReadOnly { signal } => vec![format!("signal:   {signal}")],
-        FailureKind::Starved { blocked } | FailureKind::Deadlock { blocked } => blocked
-            .iter()
-            .map(|b| {
-                let awaiting = if b.awaiting.is_empty() {
-                    "a future the kernel cannot see".to_owned()
-                } else {
-                    b.awaiting.join(", ")
-                };
-                format!("blocked:  `{}` awaits {awaiting}", b.task)
-            })
-            .collect(),
-        FailureKind::TimeLimit { limit } => {
+        FailureKind::Starved { blocked } | FailureKind::Deadlock { blocked } => {
+            blocked_lines(blocked)
+        }
+        FailureKind::TimeLimit { limit, blocked } => {
             let mut lines = vec![format!("limit:    t={}", limit.display(precision))];
             if let Some(timeout) = timeout {
                 lines.push(format!(
@@ -226,9 +218,25 @@ fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration
                     SimTime(timeout.ticks()).display(precision)
                 ));
             }
+            lines.extend(blocked_lines(blocked));
             lines
         }
     }
+}
+
+/// One `blocked:` line per task: what it awaits.
+fn blocked_lines(blocked: &[BlockedTask]) -> Vec<String> {
+    blocked
+        .iter()
+        .map(|b| {
+            let awaiting = if b.awaiting.is_empty() {
+                "a future the kernel cannot see".to_owned()
+            } else {
+                b.awaiting.join(", ")
+            };
+            format!("blocked:  `{}` awaits {awaiting}", b.task)
+        })
+        .collect()
 }
 
 impl fmt::Display for FailureReport {

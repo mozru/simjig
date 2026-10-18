@@ -144,6 +144,8 @@ pub enum FailureKind {
     TimeLimit {
         /// The limit.
         limit: SimTime,
+        /// Every task that was still waiting, and on what.
+        blocked: Vec<BlockedTask>,
     },
 }
 
@@ -189,7 +191,10 @@ impl FailureKind {
             Self::DesignFinished => {
                 "the design called $finish; end the test before it, or remove the $finish"
             }
-            Self::TimeLimit { .. } => "the test ran too long; a task is probably waiting forever",
+            Self::TimeLimit { .. } => {
+                "the test ran too long; a listed task is probably waiting for something that \
+                 never happens"
+            }
         }
     }
 }
@@ -226,7 +231,10 @@ impl fmt::Display for Failure {
         if let Some(location) = self.location {
             write!(f, "\n  at {location}")?;
         }
-        if let FailureKind::Starved { blocked } | FailureKind::Deadlock { blocked } = &self.kind {
+        if let FailureKind::Starved { blocked }
+        | FailureKind::Deadlock { blocked }
+        | FailureKind::TimeLimit { blocked, .. } = &self.kind
+        {
             for b in blocked {
                 if b.awaiting.is_empty() {
                     write!(

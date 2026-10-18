@@ -77,7 +77,13 @@ pub(crate) fn run_loop(k: &Kernel, limit: Option<SimTime>) {
                 "the next timestep, t={}, is past the time limit",
                 next.display(k.precision)
             );
-            k.fail(FailureKind::TimeLimit { limit }, None, None, message);
+            let blocked = blocked_tasks(k);
+            k.fail(
+                FailureKind::TimeLimit { limit, blocked },
+                None,
+                None,
+                message,
+            );
             return;
         }
         // Verilator does not check that time moves forward; the kernel must.
@@ -288,18 +294,11 @@ fn next_time(k: &Kernel) -> Option<SimTime> {
 /// Fails the run as `Deadlock` (every blocked task waits on another task or a sync
 /// primitive) or `Starved` (something waits on signals or time).
 fn report_blocked(k: &Kernel) {
-    let unfinished = k.tasks.borrow().unfinished();
-    let (blocked, deadlock) = {
+    let blocked = blocked_tasks(k);
+    let deadlock = {
         let waits = k.waits.borrow();
-        let blocked: Vec<BlockedTask> = unfinished
-            .iter()
-            .map(|(key, name)| BlockedTask {
-                task: name.to_string(),
-                awaiting: waits.describe(*key, &k.names, k.precision),
-            })
-            .collect();
-        let deadlock = unfinished.iter().all(|(key, _)| waits.only_lists(*key));
-        (blocked, deadlock)
+        let unfinished = k.tasks.borrow().unfinished();
+        unfinished.iter().all(|(key, _)| waits.only_lists(*key))
     };
     let n = blocked.len();
     if deadlock {
@@ -310,4 +309,17 @@ fn report_blocked(k: &Kernel) {
             format!("{n} task(s) are blocked and no timer, clock or model event is scheduled");
         k.fail(FailureKind::Starved { blocked }, None, None, message);
     }
+}
+
+/// Every unfinished task and what it waits on, in task-slot order.
+fn blocked_tasks(k: &Kernel) -> Vec<BlockedTask> {
+    let unfinished = k.tasks.borrow().unfinished();
+    let waits = k.waits.borrow();
+    unfinished
+        .iter()
+        .map(|(key, name)| BlockedTask {
+            task: name.to_string(),
+            awaiting: waits.describe(*key, &k.names, k.precision),
+        })
+        .collect()
 }

@@ -45,3 +45,7 @@ the public API, the generated code or simulation semantics.
   `libsimjig_model_<prefix>_<key16>.a`) instead of being compiled into `OUT_DIR` on every
   build-script run: editing one DUT recompiles only that DUT's C++. Every archive key
   (models and runtime) now also covers the files under `CppRecipe::include_dirs`.
+- `svtypes` front-end errors with a source location print it first:
+  `<file>:<line>:<col>: <message> (Verilator <version> JSON at <path>)`. A type error
+  reached from a port names the port and its declaration, and an unpacked struct or union
+  port says to declare the type `packed`.

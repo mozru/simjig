@@ -387,7 +387,9 @@ impl<'a> Decoder<'a> {
         self.ix.check_fields(var, VAR_FIELDS)?;
         let name = self.ix.str(var, "name")?.to_owned();
         let dir = self.direction(var)?;
-        let ty = self.ty(&self.ix.deref(var, "dtypep")?)?;
+        let ty = self
+            .ty(&self.ix.deref(var, "dtypep")?)
+            .map_err(|e| self.port_error(var, &name, e))?;
         let storage = self
             .storage(ty)
             .map_err(|e| self.ix.err(var, format!("port `{name}`: {e}")))?;
@@ -405,6 +407,25 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    /// A type error reached from port `name`, reworded to lead with the port and its
+    /// declaration (the type node may sit anywhere in the type table).
+    fn port_error(&self, var: &Node<'a>, name: &str, e: Error) -> Error {
+        match e {
+            Error::Json {
+                path,
+                source_loc,
+                version,
+                message,
+            } => Error::Json {
+                path,
+                source_loc: self.ix.source_loc(var).or(source_loc),
+                version,
+                message: format!("port `{name}`: {message}"),
+            },
+            other => other,
+        }
+    }
+
     fn storage(&self, ty: TypeId) -> std::result::Result<Storage, String> {
         let t = &self.types[ty.index()];
         match (&t.kind, t.width) {
@@ -413,7 +434,11 @@ impl<'a> Decoder<'a> {
                 len: range.count().map_err(|e| e.0)?,
             }),
             (_, Some(w)) => width::packed_storage(w).map_err(|e| e.0),
-            (_, None) => Err("unpacked structs and unions have no supported C++ storage".into()),
+            (_, None) => Err(
+                "unpacked structs and unions have no supported C++ storage; declare the type \
+                 `packed`"
+                    .into(),
+            ),
         }
     }
 

@@ -57,13 +57,12 @@ impl fmt::Display for Error {
                 source_loc,
                 version,
                 message,
-            } => {
-                write!(f, "Verilator {version} JSON at {path}")?;
-                if let Some(loc) = source_loc {
-                    write!(f, " ({loc})")?;
-                }
-                write!(f, ": {message}")
-            }
+            } => match source_loc {
+                // The source location and the message are what the designer acts on; the
+                // JSON path is for a bug report against this front end.
+                Some(loc) => write!(f, "{loc}: {message} (Verilator {version} JSON at {path})"),
+                None => write!(f, "Verilator {version} JSON at {path}: {message}"),
+            },
             Error::UnsupportedVersion { version } => write!(
                 f,
                 "no svtypes front end for `{version}`; supported Verilator versions: {}",

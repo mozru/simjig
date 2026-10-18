@@ -4,6 +4,7 @@
 //! - `cargo xtask doctor [--json]` runs the `cargo simjig doctor` checks.
 //! - `cargo xtask ci` runs the same gate locally and in GitHub Actions, so a green local
 //!   run means a green CI run.
+#![forbid(unsafe_code)]
 
 mod setup;
 
@@ -127,5 +128,43 @@ fn main() -> ExitCode {
             eprintln!("error: {msg}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    /// ARCHITECTURE.md: `unsafe` exists only in named modules of `simjig`; every other
+    /// crate root (library or binary) forbids it.
+    #[test]
+    fn every_crate_root_but_simjig_forbids_unsafe() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut roots = vec![root.join("xtask/src/main.rs")];
+        for krate in std::fs::read_dir(root.join("crates")).unwrap() {
+            let dir = krate.unwrap().path();
+            if dir.file_name().is_some_and(|n| n == "simjig") {
+                continue;
+            }
+            roots.extend(
+                ["src/lib.rs", "src/main.rs"]
+                    .map(|f| dir.join(f))
+                    .into_iter()
+                    .filter(|p| p.is_file()),
+            );
+        }
+        assert!(roots.len() >= 7, "{roots:?}");
+        let missing: Vec<_> = roots
+            .iter()
+            .filter(|p| {
+                !std::fs::read_to_string(p)
+                    .unwrap()
+                    .contains("#![forbid(unsafe_code)]")
+            })
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "no #![forbid(unsafe_code)] in {missing:?}"
+        );
     }
 }

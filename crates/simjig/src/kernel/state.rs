@@ -235,7 +235,20 @@ impl Kernel {
         if self.failed() || self.phase.get() == Phase::Ended {
             return;
         }
-        let task = task.map(|k| self.task_name(k));
+        self.fail_named(kind, task.map(|k| self.task_name(k)), location, message);
+    }
+
+    /// [`Kernel::fail`] for a task named earlier, which may no longer exist.
+    pub(crate) fn fail_named(
+        &self,
+        kind: FailureKind,
+        task: Option<String>,
+        location: Option<&'static SourceLocation>,
+        message: String,
+    ) {
+        if self.failed() || self.phase.get() == Phase::Ended {
+            return;
+        }
         self.record(TraceKind::Failure, None, 0, 0);
         *self.failure.borrow_mut() = Some(Failure {
             kind,

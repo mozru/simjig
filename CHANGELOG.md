@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A `Setup` failure for a `Task` handle dropped before its task ran names the task
+  whose poll dropped it even when that task finished in the same poll (a detached
+  child's last poll); it named `<finished task>`.
 - `cargo simjig show` prints the file's path relative to the current directory, and the
   module with `::simjig::__private::` and `::core::primitive::` removed (`In<Bit>`, `u8`),
   saying so in its first line; `--path` still prints the absolute path.

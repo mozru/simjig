@@ -595,6 +595,9 @@ fn cascading(k: &Kernel) -> bool {
 /// it (`settle_unrun_drops`).
 pub(crate) struct UnrunDrop {
     name: String,
+    /// The task whose poll dropped the handle, named now: a task that finishes in that
+    /// poll is freed before the poll is settled.
+    dropper: Option<String>,
     spawned_at: &'static Location<'static>,
 }
 
@@ -603,8 +606,10 @@ pub(crate) struct UnrunDrop {
 #[cold]
 fn dropped_unpolled(k: &Kernel, key: Key, spawned_at: &'static Location<'static>) {
     k.record(TraceKind::DroppedUnpolled, Some(key), 0, 0);
+    let dropper = k.current.get().map(|c| k.task_name(c));
     k.unrun_drops.borrow_mut().push(UnrunDrop {
         name: k.task_name(key),
+        dropper,
         spawned_at,
     });
 }
@@ -662,14 +667,14 @@ pub(crate) fn settle_unrun_drops(k: &Kernel, key: Option<Key>) {
         },
         first.name,
     );
-    k.fail(
+    k.fail_named(
         FailureKind::Setup {
             message: message.clone(),
             help: "call .detach() on the handle to run the task in the background, .await it \
                    for its result, or call .cancel() if cancelling it is intended (before \
                    an early return too, or spawn it after the checks that may return)",
         },
-        key,
+        first.dropper.clone(),
         Some(first.spawned_at.into()),
         message,
     );

@@ -65,16 +65,28 @@ the public API, the generated code or simulation semantics.
 - A replay keeps every trace file it wrote: one per model (`waves.fst`,
   `waves.model-<i>.fst`) and per fork branch (`waves[.model-<i>].branch-<j>.fst`), each
   with its own `.gtkw`. `WavesReplay::files: Vec<WavesFile>` (model, branch path, marker,
-  save file; new `simjig::WavesFile`) replaces `WavesReplay::{fst, gtkw}`. When a fork branch fails the test, its
-  files come first in the report, with the marker at the branch's own failure.
+  save file; new `simjig::WavesFile`) replaces `WavesReplay::{fst, gtkw}`. When a fork
+  branch fails the test, its files come first in the report, with the marker at the
+  branch's own failure.
 - `cargo simjig waves <test> --seed <seed> [--window ..]`. It checks `--window` itself
   (decimals such as `1.5us` become `1500ns`; a bad window is a usage error naming the
   forms), has `--help`, and after a failing test prints a note, not an error, keeping
   nextest's exit code.
 - A traced model in a `fork` branch child continues its waves in
-  `<stem>.branch-<i>.fst`; a child never writes the parent's file.
+  `<stem>.branch-<i>.fst`; a child never writes the parent's file. The branch's file is
+  finished (header written) also when the branch poisons the model: after a DPI failure
+  it is closed normally, after a `$fatal` by destroying the model in the child.
 - In a simulation of several models, model `i > 0` traces into `<stem>.model-<i>.fst`
   (new `ModelOptions::for_model`); model 0 keeps the given path.
+
+#### Test context and time (`simjig`)
+- New `TestCtx::precision()`, to print a time in a test body
+  (`now().display(ctx.precision())`); `SimTime` documents why it has no `Display`.
+
+#### Documentation
+- `README.md`, `examples/quickstart` and the crate docs show the Stage 3 features. The
+  quickstart's flop is built with `.trace_fst(true)` and gains a two-DUT test
+  (`tests/inv_flop.rs`).
 
 #### Failure kinds (`simjig`)
 - New `FailureKind::Setup { message, help }`: the test's setup cannot run and the design
@@ -105,8 +117,6 @@ the public API, the generated code or simulation semantics.
 - New `Sim::zero_coverage(model)` (the ABI's `cov_zero`) and
   `Sim::write_coverage(model, path)` (`cov_write`: Verilator's `coverage.dat`, which names
   every point), both returning `Result<(), CoverageError>` (new `simjig::CoverageError`).
-- New `TestCtx::precision()`, to print a time in a test body
-  (`now().display(ctx.precision())`); `SimTime` documents why it has no `Display`.
 - New `TestCtx::{coverage, zero_coverage, write_coverage}`: the same, on the running
   simulation of a `#[simjig::test]`.
 

@@ -37,7 +37,15 @@
 //! triggers, `spawn`, `now()`, timers) with "DPI functions run inside eval; they can't
 //! access signals or await" (`kernel::state::enter_dpi_call`): the model is in the middle
 //! of an eval, so there is no consistent value to read and no time at which a write could
-//! apply.
+//! apply. That includes every *other* simjig model: an implementation cannot read or
+//! write another DUT's signals, or run another `Sim`, inside a call. It records what it
+//! needs (in state it shares with the test) and a task acts on it after the eval.
+//!
+//! # Two instances of one build
+//! The registry is keyed by (simulation, prefix), so `set_dpi` cannot address the second
+//! instance of one build in a simulation (a lockstep of a model against itself). That
+//! instance's first DPI call fails the run as `Setup`; the fix is a second build of the
+//! design under another `simjig_build::Dut::new` name, which has its own prefix.
 //!
 //! # Duplicate names
 //! Two models in one binary that import the same C name share one symbol: the linker keeps

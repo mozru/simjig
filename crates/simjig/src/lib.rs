@@ -11,9 +11,47 @@
 //!
 //! A generated Verilator model is loaded by its generated `Dut` type, which returns a
 //! [`Sim`] plus one typed handle per signal (or a [`LoadError`] if the model and the
-//! generated Rust disagree). A test may take several DUTs, each its own model in one
-//! simulation ([`Lockstep`] compares two of them per cycle), and [`fork`] runs several
-//! branches of a test from one checkpoint (Unix, under nextest).
+//! generated Rust disagree). Tests are usually `#[simjig::test] async fn`s ([`test`]),
+//! which add a seed, a time limit, a failure report with a `repro:` line, and a run
+//! directory.
+//!
+//! # Beyond one clocked DUT
+//! - **Model options** (on the build script's `simjig_build::Dut`): `.trace_fst(true)` for
+//!   FST waves, `.timing(true)` for designs with `#` delays and `@` events, `.coverage(true)`
+//!   for coverage counters.
+//! - **Waves**: [`TraceOptions`] traces a run; under `#[simjig::test]`,
+//!   `SIMJIG_WAVES_ON_FAIL=1` (every failure), `SIMJIG_WAVES=1` or
+//!   `SIMJIG_WAVES=window:<t0>..<t1>` replay the test with tracing and list the FST files
+//!   in the report ([`WavesReplay`]); `cargo simjig waves <test> --seed <seed>` does the
+//!   same in one command.
+//! - **DPI-C imports in Rust**: the generated module has a `Dpi` trait; register an
+//!   implementation with `dut.set_dpi(..)` before the first eval. An implementation runs
+//!   inside the model's eval, so it cannot read or write signals, await, spawn, or drive
+//!   another simjig model (another DUT's signals, another [`Sim`]); a panic fails the run
+//!   as [`FailureKind::DpiPanic`]. Two instances of one DPI build cannot share a
+//!   simulation; build the design twice under two `Dut::new` names.
+//!
+//!   ```ignore
+//!   struct Adder;
+//!   impl dpi::Dpi for Adder {
+//!       fn dpi_add(&mut self, x: i32, y: i32) -> i32 { x + y }
+//!   }
+//!   #[simjig::test]
+//!   async fn sums(dut: dpi::Dut) {
+//!       dut.set_dpi(Adder);
+//!       dut.a.set(2);
+//!       dut.b.set(3);
+//!       Timer::new(ns(1)).await;
+//!       assert_eq!(dut.sum.get().to_u128(), 5);
+//!   }
+//!   ```
+//! - **Several DUTs**: a test may take two to four DUTs, each its own model in one
+//!   simulation; [`Mirror`] drives an input of two at once and [`Lockstep`] compares their
+//!   outputs per cycle.
+//! - **Checkpoints**: [`fork::run_from_checkpoint`] runs several branches of a test from
+//!   one state, each in a forked process (Unix, under nextest).
+//! - **Coverage**: [`Sim::coverage`], [`Sim::zero_coverage`] and [`Sim::write_coverage`]
+//!   (Verilator's `coverage.dat`), or the [`TestCtx`] methods of the same names in a test.
 //!
 //! Signal values are the bit-vector types of the `simjig-bits` crate, re-exported as
 //! [`simjig::bits`](bits), so a testbench needs no direct dependency on it:

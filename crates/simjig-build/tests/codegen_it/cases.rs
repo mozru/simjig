@@ -309,6 +309,28 @@ pub fn iface_sweep_member(name: &str, k: u32, w: Option<u32>) -> Case {
     through_wrapper(name, sources, iface)
 }
 
+/// `cases/sweep_beat` at `W` and `T`, its interfaces bound with the same: a member of
+/// the struct sweep tests (a `beat_t` whose field widths follow the parameters).
+pub fn beat_sweep_member(name: &str, w: u32, t: u32) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/sweep_beat/design.sv")];
+    let params = vec![
+        ("W".to_owned(), w.to_string()),
+        ("T".to_owned(), t.to_string()),
+    ];
+    let bind = |port: &str, modport: &str| IfaceBinding {
+        port: port.into(),
+        interface: "beat_if".into(),
+        params: params.clone(),
+        modport: Some(modport.into()),
+    };
+    let iface = IfaceTop {
+        dut: "beat_pipe".into(),
+        params: params.clone(),
+        bindings: vec![bind("up", "sink"), bind("down", "source")],
+    };
+    through_wrapper(name, sources, iface)
+}
+
 /// Every case: the fixtures, then the Verilator-elaborated ones.
 pub fn all() -> Vec<Case> {
     let mut cases: Vec<Case> = fixture_names().iter().map(|n| fixture(n)).collect();

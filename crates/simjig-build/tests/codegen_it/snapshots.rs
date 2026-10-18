@@ -120,3 +120,22 @@ fn committed_generated_rust_is_current() {
         );
     }
 }
+
+/// A struct typedef'd inside an interface reaches the wrapper's flat ports spelled out
+/// (anonymous), and is named after its typedef (`beat_t` is `Beat`), not after the first
+/// flat port that carries it (`up_beat`).
+#[test]
+fn an_interface_typedef_names_the_struct_its_flat_ports_carry() {
+    let case = cases::beat_sweep_member("beat_one", 8, 2);
+    let lowered = lower(&case.design, &case.config).unwrap();
+    let names: Vec<&str> = lowered.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["Beat"]);
+    let beat = &lowered.bundles[0].members[0];
+    assert_eq!(
+        (beat.name.as_str(), &beat.ty),
+        (
+            "beat",
+            &simjig_build::codegen::RustType::Named("Beat".into())
+        )
+    );
+}

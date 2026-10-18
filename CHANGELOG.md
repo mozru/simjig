@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Generated code: a struct typedef'd inside an interface (`beat_if`'s `beat_t`) is named
+  after its typedef (`Beat`) instead of the first wrapper port that carries it
+  (`UpBeat`). The wrapper spells such a type out, so it reached the IR anonymous. No
+  existing snapshot changes; `codegen_it::snapshots::an_interface_typedef_names_*`.
 - A malformed parameter value names its call in the error's headline:
   ``elaborating DUT `acc` (its `.param("W", ..)` = `3#`) failed ...``, for a `-G`
   override reported at the parameter's declaration and for a value in the generated

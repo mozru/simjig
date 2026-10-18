@@ -147,7 +147,7 @@ fn generates(design: &Design, id: TypeId, path: &str) -> Result<bool, Error> {
 }
 
 /// Name candidates for a named type `scope::name`.
-fn named_candidates(qualified: &str) -> Vec<String> {
+pub(crate) fn named_candidates(qualified: &str) -> Vec<String> {
     let (scope, name) = qualified.rsplit_once("::").unwrap_or(("", qualified));
     let scope = scope.trim_start_matches('$');
     let stem = SUFFIXES

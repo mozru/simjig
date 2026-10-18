@@ -106,6 +106,7 @@ Each SystemVerilog name becomes a Rust name by these rules (`codegen::names`,
 | typedef `status_t`, `op_e`, `item_s`, `word_u` | type `Status`, `Op`, `Item`, `Word`: one `_t`/`_e`/`_s`/`_u` suffix is dropped, then `CamelCase` |
 | two typedefs that would get one name (`a::state_t`, `b::state_t`) | both keep the suffix (`StateT`), then add the scope (`AStateT`, `BStateT`), then a number |
 | an anonymous struct or enum, first used by port `in_anon` | `InAnon`, named after its first use |
+| a struct typedef `beat_t` inside an interface (the generated wrapper's port `up_beat` spells it out) | `Beat`, after the typedef, then `UpBeat` if that name is taken |
 | enum `status_t` with `ST_EMPTY`, `ST_FULL` | `Status::EMPTY`, `Status::FULL`: a `WORD_` prefix that every variant shares is dropped (unless a remainder would start with a digit: `MODE_1` stays `MODE_1`) |
 
 An enum type is a newtype over its bits, so it also holds values outside its variants:

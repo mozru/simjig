@@ -60,7 +60,7 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
             ),
         ));
     }
-    let types = lower_types(design, &roots(design, config)?)?;
+    let types = lower_types(design, &roots(design, config, wrapper.as_ref())?)?;
     let mut types = types;
     let (signals, fields, bundles) = lower_signals(design, config, &mut types, wrapper.as_ref())?;
     let packages = lower_packages(design, &types)?;
@@ -92,21 +92,39 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
 }
 
 /// The traversal roots: ports and probes (required), then package typedefs (optional).
-fn roots(design: &Design, config: &CodegenConfig) -> Result<Vec<Root>, Error> {
+///
+/// A wrapper's flat port declares an interface signal's aggregate inline (a typedef in the
+/// interface cannot be named outside it, `lower::sv`), so its type is anonymous; it is
+/// named after the interface's typedef first (`beat_t` is `Beat`), then after the port.
+fn roots(
+    design: &Design,
+    config: &CodegenConfig,
+    wrapper: Option<&Wrapper>,
+) -> Result<Vec<Root>, Error> {
     let top = design.top_module();
     let mut roots: Vec<Root> = top
         .ports
         .iter()
-        .map(|p| Root {
-            ty: p.ty,
-            site: Use {
-                path: format!("{}.{}", top.orig_name, p.name),
-                candidates: vec![
-                    camel(&p.name),
-                    camel(&format!("{}_{}", top.orig_name, p.name)),
-                ],
-            },
-            required: true,
+        .map(|p| {
+            let typedef = design
+                .ty(p.ty)
+                .name
+                .is_none()
+                .then(|| wrapper.and_then(|w| iface_typedef(design, w, &p.name)))
+                .flatten();
+            let mut candidates = typedef.map(types::named_candidates).unwrap_or_default();
+            candidates.extend([
+                camel(&p.name),
+                camel(&format!("{}_{}", top.orig_name, p.name)),
+            ]);
+            Root {
+                ty: p.ty,
+                site: Use {
+                    path: format!("{}.{}", top.orig_name, p.name),
+                    candidates,
+                },
+                required: true,
+            }
         })
         .collect();
     for probe in &config.probes {
@@ -133,6 +151,22 @@ fn roots(design: &Design, config: &CodegenConfig) -> Result<Vec<Root>, Error> {
         }));
     }
     Ok(roots)
+}
+
+/// The typedef name (`beat_if::beat_t`) of the interface signal that the wrapper's flat
+/// port `port` carries, if it has one.
+fn iface_typedef<'d>(design: &'d Design, wrapper: &Wrapper, port: &str) -> Option<&'d str> {
+    let (iface, signal) = wrapper.ifaces.iter().find_map(|i| {
+        let (signal, _, _) = i.members.iter().find(|(_, flat, _)| flat == port)?;
+        Some((i, signal))
+    })?;
+    design
+        .modules
+        .iter()
+        .filter(|m| m.orig_name == iface.interface)
+        .flat_map(|m| m.modports.iter().filter(|mp| mp.name == iface.modport))
+        .flat_map(|mp| mp.members.iter().filter(|m| m.name == *signal))
+        .find_map(|m| design.ty(m.ty).name.as_deref())
 }
 
 /// The IR type a probe names, or `None` for a plain vector.

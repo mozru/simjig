@@ -1,7 +1,8 @@
 //! `tests/conformance/tb/test_wake_order.py`: the order in which one timestep's value
 //! changes wake tasks, and when `first!`, `join!` and `with_timeout` resume their caller.
 
-use simjig::{Event, RawSig, Timer, changed, cycles, ns, spawn};
+use simjig::{Event, In, RawSig, Timer, changed, cycles, first, join, ns, spawn, with_timeout};
+use simjig_bits::Bit;
 
 use crate::conflog::{Log, Probe};
 use crate::start_clock;
@@ -220,4 +221,72 @@ async fn edge_kinds(dut: crate::counter::Dut) {
     tz.await;
     tc.await;
     log.check("edge_kinds");
+}
+
+const FIRST: &str = "First(RisingEdge(clk),Timer(100ns))";
+const COMBINE: &str = "Combine(RisingEdge(clk),Timer(1ns))";
+const TIMEOUT: &str = "with_timeout(RisingEdge(clk),100ns)";
+
+/// `First(RisingEdge(clk), Timer(100, "ns"))`.
+async fn first_edge(clk: In<Bit>) {
+    first!(clk.rising(), Timer::new(ns(100)));
+}
+
+/// `Combine(RisingEdge(clk), Timer(1, "ns"))`.
+async fn combine_edge(clk: In<Bit>) {
+    join!(clk.rising(), Timer::new(ns(1)));
+}
+
+/// `with_timeout(RisingEdge(clk), 100, "ns")`.
+async fn timeout_edge(clk: In<Bit>) {
+    with_timeout(ns(100), clk.rising()).await.unwrap();
+}
+
+#[simjig::test]
+async fn combinator_hop(dut: crate::counter::Dut) {
+    let (clk, count) = (dut.clk, dut.count);
+    let log = Log::default();
+    let mut p = log.probe("main");
+    let mut pe = log.probe("e_task");
+    counter_start(&mut p, dut).await; // 10 ns
+    let seen = move |probe: &Probe| probe.read(&[&clk, &count]);
+
+    let te = spawn("e_task", async move {
+        for _ in 0..3 {
+            pe.wait(clk.rising(), "RisingEdge(clk)").await; // 15, 25, 35 ns
+            seen(&pe);
+        }
+    });
+    p.wait(clk.rising(), "RisingEdge(clk)").await; // 15 ns
+    seen(&p);
+    p.wait(first_edge(clk), FIRST).await; // 25 ns
+    seen(&p);
+    p.wait(combine_edge(clk), COMBINE).await; // 35 ns
+    seen(&p);
+
+    // One round per combinator, at 45, 55 and 65 ns.
+    for round in 0..3 {
+        let ev = Event::new("ev");
+        let (mut pf, mut pz) = (log.probe("f_task"), log.probe("z_task"));
+        let set = ev.clone();
+        let tz = spawn("z_task", async move {
+            pz.wait(ev.wait(), "Event.wait()").await;
+            seen(&pz);
+        });
+        let tf = spawn("f_task", async move {
+            pf.wait(clk.rising(), "RisingEdge(clk)").await;
+            seen(&pf);
+            set.set();
+        });
+        match round {
+            0 => p.wait(first_edge(clk), FIRST).await,
+            1 => p.wait(combine_edge(clk), COMBINE).await,
+            _ => p.wait(timeout_edge(clk), TIMEOUT).await,
+        }
+        seen(&p);
+        tf.await;
+        tz.await;
+    }
+    te.await;
+    log.check("combinator_hop");
 }

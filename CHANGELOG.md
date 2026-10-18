@@ -27,6 +27,12 @@ the public API, the generated code or simulation semantics.
   and `changed` on one signal are separate groups. Wake order at one delta changes from
   global registration order to priming order; trace hashes of runs where that differs
   change.
+- `first!`, `join!` and `with_timeout` resume their caller where cocotb 2.1's `First`,
+  `Combine` and `with_timeout` do (golden `combinator_hop`): after yielding once, and
+  once more when dropping the losers cancelled a wait that had not fired, so the tasks
+  woken by the same edge (and, for `first!` and `with_timeout`, the tasks those wake) run
+  first. Before, the caller resumed at once, in its registration order. A combinator
+  whose operands are ready at once now also yields before returning.
 - `with_timeout` breaks ties as cocotb 2.1 does (golden `timeout_ties`): the timeout's
   Timer registers before the future's triggers and is checked first, so a `Timer`,
   edge or `cycles` due exactly at the timeout now times out (a future's own `Timer` used

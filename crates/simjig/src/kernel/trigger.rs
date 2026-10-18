@@ -31,11 +31,12 @@ use std::panic::Location;
 use std::pin::{Pin, pin};
 use std::task::{Context, Poll};
 
+use super::combinator::hops;
 use super::panics;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
 use super::time::{SimDuration, SimTime};
-use super::waits::{EdgeKind, Registration, WaitOn};
+use super::waits::{EdgeKind, Registration, WaitOn, cancelled_waits};
 
 /// Shared poll logic: register on first poll, then complete once fired.
 ///
@@ -349,6 +350,10 @@ impl std::error::Error for Elapsed {}
 ///   (it runs, with what it wakes, before the timeout's Timer fires), so its result wins;
 /// - if both are ready in the same poll, the timeout wins.
 ///
+/// The caller resumes where cocotb's `select` resumes it: after the other tasks ready when
+/// the deciding side completed, and after one more hop for cancelling the side still
+/// waiting (`combinator::hop`, golden `combinator_hop`).
+///
 /// # Errors
 /// [`Elapsed`] if the timeout expired first.
 ///
@@ -358,14 +363,23 @@ pub async fn with_timeout<T>(
     duration: SimDuration,
     future: impl Future<Output = T>,
 ) -> Result<T, Elapsed> {
-    let mut future = pin!(future);
-    let mut timer = pin!(Timer::new(duration));
-    std::future::poll_fn(|cx| {
+    // In `Option`s so both can be dropped, cancelling the loser, before the hops.
+    let mut future = pin!(Some(future));
+    let mut timer = Some(Timer::new(duration));
+    let out = std::future::poll_fn(|cx| {
+        let (Some(t), Some(f)) = (timer.as_mut(), future.as_mut().as_pin_mut()) else {
+            unreachable!("invariant: with_timeout drops its operands only once decided")
+        };
         // The timer first, so it registers before anything `future` waits on: see above.
-        if timer.as_mut().poll(cx).is_ready() {
+        if Pin::new(t).poll(cx).is_ready() {
             return Poll::Ready(Err(Elapsed { after: duration }));
         }
-        future.as_mut().poll(cx).map(Ok)
+        f.poll(cx).map(Ok)
     })
-    .await
+    .await;
+    let before = cancelled_waits();
+    future.set(None);
+    drop(timer.take());
+    hops(cancelled_waits() != before).await;
+    out
 }

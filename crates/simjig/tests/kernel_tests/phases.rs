@@ -8,7 +8,8 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use simjig::{
     Clock, Event, FailureKind, FakeModel, NextTimeStep, Precision, RawSig, ReadOnly, ReadWrite,
-    Sim, SimTime, Timer, changed, falling, now, rising, spawn, yield_now,
+    Sim, SimTime, Timer, changed, falling, first, join, now, rising, spawn, with_timeout,
+    yield_now,
 };
 
 use super::{assert_clean, clocked, dut, ticks};
@@ -295,6 +296,69 @@ fn a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice() {
         watcher.await
     });
     assert_eq!(seen.unwrap(), ((SimTime(1), 5), (SimTime(1), 0)));
+}
+
+#[test]
+fn combinators_resume_their_caller_after_the_tasks_the_same_edge_woke() {
+    // Golden combinator_hop. Per round, the caller's combinator registers on rising(x)
+    // before f does; f sets an Event z waits on. `first!` and `with_timeout` cancel a
+    // waiting loser (the Timer), one hop more than `join!`: z runs before their caller,
+    // after the caller of `join!`.
+    let (mut sim, x, _) = two_bits();
+    let trace: Trace = Rc::default();
+    let shared = Rc::clone(&trace);
+    sim.run(async move {
+        for round in 0..3_u64 {
+            let ev = Event::new("ev");
+            let (set, tf, tz) = (ev.clone(), Rc::clone(&shared), Rc::clone(&shared));
+            let task_z = spawn("z", async move {
+                ev.wait().await;
+                push(&tz, "z");
+            });
+            let task_f = spawn("f", async move {
+                rising(x).await;
+                push(&tf, "f");
+                set.set();
+            });
+            let writer = spawn("w", async move {
+                Timer::new(ticks(1)).await;
+                x.write_u64(1);
+                Timer::new(ticks(1)).await;
+                x.write_u64(0);
+            });
+            let label = match round {
+                0 => {
+                    first!(rising(x), Timer::new(ticks(100)));
+                    "first! caller"
+                }
+                1 => {
+                    join!(rising(x), Timer::new(ticks(1)));
+                    "join! caller"
+                }
+                _ => {
+                    with_timeout(ticks(100), rising(x)).await.unwrap();
+                    "with_timeout caller"
+                }
+            };
+            push(&shared, label);
+            for task in [task_z, task_f, writer] {
+                task.await;
+            }
+        }
+    })
+    .unwrap();
+    let want = [
+        "f",
+        "z",
+        "first! caller",
+        "f",
+        "join! caller",
+        "z",
+        "f",
+        "z",
+        "with_timeout caller",
+    ];
+    assert_eq!(*trace.borrow(), want);
 }
 
 #[test]

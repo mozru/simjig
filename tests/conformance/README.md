@@ -211,6 +211,20 @@ application that follows it):
 - `ClockCycles(s, n)` awaits the one `RisingEdge(s)` trigger `n` times, inline in the
   awaiting task, so it joins like a plain `RisingEdge` (`edge_kinds` 45 ns).
 
+- **`First`, `Combine` and `with_timeout` resume their caller late.** They await each
+  operand in a helper task (`_wait` in `_concurrent_waiters.py`, started with
+  `_start_next`, so the helpers register before tasks started earlier but not yet run)
+  and wake the caller through an internal event. When the deciding helper finishes, the
+  caller is scheduled behind every task already queued: for `Combine` (and a `First`
+  whose losers have all finished) that is one hop; `First` and `with_timeout` (`select`)
+  first cancel a loser still waiting by scheduling it once more, and the caller is
+  scheduled when that loser finishes, a second hop. So the caller resumes after the tasks
+  the same callback woke directly (`combinator_hop` at 25 and 35 ns), and after the tasks
+  those wake when a loser was cancelled: an `Event` set by such a task wakes its waiter
+  before the caller of `First` (45 ns) and `with_timeout` (65 ns), after the caller of
+  `Combine` (55 ns). simjig polls the operands inline and yields once, or twice when
+  dropping the losers cancelled a pending wait (`kernel::combinator::hop`).
+
 simjig mirrors this with one wait group per (signal, edge kind), ordered by the
 registration that primed it (`kernel::waits`, "Value-change groups"), and a walk that runs
 tasks to quiescence after each group that fires (`kernel::sched::fire_value_changes`).

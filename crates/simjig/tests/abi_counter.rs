@@ -1,5 +1,6 @@
 //! The C ABI end to end: Rust drives hand-instantiated vtables of two tiny Verilator models
-//! (`tests/abi_counter/*.sv`, compiled by `build.rs`) through `model::abi` only.
+//! (`tests/abi_counter/*.sv`, built by `build.rs` through simjig-build, with the generated
+//! shims) through `model::abi` only.
 //!
 //! What this proves: the Rust mirror matches the C++ layout; ports of every storage class
 //! are read and written through the signal table; and `$fatal`, `$error`, `$stop`, `$finish`
@@ -11,27 +12,45 @@
 #[expect(dead_code, reason = "the test uses only part of the ABI mirror")]
 mod abi;
 
-#[cfg(not(simjig_abi_models))]
+#[cfg(not(simjig_test_models))]
 #[test]
 fn abi_models_were_built() {
     panic!(
         "build.rs could not build the ABI test models: {}",
-        env!("SIMJIG_ABI_MODELS_ERROR")
+        env!("SIMJIG_TEST_MODELS_ERROR")
     );
 }
 
-#[cfg(simjig_abi_models)]
+#[cfg(simjig_test_models)]
 mod with_models {
     use super::abi::{
         self, CreateOpts, Handle, ModelVtable, MsgKind, OwnedMsg, Signal, Status, TIME_NONE,
     };
     use std::ptr::{self, NonNull};
 
+    #[expect(
+        dead_code,
+        reason = "the constants of every test model; this test uses two"
+    )]
+    mod models {
+        include!(concat!(env!("OUT_DIR"), "/test_models.rs"));
+    }
+    use models::{ABI_COUNTER_IR_HASH, ABI_COUNTER_PREFIX};
+
+    mod counter {
+        use super::ModelVtable as Vtable;
+        include!(concat!(env!("OUT_DIR"), "/test_vtables/abi_counter.rs"));
+    }
+
+    mod ticker {
+        use super::ModelVtable as Vtable;
+        include!(concat!(env!("OUT_DIR"), "/test_vtables/abi_ticker.rs"));
+    }
+
+    use counter::vtable as counter_vtable;
+    use ticker::vtable as ticker_vtable;
+
     unsafe extern "C" {
-        #[link_name = "simjig_vtable_Vcounter"]
-        safe fn counter_vtable() -> &'static ModelVtable;
-        #[link_name = "simjig_vtable_Vticker"]
-        safe fn ticker_vtable() -> &'static ModelVtable;
         safe fn simjig_rt_abi_layout(out: *mut u32, cap: usize) -> usize;
     }
 
@@ -189,17 +208,17 @@ mod with_models {
     #[test]
     fn vtable_identifies_its_model() {
         let vt = counter_vtable();
-        assert_eq!(vt.check(0x5eed_c0de_0000_0001), Ok(()));
+        assert_eq!(vt.check(ABI_COUNTER_IR_HASH), Ok(()));
         assert_eq!(
             vt.check(7),
             Err(abi::AbiError::IrHash {
-                model: 0x5eed_c0de_0000_0001,
+                model: ABI_COUNTER_IR_HASH,
                 expected: 7
             })
         );
         // SAFETY: the vtable's strings are static C strings.
         let prefix = unsafe { std::ffi::CStr::from_ptr(vt.prefix) };
-        assert_eq!(prefix.to_str().unwrap(), "Vcounter");
+        assert_eq!(prefix.to_str().unwrap(), ABI_COUNTER_PREFIX);
         // SAFETY: as above.
         let version = unsafe { std::ffi::CStr::from_ptr(vt.verilator_version) };
         assert!(

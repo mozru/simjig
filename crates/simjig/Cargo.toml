@@ -21,4 +21,4 @@ serde_json.workspace = true
 trybuild.workspace = true
 
 [build-dependencies]
-cc.workspace = true
+simjig-build.workspace = true

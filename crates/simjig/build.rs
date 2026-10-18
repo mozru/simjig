@@ -1,268 +1,212 @@
-//! Builds the Verilator test models that the integration tests link against:
-//! `tests/abi_counter.rs` (the raw C ABI) and `tests/model_tests` (the Verilator backend and
-//! typed handles, over the shared DUTs in `tests/duts`).
+//! Builds the Verilator test models that simjig's own integration tests link against, each
+//! through the real pipeline (`simjig_build::Dut`): the type IR, the generated Rust and C++
+//! shim, verilation and compilation, exactly as a user's build script does.
 //!
-//! Cargo has no test-only build scripts, so this one runs for every build of `simjig`, but its
-//! output reaches only integration-test binaries (`cargo::rustc-link-arg-tests`), never the
-//! library or its users. When `simjig-build` grows the real Verilator driver, this moves there.
+//! - `tests/abi_counter.rs` drives two models (`abi_counter`, `abi_ticker`) through the raw
+//!   C ABI. `OUT_DIR/test_models.rs` gives every model's prefix and IR hash, and
+//!   `OUT_DIR/test_vtables/<name>.rs` declares its vtable symbol as `vtable()` (a
+//!   `link_name` must be a literal), returning the includer's `Vtable` type.
+//! - `tests/model_tests` and `tests/e2e_*` include the generated bindings with
+//!   `simjig::include_dut!` (`OUT_DIR/simjig/<name>.rs`).
 //!
-//! The compile recipe (see `docs/notes/abi.md`) is the one simjig-build will use:
-//! - every translation unit gets `-include simjig_vl_config.h` (the `VL_USER_*` hooks and the
-//!   `VL_PRINTF` redirection), `-std=gnu++20` (coroutines for `--timing`) and `-Os`;
-//! - libverilated (`verilated.cpp`, `verilated_threads.cpp`, `verilated_timing.cpp`) plus
-//!   `simjig_rt.cpp` form one archive, shared by every model;
-//! - each model's generated sources plus its shim form a second archive.
+//! Cargo has no test-only build scripts, so two rules keep this away from simjig's users:
+//! - models are built only when `SIMJIG_TEST_MODELS=1`, which the repository's
+//!   `.cargo/config.toml` sets; a crate that depends on simjig never builds them;
+//! - every link directive simjig-build emits is rewritten to `cargo::rustc-link-arg-tests`,
+//!   so the archives reach only simjig's test binaries, never the library.
 //!
-//! If Verilator is missing, the script still succeeds (so the library builds anywhere) and
-//! the test fails with the reason instead of being skipped.
+//! If a model cannot be built (no Verilator, say), the script still succeeds so the
+//! library builds anywhere, and each test binary fails with the reason instead of being
+//! skipped.
 
-use std::env;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::fmt::Write as _;
+use std::path::PathBuf;
 
-/// One test model.
-struct Model {
-    /// SystemVerilog source, relative to the crate.
-    sv: &'static str,
-    /// Verilator `--prefix`.
-    prefix: &'static str,
-    /// Verilated with `--timing`.
-    timing: bool,
-    /// Extra Verilator arguments (paths relative to the crate end in `.vlt`).
-    args: &'static [&'static str],
-}
+use simjig_build::{Dut, ProbeAccess, ProbeType, codegen};
 
 /// The cocotb goldens were recorded with `--timescale 1ns/1ps` (tests/conformance/README.md).
-const DUT_ARGS: &[&str] = &["--timescale", "1ns/1ps"];
+const TIMESCALE: [&str; 2] = ["--timescale", "1ns/1ps"];
 
-const MODELS: &[Model] = &[
-    Model {
-        sv: "tests/abi_counter/counter.sv",
-        prefix: "Vcounter",
-        timing: false,
-        args: &[],
-    },
-    Model {
-        sv: "tests/abi_counter/ticker.sv",
-        prefix: "Vticker",
-        timing: true,
-        args: &[],
-    },
-    Model {
-        sv: "../../tests/duts/inv/inv.sv",
-        prefix: "Vdut_inv",
-        timing: false,
-        args: DUT_ARGS,
-    },
-    Model {
-        sv: "../../tests/duts/flop/flop.sv",
-        prefix: "Vdut_flop",
-        timing: false,
-        args: DUT_ARGS,
-    },
-    Model {
-        sv: "../../tests/duts/counter/counter.sv",
-        prefix: "Vdut_counter",
-        timing: false,
-        args: DUT_ARGS,
-    },
-    Model {
-        sv: "../../tests/duts/comb_chain/comb_chain.sv",
-        prefix: "Vdut_comb_chain",
-        timing: false,
-        args: &["--timescale", "1ns/1ps", "tests/model_tests/comb_chain.vlt"],
-    },
-    Model {
-        sv: "../../tests/duts/fatal/fatal.sv",
-        prefix: "Vdut_fatal",
-        timing: false,
-        args: DUT_ARGS,
-    },
-    Model {
-        sv: "../../tests/duts/wide/wide.sv",
-        prefix: "Vdut_wide",
-        timing: false,
-        args: DUT_ARGS,
-    },
-    Model {
-        sv: "../../tests/duts/timing_dut/timing_dut.sv",
-        prefix: "Vdut_timing",
-        timing: true,
-        args: &[],
-    },
-    Model {
-        sv: "tests/model_tests/hello.sv",
-        prefix: "Vhello",
-        timing: false,
-        args: DUT_ARGS,
-    },
-];
+/// A design in the shared `tests/duts/<name>` corpus, with the goldens' timescale.
+fn shared(name: &str, files: &[&str]) -> Dut {
+    let dir = format!("../../tests/duts/{name}");
+    Dut::new(name)
+        .sources(files.iter().map(|f| format!("{dir}/{f}")))
+        .top(name)
+        .verilator_args(TIMESCALE)
+}
 
-/// The hand-written shims (what simjig-build will generate), one per test binary.
-const SHIMS: &[&str] = &["tests/abi_counter/shim.cpp", "tests/model_tests/shim.cpp"];
+/// Read-only probes of the internal variables `vars` of the top `module`.
+fn probes(dut: Dut, module: &str, width: u32, vars: &[&str]) -> Dut {
+    vars.iter().fold(dut, |dut, var| {
+        dut.probe(
+            format!("{module}.{var}"),
+            module,
+            ProbeType::Bits { width },
+            ProbeAccess::Read,
+        )
+    })
+}
+
+fn duts() -> Vec<Dut> {
+    let async_fifo = shared("async_fifo", &["async_fifo.sv"])
+        .param("WIDTH", 8)
+        .param("DEPTH", 8);
+    vec![
+        Dut::new("abi_counter")
+            .sources(["tests/abi_counter/counter.sv"])
+            .top("counter"),
+        Dut::new("abi_ticker")
+            .sources(["tests/abi_counter/ticker.sv"])
+            .top("ticker")
+            .timing(true),
+        Dut::new("hello")
+            .sources(["tests/model_tests/hello.sv"])
+            .top("hello")
+            .verilator_args(TIMESCALE),
+        shared("inv", &["inv.sv"]),
+        shared("flop", &["flop.sv"]),
+        shared("counter", &["counter.sv"]),
+        probes(
+            shared("comb_chain", &["comb_chain.sv"]),
+            "comb_chain",
+            8,
+            &["s1", "s2", "s3"],
+        ),
+        shared("fatal", &["fatal.sv"]),
+        shared("wide", &["wide.sv"]),
+        // timing_dut declares its own timeunit and precision.
+        Dut::new("timing_dut")
+            .sources(["../../tests/duts/timing_dut/timing_dut.sv"])
+            .top("timing_dut")
+            .timing(true),
+        shared("struct_pipe", &["struct_pipe_pkg.sv", "struct_pipe.sv"]),
+        shared("fifo", &["fifo.sv"])
+            .param("WIDTH", 8)
+            .param("DEPTH", 4),
+        probes(
+            async_fifo,
+            "async_fifo",
+            4,
+            &["wbin", "rgray_w2", "rbin", "wgray_r2"],
+        ),
+        shared("derived_clk", &["derived_clk.sv"]),
+        shared("iface_top", &["iface_pkg.sv", "bus_if.sv", "iface_top.sv"])
+            .bind_iface("in_bus", "bus_if.dst")
+            .bind_iface("out_bus", "bus_if.src"),
+    ]
+}
 
 fn main() {
-    println!("cargo::rustc-check-cfg=cfg(simjig_abi_models)");
+    println!("cargo::rustc-check-cfg=cfg(simjig_test_models)");
     println!("cargo::rerun-if-changed=build.rs");
-    println!("cargo::rerun-if-changed=tests/abi_counter");
-    println!("cargo::rerun-if-changed=tests/model_tests");
-    println!("cargo::rerun-if-changed=../../tests/duts");
-    println!("cargo::rerun-if-changed=../simjig-build/cpp");
-    println!("cargo::rerun-if-env-changed=VERILATOR_ROOT");
+    println!("cargo::rerun-if-env-changed=SIMJIG_TEST_MODELS");
+    if std::env::var_os("SIMJIG_TEST_MODELS").is_none_or(|v| v != "1") {
+        let why = "SIMJIG_TEST_MODELS is not 1 (the repository's .cargo/config.toml sets it)";
+        println!("cargo::rustc-env=SIMJIG_TEST_MODELS_ERROR={why}");
+        return;
+    }
     match build_models() {
-        Ok(()) => println!("cargo::rustc-cfg=simjig_abi_models"),
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            println!("cargo::rustc-cfg=simjig_test_models");
+        }
         Err(err) => {
             let err = err.replace('\n', " ");
-            println!("cargo::warning=simjig C ABI test models not built: {err}");
-            println!("cargo::rustc-env=SIMJIG_ABI_MODELS_ERROR={err}");
+            println!("cargo::warning=simjig test models not built: {err}");
+            println!("cargo::rustc-env=SIMJIG_TEST_MODELS_ERROR={err}");
         }
     }
 }
 
-fn build_models() -> Result<(), String> {
-    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
-    let out = PathBuf::from(env::var("OUT_DIR").map_err(|e| e.to_string())?);
-    let cpp = manifest.join("../simjig-build/cpp");
-    let root = verilator_root()?;
-
-    let mut model_dirs = Vec::new();
-    for model in MODELS {
-        model_dirs.push(verilate(&manifest, model, &out)?);
-    }
-
-    let include = root.join("include");
-    let mut runtime = base_build(&include, &cpp);
-    runtime
-        .file(include.join("verilated.cpp"))
-        .file(include.join("verilated_threads.cpp"))
-        .file(include.join("verilated_timing.cpp"))
-        .file(cpp.join("simjig_rt.cpp"));
-    runtime
-        .try_compile("simjig_abi_verilated")
+/// Builds every model; returns the `cargo::` lines to print (printed only when all of them
+/// built, so a half-built set links nothing).
+fn build_models() -> Result<Vec<String>, String> {
+    let env = simjig_build::BuildEnv::from_cargo().map_err(|e| e.to_string())?;
+    let mut lines = Vec::new();
+    let mut consts = String::from("// @generated by crates/simjig/build.rs\n");
+    for dut in duts() {
+        let config = dut.config().clone();
+        let built = dut.build_in(&env).map_err(|e| e.to_string())?;
+        lines.extend(tests_only(&built.directives));
+        let lowered =
+            codegen::lower(&built.design, &config.codegen_config()).map_err(|e| e.to_string())?;
+        let upper = config.name.to_uppercase();
+        let vtables = env.out_dir.join("test_vtables");
+        std::fs::create_dir_all(&vtables).map_err(|e| format!("{}: {e}", vtables.display()))?;
+        let link = vtables.join(format!("{}.rs", config.name));
+        std::fs::write(&link, vtable_decl(&built.prefix))
+            .map_err(|e| format!("{}: {e}", link.display()))?;
+        writeln!(
+            consts,
+            "pub(crate) const {upper}_PREFIX: &str = {:?};\n\
+             pub(crate) const {upper}_IR_HASH: u64 = {};",
+            built.prefix,
+            grouped_hex(lowered.ir_hash)
+        )
         .map_err(|e| e.to_string())?;
-
-    let mut models = base_build(&include, &cpp);
-    for shim in SHIMS {
-        models.file(manifest.join(shim));
     }
-    for dir in &model_dirs {
-        models.include(dir);
-        for file in generated_sources(dir)? {
-            models.file(file);
+    let path = env.out_dir.join("test_models.rs");
+    std::fs::write(&path, consts).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(lines)
+}
+
+/// `h` as a hex literal in groups of four digits (clippy's `unreadable_literal`).
+fn grouped_hex(h: u64) -> String {
+    let group = |shift: u32| (h >> shift) & 0xffff;
+    format!(
+        "0x{:04x}_{:04x}_{:04x}_{:04x}",
+        group(48),
+        group(32),
+        group(16),
+        group(0)
+    )
+}
+
+/// `vtable()`: the model's exported vtable, typed as the including module's `Vtable`.
+fn vtable_decl(prefix: &str) -> String {
+    format!(
+        "// @generated by crates/simjig/build.rs\n\
+         unsafe extern \"C\" {{\n\
+         \x20   #[link_name = \"simjig_vtable_{prefix}\"]\n\
+         \x20   pub(crate) safe fn vtable() -> &'static Vtable;\n\
+         }}\n"
+    )
+}
+
+/// simjig-build's directives with every link directive narrowed to test binaries:
+/// `rustc-link-search` + `rustc-link-lib=static=NAME` become the archive's path, a plain
+/// `rustc-link-lib=NAME` becomes `-L<dirs> -lNAME`, and `rustc-link-arg` its `-tests` form.
+/// On ELF an archive only satisfies references made before it; simjig-build lists each
+/// model's archive before the shared runtime, and each DUT repeats the runtime.
+fn tests_only(directives: &[String]) -> Vec<String> {
+    let mut search: Vec<PathBuf> = Vec::new();
+    let mut out = Vec::new();
+    for d in directives {
+        let rest = d.strip_prefix("cargo::").unwrap_or(d);
+        if let Some(dir) = rest.strip_prefix("rustc-link-search=native=") {
+            search.push(PathBuf::from(dir));
+        } else if let Some(name) = rest.strip_prefix("rustc-link-lib=static=") {
+            let file = format!("lib{name}.a");
+            let archive = search
+                .iter()
+                .rev()
+                .map(|dir| dir.join(&file))
+                .find(|p| p.exists())
+                .unwrap_or_else(|| PathBuf::from(&file));
+            out.push(format!("cargo::rustc-link-arg-tests={}", archive.display()));
+        } else if let Some(name) = rest.strip_prefix("rustc-link-lib=") {
+            for dir in &search {
+                out.push(format!("cargo::rustc-link-arg-tests=-L{}", dir.display()));
+            }
+            out.push(format!("cargo::rustc-link-arg-tests=-l{name}"));
+        } else if let Some(arg) = rest.strip_prefix("rustc-link-arg=") {
+            out.push(format!("cargo::rustc-link-arg-tests={arg}"));
+        } else {
+            out.push(d.clone());
         }
     }
-    models
-        .try_compile("simjig_abi_models")
-        .map_err(|e| e.to_string())?;
-
-    // Models first: on ELF targets an archive only satisfies references made before it.
-    for lib in ["simjig_abi_models", "simjig_abi_verilated"] {
-        println!(
-            "cargo::rustc-link-arg-tests={}",
-            out.join(format!("lib{lib}.a")).display()
-        );
-    }
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo::rustc-link-arg-tests=-lc++");
-    } else {
-        println!("cargo::rustc-link-arg-tests=-lstdc++");
-        println!("cargo::rustc-link-arg-tests=-lpthread");
-    }
-    Ok(())
-}
-
-/// `verilator --getenv VERILATOR_ROOT`, so the include directory matches the binary on PATH.
-fn verilator_root() -> Result<PathBuf, String> {
-    if let Some(root) = env::var_os("VERILATOR_ROOT") {
-        return Ok(PathBuf::from(root));
-    }
-    let output = Command::new("verilator")
-        .args(["--getenv", "VERILATOR_ROOT"])
-        .output()
-        .map_err(|e| format!("cannot run `verilator` ({e}); build inside `pixi run`"))?;
-    if !output.status.success() {
-        return Err("`verilator --getenv VERILATOR_ROOT` failed".to_owned());
-    }
-    let root = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    Ok(PathBuf::from(root))
-}
-
-/// Runs `verilator --cc` for one model; returns its output directory.
-fn verilate(manifest: &Path, model: &Model, out: &Path) -> Result<PathBuf, String> {
-    let mdir = out.join(model.prefix);
-    let sv = manifest.join(model.sv);
-    let args = model.args.iter().map(|a| {
-        if Path::new(a).extension().is_some_and(|e| e == "vlt") {
-            manifest.join(a).into_os_string()
-        } else {
-            a.into()
-        }
-    });
-    let output = Command::new("verilator")
-        .arg("--cc")
-        .arg(if model.timing {
-            "--timing"
-        } else {
-            "--no-timing"
-        })
-        .args(["--prefix", model.prefix])
-        .args(args)
-        .arg("--Mdir")
-        .arg(&mdir)
-        .arg(&sv)
-        .output()
-        .map_err(|e| format!("cannot run `verilator` ({e})"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "verilator failed on {}: {}",
-            sv.display(),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(mdir)
-}
-
-/// The `.cpp` files Verilator generated in `mdir`, sorted for a stable archive.
-fn generated_sources(mdir: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = std::fs::read_dir(mdir).map_err(|e| format!("{}: {e}", mdir.display()))?;
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| path.extension().is_some_and(|ext| ext == "cpp"))
-        .collect();
-    files.sort();
-    Ok(files)
-}
-
-/// Flags shared by every translation unit (the compile recipe in the module docs).
-fn base_build(include: &Path, cpp: &Path) -> cc::Build {
-    let mut build = cc::Build::new();
-    build
-        .cpp(true)
-        .cargo_metadata(false)
-        .warnings(false)
-        .opt_level_str("s")
-        .flag("-std=gnu++20")
-        .flag("-w")
-        .flag("-include")
-        .flag(cpp.join("simjig_vl_config.h").display().to_string())
-        .include(include)
-        .include(include.join("vltstd"))
-        .include(cpp);
-    // The VM_* switches verilated.mk passes everywhere. Of these, 5.052's runtime sources read
-    // only VM_SC and VM_VPI, and generated code reads none, so one libverilated serves every
-    // model; they are set for parity with Verilator's own build.
-    for (key, value) in [
-        ("VERILATOR", "1"),
-        ("VM_COVERAGE", "0"),
-        ("VM_SC", "0"),
-        ("VM_TIMING", "1"),
-        ("VM_TRACE", "0"),
-        ("VM_TRACE_FST", "0"),
-        ("VM_TRACE_VCD", "0"),
-        ("VM_TRACE_SAIF", "0"),
-        ("VM_VPI", "0"),
-    ] {
-        build.define(key, value);
-    }
-    build
+    out
 }

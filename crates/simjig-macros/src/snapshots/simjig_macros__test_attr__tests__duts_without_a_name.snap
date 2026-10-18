@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(duts = [Dut]), quote! { async fn t<D: X>(dut: D) {} })"
+---
+error: a DUT in `duts` is a type path that names its test: `sweep::small::Dut` (the test is `small`) or `Small`

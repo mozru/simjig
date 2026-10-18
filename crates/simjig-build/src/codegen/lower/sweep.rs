@@ -1,0 +1,582 @@
+//! The sweep lowering: several [`Lowered`] configurations of one DUT module in, one
+//! [`LoweredSweep`] out.
+//!
+//! Every member is lowered on its own first (its names, slots and types are its own);
+//! this module only decides what the sweep module holds:
+//! - **shared items**: a generated type, package-constant module or bundle that is equal
+//!   (same Rust name and definition) in every member, and names only shared types, is
+//!   defined once in the sweep module and imported by each member (`pub use super::X`),
+//!   so `small::Item` and `big::Item` are one Rust type. The check is a fixpoint: a
+//!   struct equal everywhere but holding a type that differs is not shared;
+//! - **the `Ports` trait**: one method per `Dut` field that every member has with the
+//!   same access, returning the field. A field whose type is equal in every member keeps
+//!   that type; the others get an associated type, one per distinct list of
+//!   per-member types, so ports that agree in every member (`wr_data` and `rd_data`, both
+//!   `WIDTH` bits) share it and a generic body can move a value between them. It is
+//!   named after the generated type it is in every member (`Word`), else after its first
+//!   port (`WrData`), and bounded by `simjig::Vector` (bit vectors everywhere),
+//!   `simjig::Value` (packed values) or nothing (unpacked arrays). The DUT parameters
+//!   every member has with one Rust type are associated consts;
+//! - **bundle traits**: an interface port whose bundle differs between members gets an
+//!   associated type bounded by a trait built the same way over the bundles' signals.
+//!
+//! Fields not in every member (a probe of one configuration) are left out of the trait,
+//! and listed in its docs.
+
+use std::collections::BTreeSet;
+
+use super::super::names::{Namespace, camel};
+use super::super::{
+    Access, AssocBound, AssocType, Bundle, ConstGroup, ConstValue, DutField, Error, Item, ItemKind,
+    Lowered, LoweredSweep, MethodKind, PortsTrait, RustType, SweepMember, TraitConst, TraitMethod,
+    TraitType,
+};
+
+/// The name of the sweep's trait over every member's `Dut`.
+pub const PORTS_TRAIT: &str = "Ports";
+
+/// Lowers the sweep `name` of `members` (each a module name and its lowering).
+///
+/// # Errors
+/// [`Error::Config`] when there are no members, when they configure different DUT
+/// modules, or when two names of the sweep module collide (a member named like a shared
+/// type or package).
+pub fn lower_sweep(name: &str, members: &[(String, Lowered)]) -> Result<LoweredSweep, Error> {
+    let item = || format!("sweep `{name}`");
+    let Some((_, first)) = members.first() else {
+        return Err(Error::config(item(), "a sweep needs at least one DUT"));
+    };
+    let dut = dut_module(first).to_owned();
+    if let Some((other, l)) = members.iter().find(|(_, l)| dut_module(l) != dut) {
+        return Err(Error::config(
+            item(),
+            format!(
+                "every DUT of a sweep configures one module, but `{}` is `{dut}` and `{other}` \
+                 is `{}`",
+                members[0].0,
+                dut_module(l)
+            ),
+        ));
+    }
+    let shared = Shared::find(members);
+    let mut types = Namespace::with_reserved(&[PORTS_TRAIT]);
+    for n in &shared.names {
+        types.claim(n);
+    }
+    let mut builder = Builder {
+        members,
+        shared: &shared,
+        types,
+        bundle_traits: Vec::new(),
+    };
+    let ports = builder.ports_trait(&dut);
+    let Builder {
+        bundle_traits,
+        types,
+        ..
+    } = builder;
+    check_member_names(name, members, &types)?;
+    Ok(LoweredSweep {
+        name: name.to_owned(),
+        dut,
+        members: members
+            .iter()
+            .map(|(n, l)| SweepMember {
+                name: n.clone(),
+                params: l.dut_params.clone(),
+            })
+            .collect(),
+        reexports: shared.reexports(),
+        items: shared.items,
+        packages: shared.packages,
+        bundles: shared.bundles,
+        ports,
+        bundle_traits,
+    })
+}
+
+/// The DUT module of a lowering: the wrapped one for an interface-ported DUT.
+fn dut_module(lowered: &Lowered) -> &str {
+    lowered.wrapper.as_ref().map_or(&lowered.top, |w| &w.dut)
+}
+
+/// A member module named like a type or module of the sweep module would collide with it.
+fn check_member_names(
+    name: &str,
+    members: &[(String, Lowered)],
+    types: &Namespace,
+) -> Result<(), Error> {
+    let mut seen = BTreeSet::new();
+    for (member, _) in members {
+        if !seen.insert(member.as_str()) {
+            return Err(Error::config(
+                format!("sweep `{name}`"),
+                format!("DUT `{member}` is in the sweep twice"),
+            ));
+        }
+        if types.contains(member) || member == name {
+            return Err(Error::config(
+                format!("sweep `{name}`"),
+                format!(
+                    "DUT `{member}` is named like the sweep or an item of the sweep module; \
+                     rename the DUT"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What the members have in common.
+struct Shared {
+    items: Vec<Item>,
+    packages: Vec<ConstGroup>,
+    bundles: Vec<Bundle>,
+    /// Every name the sweep module defines for them.
+    names: BTreeSet<String>,
+}
+
+impl Shared {
+    fn find(members: &[(String, Lowered)]) -> Self {
+        let first = &members[0].1;
+        let in_all = |f: &dyn Fn(&Lowered) -> bool| members.iter().all(|(_, l)| f(l));
+        let mut items: Vec<Item> = first
+            .items
+            .iter()
+            .filter(|it| it.name != PORTS_TRAIT && in_all(&|l| l.items.contains(it)))
+            .cloned()
+            .collect();
+        // A type is shared only if every type it names is: drop until nothing changes.
+        loop {
+            let names: BTreeSet<&str> = items.iter().map(|i| i.name.as_str()).collect();
+            let keep: Vec<bool> = items
+                .iter()
+                .map(|i| item_refs(i).iter().all(|r| names.contains(r.as_str())))
+                .collect();
+            if keep.iter().all(|&k| k) {
+                break;
+            }
+            let mut keep = keep.into_iter();
+            items.retain(|_| keep.next().unwrap_or(false));
+        }
+        let item_names: BTreeSet<String> = items.iter().map(|i| i.name.clone()).collect();
+        let named_shared = |ty: &RustType| refs(ty).iter().all(|r| item_names.contains(r));
+        let packages: Vec<ConstGroup> = first
+            .packages
+            .iter()
+            .filter(|g| in_all(&|l| l.packages.contains(g)))
+            .filter(|g| {
+                g.consts.iter().all(|c| match &c.value {
+                    ConstValue::Enum { ty, .. } => item_names.contains(ty),
+                    _ => true,
+                })
+            })
+            .cloned()
+            .collect();
+        let bundles: Vec<Bundle> = first
+            .bundles
+            .iter()
+            .filter(|b| in_all(&|l| l.bundles.contains(b)))
+            .filter(|b| b.members.iter().all(|m| named_shared(&m.ty)))
+            .cloned()
+            .collect();
+        let mut shared = Self {
+            items,
+            packages,
+            bundles,
+            names: BTreeSet::new(),
+        };
+        shared.names = shared.reexports().into_iter().collect();
+        shared
+    }
+
+    /// The names a member imports from the sweep module, in definition order.
+    fn reexports(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for item in &self.items {
+            names.push(item.name.clone());
+            if let ItemKind::Enum { kind_name, .. } = &item.kind {
+                names.push(kind_name.clone());
+            }
+        }
+        names.extend(self.packages.iter().map(|g| g.module.clone()));
+        names.extend(self.bundles.iter().map(|b| b.name.clone()));
+        names
+    }
+
+    fn has_item(&self, name: &str) -> bool {
+        self.items.iter().any(|i| i.name == name)
+    }
+
+    fn has_bundle(&self, bundle: &Bundle) -> bool {
+        self.bundles.contains(bundle)
+    }
+}
+
+/// The generated types `item` names.
+fn item_refs(item: &Item) -> Vec<String> {
+    match &item.kind {
+        ItemKind::Alias { target } => refs(target),
+        ItemKind::Struct { fields } => fields.iter().flat_map(|f| refs(&f.ty)).collect(),
+        ItemKind::Union { bits, views } => refs(bits)
+            .into_iter()
+            .chain(views.iter().flat_map(|v| refs(&v.ty)))
+            .collect(),
+        ItemKind::Enum { base, .. } => refs(base),
+    }
+}
+
+/// The generated types `ty` names.
+fn refs(ty: &RustType) -> Vec<String> {
+    match ty {
+        RustType::Named(n) => vec![n.clone()],
+        RustType::Array(elem, _) => refs(elem),
+        RustType::Bit | RustType::Bits(_) | RustType::WideBits { .. } => Vec::new(),
+    }
+}
+
+/// One implementation of a trait being built: the type, and its fields.
+struct Column<'a> {
+    /// The implementing type's path from the sweep module.
+    path: String,
+    /// The member it belongs to.
+    member: &'a str,
+    lowered: &'a Lowered,
+    entries: Vec<Entry<'a>>,
+}
+
+/// A field of an implementing type.
+struct Entry<'a> {
+    name: &'a str,
+    /// As the docs name it: a port on the user's module, not the generated wrapper.
+    sv_name: String,
+    kind: EntryKind<'a>,
+}
+
+enum EntryKind<'a> {
+    Signal { access: Access, ty: &'a RustType },
+    Bundle(&'a Bundle),
+}
+
+/// Builds the traits, claiming their names in the sweep module's type namespace.
+struct Builder<'a> {
+    members: &'a [(String, Lowered)],
+    shared: &'a Shared,
+    types: Namespace,
+    bundle_traits: Vec<PortsTrait>,
+}
+
+impl<'a> Builder<'a> {
+    fn ports_trait(&mut self, dut: &str) -> PortsTrait {
+        let columns: Vec<Column<'a>> = self
+            .members
+            .iter()
+            .map(|(member, l)| Column {
+                path: format!("{member}::Dut"),
+                member,
+                lowered: l,
+                entries: dut_entries(l),
+            })
+            .collect();
+        let mut t = self.build(PORTS_TRAIT.to_owned(), dut.to_owned(), &columns);
+        t.consts = self.consts();
+        t
+    }
+
+    /// The DUT parameters every member has with one Rust type.
+    fn consts(&self) -> Vec<TraitConst> {
+        let first = &self.members[0].1;
+        first
+            .dut_params
+            .iter()
+            .filter(|c| {
+                if let ConstValue::Enum { ty, .. } = &c.value
+                    && !self.shared.has_item(ty)
+                {
+                    return false;
+                }
+                self.members.iter().all(|(_, l)| {
+                    l.dut_params
+                        .iter()
+                        .any(|o| o.name == c.name && const_type(&o.value) == const_type(&c.value))
+                })
+            })
+            .map(|c| TraitConst {
+                name: c.name.clone(),
+                sv_name: c.sv_name.clone(),
+                value: c.value.clone(),
+            })
+            .collect()
+    }
+
+    /// A trait with one method per field every column has alike.
+    fn build(&mut self, name: String, sv_name: String, columns: &[Column<'a>]) -> PortsTrait {
+        let mut t = PortsTrait {
+            name,
+            sv_name,
+            impls: columns.iter().map(|c| c.path.clone()).collect(),
+            consts: Vec::new(),
+            types: Vec::new(),
+            methods: Vec::new(),
+            omitted: Vec::new(),
+        };
+        let mut assoc = Namespace::default();
+        for (i, entry) in columns[0].entries.iter().enumerate() {
+            let same: Option<Vec<&Entry<'a>>> = columns
+                .iter()
+                .map(|c| {
+                    c.entries
+                        .iter()
+                        .find(|e| e.name == entry.name)
+                        .filter(|e| alike(e, entry))
+                })
+                .collect();
+            let Some(same) = same else {
+                t.omitted.push(entry.name.to_owned());
+                continue;
+            };
+            let kind = match &entry.kind {
+                EntryKind::Signal { access, .. } => MethodKind::Signal {
+                    access: *access,
+                    ty: self.signal_type(&mut t, &mut assoc, columns, &same),
+                },
+                EntryKind::Bundle(_) => {
+                    MethodKind::Bundle(self.bundle_type(&mut t, &mut assoc, columns, &same))
+                }
+            };
+            t.methods.push(TraitMethod {
+                name: columns[0].entries[i].name.to_owned(),
+                sv_name: entry.sv_name.clone(),
+                kind,
+            });
+        }
+        t
+    }
+
+    /// A signal's type in the trait: concrete if equal everywhere, else associated.
+    fn signal_type(
+        &self,
+        t: &mut PortsTrait,
+        assoc: &mut Namespace,
+        columns: &[Column<'a>],
+        same: &[&Entry<'a>],
+    ) -> TraitType {
+        let per_impl: Vec<RustType> = columns
+            .iter()
+            .zip(same)
+            .map(|(c, e)| match e.kind {
+                EntryKind::Signal { ty, .. } => self.scoped(ty, c.member),
+                EntryKind::Bundle(_) => unreachable!("`alike` keeps kinds equal"),
+            })
+            .collect();
+        if per_impl.iter().all(|ty| *ty == per_impl[0]) {
+            return TraitType::Concrete(per_impl[0].clone());
+        }
+        let bound = columns
+            .iter()
+            .zip(same)
+            .map(|(c, e)| match e.kind {
+                EntryKind::Signal { ty, .. } => class(ty, c.lowered),
+                EntryKind::Bundle(_) => AssocBound::None,
+            })
+            .reduce(weaker)
+            .unwrap_or(AssocBound::None);
+        let base = match &per_impl[0] {
+            RustType::Named(n) => Some(n.rsplit("::").next().unwrap_or(n).to_owned()),
+            _ => None,
+        }
+        .filter(|base| {
+            per_impl
+                .iter()
+                .all(|ty| matches!(ty, RustType::Named(n) if n.rsplit("::").next() == Some(base)))
+        });
+        let name = base.unwrap_or_else(|| camel(same[0].name.trim_start_matches("r#")));
+        assoc_type(t, assoc, &name, bound, per_impl, same[0].name)
+    }
+
+    /// An interface port's type: the shared bundle, or an associated type bounded by a
+    /// bundle trait over the members' bundles.
+    fn bundle_type(
+        &mut self,
+        t: &mut PortsTrait,
+        assoc: &mut Namespace,
+        columns: &[Column<'a>],
+        same: &[&Entry<'a>],
+    ) -> TraitType {
+        let bundles: Vec<&'a Bundle> = same
+            .iter()
+            .map(|e| match e.kind {
+                EntryKind::Bundle(b) => b,
+                EntryKind::Signal { .. } => unreachable!("`alike` keeps kinds equal"),
+            })
+            .collect();
+        if bundles.iter().all(|b| *b == bundles[0]) && self.shared.has_bundle(bundles[0]) {
+            return TraitType::Concrete(RustType::Named(bundles[0].name.clone()));
+        }
+        let per_impl: Vec<RustType> = columns
+            .iter()
+            .zip(&bundles)
+            .map(|(c, b)| RustType::Named(format!("{}::{}", c.member, b.name)))
+            .collect();
+        let existing = self.bundle_traits.iter().find(|bt| {
+            bt.impls
+                .iter()
+                .zip(&per_impl)
+                .all(|(p, ty)| *ty == RustType::Named(p.clone()))
+        });
+        let trait_name = if let Some(bt) = existing {
+            bt.name.clone()
+        } else {
+            let name = self.types.claim(&format!("{}Ports", bundles[0].name));
+            let sub: Vec<Column<'a>> = columns
+                .iter()
+                .zip(&bundles)
+                .map(|(c, b)| Column {
+                    path: format!("{}::{}", c.member, b.name),
+                    member: c.member,
+                    lowered: c.lowered,
+                    entries: bundle_entries(b),
+                })
+                .collect();
+            let bt = self.build(name.clone(), bundles[0].sv_name.clone(), &sub);
+            self.bundle_traits.push(bt);
+            name
+        };
+        let name = camel(same[0].name.trim_start_matches("r#"));
+        let bound = AssocBound::Trait(trait_name);
+        assoc_type(t, assoc, &name, bound, per_impl, same[0].name)
+    }
+
+    /// `ty` as named from the sweep module: a shared type by its name, a member's own
+    /// type through the member's module.
+    fn scoped(&self, ty: &RustType, member: &str) -> RustType {
+        match ty {
+            RustType::Named(n) if !self.shared.has_item(n) => {
+                RustType::Named(format!("{member}::{n}"))
+            }
+            RustType::Array(elem, len) => {
+                RustType::Array(Box::new(self.scoped(elem, member)), *len)
+            }
+            other => other.clone(),
+        }
+    }
+}
+
+/// The associated type with these per-implementation types (reused when another field
+/// has them), with `user` recorded.
+fn assoc_type(
+    t: &mut PortsTrait,
+    assoc: &mut Namespace,
+    name: &str,
+    bound: AssocBound,
+    per_impl: Vec<RustType>,
+    user: &str,
+) -> TraitType {
+    if let Some(i) = t.types.iter().position(|a| a.per_impl == per_impl) {
+        t.types[i].users.push(user.to_owned());
+        return TraitType::Assoc(i);
+    }
+    t.types.push(AssocType {
+        name: assoc.claim(name),
+        bound,
+        per_impl,
+        users: vec![user.to_owned()],
+    });
+    TraitType::Assoc(t.types.len() - 1)
+}
+
+/// Whether two fields of the same name can be one trait method.
+fn alike(a: &Entry<'_>, b: &Entry<'_>) -> bool {
+    match (&a.kind, &b.kind) {
+        (EntryKind::Signal { access: x, .. }, EntryKind::Signal { access: y, .. }) => x == y,
+        (EntryKind::Bundle(_), EntryKind::Bundle(_)) => true,
+        _ => false,
+    }
+}
+
+/// The fields of a member's `Dut`.
+fn dut_entries(l: &Lowered) -> Vec<Entry<'_>> {
+    let on_dut = |s: &str| match s.strip_prefix(&format!("{}.", l.top)) {
+        Some(port) => format!("{}.{port}", dut_module(l)),
+        None => s.to_owned(),
+    };
+    l.fields
+        .iter()
+        .map(|f| match f {
+            DutField::Signal { name, slot } => {
+                let s = &l.signals[*slot as usize];
+                Entry {
+                    name,
+                    sv_name: on_dut(&s.name),
+                    kind: EntryKind::Signal {
+                        access: s.access,
+                        ty: &s.ty,
+                    },
+                }
+            }
+            DutField::Bundle { name, bundle, .. } => {
+                let b = &l.bundles[*bundle];
+                Entry {
+                    name,
+                    sv_name: b.sv_name.clone(),
+                    kind: EntryKind::Bundle(b),
+                }
+            }
+        })
+        .collect()
+}
+
+/// The fields of a bundle.
+fn bundle_entries(b: &Bundle) -> Vec<Entry<'_>> {
+    b.members
+        .iter()
+        .map(|m| Entry {
+            name: &m.name,
+            sv_name: m.sv_name.clone(),
+            kind: EntryKind::Signal {
+                access: m.access,
+                ty: &m.ty,
+            },
+        })
+        .collect()
+}
+
+/// What a generic body may assume of `ty` in `lowered`.
+fn class(ty: &RustType, lowered: &Lowered) -> AssocBound {
+    match ty {
+        RustType::Bit | RustType::Bits(_) | RustType::WideBits { .. } => AssocBound::Vector,
+        RustType::Array(..) => AssocBound::None,
+        RustType::Named(n) => match lowered.items.iter().find(|i| i.name == *n) {
+            Some(Item {
+                kind: ItemKind::Alias { target },
+                ..
+            }) => class(target, lowered),
+            Some(Item {
+                storage: Some(_), ..
+            }) => AssocBound::Value,
+            _ => AssocBound::None,
+        },
+    }
+}
+
+/// The bound both `a` and `b` satisfy.
+fn weaker(a: AssocBound, b: AssocBound) -> AssocBound {
+    match (a, b) {
+        (AssocBound::Vector, AssocBound::Vector) => AssocBound::Vector,
+        (AssocBound::Vector | AssocBound::Value, AssocBound::Vector | AssocBound::Value) => {
+            AssocBound::Value
+        }
+        _ => AssocBound::None,
+    }
+}
+
+/// The Rust type of a constant, as a comparable key.
+fn const_type(value: &ConstValue) -> String {
+    match value {
+        ConstValue::Int { ty, .. } => (*ty).to_owned(),
+        ConstValue::Wide { width, .. } => format!("wide{width}"),
+        ConstValue::Enum { ty, .. } => format!("enum {ty}"),
+        ConstValue::Str(_) => "str".to_owned(),
+        ConstValue::Real(_) => "f64".to_owned(),
+    }
+}

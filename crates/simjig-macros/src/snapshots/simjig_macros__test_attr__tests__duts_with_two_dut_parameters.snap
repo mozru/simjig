@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(duts = [a::Dut]), quote! { async fn t<D: X>(a: D, b: D) {} })"
+---
+error: with `duts = [..]`, the test takes exactly one DUT parameter, of a type every listed DUT is: `async fn t<D: sweep::Ports>(dut: D)`

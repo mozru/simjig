@@ -20,4 +20,5 @@ mod probes;
 mod rebuild;
 mod recipe;
 mod support;
+mod sweep;
 mod ui;

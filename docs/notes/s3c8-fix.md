@@ -51,6 +51,8 @@ off "no `%Error` except `Exiting due to .. warning(s)`", and `.. 1 error(s), N
 warning(s)` also ends in `warning(s)`: fixed (`error::is_error_line`).
 
 ## Parameter sweeps: why documentation (c), not shared types (a) or a trait (b)
+Superseded: `n-sweep.md` builds (a) and (b) together (`simjig_build::Sweep`).
+
 - (b) A generated per-top trait (`PktParserPorts`) cannot have one signature per port:
   a struct or enum port's type is generated per DUT (`pkt_small::Hdr`, `pkt_big::Hdr`),
   and a parameter-sized port is `Bits<4>` in one and `Bits<64>` in another, so most

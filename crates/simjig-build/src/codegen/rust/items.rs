@@ -11,7 +11,7 @@ use super::super::{EnumVariant, Item, ItemKind, RustType, StructField, UnionView
 use super::{BITS, RT, base_value, derive, prim, raw_type, render};
 
 /// Emits one item.
-pub(super) fn emit_item(w: &mut Writer, item: &Item) {
+pub(crate) fn emit_item(w: &mut Writer, item: &Item) {
     match &item.kind {
         ItemKind::Alias { target } => {
             w.line(format!(

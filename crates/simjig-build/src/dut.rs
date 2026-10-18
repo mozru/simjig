@@ -668,6 +668,9 @@ pub struct Dut {
     config: DutConfig,
     recipe: CppRecipe,
     emitter: Emitter,
+    /// Whether [`Dut::emitter`] replaced the code generator, which a sweep refuses
+    /// (`crate::sweep`): a flag, as function pointers cannot be compared reliably.
+    custom_emitter: bool,
 }
 
 impl Default for Dut {
@@ -676,6 +679,7 @@ impl Default for Dut {
             config: DutConfig::default(),
             recipe: CppRecipe::default(),
             emitter: emit::DEFAULT_EMITTER,
+            custom_emitter: false,
         }
     }
 }
@@ -877,6 +881,7 @@ impl Dut {
     /// Replaces the code generator (default: [`emit::DEFAULT_EMITTER`]).
     pub fn emitter(mut self, emitter: Emitter) -> Self {
         self.emitter = emitter;
+        self.custom_emitter = true;
         self
     }
 
@@ -1062,6 +1067,16 @@ fn check_dpi_header(imports: &[DpiImport], obj_dir: &Path, prefix: &str) -> Resu
 }
 
 impl Dut {
+    /// Whether [`Dut::emitter`] replaced the code generator.
+    pub(crate) fn has_custom_emitter(&self) -> bool {
+        self.custom_emitter
+    }
+
+    /// The reruns of this DUT's failed build ([`failed_reruns`]).
+    pub(crate) fn failed_reruns(&self, out_dir: Option<&Path>) -> Vec<String> {
+        failed_reruns(&self.config, &self.recipe, out_dir)
+    }
+
     /// The IR (cached or from the JSON pass), the emitted files placed, and the layout
     /// check run unless it passed for this IR before; with the IR's warnings
     /// ([`pipeline::iface_param_warnings`]), given on a cached IR too.
@@ -1163,7 +1178,7 @@ fn reruns<'a>(named: impl Iterator<Item = &'a PathBuf>, out_dir: Option<&Path>) 
 
 /// Whether `name` is a C identifier (letters, digits, `_`; not starting with a digit),
 /// which a DUT name must be: it names a Rust module, a C++ class and a `cfg`.
-fn is_c_ident(name: &str) -> bool {
+pub(crate) fn is_c_ident(name: &str) -> bool {
     !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')

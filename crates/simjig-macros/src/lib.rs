@@ -38,7 +38,7 @@ mod test_attr;
 /// parameter is the context, a by-value parameter a DUT; the context comes first. Up to
 /// four DUTs share one simulation (`async fn t(a: inv::Dut, b: flop::Dut)`), each with its
 /// own model, evaluated in parameter order in every delta; see `simjig::Lockstep`. The
-/// function cannot be generic, `const`, `unsafe` or a method. Other attributes
+/// function cannot be generic (except with `duts`), `const`, `unsafe` or a method. Other attributes
 /// (`#[ignore]`, `#[should_panic]`, docs) apply to the generated test.
 ///
 /// # What the test does

@@ -8,7 +8,9 @@
 //! - a DPI export name defined by two models: DPI symbols are global C functions
 //!   (IEEE 1800-2023 §35.5.1), so every caller would bind to one model's export;
 //! - the covergroup runtime compiled with two `VM_COVERAGE` settings (see
-//!   [`claim_covergroups`]).
+//!   [`claim_covergroups`]);
+//! - a sweep's name, which names a generated file like a DUT's, and its members, whose
+//!   files the sweep rewrites (see [`claim_sweep`]).
 //!
 //! It also keeps the link arguments that must appear once per binary: an `-rpath` given
 //! twice makes ld64 warn on every link, and FST models ask for one per native library
@@ -42,6 +44,9 @@ struct Model {
 }
 
 static BUILT: Mutex<Vec<Model>> = Mutex::new(Vec::new());
+
+/// The sweeps this build script claimed: `OUT_DIR`, name and member names.
+static SWEEPS: Mutex<Vec<(PathBuf, String, Vec<String>)>> = Mutex::new(Vec::new());
 
 /// The `-rpath` link arguments already emitted, per `OUT_DIR`.
 static RPATHS: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
@@ -82,6 +87,16 @@ fn config_error(config: &DutConfig, msg: String) -> Error {
 /// case-insensitive filesystem (macOS and Windows by default), so the second would
 /// overwrite the first's module, and the build would differ between machines.
 pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Result<(), Error> {
+    if let Some(sweep) = sweep_named(&env.out_dir, &config.name) {
+        return Err(config_error(
+            config,
+            format!(
+                "this build script has a sweep named `{sweep}`, and both would generate \
+                 `OUT_DIR/simjig/{}.rs`; rename one",
+                config.name
+            ),
+        ));
+    }
     let mut built = built();
     if let Some(m) = built.iter().find(|m| {
         m.out_dir == env.out_dir
@@ -133,6 +148,59 @@ pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Re
             Ok(())
         }
     }
+}
+
+/// The sweep of this build script named `name`, or a name differing only in case.
+fn sweep_named(out_dir: &Path, name: &str) -> Option<String> {
+    let sweeps = SWEEPS.lock().unwrap_or_else(PoisonError::into_inner);
+    sweeps
+        .iter()
+        .find(|(dir, n, _)| dir == out_dir && n.eq_ignore_ascii_case(name))
+        .map(|(_, n, _)| n.clone())
+}
+
+/// Records the sweep `name` of `members`, before any member builds. Refused when a DUT
+/// (or another sweep) has the name, which also names `OUT_DIR/simjig/<name>.rs`, and when a
+/// member belongs to another sweep, which would rewrite its file again. The same sweep
+/// claimed twice is accepted.
+pub(crate) fn claim_sweep(env: &BuildEnv, name: &str, members: &[String]) -> Result<(), Error> {
+    let fail = |msg: String| {
+        Err(Error::Config {
+            dut: name.to_owned(),
+            msg,
+        })
+    };
+    if claimed(&env.out_dir, name) {
+        return fail(format!(
+            "a DUT of this build script is named `{name}` (or differs only in case), and the \
+             sweep's module would be its `OUT_DIR/simjig/{name}.rs`; rename the sweep"
+        ));
+    }
+    let mut sweeps = SWEEPS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mine = sweeps.iter().filter(|(dir, _, _)| *dir == env.out_dir);
+    for (_, other, others) in mine {
+        if other.eq_ignore_ascii_case(name) && (other != name || others != members) {
+            return fail(format!(
+                "this build script already has a sweep named `{other}`, with other DUTs; \
+                 give each sweep its own name"
+            ));
+        }
+        if other != name
+            && let Some(m) = members.iter().find(|m| others.contains(m))
+        {
+            return fail(format!(
+                "DUT `{m}` is already in sweep `{other}`; a DUT can be in one sweep only, \
+                 so build the configuration again under another name"
+            ));
+        }
+    }
+    if !sweeps
+        .iter()
+        .any(|(dir, n, _)| *dir == env.out_dir && n == name)
+    {
+        sweeps.push((env.out_dir.clone(), name.to_owned(), members.to_vec()));
+    }
+    Ok(())
 }
 
 /// Records that the model `prefix` claimed built successfully.

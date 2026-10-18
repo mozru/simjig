@@ -16,7 +16,7 @@ error: put the context parameter first: `(sim: &simjig::TestCtx, dut: Dut)`
 10 | async fn context_last(dut: Dut, sim: &simjig::TestCtx) {}
    |                                 ^^^^^^^^^^^^^^^^^^^^^
 
-error: a simjig test cannot be generic; name the DUT type in the parameter list
+error: a simjig test cannot be generic; name the DUT type in the parameter list, or list the DUT types to run a generic body on: `duts = [small::Dut, big::Dut]`
   --> tests/harness_ui/bad_params.rs:13:17
    |
 13 | async fn generic<D>(dut: D) {}

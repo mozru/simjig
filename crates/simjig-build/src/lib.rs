@@ -34,6 +34,7 @@ mod optfile;
 mod pipeline;
 mod runtime;
 mod script;
+mod sweep;
 mod syms;
 mod verilator;
 
@@ -49,6 +50,7 @@ pub use header::{
 };
 /// The type IR crate, re-exported so emitters name the same `Design` as the pipeline.
 pub use svtypes;
+pub use sweep::{BuiltSweep, Sweep};
 pub use verilator::Verilator;
 
 /// Version of the C ABI between generated Rust and the C++ runtime. It is part of every

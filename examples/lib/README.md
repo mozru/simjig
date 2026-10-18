@@ -79,16 +79,21 @@ A full FIFO takes a push only in a cycle that also pops; an empty FIFO ignores a
 (`rtl/fifo_pkg.sv`), so its testbench drives and compares the generated `Item` struct
 (`item.kind`, `item.tag`, `item.data`) and the enum `Kind` instead of raw bits.
 
-`build.rs` builds two models: `sync_fifo` (8 bits, 4 deep, registered read) and
-`item_fifo` (`Item`, 4 deep, FWFT). `tests/sync_fifo.rs` copies either model's handles into
-one `Fifo<T>` struct, so one driver, monitor and model serve both. The monitor's model
-honours `rst` too: a reset edge discards its entries, so any test may reset mid-run.
+`build.rs` builds the sweep `sync_fifo` of two raw FIFOs with a registered read
+(`fifo_8x4`: 8 bits, 4 deep; `fifo_32x16`: 32 bits, 16 deep; see the top README's "A
+parameter sweep"), and `item_fifo` (`Item`, 4 deep, FWFT). The raw FIFO's tests are
+written once over `sync_fifo::Ports` and run on both configurations
+(`#[simjig::test(duts = [..])]`, so `random_traffic_matches_the_model::fifo_32x16`).
+`tests/sync_fifo.rs` copies any model's handles into one `Fifo<T, C>` struct, so one
+driver, monitor and model serve all three. The monitor's model honours `rst` too: a reset
+edge discards its entries, so any test may reset mid-run.
 
-**To test a plain FIFO of your own, copy `tests/sync_fifo.rs`.** `Fifo<T>` and the
-`Payload` bound are there only because this crate builds two models of one FIFO: with one
-model, use its `Dut` handles directly and its payload type in `Model`, and keep the rest
-(the monitor, `reset`, `cycle`, the producer and consumer). `tests/async_fifo.rs` is the
-one to copy for a dual-clock FIFO.
+**To test a plain FIFO of your own, copy `tests/sync_fifo.rs`.** `Fifo<T, C>` is there
+only because this crate tests a sweep and a second module of one FIFO: with one model,
+use its `Dut` handles directly and its payload type in `Model`; with one sweep, take
+`D: sync_fifo::Ports` in the helpers; and keep the rest (the monitor, `reset`, `cycle`,
+the producer and consumer). `tests/async_fifo.rs` is the one to copy for a dual-clock
+FIFO.
 
 While `empty`, an FWFT `rd_data` is stale and means nothing; a registered `rd_data` reads
 0 from a reset until the first pop. Reset beats a `push` or `pop` at the same edge.
@@ -96,13 +101,17 @@ While `empty`, an FWFT `rd_data` is stale and means nothing; a registered `rd_da
 | Test | Checks |
 |---|---|
 | `random_traffic_matches_the_model`, `random_items_match_the_model` | 2000 cycles of bursty pushes and pops against the model (`count`, `full`, `empty`, `rd` every edge); then a drain; every corner reached (full, empty, a dropped push, push with pop while full) |
-| `fills_to_full_and_drains_to_empty` | `count` and `full` while filling, the dropped fifth push, order, a pop of an empty FIFO |
-| `push_and_pop_in_one_cycle` | when empty, in between, and when full |
+| `fills_to_full_and_drains_to_empty` | `count` and `full` while filling, the dropped `DEPTH + 1`th push, order, a pop of an empty FIFO |
+| `count_climbs_to_the_depth` | `count` and `full` push by push, in the top README's sweep example |
+| `push_and_pop_in_one_cycle` | when empty, in between, and when full (`fifo_8x4` only) |
 | `registered_read_waits_for_a_pop`, `first_word_falls_through` | the two read modes |
 | `a_reset_during_traffic_empties_the_fifo`, `a_reset_during_item_traffic_empties_the_fifo` | `rst` for one edge mid-traffic, with entries inside and both pointers away from zero: right after it `count` is 0, `empty` set, `full` clear, a registered `rd` zero; the model restarts empty and traffic goes on, checked as before |
 | `a_reset_beats_push_and_pop`, `a_reset_beats_item_push_and_pop` | directed: two entries inside, both pointers away from zero, `push` and `pop` held high across the reset edge: after it `count` 0, `empty` set, `full` clear, a registered `rd` zero (not the entry the pop would have read); then one push and pop work |
 | `random_continuations_from_full` | fills once, then `fork::run_from_checkpoint` runs four random branches from that full state, each with its own seed (under nextest; multi-threaded `cargo test` skips it, saying so) |
 | `parameters_are_checked_at_elaboration` | runs `verilator --lint-only -Wall` on other parameter sets, and on a DEPTH or WIDTH it must refuse (`$fatal`) |
+| `the_readme_sweep_is_this_crate_code` | the top README's sweep example is this crate's `build.rs` and test code |
+
+Every test of the raw FIFO but `push_and_pop_in_one_cycle` runs once per configuration.
 
 ## skid_buffer
 

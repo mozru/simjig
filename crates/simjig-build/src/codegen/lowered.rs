@@ -426,3 +426,136 @@ pub struct WrapperIface {
     /// The bundle members in order: `(signal name, wrapper port, direction)`.
     pub members: Vec<(String, String, Direction)>,
 }
+
+/// A parameter sweep: several configurations (members) of one DUT module, lowered together
+/// by [`lower_sweep`](super::lower_sweep) into one Rust module that holds what they share
+/// and a trait every member's `Dut` implements.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoweredSweep {
+    /// The sweep's Rust module name (`Sweep::new`), which `include_dut!` names.
+    pub name: String,
+    /// The DUT module every member configures (the user's, not a generated wrapper).
+    pub dut: String,
+    /// The members, in sweep order: each one's module name and parameters.
+    pub members: Vec<SweepMember>,
+    /// The generated types identical in every member, defined once in the sweep module
+    /// (member 0's IR order, so dependencies come first).
+    pub items: Vec<Item>,
+    /// The package-constant modules identical in every member.
+    pub packages: Vec<ConstGroup>,
+    /// The interface bundles identical in every member.
+    pub bundles: Vec<Bundle>,
+    /// The names each member module imports from the sweep module instead of defining
+    /// them: the shared items (and enums' variant enums), packages and bundles.
+    pub reexports: Vec<String>,
+    /// The trait every member's `Dut` implements.
+    pub ports: PortsTrait,
+    /// One trait per interface port whose bundle differs between members.
+    pub bundle_traits: Vec<PortsTrait>,
+}
+
+/// One configuration of a [`LoweredSweep`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SweepMember {
+    /// Its Rust module name inside the sweep module (the DUT name).
+    pub name: String,
+    /// The DUT's parameters in this configuration.
+    pub params: Vec<Const>,
+}
+
+/// A generated trait over the signals several generated types have in common: the
+/// sweep's `Ports` over each member's `Dut`, or a bundle trait over interface bundles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PortsTrait {
+    /// Rust name.
+    pub name: String,
+    /// What it describes: the DUT module, or `interface.modport`.
+    pub sv_name: String,
+    /// The implementing types, as paths from the sweep module (`fifo_small::Dut`); every
+    /// per-implementation list below is in this order.
+    pub impls: Vec<String>,
+    /// Parameters every implementation has with one Rust type, as associated consts.
+    pub consts: Vec<TraitConst>,
+    /// Associated types: one per distinct list of per-implementation types.
+    pub types: Vec<AssocType>,
+    /// One method per signal or bundle every implementation has with one access.
+    pub methods: Vec<TraitMethod>,
+    /// Fields left out: not in every implementation, or not alike in all of them.
+    pub omitted: Vec<String>,
+}
+
+/// An associated const of a [`PortsTrait`]: a DUT parameter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraitConst {
+    /// Rust name, as on each `Dut`.
+    pub name: String,
+    /// SystemVerilog name.
+    pub sv_name: String,
+    /// The first implementation's value; its type is every implementation's.
+    pub value: ConstValue,
+}
+
+/// An associated type of a [`PortsTrait`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssocType {
+    /// Rust name.
+    pub name: String,
+    /// What a generic body may assume of it.
+    pub bound: AssocBound,
+    /// The type in each implementation, with paths from the sweep module.
+    pub per_impl: Vec<RustType>,
+    /// The fields whose type it is, in declaration order.
+    pub users: Vec<String>,
+}
+
+/// The bound of an [`AssocType`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AssocBound {
+    /// `simjig::Vector`: a bit vector in every implementation.
+    Vector,
+    /// `simjig::Value`: a packed value in every implementation.
+    Value,
+    /// No bound: an unpacked array somewhere, which has no `get`/`set`.
+    None,
+    /// A bundle trait of the sweep, by name.
+    Trait(String),
+}
+
+/// A method of a [`PortsTrait`]: returns a field of the implementing type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraitMethod {
+    /// Rust name, the field's.
+    pub name: String,
+    /// The signal's hierarchical name in the first implementation (`fifo.clk`), or the
+    /// interface port's `interface.modport`.
+    pub sv_name: String,
+    /// What it returns.
+    pub kind: MethodKind,
+}
+
+/// What a [`TraitMethod`] returns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MethodKind {
+    /// A signal handle of this access.
+    Signal {
+        /// The handle kind.
+        access: Access,
+        /// Its value type.
+        ty: TraitType,
+    },
+    /// An interface bundle.
+    Bundle(TraitType),
+}
+
+/// A type in a [`PortsTrait`]'s signatures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TraitType {
+    /// The same type in every implementation (generated names are the sweep's shared
+    /// items).
+    Concrete(RustType),
+    /// The associated type at this index of [`PortsTrait::types`].
+    Assoc(usize),
+}

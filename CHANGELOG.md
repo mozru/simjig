@@ -4,6 +4,31 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Parameter sweeps are first class. `simjig_build::Sweep::new("sync_fifo").dut(a).dut(b)
+  .build()` builds several configurations of one module and one Rust module over them:
+  `simjig::include_dut!(sync_fifo)` brings in each configuration
+  (`sync_fifo::fifo_8x4::Dut`), the generated types equal in every configuration,
+  defined once (`fifo_8x4::Item` is `sync_fifo::Item`), and the trait
+  `sync_fifo::Ports`, which every configuration's `Dut` implements: one method per
+  signal (`dut.clk()`), the parameters as associated consts (`D::DEPTH`), and an
+  associated type where the configurations' types differ (`D::Count`, shared by signals
+  that agree in every configuration), bounded by the new `simjig::Vector` or
+  `simjig::Value`. An interface port whose bundle differs gets a bundle trait. The README
+  trait-and-macro pattern is gone; see "A parameter sweep". A sweep's member files import
+  the shared types from the sweep module (`pub use super::{..}`), so they are included
+  through it; a DUT built outside a sweep is generated as before (snapshots unchanged).
+  Reviewed new snapshots: `codegen_it::sweep` (`sweep__*`, `iface_sweep__*`).
+- `#[simjig::test(duts = [a::Dut, b::Dut])]` on a generic `async fn t<D: s::Ports>(dut: D)`
+  makes one test per listed type (`t::a`, `t::b`), each running the body as written, so a
+  failure points into it. The messages for a generic test and an unknown argument now
+  mention `duts`.
+- `simjig::Value` (a value a handle gets and sets, compares and prints) and
+  `simjig::Vector` (a bit vector: from and `==` a `u128`, `to_u128()`), implemented for
+  every type with their bounds.
+- A DUT may not be named like a sweep of the same build script (both name
+  `OUT_DIR/simjig/<name>.rs`), and a DUT may be in one sweep only.
+- `examples/lib` builds `sync_fifo` as the sweep of `fifo_8x4` and `fifo_32x16`; its raw
+  FIFO tests run on both (`random_traffic_matches_the_model::fifo_32x16`).
 - `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
   `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
   refused; `--threads 2147483648` is negative and left to Verilator's own error.

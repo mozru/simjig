@@ -7,7 +7,14 @@
 //! #[simjig::test(timeout = "none")]                 no time limit
 //! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
+//!
+//! #[simjig::test(duts = [<Dut>, ...])]              one test per DUT type
+//! async fn <name><D: ..>([<sim>: &<Ctx>,] <dut>: D) [-> <Output>] { ... }
 //! ```
+//! With `duts`, the function may be generic and takes exactly one DUT. The expansion is a
+//! module `<name>` holding the function as written and one `#[test]` per DUT type, named
+//! after it (`sweep::small::Dut` gives `<name>::small`), each calling the function with its
+//! DUT: a parameter sweep's body written once, with failures located in it.
 //! A parameter whose type is a shared reference is the test context; a parameter taken by
 //! value is a DUT, whose type implements `simjig::DutModel`. Both are optional; when both
 //! are present the context comes first. Up to [`MAX_DUTS`] DUT parameters share one
@@ -22,7 +29,7 @@
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
-use syn::parse::Parser;
+use syn::parse::{Parse, Parser};
 use syn::spanned::Spanned;
 use syn::{FnArg, ItemFn, Lit, LitStr, ReturnType, Safety, Type, Visibility};
 
@@ -30,8 +37,11 @@ use syn::{FnArg, ItemFn, Lit, LitStr, ReturnType, Safety, Type, Visibility};
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args = parse_args(attr)?;
     let func: ItemFn = syn::parse2(item)?;
-    let test = TestFn::validate(func)?;
-    Ok(emit(&args, &test))
+    let test = TestFn::validate(func, args.duts.is_some())?;
+    match &args.duts {
+        Some(duts) => emit_each(&args, &test, duts),
+        None => Ok(emit(&args, &test)),
+    }
 }
 
 /// The attribute's arguments.
@@ -41,6 +51,8 @@ struct Args {
     timeout: Option<TimeoutArg>,
     /// The path the expansion reaches simjig by; `None` is `::simjig`.
     krate: Option<syn::Path>,
+    /// `duts = [..]`: the DUT types to instantiate the function for.
+    duts: Option<Vec<Type>>,
 }
 
 /// A `timeout` argument.
@@ -93,11 +105,24 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             }
             args.krate = Some(meta.value()?.parse()?);
             Ok(())
+        } else if meta.path.is_ident("duts") {
+            if args.duts.is_some() {
+                return Err(meta.error("`duts` is given twice"));
+            }
+            let content;
+            let value = meta.value()?;
+            syn::bracketed!(content in value);
+            let list = content.parse_terminated(Type::parse, syn::Token![,])?;
+            if list.is_empty() {
+                return Err(meta.error("`duts` lists no DUT type: `duts = [small::Dut, big::Dut]`"));
+            }
+            args.duts = Some(list.into_iter().collect());
+            Ok(())
         } else {
             Err(meta.error(
                 "unknown `#[simjig::test]` argument; the arguments are \
-                 `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`) and \
-                 `crate = <path to simjig>`",
+                 `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`), \
+                 `duts = [<DUT type>, ..]` and `crate = <path to simjig>`",
             ))
         }
     });
@@ -153,10 +178,19 @@ struct TestFn {
 
 impl TestFn {
     /// Checks the signature, collecting every error so the user sees them all at once.
-    fn validate(func: ItemFn) -> syn::Result<Self> {
+    /// `each`: the attribute has `duts`, so the function may be generic and must take
+    /// exactly one DUT.
+    fn validate(func: ItemFn, each: bool) -> syn::Result<Self> {
         let mut errors = Vec::new();
-        check_qualifiers(&func, &mut errors);
+        check_qualifiers(&func, each, &mut errors);
         let (sim, duts) = classify_params(&func, &mut errors);
+        if each && duts.len() != 1 {
+            errors.push(syn::Error::new_spanned(
+                &func.sig.inputs,
+                "with `duts = [..]`, the test takes exactly one DUT parameter, of a type \
+                 every listed DUT is: `async fn t<D: sweep::Ports>(dut: D)`",
+            ));
+        }
         let mut errors = errors.into_iter();
         if let Some(mut first) = errors.next() {
             for e in errors {
@@ -168,7 +202,7 @@ impl TestFn {
     }
 }
 
-fn check_qualifiers(func: &ItemFn, errors: &mut Vec<syn::Error>) {
+fn check_qualifiers(func: &ItemFn, each: bool, errors: &mut Vec<syn::Error>) {
     let sig = &func.sig;
     if sig.asyncness.is_none() {
         errors.push(syn::Error::new(
@@ -195,10 +229,11 @@ fn check_qualifiers(func: &ItemFn, errors: &mut Vec<syn::Error>) {
             "a simjig test cannot have an `extern` ABI",
         ));
     }
-    if !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
+    if !each && (!sig.generics.params.is_empty() || sig.generics.where_clause.is_some()) {
         errors.push(syn::Error::new_spanned(
             &sig.generics,
-            "a simjig test cannot be generic; name the DUT type in the parameter list",
+            "a simjig test cannot be generic; name the DUT type in the parameter list, \
+             or list the DUT types to run a generic body on: `duts = [small::Dut, big::Dut]`",
         ));
     }
     if let Some(variadic) = &sig.variadic {
@@ -323,23 +358,9 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
     body.vis = Visibility::Inherited;
     let (dut_ty, dut_pat, dut_vars) = dut_parts(&test.duts);
     let (sim_pat, call_args) = closure_params(test, &dut_vars);
-    let krate = args
-        .krate
-        .as_ref()
-        .map_or_else(|| quote!(::simjig), |path| quote!(#path));
-    let timeout = timeout_expr(&krate, args.timeout);
-    // Whether these fire depends on user code, so this is `allow`, not `expect` (an
-    // unfulfilled `expect` would warn instead): a body need not await, and the test's
-    // `simjig::Result` carries the plain-data `Failure`, which is large by design.
-    let allow = quote!(#[allow(clippy::unused_async, clippy::result_large_err)]);
-    let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
-    let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
-    let output_check = match &sig.output {
-        ReturnType::Default => quote!(),
-        ReturnType::Type(_, ty) => quote_spanned!(ty.span()=>
-            #krate::__private::assert_test_output::<#ty>();
-        ),
-    };
+    let allow = allow();
+    let output_check = output_check(args, sig);
+    let run = run_call(args, test, &dut_ty, &sim_pat, &dut_pat, ident, &call_args);
     quote! {
         #[::core::prelude::v1::test]
         #(#attrs)*
@@ -347,18 +368,155 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
             #allow
             #body
             #output_check
-            #krate::__private::run_test::<#dut_ty, _, _>(
-                &#krate::__private::TestMeta {
-                    module_path: ::core::module_path!(),
-                    name: ::core::stringify!(#ident),
-                    package: ::core::env!("CARGO_PKG_NAME"),
-                    timeout: #timeout,
-                    ignored: #ignored,
-                    should_panic: #should_panic,
-                },
-                |#sim_pat, #dut_pat| async move { #ident(#(#call_args),*).await },
-            );
+            #run
         }
+    }
+}
+
+/// How the expansion names simjig.
+fn krate(args: &Args) -> TokenStream {
+    args.krate
+        .as_ref()
+        .map_or_else(|| quote!(::simjig), |path| quote!(#path))
+}
+
+/// The lints the user's function is exempt from.
+fn allow() -> TokenStream {
+    // Whether these fire depends on user code, so this is `allow`, not `expect` (an
+    // unfulfilled `expect` would warn instead): a body need not await, and the test's
+    // `simjig::Result` carries the plain-data `Failure`, which is large by design.
+    quote!(#[allow(clippy::unused_async, clippy::result_large_err)])
+}
+
+/// The check that the function's output is one a test may return, at its type's span.
+fn output_check(args: &Args, sig: &syn::Signature) -> TokenStream {
+    let krate = krate(args);
+    match &sig.output {
+        ReturnType::Default => quote!(),
+        ReturnType::Type(_, ty) => quote_spanned!(ty.span()=>
+            #krate::__private::assert_test_output::<#ty>();
+        ),
+    }
+}
+
+/// The `run_test` call of the test `name`, running the user's function on `dut_ty`.
+fn run_call(
+    args: &Args,
+    test: &TestFn,
+    dut_ty: &TokenStream,
+    sim_pat: &TokenStream,
+    dut_pat: &TokenStream,
+    name: &Ident,
+    call_args: &[TokenStream],
+) -> TokenStream {
+    let krate = krate(args);
+    let timeout = timeout_expr(&krate, args.timeout);
+    let attrs = &test.func.attrs;
+    let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
+    let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
+    let func = &test.func.sig.ident;
+    quote! {
+        #krate::__private::run_test::<#dut_ty, _, _>(
+            &#krate::__private::TestMeta {
+                module_path: ::core::module_path!(),
+                name: ::core::stringify!(#name),
+                package: ::core::env!("CARGO_PKG_NAME"),
+                timeout: #timeout,
+                ignored: #ignored,
+                should_panic: #should_panic,
+            },
+            |#sim_pat, #dut_pat| async move { #func(#(#call_args),*).await },
+        );
+    }
+}
+
+/// `duts = [..]`: a module named after the function, holding it and one test per DUT.
+fn emit_each(args: &Args, test: &TestFn, duts: &[Type]) -> syn::Result<TokenStream> {
+    let ItemFn {
+        attrs, vis, sig, ..
+    } = &test.func;
+    let ident = &sig.ident;
+    let mut body = test.func.clone();
+    body.attrs.clear();
+    body.vis = Visibility::Inherited;
+    let mut names: Vec<Ident> = Vec::new();
+    for ty in duts {
+        let name = test_name(ty)?;
+        if name == *ident || names.contains(&name) {
+            return Err(syn::Error::new_spanned(
+                ty,
+                format!(
+                    "the test for this DUT would be `{ident}::{name}`, which another DUT or \
+                     the function already names; list each DUT once"
+                ),
+            ));
+        }
+        names.push(name);
+    }
+    // Docs and `cfg`s on the module; the rest (`#[ignore]`, `#[should_panic]`) on each test.
+    let on_module = |a: &&syn::Attribute| {
+        ["doc", "cfg", "cfg_attr"]
+            .iter()
+            .any(|n| a.path().is_ident(n))
+    };
+    let mod_attrs: Vec<&syn::Attribute> = attrs.iter().filter(on_module).collect();
+    let test_attrs: Vec<&syn::Attribute> = attrs.iter().filter(|a| !on_module(a)).collect();
+    let output_check = output_check(args, sig);
+    let tests: Vec<TokenStream> = duts
+        .iter()
+        .zip(&names)
+        .map(|(ty, name)| {
+            let dut_var = format_ident!("__simjig_dut");
+            let (sim_pat, call_args) = closure_params(test, std::slice::from_ref(&dut_var));
+            let run = run_call(
+                args,
+                test,
+                &quote!(#ty),
+                &sim_pat,
+                &quote!(#dut_var),
+                name,
+                &call_args,
+            );
+            quote! {
+                #[::core::prelude::v1::test]
+                #(#test_attrs)*
+                fn #name() {
+                    #output_check
+                    #run
+                }
+            }
+        })
+        .collect();
+    let allow = allow();
+    Ok(quote! {
+        #(#mod_attrs)*
+        #vis mod #ident {
+            #[allow(unused_imports)]
+            use super::*;
+
+            #allow
+            #body
+
+            #(#tests)*
+        }
+    })
+}
+
+/// The name of the test for DUT type `ty`: its path's last segment, or the one before a
+/// last `Dut` (`sweep::small::Dut` is `small`).
+fn test_name(ty: &Type) -> syn::Result<Ident> {
+    let segments: Vec<&Ident> = match ty {
+        Type::Path(p) if p.qself.is_none() => p.path.segments.iter().map(|s| &s.ident).collect(),
+        _ => Vec::new(),
+    };
+    match segments.as_slice() {
+        [.., module, last] if *last == "Dut" => Ok((*module).clone()),
+        [.., last] if *last != "Dut" => Ok((*last).clone()),
+        _ => Err(syn::Error::new_spanned(
+            ty,
+            "a DUT in `duts` is a type path that names its test: `sweep::small::Dut` (the \
+             test is `small`) or `Small`",
+        )),
     }
 }
 
@@ -481,6 +639,46 @@ mod tests {
                 quote!(timeout = "1ns", timeout = "2ns"),
                 quote! { async fn t() {} }
             )
+        );
+    }
+
+    #[test]
+    fn expands_one_test_per_listed_dut() {
+        insta::assert_snapshot!(render(
+            quote!(timeout = "1us", duts = [fifo::small::Dut, fifo::big::Dut]),
+            quote! {
+                /// Docs go on the module.
+                #[ignore]
+                pub async fn resets<D: fifo::Ports>(sim: &TestCtx, dut: D) -> simjig::Result {
+                    Ok(())
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_bad_dut_lists() {
+        insta::assert_snapshot!(
+            "duts_with_two_dut_parameters",
+            render(
+                quote!(duts = [a::Dut]),
+                quote! { async fn t<D: X>(a: D, b: D) {} }
+            )
+        );
+        insta::assert_snapshot!(
+            "duts_naming_one_test_twice",
+            render(
+                quote!(duts = [a::Dut, b::a::Dut]),
+                quote! { async fn t<D: X>(dut: D) {} }
+            )
+        );
+        insta::assert_snapshot!(
+            "duts_without_a_name",
+            render(quote!(duts = [Dut]), quote! { async fn t<D: X>(dut: D) {} })
+        );
+        insta::assert_snapshot!(
+            "duts_empty",
+            render(quote!(duts = []), quote! { async fn t<D: X>(dut: D) {} })
         );
     }
 

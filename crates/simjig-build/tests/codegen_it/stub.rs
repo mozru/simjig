@@ -190,6 +190,16 @@ impl<const N: usize> RawWords for [u32; N] {
     }
 }
 
+/// A value a handle reads and writes (the runtime's `Value`).
+pub trait Value: Packed<Raw: RawWords> + Eq + fmt::Debug + Default {}
+
+impl<T: Packed<Raw: RawWords> + Eq + fmt::Debug + Default> Value for T {}
+
+/// A bit vector (the runtime's `Vector`).
+pub trait Vector: Value + From<u128> + PartialEq<u128> {}
+
+impl<T: Value + From<u128> + PartialEq<u128>> Vector for T {}
+
 fn get(words: &[u32], bit: u32) -> bool {
     words[(bit / 32) as usize] >> (bit % 32) & 1 == 1
 }

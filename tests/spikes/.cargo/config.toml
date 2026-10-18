@@ -1,0 +1,4 @@
+# Keep build outputs in the worktree's target/ (docs/agents/COMMON.md), next to the root
+# workspace's. Relative to this .cargo directory's parent.
+[build]
+target-dir = "../../target/spikes"

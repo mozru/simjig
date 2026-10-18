@@ -1,0 +1,3 @@
+`verilator_config
+// Probe for the plain build: the create-time width check needs public_flat metadata.
+public_flat_rd -module "tc_sub" -var "r"

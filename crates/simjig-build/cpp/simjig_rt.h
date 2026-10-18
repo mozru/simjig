@@ -6,6 +6,10 @@
 // - The *active* runtime is a thread-local pointer set for the duration of each entry point
 //   (`Scope`). Verilator's hooks (vl_fatal, vl_stop_maybe, VL_PRINTF, ...) take no context
 //   argument, so they find their model through it.
+// - Per-model isolation (docs/notes/spikes.md §2, docs/notes/tracecov.md): a Scope also makes
+//   the model's context Verilator's thread context (`$time`, `$finish` flags, `$display`
+//   attribution) and swaps the model's private VlRNG into Verilator's thread-local `$urandom`
+//   state, so each model's stream depends only on its own seed and its own draws.
 // - `guard()` is the exception barrier. Every `extern "C"` entry point that runs model code
 //   runs it inside guard(), so no C++ exception ever reaches Rust (that would be UB).
 //
@@ -51,6 +55,15 @@ public:
     Runtime(const simjig_create_opts* opts, bool coroutines);
 
     VerilatedContext& context() { return *m_context; }
+    // The model's private `$urandom` state while no Scope of this runtime is active (inside
+    // one it is swapped into VlRNG::vl_thread_rng(), and this holds the outer state).
+    VlRNG& rng() { return m_rng; }
+    // Replaces the model's private `$urandom` state with VlRNG(seed), wherever it currently
+    // lives (the thread slot while this runtime's Scope is active, else m_rng).
+    void reseed(uint64_t seed) noexcept;
+    // The seed Verilator gives the thread stream of this context: VerilatedContextImp::
+    // randSeedDefault64() (verilated.cpp) for a nonzero randSeed (+verilator+seed+, default 1).
+    uint64_t context_seed() const;
     bool poisoned() const { return m_poisoned; }
     void poison() { m_poisoned = true; }
 
@@ -76,6 +89,7 @@ private:
                      const char* hier) noexcept;
 
     std::unique_ptr<VerilatedContext> m_context;
+    VlRNG m_rng{0};  // reseeded by create (see Vtable::create); VlRNG(0) draws nothing
     std::deque<Record> m_ring;
     std::vector<Record> m_drained;  // backs the string pointers handed out by drain()
     size_t m_dropped = 0;
@@ -90,7 +104,9 @@ private:
 // The runtime whose entry point is running on this thread, or nullptr.
 Runtime* active() noexcept;
 
-// Makes `rt` the active runtime and its context Verilator's thread context.
+// Makes `rt` the active runtime, its context Verilator's thread context and its VlRNG the
+// thread's `$urandom` state; undoes all three on exit (scopes nest, e.g. a DPI call that
+// evaluates another model).
 class Scope final {
 public:
     explicit Scope(Runtime& rt) noexcept;
@@ -99,8 +115,40 @@ public:
     Scope& operator=(const Scope&) = delete;
 
 private:
+    Runtime& m_rt;
     Runtime* m_previous;
 };
+
+// Verilator's thread-local `$urandom` state (VlRNG::vl_thread_rng()) with its reseed epoch
+// brought up to date *without* losing the state. vl_thread_rng() overwrites the state from the
+// thread context's seed whenever any context's seed changed since its last call on this thread
+// (verilated.cpp, VlRNG::vl_thread_rng), including when another model's context is created.
+// Swapping through this keeps such a reseed from landing on a model's private state.
+VlRNG& thread_rng() noexcept;
+
+// The identity of a file, to find descriptors open on it after it was renamed or unlinked.
+struct FileId {
+    uint64_t dev = 0;
+    uint64_t ino = 0;
+    bool valid = false;
+};
+FileId file_id(const char* path) noexcept;
+// Points every descriptor of this process open on `id` at /dev/null (dup2). Returns how many
+// were redirected, or -1 if /dev/null could not be opened.
+int redirect_to_devnull(const FileId& id) noexcept;
+// Creates (or truncates) `path` for writing and closes it again, so that a writer that cannot
+// report an open failure (fstcpp's std::ofstream) or reports it with a fatal
+// (VerilatedCovContext::write) is never given a path it cannot create. On failure records a
+// WARNING naming `what` and the reason, and returns false.
+bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept;
+
+// Checks a probe (a SIMJIG_DIR_INTERNAL signal) against the model's own metadata: the
+// public_flat_rd/_rw variable `<path>` must exist in scope `<model_name>.<path's scope>`,
+// live at `s.ptr`, be packed only, and be exactly `s.width` bits wide. The C++ type check in
+// SIMJIG_SIGNAL only sees the storage class (an 8-bit CData also holds a 5-bit signal), and
+// Verilator's width exists only in these runtime tables (V<prefix>__Syms__Slow.cpp), so the
+// check runs at create. Throws std::runtime_error naming the probe on a mismatch.
+void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s);
 
 }  // namespace simjig
 
@@ -110,6 +158,9 @@ private:
 struct simjig_handle {
     simjig_handle(const simjig_create_opts* opts, bool coroutines) : rt{opts, coroutines} {}
     virtual ~simjig_handle() = default;
+    // Destroys the model and everything attached to it (trace first). simjig_rt_destroy calls
+    // it inside a Scope, while `rt` and its context are still alive.
+    virtual void teardown() noexcept {}
     simjig_handle(const simjig_handle&) = delete;
     simjig_handle& operator=(const simjig_handle&) = delete;
     // Runs `fn(*this)` behind the barrier. Not a template on purpose: keeps the barrier in
@@ -137,14 +188,23 @@ extern "C" {
 void simjig_rt_destroy(simjig_handle* h);
 void simjig_rt_set_time(simjig_handle* h, uint64_t time);
 size_t simjig_rt_drain_msgs(simjig_handle* h, simjig_msg* out, size_t cap);
-simjig_status simjig_rt_trace_open_unsupported(simjig_handle* h, const char* path);
-simjig_status simjig_rt_trace_dump_unsupported(simjig_handle* h, uint64_t time);
-simjig_status simjig_rt_trace_close_unsupported(simjig_handle* h);
-uint32_t* simjig_rt_cov_counters_none(simjig_handle* h, size_t* count);
+simjig_status simjig_rt_rng_seed(simjig_handle* h, uint64_t seed);
 // The ABI structs' layout as this compiler sees it, for the Rust mirror's tests: writes up to
 // `cap` of {sizeof, alignof} for simjig_model_vtable, simjig_signal, simjig_msg and
 // simjig_create_opts, in that order. Returns the number of values written.
 size_t simjig_rt_abi_layout(uint32_t* out, size_t cap);
+
+// One field of a struct in simjig_abi.h, as this compiler lays it out.
+typedef struct simjig_abi_field {
+    const char* type;  // the struct's C name, e.g. "simjig_model_vtable"
+    const char* name;  // the field's name, e.g. "trace_open_ex"
+    uint32_t offset;   // offsetof(type, name)
+    uint32_t size;     // sizeof the field
+} simjig_abi_field;
+// Every field of simjig_model_vtable, simjig_signal, simjig_msg and simjig_create_opts, in
+// that struct order and in declaration order within each; *count entries, static storage.
+// The Rust mirror's offset_of! asserts are compared against it (docs/notes/tracecov.md).
+const simjig_abi_field* simjig_rt_abi_fields(size_t* count);
 }
 
 #endif  // SIMJIG_RT_H_

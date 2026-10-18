@@ -5,12 +5,15 @@
 //
 //   #include "Vcounter.h"
 //   #include "Vcounter___024root.h"   // only if public internal signals are bound
+//   #include "Vcounter__Syms.h"        // only with kCoverage (the counter arrays live there)
 //   #include "simjig_model.h"
 //   struct CounterTraits {
 //       using Model = Vcounter;
 //       static constexpr const char* kPrefix = "Vcounter";
 //       static constexpr uint64_t kIrHash = 0x0123456789abcdefull;
 //       static constexpr bool kTiming = false;   // verilated with --timing (coroutines)?
+//       static constexpr bool kTraceFst = false; // verilated with --trace-fst? (default false)
+//       static constexpr bool kCoverage = false; // verilated with --coverage*? (default false)
 //       static void bind(Vcounter& m, simjig::SignalTable& t) {
 //           SIMJIG_SIGNAL(t, m.clk, "clk", 1, SIMJIG_DIR_IN, SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE);
 //           SIMJIG_SIGNAL(t, m.rootp->counter__DOT__state, "counter.state", 4,
@@ -26,16 +29,24 @@
 //   type Verilator uses for that width (so a width/type drift fails the C++ build, not the
 //   simulation).
 // - No model code runs outside simjig::guard().
+// - Trace and coverage code is compiled only for kTraceFst / kCoverage models (`if constexpr`
+//   in templates), so a model without them needs neither verilated_fst_c.cpp nor
+//   verilated_cov.cpp at link time; their entries then return SIMJIG_UNSUPPORTED.
+// - A trace is closed before its model is destroyed (ModelHandle::teardown).
 #ifndef SIMJIG_MODEL_H_
 #define SIMJIG_MODEL_H_
 
 #include "simjig_abi.h"
 #include "simjig_rt.h"
+#include "verilated_cov.h"
+#include "verilated_fst_c.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace simjig {
@@ -87,19 +98,103 @@ private:
     std::vector<simjig_signal> m_signals;
 };
 
+// Optional traits members, so shims written before they existed keep compiling.
+template <class Traits>
+constexpr bool trace_fst_of() {
+    if constexpr (requires { Traits::kTraceFst; }) {
+        return Traits::kTraceFst;
+    } else {
+        return false;
+    }
+}
+template <class Traits>
+constexpr bool coverage_of() {
+    if constexpr (requires { Traits::kCoverage; }) {
+        return Traits::kCoverage;
+    } else {
+        return false;
+    }
+}
+
+// An open FST trace. A template only so that nothing names VerilatedFstC's out-of-line members
+// unless a kTraceFst model instantiates it.
+template <class Model>
+struct FstTrace final {
+    std::unique_ptr<VerilatedFstC> writer;  // null: no trace open
+    FileId file;                             // the file `writer` writes, for detach
+    uint32_t depth = 0;
+    uint64_t start_time = 0;
+    void reset() { writer.reset(); }
+};
+struct NoTrace final {
+    void reset() {}
+};
+
 template <class Traits>
 struct ModelHandle final : simjig_handle {
     explicit ModelHandle(const simjig_create_opts* opts) : simjig_handle{opts, Traits::kTiming} {}
+    void teardown() noexcept override {
+        try {
+            trace.reset();  // its close writes the header and needs the model alive
+        } catch (...) {
+            // A failing close loses the trace, never the process.
+        }
+        model.reset();
+    }
     std::unique_ptr<typename Traits::Model> model;
     SignalTable table;
+    std::conditional_t<trace_fst_of<Traits>(), FstTrace<typename Traits::Model>, NoTrace> trace;
 };
+
+// The counters of points Verilator places on the top module object (`rootp->__Vcoverage`),
+// provided that is *every* point: the symbol table's `__Vcoverage` is sized for all of the
+// model's points (V3EmitCSyms), and the top's for those it declares (V3EmitCHeaders), so equal
+// sizes mean nothing lives in a separate module instance (no_inline_module, hierarchical
+// blocks) or in a class/package function. Otherwise {nullptr, 0}: a partial array would make
+// an index mean different points in different builds. docs/notes/tracecov.md has the mapping.
+template <class Model>
+std::pair<uint32_t*, size_t> top_counters(Model& m) {
+    // The model's own vlSymsp is private; its root object's copy is public.
+    using Root = std::remove_cv_t<std::remove_pointer_t<std::remove_cv_t<decltype(Model::rootp)>>>;
+    using Syms = std::remove_pointer_t<std::remove_cv_t<decltype(Root::vlSymsp)>>;
+    static_assert(sizeof(Root) > 0 && sizeof(Syms) > 0,
+                  "simjig: a kCoverage shim must include <prefix>__Syms.h");
+    if constexpr (requires(Root& r, Syms& s) {
+                      r.__Vcoverage;
+                      s.__Vcoverage;
+                  }) {
+        using Arr = std::remove_reference_t<decltype(m.rootp->__Vcoverage)>;
+        using All = std::remove_reference_t<decltype(m.rootp->vlSymsp->__Vcoverage)>;
+        static_assert(std::is_same_v<std::remove_all_extents_t<Arr>, uint32_t>,
+                      "simjig: coverage counters must be uint32_t (verilate with --threads 1)");
+        if constexpr (std::extent_v<Arr> == std::extent_v<All>) {
+            return {m.rootp->__Vcoverage, std::extent_v<Arr>};
+        }
+    }
+    return {nullptr, 0};
+}
 
 template <class Traits>
 struct Vtable final {
     using Handle = ModelHandle<Traits>;
     using Model = typename Traits::Model;
+    static constexpr bool kTrace = trace_fst_of<Traits>();
+    static constexpr bool kCoverage = coverage_of<Traits>();
+    // Verilator writes `traceCapable` into every model header: a shim that disagrees with the
+    // Verilator command line fails to compile instead of tracing nothing.
+    static_assert(kTrace == Model::traceCapable,
+                  "simjig: kTraceFst must be true exactly when verilated with --trace-fst");
 
-    static Model& model(simjig_handle* h) { return *static_cast<Handle*>(h)->model; }
+    static Handle* handle(simjig_handle* h) { return static_cast<Handle*>(h); }
+    static Model& model(simjig_handle* h) { return *handle(h)->model; }
+
+    // guard() for calls that only observe the model (trace, coverage): the sticky FINISH and
+    // STOP describe the simulation, not this call, so they read as OK here.
+    template <class F>
+    static simjig_status observe(simjig_handle* h, F&& body) noexcept {
+        const simjig_status s = guard(h, std::forward<F>(body));
+        return s == SIMJIG_FINISH || s == SIMJIG_STOP ? SIMJIG_OK : s;
+    }
 
     static simjig_status create(const simjig_create_opts* opts, simjig_handle** out) noexcept {
         if (out == nullptr) return SIMJIG_EXCEPTION;
@@ -120,9 +215,18 @@ struct Vtable final {
             if (opts != nullptr && opts->error_limit > 0) {
                 ctx.errorLimit(static_cast<int>(opts->error_limit));
             }
+            // A traced model's trace_init fatals unless this was set before time 0; it makes
+            // Verilator compute signals only waves read, so only traced builds pay for it.
+            if constexpr (kTrace) ctx.traceEverOn(true);
+            // After commandArgs, so +verilator+seed+ applies; before the model, whose
+            // constructor may already draw (class objects seed from the current stream).
+            h->rt.reseed(h->rt.context_seed());
             const char* name = opts != nullptr && opts->name != nullptr ? opts->name : "TOP";
             h->model = std::make_unique<Model>(&ctx, name);
             Traits::bind(*h->model, h->table);
+            for (const simjig_signal& s : h->table.signals()) {
+                if (s.dir == SIMJIG_DIR_INTERNAL) check_probe(ctx, h->model->name(), s);
+            }
         });
     }
 
@@ -159,10 +263,153 @@ struct Vtable final {
             if (count != nullptr) *count = 0;
             return nullptr;
         }
-        const auto& sigs = static_cast<Handle*>(h)->table.signals();
+        const auto& sigs = handle(h)->table.signals();
         if (count != nullptr) *count = static_cast<uint32_t>(sigs.size());
         return sigs.data();
     }
+
+    // ---- FST tracing (kTraceFst only) --------------------------------------------------
+
+    // Precondition for every trace_* body below: kTrace, h live and not poisoned.
+    static simjig_status open_trace(simjig_handle* h, const char* path, uint32_t depth,
+                                    uint64_t start_time) {
+        if (!probe_writable(h->rt, path, "trace file")) return SIMJIG_IO_ERROR;
+        auto& t = handle(h)->trace;
+        return observe(h, [h, &t, path, depth, start_time] {
+            t.reset();
+            auto writer = std::make_unique<VerilatedFstC>();
+            // `levels` is ignored by 5.052's generated traceBaseModel; depth is applied with
+            // $dumpvars semantics instead, relative to the model's top scope (its name).
+            model(h).trace(writer.get(), 0);
+            if (depth > 0) writer->dumpvars(static_cast<int>(depth), model(h).name());
+            writer->open(path);
+            t.writer = std::move(writer);
+            t.file = file_id(path);
+            t.depth = depth;
+            t.start_time = start_time;
+        });
+    }
+
+    static simjig_status trace_open_ex(simjig_handle* h, const char* path, uint32_t depth,
+                                       uint64_t start_time) noexcept {
+        if constexpr (!kTrace) {
+            return SIMJIG_UNSUPPORTED;
+        } else {
+            if (h == nullptr) return SIMJIG_EXCEPTION;
+            if (h->rt.poisoned()) return SIMJIG_POISONED;
+            return open_trace(h, path, depth, start_time);
+        }
+    }
+
+    static simjig_status trace_open(simjig_handle* h, const char* path) noexcept {
+        return trace_open_ex(h, path, 0, 0);
+    }
+
+    static simjig_status trace_dump(simjig_handle* h, uint64_t time) noexcept {
+        if constexpr (!kTrace) {
+            return SIMJIG_UNSUPPORTED;
+        } else {
+            if (h == nullptr) return SIMJIG_EXCEPTION;
+            if (h->rt.poisoned()) return SIMJIG_POISONED;
+            auto& t = handle(h)->trace;
+            if (!t.writer || time < t.start_time) return SIMJIG_OK;
+            return observe(h, [&t, time] { t.writer->dump(time); });
+        }
+    }
+
+    static simjig_status trace_flush(simjig_handle* h) noexcept {
+        if constexpr (!kTrace) {
+            return SIMJIG_UNSUPPORTED;
+        } else {
+            if (h == nullptr) return SIMJIG_EXCEPTION;
+            if (h->rt.poisoned()) return SIMJIG_POISONED;
+            auto& t = handle(h)->trace;
+            if (!t.writer) return SIMJIG_OK;
+            return observe(h, [&t] { t.writer->flush(); });
+        }
+    }
+
+    static simjig_status trace_close(simjig_handle* h) noexcept {
+        if constexpr (!kTrace) {
+            return SIMJIG_UNSUPPORTED;
+        } else {
+            if (h == nullptr) return SIMJIG_EXCEPTION;
+            if (h->rt.poisoned()) return SIMJIG_POISONED;
+            auto& t = handle(h)->trace;
+            if (!t.writer) return SIMJIG_OK;
+            return observe(h, [&t] { t.reset(); });
+        }
+    }
+
+    // docs/notes/spikes.md §1 surprise 3: a fork child shares the trace file's descriptor and
+    // offset with its parent, so any write or close through the inherited writer corrupts the
+    // parent's file. Redirecting the descriptor to /dev/null first makes the close harmless.
+    static simjig_status trace_reopen(simjig_handle* h, const char* path) noexcept {
+        if constexpr (!kTrace) {
+            return SIMJIG_UNSUPPORTED;
+        } else {
+            if (h == nullptr) return SIMJIG_EXCEPTION;
+            if (h->rt.poisoned()) return SIMJIG_POISONED;
+            auto& t = handle(h)->trace;
+            if (!t.writer) return open_trace(h, path, 0, 0);
+            if (!t.file.valid) {
+                h->rt.on_warn("", 0, "", "trace_reopen: the inherited trace file is unknown");
+                return SIMJIG_IO_ERROR;
+            }
+            const FileId target = file_id(path);
+            if (target.valid && target.dev == t.file.dev && target.ino == t.file.ino) {
+                h->rt.on_warn("", 0, "", "trace_reopen: the new trace path is the inherited file");
+                return SIMJIG_IO_ERROR;
+            }
+            if (!probe_writable(h->rt, path, "trace file")) return SIMJIG_IO_ERROR;
+            if (redirect_to_devnull(t.file) < 0) {
+                h->rt.on_warn("", 0, "", "trace_reopen: cannot open /dev/null");
+                return SIMJIG_IO_ERROR;
+            }
+            const simjig_status closed = observe(h, [&t] { t.reset(); });
+            if (closed != SIMJIG_OK) return closed;
+            return open_trace(h, path, t.depth, t.start_time);
+        }
+    }
+
+    // ---- Coverage (kCoverage only) ------------------------------------------------------
+
+    static uint32_t* cov_counters(simjig_handle* h, size_t* count) noexcept {
+        std::pair<uint32_t*, size_t> counters{nullptr, 0};
+        if constexpr (kCoverage) {
+            if (h != nullptr) counters = top_counters(model(h));
+        }
+        if (count != nullptr) *count = counters.second;
+        return counters.first;
+    }
+
+    static simjig_status cov_zero(simjig_handle* h) noexcept {
+        if constexpr (!kCoverage) {
+            return SIMJIG_UNSUPPORTED;
+        } else {
+            return observe(h, [h] { h->rt.context().coveragep()->zero(); });
+        }
+    }
+
+    static simjig_status cov_write(simjig_handle* h, const char* path) noexcept {
+        if constexpr (!kCoverage) {
+            return SIMJIG_UNSUPPORTED;
+        } else {
+            std::string file;
+            const simjig_status named = observe(h, [h, path, &file] {
+                file = path != nullptr ? path : h->rt.context().coveragep()->defaultFilename();
+            });
+            if (named != SIMJIG_OK) return named;
+            // VerilatedCovContext::write reports an unwritable file with a fatal, which would
+            // poison a model whose simulation is fine.
+            if (!probe_writable(h->rt, file.c_str(), "coverage file")) return SIMJIG_IO_ERROR;
+            return observe(h, [h, &file] { h->rt.context().coveragep()->write(file); });
+        }
+    }
+
+    static constexpr uint64_t kFeatures = (Traits::kTiming ? SIMJIG_FEATURE_TIMING : 0)
+                                          | (kTrace ? SIMJIG_FEATURE_TRACE_FST : 0)
+                                          | (kCoverage ? SIMJIG_FEATURE_COVERAGE : 0);
 
     static constexpr simjig_model_vtable table{
         SIMJIG_ABI_VERSION,
@@ -179,10 +426,17 @@ struct Vtable final {
         &next_time_slot,
         &signals,
         &simjig_rt_drain_msgs,
-        &simjig_rt_trace_open_unsupported,
-        &simjig_rt_trace_dump_unsupported,
-        &simjig_rt_trace_close_unsupported,
-        &simjig_rt_cov_counters_none,
+        &trace_open,
+        &trace_dump,
+        &trace_close,
+        &cov_counters,
+        kFeatures,
+        &trace_open_ex,
+        &trace_flush,
+        &trace_reopen,
+        &cov_zero,
+        &cov_write,
+        &simjig_rt_rng_seed,
     };
 };
 

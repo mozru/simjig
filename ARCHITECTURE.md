@@ -55,7 +55,8 @@ listed here with what keeps the copies equal.
 | Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |
 | Rendering a failure | `Display` of `kernel::failure::Failure` and of `BlockedTask` (one blocked task); the harness's report (`harness::report::FailureReport`) builds on them |
 | Seeds and random streams | `harness::seed`: `Seed` (root seed, test-name seed, Verilator seed), `Seed::rng` (named streams), `Rng` (xoshiro256**) |
-| Stable hashing (FNV-1a 64) | `kernel::recorder::Fnv`: the trace hash, seeds, stream seeds, failure signatures |
+| Stable run-time hashing (FNV-1a 64) | `kernel::recorder::Fnv`: the trace hash, seeds, stream seeds, failure signatures |
+| Stable build-time hashing (SHA-256 over length-prefixed fields; never `Debug` output) | `simjig_build::hash::KeyHasher`: cache keys, the model prefix and its claim (`DutConfig::model_digest`), the IR hash (`hash::ir_hash`, its first 64 bits) |
 | Checking a model's C vtable before use | `simjig::model::raw::check_vtable` |
 | Trace file names: `<stem>.fst` for the first model, `<stem>.model-<i>.fst` for model `i`, then `.branch-<j>` for fork branch `j` (`<stem>[.model-<i>].branch-<j>.fst`; checkpoints cannot nest) | Built by `harness::dut::ModelOptions::for_model` (`.model-<i>`) and `model::trace::branch_path` (`.branch-<j>`); parsed back only by `harness::replay::trace_identity` |
 | The time grammar of a waves window (`<t0>..<t1>`) | `simjig::harness::waves::parse_window` (`SIMJIG_WAVES=window:`, whole numbers of a unit). `cargo-simjig`'s `waves::parse_window` is a deliberate second copy, since `cargo-simjig` may not depend on `simjig`: it also takes decimals (`1.5us`) and turns them into the harness's form, so it accepts a superset and emits only what the harness parses |

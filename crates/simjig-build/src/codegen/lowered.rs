@@ -14,8 +14,9 @@ pub struct Lowered {
     pub top: String,
     /// The elaborating tool, e.g. `verilator 5.052`.
     pub producer: String,
-    /// FNV-1a 64 of the IR (as JSON) and the configuration: the value the C++ shim and
-    /// the Rust `Dut` both carry, so a model built from another IR is rejected at load.
+    /// The first 64 bits of a SHA-256 of the IR (as JSON) and the configuration
+    /// (`hash::ir_hash`): the value the C++ shim and the Rust `Dut` both carry, so a model
+    /// built from another IR is rejected at load.
     pub ir_hash: u64,
     /// Generated Rust types, in IR type order (dependencies first).
     pub items: Vec<Item>,

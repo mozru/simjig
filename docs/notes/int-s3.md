@@ -36,7 +36,10 @@ in that order, with the gate after each.
    own timesteps, not the simulation's (`each_model_of_a_multi_dut_simulation_*`).
 
 ## Open
-- IR `SCHEMA` was not bumped for the optional DPI fields (dpi notes item 10).
+(Refreshed after the s3c4 review; see `int-s3c.md`.)
+- ~~IR `SCHEMA` was not bumped for the optional DPI fields~~: schema 5 (`s3c4-fix`).
+- ~~Prefix claims hash `Debug`~~ (item 5): claims record `DutConfig::model_digest`, and
+  `dpi_in_c` is in neither prefix nor claim (`s3c4-fix`).
 - `simjig` build-depends on `simjig-build` for its tests (dpi notes item 5).
 - `Sim::coverage` names counters by index only; `coverage.dat` has the point names.
 - Not verified: Linux, GTKWave opening the files, `--timing` models calling DPI.

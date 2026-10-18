@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- README "A parameter sweep": the test snippet uses the short names `use sync_fifo::*;`
+  allows (`duts = [fifo_8x4::Dut, ..]`, `D: Ports`), as the long form warns
+  (`unused_qualifications`) next to that import; `examples/lib`'s `sync_fifo` tests do
+  the same. It documents `.sources` against `.param`, `i32` parameter consts
+  (`.unsigned_abs()`), and why a bit vector converts from `u128` only (`u128::from` for
+  `rng.below`).
 - `Dut::sources` skips a path already added (it used to pass Verilator the file twice,
   defining its modules twice). Its docs and `Dut::param`'s say that `.sources` appends
   while `.param` replaces, with the pattern for one member's own RTL.

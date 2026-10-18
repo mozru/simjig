@@ -353,6 +353,12 @@ Sweep::new("sync_fifo")
     .build()?;
 ```
 
+A member can change its base configuration: `.param` again replaces the value (the last
+call wins), but `.sources` again appends (a path already added is skipped). To give one
+member other RTL, make the sources an argument of the closure
+(`|name: &str, rtl: &str| Dut::new(name).sources([rtl])..`) rather than adding them
+after.
+
 `simjig::include_dut!(sync_fifo)` includes the sweep: each configuration's module
 (`sync_fifo::fifo_8x4::Dut`), the generated types that are the same in every configuration
 (defined once, so `fifo_8x4::Item` is `sync_fifo::Item`), and the trait
@@ -360,11 +366,11 @@ Sweep::new("sync_fifo")
 `Dut`'s fields (`dut.clk()` for `dut.clk`) and its associated consts are the parameters
 (`D::DEPTH`). A test written once over `D: sync_fifo::Ports` runs on every configuration
 listed in `duts`, one test each (`count_climbs_to_the_depth::fifo_8x4`), and a failure
-points at the line in the body:
+points at the line in the body. With `use sync_fifo::*;` (below), the names are short:
 
 ```rust
-#[simjig::test(init = random, timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
-async fn count_climbs_to_the_depth<D: sync_fifo::Ports>(dut: D) {
+#[simjig::test(init = random, timeout = "2us", duts = [fifo_8x4::Dut, fifo_32x16::Dut])]
+async fn count_climbs_to_the_depth<D: Ports>(dut: D) {
     clock(dut.clk(), ns(10)).start();
     dut.rst().set(1);
     cycles(dut.clk(), 2).await;
@@ -398,7 +404,13 @@ all: `Ports`, the bundle traits (`<Bundle>Ports`) and fields traits of the sweep
 the runtime's `Value`, `Vector` and `Packed` (`D::WrData::WIDTH`). A signal that not
 every configuration has alike (a probe of one) is left out of `Ports`; the concrete
 `Dut` still has it. A test of one configuration takes its `Dut` as before
-(`dut: sync_fifo::fifo_8x4::Dut`).
+(`dut: fifo_8x4::Dut`).
+
+The parameters are `i32` consts (SystemVerilog `int`), so a size takes
+`D::DEPTH.unsigned_abs()`. A bit vector converts from `u128` only (`set`, `==` and a
+field constructor's arguments): a second integer type would leave a literal's type
+ambiguous (`D::Beat::new(0, 0x5a)` would no longer infer), so a `u64` such as
+`ctx.rng(..).below(n)` is passed as `u128::from(..)`.
 
 A packed struct whose field widths follow a parameter is a different Rust struct in each
 configuration, so its associated type is bounded by a trait over its fields, named after

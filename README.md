@@ -226,6 +226,13 @@ simjig::include_dut!(fast_model);
 async fn big_works(dut: fast_model::Dut) { /* ... */ }
 ```
 
+The `cfg` reaches the targets of the package whose build script built the DUT (its
+library, tests, examples, benches), not the crates that depend on it: a dependent that
+needs the gate sets its own. A script that calls `Dut::build` only sometimes (behind a
+feature or an environment variable) must still declare the gate when it does not call
+it, or the gated code warns `unexpected_cfgs`:
+`println!("cargo::rustc-check-cfg=cfg(simjig_dut_fast_model)");`.
+
 An ungated `include_dut!` of a DUT that failed is a compile error naming the DUT and
 its error: a failed build replaces its generated module with a `compile_error!` stub,
 so a module left by an earlier build cannot compile against a model that is not linked.

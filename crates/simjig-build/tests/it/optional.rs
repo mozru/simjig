@@ -105,4 +105,19 @@ fn a_failed_optional_dut_is_a_compile_error_or_gated_off() {
     for link_error in ["Undefined symbols", "undefined reference", "linking with"] {
         assert!(!out.contains(link_error), "{link_error}:\n{out}");
     }
+
+    // `cargo check` sees the same stub.
+    let check = cargo(&krate, &target, &["check", "--offline", "--tests"], true);
+    let out = text(&check);
+    assert!(!check.status.success(), "{out}");
+    assert!(out.contains("DUT `opt` failed to build"), "{out}");
+
+    // Fixed again, the stub is replaced and the gate is set again.
+    let fixed = cargo(&krate, &target, &test, false);
+    let out = text(&fixed);
+    assert!(fixed.status.success(), "{out}");
+    for ran in ["test opt_inverts ... ok", "test opt_built ... ok"] {
+        assert!(out.contains(ran), "{ran}:\n{out}");
+    }
+    assert!(!out.contains("opt_skipped"), "{out}");
 }

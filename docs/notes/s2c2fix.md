@@ -21,6 +21,10 @@ verilated all 15 test models into that second target directory.
   (nextest flagged it SLOW; it verilated into `target/tests/trybuild/simjig-cache`,
   12 MB), **5.4 s** after, with no `simjig-cache` there.
 
+- Full gate from a cold target (`rm -rf target`, then `pixi run cargo xtask ci`): passes
+  in **2:24** wall (nextest step 87 s, 595 tests, 13 slow); the UI test took 31 s there,
+  compiling the nested build's dependencies while the other tests ran. Warm: 2:08.
+
 ## 2. Default timeout at coarse precisions
 `default_timeout_ticks`: `10 * 10^(-3-e)` ticks for `e <= -3`, else
 `ceil(10 / 10^(e+3))`, at least 1. Test:

@@ -13,13 +13,26 @@ use simjig_build::{
 
 use crate::support::{Sandbox, dut};
 
-/// The model archive of `built` exports its vtable symbol.
-fn exports_vtable(env_out: &Path, built: &Built) -> bool {
-    let archive = env_out.join(format!(
-        "simjig-{p}/libsimjig_model_{p}.a",
-        p = built.prefix
-    ));
-    let nm = Command::new("nm").arg(&archive).output().unwrap();
+/// The model archive of `built` (in the shared cache, named in its link directives)
+/// exports its vtable symbol.
+fn exports_vtable(cache: &Path, built: &Built) -> bool {
+    let name = format!("libsimjig_model_{}_", built.prefix);
+    let archive = built
+        .directives
+        .iter()
+        .filter_map(|d| d.strip_prefix("cargo::rustc-link-arg="))
+        .map(Path::new)
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(&name))
+        })
+        .unwrap_or_else(|| panic!("no model archive in {:?}", built.directives));
+    assert!(
+        archive.starts_with(cache.join("archives")),
+        "{}",
+        archive.display()
+    );
+    let nm = Command::new("nm").arg(archive).output().unwrap();
     String::from_utf8_lossy(&nm.stdout).contains(&format!("simjig_vtable_{}", built.prefix))
 }
 
@@ -58,7 +71,7 @@ fn generated_files_reach_out_dir_verilator_and_the_compiler() {
         shim.contains(r#"SIMJIG_PROBE(t, m, "struct_pipe", "s1_valid""#),
         "{shim}"
     );
-    assert!(exports_vtable(&env.out_dir, &built));
+    assert!(exports_vtable(&env.cache_dir(), &built));
 }
 
 #[test]
@@ -83,7 +96,7 @@ fn an_interface_ported_dut_is_built_through_the_generated_wrapper() {
         names.contains(&"in_bus_valid") && names.contains(&"out_bus_data"),
         "{names:?}"
     );
-    assert!(exports_vtable(&env.out_dir, &built));
+    assert!(exports_vtable(&env.cache_dir(), &built));
 }
 
 fn failing_layout(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {

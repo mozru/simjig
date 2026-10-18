@@ -33,8 +33,12 @@ extern "C" {
 const simjig_model_vtable* simjig_vtable_Vtc_full(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_badprobe(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_param_rd(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_param_rw(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_rd_as_rw(void);
 const simjig_model_vtable* simjig_vtable_Vtc_hier(void);
 const simjig_model_vtable* simjig_vtable_Vtc_timing(void);
+const simjig_model_vtable* simjig_vtable_Vtc_cg(void);
 }
 
 namespace {
@@ -261,6 +265,43 @@ void probe_width_is_checked_at_create() {
     }
     CHECK(named);
     CHECK_EQ(bad.vt()->eval(bad.h()), SIMJIG_POISONED);
+}
+
+// The message of a failed create, or "" when there is none.
+std::string create_failure(Model& m) {
+    for (const simjig_msg& msg : m.drain()) {
+        if (msg.kind == SIMJIG_MSG_EXCEPTION) return msg.msg;
+    }
+    return "";
+}
+
+// A localparam is constexpr storage in the model: it may be probed for reading, but a
+// read-write probe would hand out a writable pointer to read-only memory (a write is SIGBUS on
+// macOS, undefined behaviour anywhere). A public_flat_rd variable is not writable either.
+void probe_access_is_checked_at_create() {
+    {
+        Model rd{simjig_vtable_Vtc_plain_param_rd(), "TOP"};
+        CHECK_EQ(rd.created(), SIMJIG_OK);
+        uint32_t n = 0;
+        const simjig_signal* s = rd.vt()->signals(rd.h(), &n);
+        CHECK(n == 6 && *static_cast<const uint8_t*>(s[5].ptr) == 0x5a);
+    }
+    Model rw{simjig_vtable_Vtc_plain_param_rw(), "TOP"};
+    CHECK_EQ(rw.created(), SIMJIG_EXCEPTION);
+    const std::string why = create_failure(rw);
+    if (why.find("probe 'tc.u.LP'") == std::string::npos
+        || why.find("is a parameter") == std::string::npos) {
+        std::fprintf(stderr, "  message: %s\n", why.c_str());
+        CHECK(false);
+    }
+    Model ro{simjig_vtable_Vtc_plain_rd_as_rw(), "TOP"};
+    CHECK_EQ(ro.created(), SIMJIG_EXCEPTION);
+    const std::string ro_why = create_failure(ro);
+    if (ro_why.find("probe 'tc.u.r'") == std::string::npos
+        || ro_why.find("public_flat_rd") == std::string::npos) {
+        std::fprintf(stderr, "  message: %s\n", ro_why.c_str());
+        CHECK(false);
+    }
 }
 
 // simjig_rt_abi_fields lists every field: within each struct the fields start at 0, follow
@@ -582,6 +623,61 @@ void counters_of_every_module_object_are_runs() {
     CHECK_EQ(dat_total(slurp(dat), &points), 0u);
 }
 
+// Counters are noted only while create constructs the model: a covergroup created by `new`
+// (or any coverage point registered later) must not make the runtime keep collecting
+// pointers it will never hand out.
+void cov_noting_stops_after_create() {
+    uint32_t counters[4] = {};
+    simjig::Runtime rt{nullptr, false};
+    {
+        const simjig::Scope scope{rt};
+        simjig::note_cov_counter(&counters[0]);
+        simjig::note_cov_counter(&counters[1]);
+    }
+    const std::vector<simjig_cov_run> runs = rt.cov_runs(counters, sizeof counters);
+    CHECK(runs.size() == 1 && runs[0].counters == counters && runs[0].len == 2);
+    {
+        const simjig::Scope scope{rt};
+        simjig::note_cov_counter(&counters[2]);  // what an eval-time registration does
+    }
+    CHECK(rt.cov_runs(counters, sizeof counters).empty());
+}
+
+// A covergroup's bins are registered when `new` runs, in the first eval, in counters
+// Verilator allocates on the heap: they are in no run (the runs are fixed at create), but
+// cov_write writes them and cov_zero clears them.
+void covergroup_bins_are_written_but_not_in_runs() {
+    Model m{simjig_vtable_Vtc_cg(), "TOP"};
+    CHECK_EQ(m.created(), SIMJIG_OK);
+    size_t n = 0;
+    const uint64_t before = runs_total(m, &n);
+    CHECK(n > 0);
+    CHECK_EQ(before, 0u);
+    const simjig_signal* s = m.vt()->signals(m.h(), nullptr);
+    for (uint64_t t = 0; t < 80; t += 5) {
+        *static_cast<uint8_t*>(s[0].ptr) = (t / 5) % 2;
+        *static_cast<uint8_t*>(s[1].ptr) = static_cast<uint8_t>((t / 10) % 4);
+        m.vt()->set_time(m.h(), t);
+        CHECK_EQ(m.vt()->eval(m.h()), SIMJIG_OK);
+    }
+    size_t after_n = 0;
+    const uint64_t live = runs_total(m, &after_n);
+    CHECK_EQ(after_n, n);  // the runs did not change
+    const std::string dat = path("cg.dat");
+    CHECK_EQ(m.vt()->cov_write(m.h(), dat.c_str()), SIMJIG_OK);
+    const std::string text = slurp(dat);
+    size_t points = 0;
+    const uint64_t total = dat_total(text, &points);
+    CHECK(text.find("covergroup") != std::string::npos);
+    CHECK(live > 0);
+    CHECK(total > live);  // the bins' hits are in coverage.dat, not in the runs
+    if (!(total > live)) std::fprintf(stderr, "  live %llu total %llu\n%s\n",
+        static_cast<unsigned long long>(live), static_cast<unsigned long long>(total), text.c_str());
+    CHECK_EQ(m.vt()->cov_zero(m.h()), SIMJIG_OK);
+    CHECK_EQ(m.vt()->cov_write(m.h(), dat.c_str()), SIMJIG_OK);
+    CHECK_EQ(dat_total(slurp(dat), &points), 0u);
+}
+
 std::vector<uint32_t> draws(Model& m, int n) {
     std::vector<uint32_t> out;
     for (int i = 0; i < n; ++i) out.push_back(m.cycle());
@@ -697,6 +793,7 @@ int main(int argc, char** argv) {
         {"fork_child_detaches_and_reopens", fork_child_detaches_and_reopens},
         {"plain_model_reports_unsupported", plain_model_reports_unsupported},
         {"probe_width_is_checked_at_create", probe_width_is_checked_at_create},
+        {"probe_access_is_checked_at_create", probe_access_is_checked_at_create},
         {"abi_field_table_covers_every_field", abi_field_table_covers_every_field},
         {"thread_rng_survives_a_reseed_epoch", thread_rng_survives_a_reseed_epoch},
         {"fst_trace_is_written_and_parses", fst_trace_is_written_and_parses},
@@ -709,6 +806,9 @@ int main(int argc, char** argv) {
         {"devnull_redirect_finds_descriptors_above_the_limit",
          devnull_redirect_finds_descriptors_above_the_limit},
         {"counters_of_every_module_object_are_runs", counters_of_every_module_object_are_runs},
+        {"cov_noting_stops_after_create", cov_noting_stops_after_create},
+        {"covergroup_bins_are_written_but_not_in_runs",
+         covergroup_bins_are_written_but_not_in_runs},
         {"urandom_streams_are_per_model_and_reproducible",
          urandom_streams_are_per_model_and_reproducible},
         {"display_is_attributed_to_its_model", display_is_attributed_to_its_model},

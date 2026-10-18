@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::literal::Literal;
 
 /// Version of the serialized IR. Bumped on every change to the JSON form.
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 
 /// An elaborated design: types, modules and packages, as seen by one producer run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,6 +298,45 @@ pub struct Module {
     pub iface_ports: Vec<IfacePort>,
     /// Modports, for an interface.
     pub modports: Vec<Modport>,
+    /// Module and interface instances declared directly in the body, in declaration order.
+    /// Instances inside generate blocks are not listed. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<Instance>,
+    /// Variables declared directly in the body (ports, signals, parameters, localparams),
+    /// in declaration order, without interface ports and without variables of generate
+    /// blocks, tasks or functions. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<Variable>,
+}
+
+/// An instance of a module or interface in a module body. With [`Module::variables`] it
+/// lets a build check a hierarchical path (`top.u_core.state`) before the model exists.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Instance {
+    /// Instance name.
+    pub name: String,
+    /// The specialisation instantiated.
+    pub module: ModuleId,
+}
+
+/// A variable declared in a module body: only its name and kind, not its type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Variable {
+    /// Variable name.
+    pub name: String,
+    /// What it is.
+    pub kind: VariableKind,
+}
+
+/// The kind of a [`Variable`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VariableKind {
+    /// A port, net or variable: storage the simulation changes.
+    Signal,
+    /// A `parameter`: a constant, overridable per instance.
+    Parameter,
+    /// A `localparam`: a constant.
+    Localparam,
 }
 
 /// A package with its parameters and named types.

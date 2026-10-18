@@ -232,6 +232,18 @@ pub fn iface_param() -> Case {
     through_wrapper("iface_param", sources, iface)
 }
 
+/// `cases/probe_paths`: `alu.u_mid.u_core` with a parameter and a localparam in `alu`. Not
+/// in [`all`]: only the probe path errors use it.
+pub fn probe_paths() -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/probe_paths/design.sv")];
+    Case {
+        name: "probe_paths".into(),
+        design: pass(&sources, "alu"),
+        config: CodegenConfig::default(),
+        sources,
+    }
+}
+
 /// Every case: the fixtures, then the Verilator-elaborated ones.
 pub fn all() -> Vec<Case> {
     let mut cases: Vec<Case> = fixture_names().iter().map(|n| fixture(n)).collect();

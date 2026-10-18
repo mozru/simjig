@@ -4,6 +4,7 @@
     reason = "test helpers outside #[test] fns; a panic is the failure report"
 )]
 
+mod cli;
 mod dpi;
 mod fixtures;
 mod header;

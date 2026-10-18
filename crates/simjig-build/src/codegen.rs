@@ -30,6 +30,8 @@ mod vlt;
 mod wrapper;
 mod writer;
 
+pub(crate) use names::closest;
+
 pub use config::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 pub use dpi::{DpiHeaderMismatch, check_dpi_header, dpi_prototypes, emit_dpi};
 pub use error::Error;

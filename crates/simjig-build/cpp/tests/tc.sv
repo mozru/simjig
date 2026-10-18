@@ -25,6 +25,9 @@ module tc_sub (
     input  logic d,
     output logic q
 );
+  // Probed read-only and read-write by the probe tests (main.cpp): Verilator stores it as
+  // a `static constexpr` member, so a write through its address would hit read-only memory.
+  localparam logic [7:0] LP = 8'h5a;
   logic r;
   always_ff @(posedge clk) begin
     r <= d;

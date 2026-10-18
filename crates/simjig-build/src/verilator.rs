@@ -56,7 +56,10 @@ impl Verilator {
             verilator_root: env.verilator_root.clone(),
             untested: false,
         };
-        let out = run(found.command().arg("--version"))?;
+        let out = run(
+            found.command().arg("--version"),
+            "asking Verilator for its version",
+        )?;
         let version_line = String::from_utf8_lossy(&out.stdout)
             .lines()
             .next()
@@ -74,7 +77,10 @@ impl Verilator {
             }
         };
         found.untested = untested;
-        let root = run(found.command().args(["--getenv", "VERILATOR_ROOT"]))?;
+        let root = run(
+            found.command().args(["--getenv", "VERILATOR_ROOT"]),
+            "asking Verilator for VERILATOR_ROOT",
+        )?;
         let root = PathBuf::from(String::from_utf8_lossy(&root.stdout).trim());
         found.version = version;
         found.version_line = version_line;
@@ -119,8 +125,8 @@ fn quote(arg: &str) -> String {
     }
 }
 
-/// Runs a command to completion; a non-zero exit is an [`Error::Command`].
-pub(crate) fn run(cmd: &mut Command) -> Result<Output, Error> {
+/// Runs a command to completion; a non-zero exit is an [`Error::Command`] headed `what`.
+pub(crate) fn run(cmd: &mut Command, what: &str) -> Result<Output, Error> {
     let line = display_command(cmd);
     let out = cmd.output().map_err(|source| Error::Spawn {
         command: line.clone(),
@@ -129,7 +135,7 @@ pub(crate) fn run(cmd: &mut Command) -> Result<Output, Error> {
     if out.status.success() {
         Ok(out)
     } else {
-        Err(Error::command(line, &out))
+        Err(Error::command(what, line, &out))
     }
 }
 

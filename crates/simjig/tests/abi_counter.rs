@@ -52,8 +52,10 @@ mod with_models {
     use ticker::vtable as ticker_vtable;
 
     unsafe extern "C" {
-        safe fn simjig_rt_abi_layout(out: *mut u32, cap: usize) -> usize;
-        safe fn simjig_rt_abi_fields(count: *mut usize) -> *const CppField;
+        // Not `safe`: both write through their pointer argument, which safe code could
+        // pass dangling.
+        fn simjig_rt_abi_layout(out: *mut u32, cap: usize) -> usize;
+        fn simjig_rt_abi_fields(count: *mut usize) -> *const CppField;
     }
 
     /// `simjig_abi_field` (`simjig_rt.h`): one field as the C++ compiler lays it out.
@@ -226,7 +228,9 @@ mod with_models {
     #[test]
     fn rust_mirror_matches_cpp_layout() {
         let mut got = [0u32; 10];
-        assert_eq!(simjig_rt_abi_layout(got.as_mut_ptr(), got.len()), 10);
+        // SAFETY: `got` has room for the `got.len()` values the call may write.
+        let n = unsafe { simjig_rt_abi_layout(got.as_mut_ptr(), got.len()) };
+        assert_eq!(n, 10);
         let want = [
             size_of::<ModelVtable>(),
             align_of::<ModelVtable>(),
@@ -248,7 +252,8 @@ mod with_models {
     #[test]
     fn every_mirror_field_matches_cpp_offsetof() {
         let mut count = 0;
-        let table = simjig_rt_abi_fields(&raw mut count);
+        // SAFETY: `count` is a live `usize` the call writes.
+        let table = unsafe { simjig_rt_abi_fields(&raw mut count) };
         // SAFETY: the runtime returns `count` entries of static storage.
         let cpp = unsafe { std::slice::from_raw_parts(table, count) };
         let text = |p| {

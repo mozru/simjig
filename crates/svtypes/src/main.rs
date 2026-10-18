@@ -1,5 +1,6 @@
 //! `svtypes dump <sv files> --top X [-G NAME=VALUE] [-D NAME[=VALUE]] [-I DIR] [-- ARGS]`:
 //! runs the Verilator JSON pass and prints the design's type IR as JSON.
+//! `svtypes --help` prints the usage.
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
@@ -56,6 +57,15 @@ fn parse_args(args: &[String]) -> Result<JsonPassOpts, String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if matches!(
+        args.first().map(String::as_str),
+        Some("--help" | "-h" | "help")
+    ) {
+        return match writeln!(std::io::stdout().lock(), "{USAGE}") {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
     let result = parse_args(&args).and_then(|opts| {
         let design = json_pass(&opts).map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(&design).map_err(|e| e.to_string())?;

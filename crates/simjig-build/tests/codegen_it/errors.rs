@@ -70,3 +70,94 @@ fn error_messages() {
     }
     insta::assert_snapshot!(out.join("\n"));
 }
+
+/// Each probe mistake is caught by the lowering, before verilation, with the item, what is
+/// wrong and a fix: a mistyped instance or variable (with the closest name), a declaring
+/// module that is not the instance's, and a read-write probe of a constant.
+#[test]
+fn probe_path_mistakes_name_the_fix() {
+    let design = cases::probe_paths().design;
+    let lower_with = |path: &str, module: &str, access| {
+        let config = CodegenConfig {
+            probes: vec![Probe {
+                path: path.into(),
+                module: module.into(),
+                ty: ProbeType::Bits { width: 8 },
+                access,
+            }],
+            ..CodegenConfig::default()
+        };
+        lower(&design, &config)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    };
+    let (rd, rw) = (ProbeAccess::Read, ProbeAccess::ReadWrite);
+    for (path, module, access, want) in [
+        (
+            "alu.u_mid.u_cre.result",
+            "alu_core",
+            rd,
+            "codegen: probe alu.u_mid.u_cre.result: no instance `u_cre` in `alu.u_mid` (a \
+             `mid`); did you mean `u_core`?",
+        ),
+        (
+            "alu.u_mid.u_core.reslt",
+            "alu_core",
+            rd,
+            "codegen: probe alu.u_mid.u_core.reslt: no variable `reslt` in `alu_core` (the \
+             module of `alu.u_mid.u_core`); did you mean `result`?",
+        ),
+        (
+            "alu.u_mid.u_core.result",
+            "mid",
+            rd,
+            "codegen: probe alu.u_mid.u_core.result: `alu.u_mid.u_core` is an instance of \
+             `alu_core`, not of `mid` as the probe declares; pass `\"alu_core\"` as the \
+             probe's module",
+        ),
+        (
+            "alu.LP",
+            "alu",
+            rw,
+            "codegen: probe alu.LP: `LP` is a localparam of `alu`, a constant Verilator keeps \
+             in read-only storage; probe it with `ProbeAccess::Read`",
+        ),
+        (
+            "alu.P",
+            "alu",
+            rw,
+            "codegen: probe alu.P: `P` is a parameter of `alu`, a constant Verilator keeps in \
+             read-only storage; probe it with `ProbeAccess::Read`",
+        ),
+    ] {
+        assert_eq!(lower_with(path, module, access), Err(want.to_owned()));
+    }
+    for (path, module, access) in [
+        ("alu.u_mid.u_core.result", "alu_core", rw),
+        ("alu.LP", "alu", rd),
+        ("alu.P", "alu", rd),
+        ("alu.acc", "alu", rw),
+    ] {
+        assert_eq!(lower_with(path, module, access), Ok(()), "{path}");
+    }
+}
+
+/// Through the interface wrapper, the path is the DUT's, and so are the names checked.
+#[test]
+fn probe_paths_of_an_interface_ported_dut_are_checked_below_the_dut() {
+    let case = cases::iface_top();
+    let config = CodegenConfig {
+        probes: vec![Probe {
+            path: "iface_top.data_qq".into(),
+            module: "iface_top".into(),
+            ty: ProbeType::Bits { width: 8 },
+            access: ProbeAccess::Read,
+        }],
+        ..case.config.clone()
+    };
+    let err = lower(&case.design, &config).unwrap_err().to_string();
+    assert!(
+        err.contains("no variable `data_qq` in `iface_top` (the module of `iface_top`); did you mean `data_q`?"),
+        "{err}"
+    );
+}

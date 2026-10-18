@@ -6,8 +6,9 @@
 //!
 //! Invariants:
 //! - The `#[repr(C)]` structs match the header byte for byte. Compile-time asserts below pin
-//!   their sizes and field offsets for 64-bit targets; a test compares them with what the C++
-//!   compiler reports (`simjig_rt_abi_layout`).
+//!   their sizes and every field offset for 64-bit targets; tests compare sizes and every
+//!   field's offset and size with what the C++ compiler reports (`simjig_rt_abi_layout`,
+//!   `simjig_rt_abi_fields`).
 //! - Integers coming from C (status codes, message kinds, storage classes) are kept as
 //!   integers and decoded with `TryFrom`: a Rust enum holding an unknown discriminant is UB.
 //! - The table is append-only. [`ModelVtable::check`] rejects a model whose `abi_version`
@@ -238,31 +239,119 @@ pub(crate) struct ModelVtable {
     pub(crate) rng_seed: unsafe extern "C" fn(*mut Handle, u64) -> i32,
 }
 
-// The header is written for LP64/LLP64 targets with 8-byte pointers; pin every offset there.
-#[cfg(target_pointer_width = "64")]
-const _: () = {
-    assert!(size_of::<Signal>() == 32 && align_of::<Signal>() == 8);
-    assert!(offset_of!(Signal, words) == 8 && offset_of!(Signal, storage) == 12);
-    assert!(offset_of!(Signal, reserved) == 15);
-    assert!(offset_of!(Signal, name) == 16 && offset_of!(Signal, ptr) == 24);
+/// One field of a mirrored struct, named as in the header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FieldLayout {
+    /// The C struct name, e.g. `simjig_signal`.
+    pub(crate) ty: &'static str,
+    /// The C field name (`final` for the Rust `final_`).
+    pub(crate) name: &'static str,
+    /// `offset_of!` in the mirror.
+    pub(crate) offset: usize,
+    /// `size_of` of the field's type in the mirror.
+    pub(crate) size: usize,
+}
 
-    assert!(size_of::<Msg>() == 48 && align_of::<Msg>() == 8);
-    assert!(offset_of!(Msg, time) == 8 && offset_of!(Msg, file) == 16);
-    assert!(offset_of!(Msg, msg) == 32 && offset_of!(Msg, msg_len) == 40);
+/// The size of the field `field` selects; the closure is never called.
+fn field_size<S, F>(_field: fn(&S) -> &F) -> usize {
+    size_of::<F>()
+}
 
-    assert!(size_of::<CreateOpts>() == 32 && align_of::<CreateOpts>() == 8);
-    assert!(offset_of!(CreateOpts, name) == 8 && offset_of!(CreateOpts, error_limit) == 16);
-    assert!(offset_of!(CreateOpts, argv) == 24);
+/// The C name of a mirror field: its Rust name unless given.
+macro_rules! c_name {
+    ($field:ident) => {
+        stringify!($field)
+    };
+    ($field:ident $c:literal) => {
+        $c
+    };
+}
 
-    assert!(size_of::<ModelVtable>() == 192 && align_of::<ModelVtable>() == 8);
-    assert!(offset_of!(ModelVtable, prefix) == 8 && offset_of!(ModelVtable, ir_hash) == 24);
-    assert!(offset_of!(ModelVtable, create) == 32);
-    assert!(offset_of!(ModelVtable, drain_msgs) == 96);
-    assert!(offset_of!(ModelVtable, cov_counters) == 128);
-    assert!(offset_of!(ModelVtable, features) == 136);
-    assert!(offset_of!(ModelVtable, trace_open_ex) == 144);
-    assert!(offset_of!(ModelVtable, rng_seed) == 184);
-};
+/// For each mirrored struct and each of its fields, in header order: a compile-time
+/// assert that `offset_of!` equals the offset the header implies on LP64/LLP64 (8-byte
+/// pointers), and an entry of [`abi_fields`], which a test compares with the C++
+/// compiler's `offsetof`/`sizeof` (`simjig_rt_abi_fields`).
+macro_rules! abi_fields {
+    ($($c_ty:literal $ty:ident = $size:literal {
+        $($field:ident $(as $c:literal)? @ $offset:literal,)+
+    })+) => {
+        #[cfg(target_pointer_width = "64")]
+        const _: () = {
+            $(
+                assert!(size_of::<$ty>() == $size && align_of::<$ty>() == 8);
+                $(assert!(offset_of!($ty, $field) == $offset);)+
+            )+
+        };
+
+        /// Every field of every mirrored struct, in header order.
+        pub(crate) fn abi_fields() -> Vec<FieldLayout> {
+            vec![$($(FieldLayout {
+                ty: $c_ty,
+                name: c_name!($field $($c)?),
+                offset: offset_of!($ty, $field),
+                size: field_size(|s: &$ty| &s.$field),
+            },)+)+]
+        }
+    };
+}
+
+abi_fields! {
+    "simjig_model_vtable" ModelVtable = 192 {
+        abi_version @ 0,
+        size @ 4,
+        prefix @ 8,
+        verilator_version @ 16,
+        ir_hash @ 24,
+        create @ 32,
+        destroy @ 40,
+        eval @ 48,
+        final_ as "final" @ 56,
+        set_time @ 64,
+        events_pending @ 72,
+        next_time_slot @ 80,
+        signals @ 88,
+        drain_msgs @ 96,
+        trace_open @ 104,
+        trace_dump @ 112,
+        trace_close @ 120,
+        cov_counters @ 128,
+        features @ 136,
+        trace_open_ex @ 144,
+        trace_flush @ 152,
+        trace_reopen @ 160,
+        cov_zero @ 168,
+        cov_write @ 176,
+        rng_seed @ 184,
+    }
+    "simjig_signal" Signal = 32 {
+        id @ 0,
+        width @ 4,
+        words @ 8,
+        storage @ 12,
+        dir @ 13,
+        access @ 14,
+        reserved @ 15,
+        name @ 16,
+        ptr @ 24,
+    }
+    "simjig_msg" Msg = 48 {
+        kind @ 0,
+        line @ 4,
+        time @ 8,
+        file @ 16,
+        hier @ 24,
+        msg @ 32,
+        msg_len @ 40,
+    }
+    "simjig_create_opts" CreateOpts = 32 {
+        size @ 0,
+        flags @ 4,
+        name @ 8,
+        error_limit @ 16,
+        argc @ 20,
+        argv @ 24,
+    }
+}
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("simjig's C ABI is defined for 64-bit targets only");
 

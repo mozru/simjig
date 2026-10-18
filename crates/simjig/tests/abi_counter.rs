@@ -34,6 +34,16 @@ mod with_models {
         #[link_name = "simjig_vtable_Vticker"]
         safe fn ticker_vtable() -> *const ModelVtable;
         safe fn simjig_rt_abi_layout(out: *mut u32, cap: usize) -> usize;
+        safe fn simjig_rt_abi_fields(count: *mut usize) -> *const CppField;
+    }
+
+    /// `simjig_abi_field` (`simjig_rt.h`): one field as the C++ compiler lays it out.
+    #[repr(C)]
+    struct CppField {
+        ty: *const std::ffi::c_char,
+        name: *const std::ffi::c_char,
+        offset: u32,
+        size: u32,
     }
 
     /// RAII owner of one model handle; the test's only path to the vtable's functions.
@@ -214,6 +224,33 @@ mod with_models {
         ]
         .map(|v| u32::try_from(v).unwrap());
         assert_eq!(got, want);
+    }
+
+    /// Every field of every mirrored struct sits at the C++ `offsetof` with the C++
+    /// `sizeof`, and neither side has a field the other lacks.
+    #[test]
+    fn every_mirror_field_matches_cpp_offsetof() {
+        let mut count = 0;
+        let table = simjig_rt_abi_fields(&raw mut count);
+        // SAFETY: the runtime returns `count` entries of static storage.
+        let cpp = unsafe { std::slice::from_raw_parts(table, count) };
+        let text = |p| {
+            // SAFETY: the table's strings are static C strings.
+            unsafe { std::ffi::CStr::from_ptr(p) }
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
+        let cpp: Vec<(String, String, usize, usize)> = cpp
+            .iter()
+            .map(|f| (text(f.ty), text(f.name), f.offset as usize, f.size as usize))
+            .collect();
+        let rust: Vec<(String, String, usize, usize)> = abi::abi_fields()
+            .iter()
+            .map(|f| (f.ty.to_owned(), f.name.to_owned(), f.offset, f.size))
+            .collect();
+        assert_eq!(rust, cpp);
+        assert_eq!(cpp.len(), 47);
     }
 
     #[test]

@@ -71,7 +71,7 @@ pub mod __private {
         DEFAULT_TIMEOUT_MS, RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, assert_test_output,
         run, run_test,
     };
-    pub use crate::kernel::combinator::{MaybeDone, boxed, hop};
+    pub use crate::kernel::combinator::{Fork, MaybeDone, Operand};
 
     // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,
     // "The `__private` contract", and `model::bind` for the model glue.

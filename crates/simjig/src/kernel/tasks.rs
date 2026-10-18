@@ -15,6 +15,12 @@
 //! # Scheduling
 //! The ready queue is FIFO and deduplicated: waking a queued task again does nothing, and a
 //! wake for a task that no longer exists is dropped when it is popped.
+//!
+//! # Combinator helpers
+//! The table also holds the helper tasks of `first!`, `join!` and `with_timeout` (one per
+//! operand, `Helper`): queue places with a waker and a cancellation state but no future,
+//! name or handle. Running one polls its root task routed to it; `combinator` explains the
+//! protocol. They are not counted as tasks and never appear in failure reports.
 
 use std::any::Any;
 use std::collections::VecDeque;
@@ -24,7 +30,7 @@ use std::marker::PhantomData;
 use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use super::OrInvariant;
 use super::failure::FailureKind;
@@ -73,31 +79,109 @@ struct TaskEntry {
     join: Key,
 }
 
+/// A combinator operand's helper task (cocotb's per-operand `Task` in `_wait`): a place in
+/// the ready queue and a cancellation state, but no future of its own. Its operand lives in
+/// the combinator, inside `root`'s future; running the helper polls `root` routed to it
+/// (see `combinator`). Helpers have no name, no handle and no join list, and never appear
+/// in failure reports.
+struct Helper {
+    /// The task whose future holds the operand.
+    root: Key,
+    /// What awaits the combinator: `root`, or the helper whose operand holds it.
+    owner: Key,
+    state: HelperState,
+    /// Started combinators awaited inside this helper's operand that still have helpers
+    /// running.
+    live_forks: u32,
+    /// Whether the helper's cancellation was passed on to those combinators.
+    propagated: bool,
+}
+
+/// Where a helper is in cocotb's task life cycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HelperState {
+    /// Scheduled or waiting on a trigger.
+    Running,
+    /// `Task.cancel()` was called; it finishes when it next runs.
+    Cancelling,
+    /// Finished, normally or cancelled.
+    Done,
+}
+
+enum Entry {
+    Task(TaskEntry),
+    Helper(Helper),
+}
+
 #[derive(Default)]
 pub(crate) struct TaskTable {
-    slab: Slab<TaskEntry>,
+    slab: Slab<Entry>,
+    helpers: usize,
 }
 
 impl TaskTable {
-    pub(crate) fn name(&self, key: Key) -> Option<Rc<str>> {
-        self.slab.get(key).map(|e| Rc::clone(&e.name))
+    fn get(&self, key: Key) -> Option<&TaskEntry> {
+        match self.slab.get(key)? {
+            Entry::Task(e) => Some(e),
+            Entry::Helper(_) => None,
+        }
     }
 
+    fn get_mut(&mut self, key: Key) -> Option<&mut TaskEntry> {
+        match self.slab.get_mut(key)? {
+            Entry::Task(e) => Some(e),
+            Entry::Helper(_) => None,
+        }
+    }
+
+    fn helper(&self, key: Key) -> Option<&Helper> {
+        match self.slab.get(key)? {
+            Entry::Helper(h) => Some(h),
+            Entry::Task(_) => None,
+        }
+    }
+
+    fn helper_mut(&mut self, key: Key) -> Option<&mut Helper> {
+        match self.slab.get_mut(key)? {
+            Entry::Helper(h) => Some(h),
+            Entry::Task(_) => None,
+        }
+    }
+
+    fn remove_task(&mut self, key: Key) -> Option<TaskEntry> {
+        self.get(key)?;
+        match self.slab.remove(key)? {
+            Entry::Task(e) => Some(e),
+            Entry::Helper(_) => None,
+        }
+    }
+
+    fn tasks(&self) -> impl Iterator<Item = (Key, &TaskEntry)> {
+        self.slab.iter().filter_map(|(k, e)| match e {
+            Entry::Task(t) => Some((k, t)),
+            Entry::Helper(_) => None,
+        })
+    }
+
+    pub(crate) fn name(&self, key: Key) -> Option<Rc<str>> {
+        self.get(key).map(|e| Rc::clone(&e.name))
+    }
+
+    /// Tasks in the table; helpers are not counted.
     pub(crate) fn len(&self) -> usize {
-        self.slab.len()
+        self.slab.len() - self.helpers
     }
 
     /// Keys and names of tasks whose futures have not completed, in slot order.
     pub(crate) fn unfinished(&self) -> Vec<(Key, Rc<str>)> {
-        self.slab
-            .iter()
+        self.tasks()
             .filter(|(_, e)| e.state != TaskState::Done)
             .map(|(k, e)| (k, Rc::clone(&e.name)))
             .collect()
     }
 
     pub(crate) fn keys(&self) -> Vec<Key> {
-        self.slab.iter().map(|(k, _)| k).collect()
+        self.tasks().map(|(k, _)| k).collect()
     }
 
     fn by_wake(&self, index: u32, gen16_: u16) -> Option<Key> {
@@ -108,7 +192,7 @@ impl TaskTable {
 impl fmt::Debug for TaskTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
-            .entries(self.slab.iter().map(|(_, e)| &e.name))
+            .entries(self.tasks().map(|(_, e)| &e.name))
             .finish()
     }
 }
@@ -122,16 +206,32 @@ pub(crate) struct ReadyQueue {
 }
 
 impl ReadyQueue {
+    /// Queues at the back (cocotb `EventLoop.schedule`); a no-op if already queued.
     pub(crate) fn push(&mut self, index: u32, gen16_: u16) {
+        if self.mark(index, gen16_) {
+            self.queue.push_back((index, gen16_));
+        }
+    }
+
+    /// Queues at the front (cocotb `EventLoop.schedule_left`, used by `Task._start_next`);
+    /// a no-op if already queued.
+    fn push_front(&mut self, index: u32, gen16_: u16) {
+        if self.mark(index, gen16_) {
+            self.queue.push_front((index, gen16_));
+        }
+    }
+
+    /// Records `index` as queued; returns `false` if it already was.
+    fn mark(&mut self, index: u32, gen16_: u16) -> bool {
         let i = index as usize;
         if self.queued.len() <= i {
             self.queued.resize(i + 1, None);
         }
         if self.queued[i] == Some(gen16_) {
-            return;
+            return false;
         }
         self.queued[i] = Some(gen16_);
-        self.queue.push_back((index, gen16_));
+        true
     }
 
     fn pop(&mut self) -> Option<(u32, u16)> {
@@ -193,7 +293,7 @@ pub(crate) fn spawn_in<T: 'static>(
 ) -> Task<T> {
     let (full, ancestors): (Rc<str>, Rc<[Key]>) = {
         let tasks = k.tasks.borrow();
-        match parent.and_then(|p| Some((p, tasks.slab.get(p)?))) {
+        match parent.and_then(|p| Some((p, tasks.get(p)?))) {
             Some((p, e)) => (
                 format!("{}.{name}", e.name).into(),
                 e.ancestors.iter().copied().chain([p]).collect(),
@@ -212,12 +312,12 @@ pub(crate) fn spawn_in<T: 'static>(
                 .current
                 .get()
                 .or_invariant("invariant: a completing task is current");
-            if let Some(e) = k.tasks.borrow_mut().slab.get_mut(key) {
+            if let Some(e) = k.tasks.borrow_mut().get_mut(key) {
                 e.result = Some(Box::new(value));
             }
         });
     });
-    let key = k.tasks.borrow_mut().slab.insert(TaskEntry {
+    let key = k.tasks.borrow_mut().slab.insert(Entry::Task(TaskEntry {
         name: Rc::clone(&full),
         ancestors,
         owner: None,
@@ -229,7 +329,7 @@ pub(crate) fn spawn_in<T: 'static>(
         cancel_requested: false,
         detached: Vec::new(),
         join,
-    });
+    }));
     assert!(
         key.index <= MAX_TASK_INDEX,
         "more than {} tasks alive at once (spawning `{full}`)",
@@ -296,7 +396,6 @@ impl<T: 'static> Task<T> {
         state::with_sim(self.sim_gen, |k| {
             k.tasks
                 .borrow()
-                .slab
                 .get(key)
                 .is_none_or(|e| e.state == TaskState::Done)
         })
@@ -312,7 +411,7 @@ impl<T: 'static> Task<T> {
         let Some(key) = self.key.take() else { return };
         state::with_sim(self.sim_gen, |k| {
             let mut tasks = k.tasks.borrow_mut();
-            let Some(entry) = tasks.slab.get_mut(key) else {
+            let Some(entry) = tasks.get_mut(key) else {
                 return;
             };
             entry.has_handle = false;
@@ -324,17 +423,16 @@ impl<T: 'static> Task<T> {
             let ancestors = Rc::clone(&entry.ancestors);
             let owner = ancestors.iter().rev().copied().find(|&a| {
                 tasks
-                    .slab
                     .get(a)
                     .is_some_and(|e| matches!(e.state, TaskState::Pending | TaskState::Polling))
             });
             // No running ancestor means `main` completed: the run is ending, and `drop_all`
             // cancels the task.
             if let Some(owner) = owner {
-                if let Some(e) = tasks.slab.get_mut(key) {
+                if let Some(e) = tasks.get_mut(key) {
                     e.owner = Some(owner);
                 }
-                if let Some(o) = tasks.slab.get_mut(owner) {
+                if let Some(o) = tasks.get_mut(owner) {
                     o.detached.push(key);
                 }
             }
@@ -353,7 +451,7 @@ impl<T: 'static> Task<T> {
     pub(crate) fn take_result(&mut self, k: &Kernel) -> Option<T> {
         let key = self.key?;
         let mut tasks = k.tasks.borrow_mut();
-        let entry = tasks.slab.get_mut(key)?;
+        let entry = tasks.get_mut(key)?;
         if entry.state != TaskState::Done {
             return None;
         }
@@ -381,7 +479,7 @@ impl<T: 'static> Future for Task<T> {
             if let Some(v) = this.take_result(k) {
                 return Some(Poll::Ready(v));
             }
-            let join = k.tasks.borrow().slab.get(key).map(|e| e.join);
+            let join = k.tasks.borrow().get(key).map(|e| e.join);
             let Some(join) = join else {
                 panic!("task `{}` was cancelled while awaited", this.name)
             };
@@ -420,7 +518,7 @@ impl<T> Task<T> {
         state::with_sim(self.sim_gen, |k| {
             let (done, never_ran) = {
                 let mut tasks = k.tasks.borrow_mut();
-                let Some(entry) = tasks.slab.get_mut(key) else {
+                let Some(entry) = tasks.get_mut(key) else {
                     return;
                 };
                 entry.has_handle = false;
@@ -451,7 +549,6 @@ fn cascading(k: &Kernel) -> bool {
     let owner_cancelled = k.current.get().is_some_and(|c| {
         k.tasks
             .borrow()
-            .slab
             .get(c)
             .is_some_and(|e| e.state == TaskState::Cancelling)
     });
@@ -477,10 +574,10 @@ fn dropped_unpolled(k: &Kernel, key: Key) {
 
 /// Removes a task's entry and its join list; its future must already be gone.
 fn free_task(k: &Kernel, key: Key) {
-    let removed = k.tasks.borrow_mut().slab.remove(key);
+    let removed = k.tasks.borrow_mut().remove_task(key);
     let Some(entry) = removed else { return };
     if let Some(owner) = entry.owner
-        && let Some(o) = k.tasks.borrow_mut().slab.get_mut(owner)
+        && let Some(o) = k.tasks.borrow_mut().get_mut(owner)
     {
         o.detached.retain(|&c| c != key);
     }
@@ -529,7 +626,7 @@ fn drop_guarded<V>(k: &Kernel, key: Key, value: V) {
 pub(crate) fn cancel_task(k: &Kernel, key: Key) {
     let (future, children) = {
         let mut tasks = k.tasks.borrow_mut();
-        let Some(entry) = tasks.slab.get_mut(key) else {
+        let Some(entry) = tasks.get_mut(key) else {
             return;
         };
         match entry.state {
@@ -557,7 +654,6 @@ fn complete_task(k: &Kernel, key: Key, future: BoxFuture) {
     let (children, join, has_handle) = {
         let mut tasks = k.tasks.borrow_mut();
         let entry = tasks
-            .slab
             .get_mut(key)
             .or_invariant("invariant: a completing task is in the table");
         entry.state = TaskState::Done;
@@ -590,10 +686,21 @@ pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> String {
 }
 
 /// Polls one task.
-fn poll_task(k: &Kernel, key: Key) {
+///
+/// A woken helper polls its root task routed to it (`combinator`); a helper that already
+/// finished, or whose root is not waiting, is skipped.
+fn poll_task(k: &Kernel, woken: Key) {
+    let (key, route) = {
+        let tasks = k.tasks.borrow();
+        match tasks.helper(woken) {
+            Some(h) if h.state == HelperState::Done => return,
+            Some(h) => (h.root, Some(woken)),
+            None => (woken, None),
+        }
+    };
     let future = {
         let mut tasks = k.tasks.borrow_mut();
-        let Some(entry) = tasks.slab.get_mut(key) else {
+        let Some(entry) = tasks.get_mut(key) else {
             return;
         };
         if entry.state != TaskState::Pending {
@@ -604,21 +711,24 @@ fn poll_task(k: &Kernel, key: Key) {
         entry.future.take()
     };
     let Some(mut future) = future else { return };
-    k.record(TraceKind::Poll, Some(key), 0, 0);
+    k.record(TraceKind::Poll, Some(key), u64::from(route.is_some()), 0);
     k.bump(|c| c.polls += 1);
     let waker = waker::task_waker(k.sim_gen, key.index, gen16(key.gen_));
     let mut cx = Context::from_waker(&waker);
     let previous = k.current.replace(Some(key));
+    let context = k.context.replace(Some(key));
+    let previous_route = k.route.replace(route);
     panics::forget();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
     k.current.set(previous);
+    k.context.set(context);
+    k.route.set(previous_route);
     match outcome {
         Ok(Poll::Ready(())) => complete_task(k, key, future),
         Ok(Poll::Pending) => {
             let cancel = {
                 let mut tasks = k.tasks.borrow_mut();
                 let entry = tasks
-                    .slab
                     .get_mut(key)
                     .or_invariant("invariant: a polled task stays in the table");
                 entry.future = Some(future);
@@ -632,7 +742,7 @@ fn poll_task(k: &Kernel, key: Key) {
         Err(payload) => {
             let location = panics::take();
             // Keep the future: it is dropped with the rest when the run ends.
-            if let Some(entry) = k.tasks.borrow_mut().slab.get_mut(key) {
+            if let Some(entry) = k.tasks.borrow_mut().get_mut(key) {
                 entry.future = Some(future);
                 entry.state = TaskState::Pending;
             }
@@ -663,13 +773,179 @@ pub(crate) fn run_ready(k: &Kernel) {
     }
 }
 
+/// Starts the `N` helpers of a combinator awaited in the current context and queues them
+/// at the front, in operand order, as cocotb's `_wait` does (`_start_next` on each, last
+/// first). Returns the combinator's owner (the current context) and the helpers.
+///
+/// # Panics
+/// Outside a task's poll, or if 65 536 tasks and helpers are alive at once.
+pub(crate) fn start_helpers<const N: usize>(k: &Kernel) -> (Key, [Key; N]) {
+    let root = k
+        .current
+        .get()
+        .or_invariant("invariant: a combinator is polled by a task");
+    let owner = k.context.get().unwrap_or(root);
+    let mut tasks = k.tasks.borrow_mut();
+    let keys: [Key; N] = std::array::from_fn(|_| {
+        tasks.slab.insert(Entry::Helper(Helper {
+            root,
+            owner,
+            state: HelperState::Running,
+            live_forks: 0,
+            propagated: false,
+        }))
+    });
+    tasks.helpers += N;
+    if let Some(o) = tasks.helper_mut(owner) {
+        o.live_forks += 1;
+    }
+    drop(tasks);
+    let mut ready = k.ready.borrow_mut();
+    for key in keys.iter().rev() {
+        assert!(
+            key.index <= MAX_TASK_INDEX,
+            "more than {} tasks and combinator operands alive at once",
+            MAX_TASK_INDEX + 1
+        );
+        ready.push_front(key.index, gen16(key.gen_));
+    }
+    (owner, keys)
+}
+
+/// Whether this poll runs the context that polls the combinator (its task, or its
+/// helper), rather than passing through it to a helper of a combinator inside.
+pub(crate) fn runs_owner(k: &Kernel) -> bool {
+    let route = k.route.get();
+    route.is_none() || route == k.context.get()
+}
+
+/// The operand whose helper this run is routed to, directly or through combinators nested
+/// in that operand.
+pub(crate) fn route_index(k: &Kernel, helpers: &[Key]) -> Option<usize> {
+    let mut at = k.route.get()?;
+    let tasks = k.tasks.borrow();
+    loop {
+        if let Some(i) = helpers.iter().position(|&h| h == at) {
+            return Some(i);
+        }
+        at = tasks.helper(at)?.owner;
+    }
+}
+
+/// Whether this run is helper `key`'s own (not one passing through it).
+pub(crate) fn routed_to(k: &Kernel, key: Key) -> bool {
+    k.route.get() == Some(key)
+}
+
+pub(crate) fn helper_state(k: &Kernel, key: Key) -> HelperState {
+    k.tasks
+        .borrow()
+        .helper(key)
+        .map_or(HelperState::Done, |h| h.state)
+}
+
+/// Enters helper `key`'s context; returns the waker its operand must register and the
+/// context to restore afterwards.
+pub(crate) fn enter_helper(k: &Kernel, key: Key) -> (Waker, Option<Key>) {
+    let waker = waker::task_waker(k.sim_gen, key.index, gen16(key.gen_));
+    (waker, k.context.replace(Some(key)))
+}
+
+/// cocotb's `Task.cancel()` on a helper: marks it cancelling and queues it at the back,
+/// or leaves it where it already is queued (a scheduled task is "hijacked"). Returns
+/// whether its operand can be dropped now, deregistering its trigger as cocotb does at
+/// once: not when the operand awaits started combinators, which cancel their own
+/// helpers only when this one runs.
+pub(crate) fn cancel_helper(k: &Kernel, key: Key) -> bool {
+    let drop_now = {
+        let mut tasks = k.tasks.borrow_mut();
+        let Some(h) = tasks.helper_mut(key) else {
+            return false;
+        };
+        h.state = HelperState::Cancelling;
+        h.live_forks == 0
+    };
+    k.ready.borrow_mut().push(key.index, gen16(key.gen_));
+    drop_now
+}
+
+/// For a run of cancelling helper `key`: whether the cancellation must still be passed to
+/// the started combinators in its operand. True once.
+pub(crate) fn take_propagation(k: &Kernel, key: Key) -> bool {
+    let mut tasks = k.tasks.borrow_mut();
+    let Some(h) = tasks.helper_mut(key) else {
+        return false;
+    };
+    let propagate = h.live_forks > 0 && !h.propagated;
+    h.propagated = true;
+    propagate
+}
+
+/// Whether helper `key`'s operand still awaits a combinator with helpers running.
+pub(crate) fn has_live_forks(k: &Kernel, key: Key) -> bool {
+    k.tasks
+        .borrow()
+        .helper(key)
+        .is_some_and(|h| h.live_forks > 0)
+}
+
+/// Queues `key` at the back again (cocotb awaiting `NullTrigger`).
+pub(crate) fn requeue(k: &Kernel, key: Key) {
+    k.ready.borrow_mut().push(key.index, gen16(key.gen_));
+}
+
+pub(crate) fn finish_helper(k: &Kernel, key: Key) {
+    if let Some(h) = k.tasks.borrow_mut().helper_mut(key) {
+        h.state = HelperState::Done;
+    }
+}
+
+/// Whether `owner` is a helper being cancelled: its combinators cancel their helpers.
+pub(crate) fn owner_cancelling(k: &Kernel, owner: Key) -> bool {
+    k.tasks
+        .borrow()
+        .helper(owner)
+        .is_some_and(|h| h.state == HelperState::Cancelling)
+}
+
+/// A combinator's last helper finished: wakes its owner (cocotb's `complete.set()`),
+/// unless the owner is a helper being cancelled, which no longer waits on it.
+pub(crate) fn fork_complete(k: &Kernel, owner: Key) {
+    {
+        let mut tasks = k.tasks.borrow_mut();
+        if let Some(h) = tasks.helper_mut(owner) {
+            h.live_forks -= 1;
+            if h.state != HelperState::Running {
+                return;
+            }
+        } else if tasks.get(owner).is_none() {
+            return;
+        }
+    }
+    k.ready.borrow_mut().push(owner.index, gen16(owner.gen_));
+}
+
+/// Removes a combinator's helpers; `live` if some had not finished.
+pub(crate) fn free_helpers(k: &Kernel, helpers: &[Key], owner: Key, live: bool) {
+    let mut tasks = k.tasks.borrow_mut();
+    for &key in helpers {
+        if tasks.helper(key).is_some() {
+            tasks.slab.remove(key);
+            tasks.helpers -= 1;
+        }
+    }
+    if live && let Some(o) = tasks.helper_mut(owner) {
+        o.live_forks -= 1;
+    }
+}
+
 /// Drops every task, children through their parents first, until the table is empty.
 pub(crate) fn drop_all(k: &Kernel) {
     loop {
         let keys = k.tasks.borrow().keys();
         let Some(&first) = keys.first() else { return };
         for key in keys {
-            let done = k.tasks.borrow().slab.get(key).map(|e| e.state);
+            let done = k.tasks.borrow().get(key).map(|e| e.state);
             match done {
                 Some(TaskState::Done) => free_task(k, key),
                 Some(_) => cancel_task(k, key),
@@ -677,7 +953,7 @@ pub(crate) fn drop_all(k: &Kernel) {
             }
         }
         // A `Drop` that keeps spawning would loop forever; one pass must make progress.
-        if k.tasks.borrow().slab.get(first).is_some() {
+        if k.tasks.borrow().get(first).is_some() {
             return;
         }
     }

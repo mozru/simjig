@@ -300,10 +300,10 @@ fn a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice() {
 
 #[test]
 fn combinators_resume_their_caller_after_the_tasks_the_same_edge_woke() {
-    // Golden combinator_hop. Per round, the caller's combinator registers on rising(x)
-    // before f does; f sets an Event z waits on. `first!` and `with_timeout` cancel a
-    // waiting loser (the Timer), one hop more than `join!`: z runs before their caller,
-    // after the caller of `join!`.
+    // Golden combinator_hop. Per round, the caller's helper registers on rising(x) before f
+    // does; f sets an Event z waits on. `join!`'s caller is woken by its last helper, right
+    // after f; `first!` and `with_timeout` first cancel their waiting loser (the Timer),
+    // whose helper is queued behind z, and the caller is woken only when it finishes.
     let (mut sim, x, _) = two_bits();
     let trace: Trace = Rc::default();
     let shared = Rc::clone(&trace);
@@ -362,7 +362,92 @@ fn combinators_resume_their_caller_after_the_tasks_the_same_edge_woke() {
 }
 
 #[test]
-fn first_of_coincident_edges_goes_to_the_leftmost_operand() {
+fn first_goes_to_the_helper_that_finishes_first_not_the_leftmost_operand() {
+    // Golden loser_scheduled: t waits on rising(x) before the caller's `first!` does, and
+    // sets ev. The edge wakes t, then the `rising` helper; ev's helper is woken by t, so
+    // it is queued behind the `rising` helper and loses although it is the left operand.
+    let (mut sim, x, _) = two_bits();
+    let won = sim.run(async move {
+        let ev = Event::new("ev");
+        let set = ev.clone();
+        let t = spawn("t", async move {
+            rising(x).await;
+            set.set();
+        });
+        let writer = spawn("w", async move {
+            Timer::new(ticks(1)).await;
+            x.write_u64(1);
+        });
+        yield_now().await; // t registers first
+        let won = first!(
+            async {
+                ev.wait().await;
+                "ev"
+            },
+            async {
+                rising(x).await;
+                "rise"
+            }
+        );
+        t.await;
+        writer.await;
+        won
+    });
+    assert_eq!(won.unwrap(), "rise");
+}
+
+#[test]
+fn a_cancelled_nested_combinator_finishes_its_helpers_before_the_caller_resumes() {
+    // Golden cancelled_nest. The `join!` loses while waiting; its helper, when it runs,
+    // cancels the join's two helpers and requeues itself until they finished, so the
+    // caller resumes three hops after the edge: between z3 and z4 of an Event chain that f
+    // starts at that edge.
+    let (mut sim, x, y) = two_bits();
+    let trace: Trace = Rc::default();
+    let shared = Rc::clone(&trace);
+    sim.run(async move {
+        let events: Vec<Event> = (0..6).map(|_| Event::new("ev")).collect();
+        let (first_event, tf) = (events[0].clone(), Rc::clone(&shared));
+        let mut tasks = vec![spawn("f", async move {
+            rising(x).await;
+            push(&tf, "f");
+            first_event.set();
+        })];
+        for i in 0..5 {
+            let (wait, next, tz) = (events[i].clone(), events[i + 1].clone(), Rc::clone(&shared));
+            tasks.push(spawn("z", async move {
+                wait.wait().await;
+                push(&tz, format!("z{}", i + 1));
+                next.set();
+            }));
+        }
+        tasks.push(spawn("w", async move {
+            Timer::new(ticks(2)).await;
+            x.write_u64(1);
+        }));
+        Timer::new(ticks(1)).await;
+        first!(
+            async {
+                join!(changed(y), Timer::new(ticks(100)));
+            },
+            rising(x)
+        );
+        push(&shared, "caller");
+        for task in tasks {
+            task.await;
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        *trace.borrow(),
+        ["f", "z1", "z2", "z3", "caller", "z4", "z5"]
+    );
+}
+
+#[test]
+fn first_of_coincident_edges_goes_to_the_trigger_primed_first() {
+    // Each operand's helper primes its edge in operand order, so the leftmost operand's
+    // trigger is the older one and fires first; it wins because its helper finishes first.
     let mut m = FakeModel::new(Precision::NS);
     m.signal("c1", 1);
     m.signal("c2", 1);

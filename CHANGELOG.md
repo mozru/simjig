@@ -27,12 +27,22 @@ the public API, the generated code or simulation semantics.
   and `changed` on one signal are separate groups. Wake order at one delta changes from
   global registration order to priming order; trace hashes of runs where that differs
   change.
-- `first!`, `join!` and `with_timeout` resume their caller where cocotb 2.1's `First`,
-  `Combine` and `with_timeout` do (golden `combinator_hop`): after yielding once, and
-  once more when dropping the losers cancelled a wait that had not fired, so the tasks
-  woken by the same edge (and, for `first!` and `with_timeout`, the tasks those wake) run
-  first. Before, the caller resumed at once, in its registration order. A combinator
-  whose operands are ready at once now also yields before returning.
+- `first!`, `join!` and `with_timeout` run each operand in an internal helper task, as
+  cocotb 2.1's `First`, `Combine` and `with_timeout` do (`_wait`): the helpers start at the
+  front of the ready queue in operand order, the first helper to *finish* decides a
+  `first!` (not the leftmost operand that is ready: an operand woken by a task the same
+  edge woke loses to one the edge woke itself), losers are cancelled as cocotb cancels
+  them (dropped when deregistered, finishing at their queue place), and the caller
+  resumes when the last helper finishes (goldens `combinator_hop`, `loser_scheduled`,
+  `spawned_combinators`, `cancelled_nest` and seven more in `test_callback_order`).
+  Before, operands were polled inline in the caller, leftmost first, and the caller
+  yielded once or twice afterwards. The cost is one helper entry and two or three extra
+  polls of the caller's task per combinator. Trace hashes of runs with combinators
+  change. `__private::{hop, boxed}` are gone (macro internals).
+- Performance: value-change groups are kept in a map keyed by priming order, so a walk
+  over G groups costs O(G log G) instead of O(G^2); cancelling one of many waiters of an
+  edge or a timer deadline, and firing one of many timers due together, is O(1) instead
+  of O(waiters).
 - `with_timeout` breaks ties as cocotb 2.1 does (golden `timeout_ties`): the timeout's
   Timer registers before the future's triggers and is checked first, so a `Timer`,
   edge or `cycles` due exactly at the timeout now times out (a future's own `Timer` used

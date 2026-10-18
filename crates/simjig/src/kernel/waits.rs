@@ -119,8 +119,6 @@ pub(crate) type Wake = (u64, Waker);
 
 pub(crate) struct WaitTable {
     seq: u64,
-    /// Registrations removed before they fired (cancelled waits), ever.
-    cancelled: u64,
     waiters: Slab<Waiter>,
     /// Primed value-change groups by `primed`: a walk visits them in key order, and
     /// priming, firing and unpriming one is O(log G).
@@ -196,7 +194,6 @@ impl WaitTable {
     pub(crate) fn new(slots: usize) -> Self {
         Self {
             seq: 0,
-            cancelled: 0,
             waiters: Slab::default(),
             groups: BTreeMap::new(),
             group_of: vec![[None; 3]; slots],
@@ -284,7 +281,6 @@ impl WaitTable {
         if w.fired {
             return;
         }
-        self.cancelled += 1;
         match w.on {
             WaitOn::Edge { slot, edge } => {
                 if let Some(seq) = self.group_of[slot as usize][edge.index()]
@@ -560,13 +556,6 @@ pub(crate) fn wake_sorted(mut wakes: Vec<Wake>) {
     for (_, waker) in wakes {
         waker.wake();
     }
-}
-
-/// How many registrations of the current simulation were removed before they fired; 0
-/// outside a simulation. A combinator compares it around dropping its losers to learn
-/// whether one was still waiting (see `combinator::hop`).
-pub(crate) fn cancelled_waits() -> u64 {
-    state::try_current("a combinator", |k| k.waits.borrow().cancelled).unwrap_or(0)
 }
 
 /// Fires every waiter on `list`.

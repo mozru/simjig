@@ -298,7 +298,7 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     }
     d.extend(stdlib.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
     d.extend(link_args(&archives, &natives, stdlib.as_deref()));
-    Ok(d)
+    Ok(script::once_per_script(&i.env.out_dir, d))
 }
 
 /// The same libraries again, as `cargo::rustc-link-arg` lines, in link order.

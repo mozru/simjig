@@ -10,10 +10,14 @@
 //! - the covergroup runtime compiled with two `VM_COVERAGE` settings (see
 //!   [`claim_covergroups`]).
 //!
+//! It also keeps the link arguments that must appear once per binary: an `-rpath` given
+//! twice makes ld64 warn on every link, and FST models ask for one per native library
+//! (lz4 and zlib, usually in the same directory) per model ([`once_per_script`]).
+//!
 //! The registry is keyed by `OUT_DIR` so tests that build in several sandboxes from one
 //! process do not see each other's models.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::dut::DutConfig;
@@ -34,6 +38,28 @@ struct Model {
 }
 
 static BUILT: Mutex<Vec<Model>> = Mutex::new(Vec::new());
+
+/// The `-rpath` link arguments already emitted, per `OUT_DIR`.
+static RPATHS: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+
+/// `directives` without the `-rpath` link arguments this build script (`out_dir`) already
+/// emitted, for this DUT or an earlier one; every other directive is kept, in order.
+pub(crate) fn once_per_script(out_dir: &Path, directives: Vec<String>) -> Vec<String> {
+    let mut seen = RPATHS.lock().unwrap_or_else(PoisonError::into_inner);
+    directives
+        .into_iter()
+        .filter(|d| {
+            if !d.contains("-rpath,") {
+                return true;
+            }
+            let first = !seen.iter().any(|(dir, arg)| dir == out_dir && arg == d);
+            if first {
+                seen.push((out_dir.to_path_buf(), d.clone()));
+            }
+            first
+        })
+        .collect()
+}
 
 fn built() -> MutexGuard<'static, Vec<Model>> {
     // A panic while holding the lock leaves the list itself consistent.
@@ -162,4 +188,31 @@ pub(crate) fn claim_covergroups(
         m.covergroup_coverage = Some(coverage);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_rpath_is_emitted_once_per_build_script() {
+        let rpath = "cargo::rustc-link-arg=-Wl,-rpath,/conda/lib".to_owned();
+        let lib = |n: &str| format!("cargo::rustc-link-lib={n}");
+        let first = Path::new("/out/rpath-a");
+        assert_eq!(
+            once_per_script(
+                first,
+                vec![lib("lz4"), rpath.clone(), lib("z"), rpath.clone()]
+            ),
+            [lib("lz4"), rpath.clone(), lib("z")]
+        );
+        // A second FST model of the same script: the directory is already on the rpath.
+        assert_eq!(
+            once_per_script(first, vec![lib("z"), rpath.clone()]),
+            [lib("z")]
+        );
+        // Another build script (another OUT_DIR) needs its own.
+        let other = Path::new("/out/rpath-b");
+        assert_eq!(once_per_script(other, vec![rpath.clone()]), [rpath]);
+    }
 }

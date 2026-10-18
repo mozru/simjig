@@ -168,13 +168,7 @@ fn build_models() -> Result<Vec<String>, String> {
     for dut in duts() {
         let config = dut.config().clone();
         let built = dut.build_in(&env).map_err(|e| e.to_string())?;
-        for line in tests_only(&built.directives) {
-            // FST models add `-rpath <dir>` for lz4 and for zlib, usually the same
-            // directory; ld64 warns about every repeat.
-            if !(line.contains("-rpath,") && lines.contains(&line)) {
-                lines.push(line);
-            }
-        }
+        lines.extend(tests_only(&built.directives));
         let lowered =
             codegen::lower(&built.design, &config.codegen_config()).map_err(|e| e.to_string())?;
         let upper = config.name.to_uppercase();

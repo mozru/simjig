@@ -128,11 +128,9 @@ impl FakeModel {
                 return Ok(());
             }
         }
-        Err(ModelError {
-            message: format!(
-                "fake model: combinational logic did not settle in {SETTLE_LIMIT} passes"
-            ),
-        })
+        Err(ModelError::fatal(format!(
+            "fake model: combinational logic did not settle in {SETTLE_LIMIT} passes"
+        )))
     }
 
     /// Runs the events due now, oldest first; events they schedule for now wait for the
@@ -143,13 +141,11 @@ impl FakeModel {
             return Ok(());
         };
         if *entry.key() < now {
-            return Err(ModelError {
-                message: format!(
-                    "fake model: an event due at t={} was not run before t={}; missed a time slot",
-                    entry.key().ticks(),
-                    now.ticks()
-                ),
-            });
+            return Err(ModelError::fatal(format!(
+                "fake model: an event due at t={} was not run before t={}; missed a time slot",
+                entry.key().ticks(),
+                now.ticks()
+            )));
         }
         if *entry.key() == now {
             for logic in entry.remove() {
@@ -222,13 +218,13 @@ impl ModelBackend for FakeModel {
             self.settle()?;
             passes += 1;
             if passes == SETTLE_LIMIT {
-                return Err(ModelError {
-                    message: format!("fake model: flops kept firing for {SETTLE_LIMIT} passes"),
-                });
+                return Err(ModelError::fatal(format!(
+                    "fake model: flops kept firing for {SETTLE_LIMIT} passes"
+                )));
             }
         }
         if let Some(message) = self.state.fatal.take() {
-            return Err(ModelError { message });
+            return Err(ModelError::fatal(message));
         }
         Ok(if self.state.finished {
             EvalStatus::Finished

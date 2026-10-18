@@ -39,7 +39,7 @@
 
 use std::panic::Location;
 
-use super::backend::EvalStatus;
+use super::backend::{EvalStatus, ModelErrorKind};
 use super::clock::ClockEntry;
 use super::failure::{BlockedTask, FailureKind};
 use super::recorder::TraceKind;
@@ -245,14 +245,15 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         ),
         Err(e) => {
             let message = format!("{which}{}", e.message);
-            k.fail(
-                FailureKind::ModelFatal {
+            let kind = match e.kind {
+                ModelErrorKind::Fatal => FailureKind::ModelFatal {
                     message: message.clone(),
                 },
-                None,
-                None,
-                message,
-            );
+                ModelErrorKind::DpiPanic => FailureKind::DpiPanic {
+                    message: message.clone(),
+                },
+            };
+            k.fail(kind, None, None, message);
         }
     }
     false
@@ -383,4 +384,59 @@ fn blocked_tasks(k: &Kernel) -> Vec<BlockedTask> {
             awaiting: waits.describe(*key, &k.names, k.precision),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::backend::{ModelBackend, ModelError};
+    use super::super::failure::FailureKind;
+    use super::super::sim::Sim;
+    use super::super::time::{Precision, SimDuration};
+    use super::super::trigger::Timer;
+    use super::*;
+
+    /// A model with no signals whose first eval reports a panicking DPI-C import.
+    struct DpiPanics;
+
+    impl ModelBackend for DpiPanics {
+        fn precision(&self) -> Precision {
+            Precision::NS
+        }
+        fn slot_count(&self) -> u32 {
+            0
+        }
+        fn slot_name(&self, _slot: u32) -> &str {
+            unreachable!("no slots")
+        }
+        fn slot_width(&self, _slot: u32) -> u32 {
+            unreachable!("no slots")
+        }
+        fn read(&self, _slot: u32, _out: &mut [u32]) {}
+        fn write(&mut self, _slot: u32, _value: &[u32]) {}
+        fn set_time(&mut self, _time: SimTime) {}
+        fn eval(&mut self) -> Result<EvalStatus, ModelError> {
+            Err(ModelError::dpi_panic(
+                "DPI-C import `dpi_add` panicked: seven".into(),
+            ))
+        }
+        fn events_pending(&self) -> bool {
+            false
+        }
+        fn next_time_slot(&self) -> SimTime {
+            SimTime::ZERO
+        }
+    }
+
+    #[test]
+    fn a_dpi_panic_is_its_own_failure_kind() {
+        let mut sim = Sim::from_backend(Box::new(DpiPanics));
+        let f = sim.run(Timer::new(SimDuration::from_ticks(1))).unwrap_err();
+        assert_eq!(
+            f.kind,
+            FailureKind::DpiPanic {
+                message: "DPI-C import `dpi_add` panicked: seven".into()
+            }
+        );
+        assert!(f.to_string().starts_with("simjig DpiPanic at t=0"), "{f}");
+    }
 }

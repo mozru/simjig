@@ -36,11 +36,55 @@ pub(crate) enum EvalStatus {
     Finished,
 }
 
-/// A fatal error raised by the model during `eval` (`$fatal`, `$stop`, an internal error).
+/// Which kind of failure a [`ModelError`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModelErrorKind {
+    /// The design or Verilator reported a fatal error (`$fatal`, `$stop`, an internal
+    /// error).
+    Fatal,
+    /// A DPI-C import implemented in Rust panicked during the eval.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the dpi module (branch w3/dpi) makes it once merged"
+        )
+    )]
+    DpiPanic,
+}
+
+/// A fatal error raised by the model during `eval`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ModelError {
+    /// What failed; it decides the run's [`FailureKind`](super::failure::FailureKind).
+    pub(crate) kind: ModelErrorKind,
     /// What the model reported, including the HDL file, line and scope when known.
     pub(crate) message: String,
+}
+
+impl ModelError {
+    /// A fatal error reported by the design or Verilator.
+    pub(crate) const fn fatal(message: String) -> Self {
+        Self {
+            kind: ModelErrorKind::Fatal,
+            message,
+        }
+    }
+
+    /// A panic in a DPI-C import implemented in Rust.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the dpi module (branch w3/dpi) calls it once merged"
+        )
+    )]
+    pub(crate) const fn dpi_panic(message: String) -> Self {
+        Self {
+            kind: ModelErrorKind::DpiPanic,
+            message,
+        }
+    }
 }
 
 impl fmt::Display for ModelError {

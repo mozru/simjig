@@ -188,7 +188,7 @@ impl VerilatorModel {
             if poison {
                 self.poisoned = Some(message.clone());
             }
-            ModelError { message }
+            ModelError::fatal(message)
         })
     }
 }
@@ -224,9 +224,9 @@ impl ModelBackend for VerilatorModel {
 
     fn eval(&mut self) -> Result<EvalStatus, ModelError> {
         if let Some(reason) = &self.poisoned {
-            return Err(ModelError {
-                message: format!("the model can no longer be evaluated: {reason}"),
-            });
+            return Err(ModelError::fatal(format!(
+                "the model can no longer be evaluated: {reason}"
+            )));
         }
         let status = self.raw.eval();
         self.outcome(status)

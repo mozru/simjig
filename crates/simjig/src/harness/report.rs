@@ -193,6 +193,7 @@ fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration
     match kind {
         FailureKind::TaskPanic { .. }
         | FailureKind::ModelFatal { .. }
+        | FailureKind::DpiPanic { .. }
         | FailureKind::DesignFinished => Vec::new(),
         FailureKind::DeltaLimit { limit, signals } => vec![
             format!("limit:    {limit} evals in one timestep"),

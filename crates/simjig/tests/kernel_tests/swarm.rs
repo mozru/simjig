@@ -258,7 +258,9 @@ fn run_seed(seed: u64) -> (String, u64) {
                 | FailureKind::Starved { .. }
                 | FailureKind::Deadlock { .. }
                 | FailureKind::TimeLimit { .. } => true,
-                FailureKind::ModelFatal { .. } | FailureKind::DesignFinished => false,
+                FailureKind::ModelFatal { .. }
+                | FailureKind::DpiPanic { .. }
+                | FailureKind::DesignFinished => false,
             };
             assert!(legit, "seed {seed}: unexpected failure: {f}");
             f.to_string()

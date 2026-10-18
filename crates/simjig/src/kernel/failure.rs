@@ -147,6 +147,12 @@ pub enum FailureKind {
         /// The model's message.
         message: String,
     },
+    /// A DPI-C import implemented in Rust panicked while the model was evaluated; the
+    /// model is poisoned.
+    DpiPanic {
+        /// Which import panicked, and the panic message.
+        message: String,
+    },
     /// The design executed `$finish` before the main task returned.
     DesignFinished,
     /// The next timestep is past the limit set with
@@ -172,6 +178,7 @@ impl FailureKind {
             Self::Starved { .. } => "Starved",
             Self::Deadlock { .. } => "Deadlock",
             Self::ModelFatal { .. } => "ModelFatal",
+            Self::DpiPanic { .. } => "DpiPanic",
             Self::DesignFinished => "DesignFinished",
             Self::TimeLimit { .. } => "TimeLimit",
         }
@@ -204,6 +211,10 @@ impl FailureKind {
                 "each listed task waits on another; check lock order and that events are set"
             }
             Self::ModelFatal { .. } => "the design reported the error; see its message",
+            Self::DpiPanic { .. } => {
+                "the Rust implementation of the DPI-C import panicked; the panic message and \
+                 the stderr backtrace show the cause"
+            }
             Self::DesignFinished => {
                 "the design called $finish; end the test before it, or remove the $finish"
             }

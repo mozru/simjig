@@ -64,7 +64,8 @@ impl fmt::Display for Error {
             }
             Error::UnsupportedVersion { version } => write!(
                 f,
-                "no svtypes front end for `{version}`; supported: Verilator 5.050 to 5.059"
+                "no svtypes front end for `{version}`; supported Verilator versions: {}",
+                crate::version::supported_list()
             ),
             Error::Tool {
                 command,

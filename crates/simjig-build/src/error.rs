@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use crate::header::PortMismatch;
-use crate::verilator::VerilatorVersion;
 
 /// Errors from configuring, verilating or compiling a DUT.
 #[derive(Debug, thiserror::Error)]
@@ -50,19 +49,18 @@ pub enum Error {
         /// Every location that was checked, in order.
         searched: Vec<PathBuf>,
     },
-    /// The Verilator found is not in the supported-version table.
+    /// The Verilator found is not in the supported-version table
+    /// ([`svtypes::version::SUPPORTED`]).
     #[error(
         "unsupported Verilator at {}: `{found}`; supported versions: {}",
         path.display(),
-        display_versions(supported)
+        svtypes::version::supported_list()
     )]
     UnsupportedVerilator {
         /// The executable that was queried.
         path: PathBuf,
         /// Its `--version` output (first line).
         found: String,
-        /// The versions this release of `simjig-build` supports.
-        supported: &'static [VerilatorVersion],
     },
     /// An external tool ran but failed.
     #[error("{}", display_command_failure(command, status, stderr, path.as_deref()))]
@@ -222,14 +220,6 @@ fn display_paths(paths: &[PathBuf]) -> String {
     paths
         .iter()
         .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn display_versions(versions: &[VerilatorVersion]) -> String {
-    versions
-        .iter()
-        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
 }

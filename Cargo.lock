@@ -75,6 +75,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cargo-simjig"
 version = "0.0.0"
+dependencies = [
+ "svtypes",
+]
 
 [[package]]
 name = "cc"

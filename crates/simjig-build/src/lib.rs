@@ -42,7 +42,7 @@ pub use header::{
 };
 /// The type IR crate, re-exported so emitters name the same `Design` as the pipeline.
 pub use svtypes;
-pub use verilator::{SUPPORTED_VERILATOR, Verilator, VerilatorVersion};
+pub use verilator::Verilator;
 
 /// Version of the C ABI between generated Rust and the C++ runtime. It is part of every
 /// cache key, so changing the ABI invalidates every cached model and runtime. The C ABI

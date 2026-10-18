@@ -13,6 +13,9 @@
 //!   index it, match on its typed [`Cell`], and check the buffer length and the write bit
 //!   before touching model memory, so the `abi` raw accessors' preconditions hold.
 //! - Drained message strings are copied out before the next entry point call.
+//! - `coverage` holds the model's `cov_runs` (pointer and length per run), taken once:
+//!   the ABI keeps them valid until destroy, so reading a counter is a raw read of model
+//!   memory between entry points, like `read`.
 //! - A [`TracePort`] reaches the handle only while it is live: the model clears the shared
 //!   cell before `destroy`. It is `!Send` too, and its only caller (a fork hook, which runs
 //!   in the main task's poll, never inside an eval: the kernel refuses `fork` inside a DPI
@@ -55,7 +58,12 @@ pub(crate) struct RawModel {
     names: Box<[String]>,
     /// The handle while it is live, shared with [`TracePort`]s; `None` from `Drop` on.
     live: Rc<StdCell<Option<NonNull<Handle>>>>,
+    /// The coverage counter runs, once [`RawModel::take_coverage_runs`] fetched them.
+    coverage: Option<CovRuns>,
 }
+
+/// Coverage counter runs: the first counter and the count of each.
+type CovRuns = Box<[(NonNull<u32>, usize)]>;
 
 /// A model's trace entry points after `trace_open`, shared by its tracer and the tracer's
 /// fork hook (flush before a fork, reopen in the child, close before the child exits),
@@ -158,6 +166,7 @@ impl RawModel {
             signals: Box::default(),
             names: Box::default(),
             live: Rc::new(StdCell::new(Some(handle))),
+            coverage: None,
         };
         // Validate after `model` owns the handle, so an error destroys it.
         let decoded = rows
@@ -171,6 +180,42 @@ impl RawModel {
         model.names = decoded.iter().map(|row| unsafe { row.name() }).collect();
         model.signals = decoded;
         Ok((model, status))
+    }
+
+    /// Fetches the coverage counter runs of a model verilated with coverage (call once, on
+    /// a healthy model); a model without coverage keeps none.
+    pub(crate) fn take_coverage_runs(&mut self) {
+        if self.vt.features & abi::FEATURE_COVERAGE == 0 {
+            return;
+        }
+        let mut count = 0usize;
+        // SAFETY: as in `eval`; `count` is a valid out-parameter.
+        let runs = unsafe { (self.vt.cov_runs)(self.handle.as_ptr(), &raw mut count) };
+        let runs: &[abi::CovRun] = if runs.is_null() || count == 0 {
+            &[]
+        } else {
+            // SAFETY: the ABI guarantees `count` initialised runs at `runs`, valid until
+            // destroy; they are copied out (pointers and lengths) before any other call.
+            unsafe { std::slice::from_raw_parts(runs, count) }
+        };
+        self.coverage = Some(
+            runs.iter()
+                .filter_map(|run| NonNull::new(run.counters).map(|p| (p, run.len)))
+                .collect(),
+        );
+    }
+
+    /// Every coverage counter, in run order; `None` for a model without coverage.
+    pub(crate) fn coverage(&self) -> Option<Vec<u32>> {
+        let runs = self.coverage.as_ref()?;
+        let mut out = Vec::with_capacity(runs.iter().map(|(_, len)| len).sum());
+        for &(counters, len) in runs {
+            // SAFETY: `len` live, aligned `u32` counters at `counters` until destroy (the ABI
+            // contract), read by value; the model only writes them inside entry points, and
+            // none runs now (module invariants).
+            out.extend((0..len).map(|i| unsafe { counters.as_ptr().wrapping_add(i).read() }));
+        }
+        Some(out)
     }
 
     /// The validated signal table, in slot order.

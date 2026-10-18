@@ -102,6 +102,11 @@ impl Models {
         self.backends.len()
     }
 
+    /// Model `model`'s coverage counters (`ModelBackend::coverage`).
+    pub(crate) fn coverage(&self, model: usize) -> Option<Vec<u32>> {
+        self.backends.get(model)?.coverage()
+    }
+
     pub(crate) fn precision(&self) -> Precision {
         self.backends[0].precision()
     }

@@ -60,6 +60,44 @@ fn probes(dut: Dut, module: &str, width: u32, vars: &[&str]) -> Dut {
     })
 }
 
+/// The designs that exercise interfaces with probes, coverage and DPI-C.
+fn feature_duts() -> Vec<Dut> {
+    vec![
+        shared("iface_top", &["iface_pkg.sv", "bus_if.sv", "iface_top.sv"])
+            .bind_iface("in_bus", "bus_if.dst")
+            .bind_iface("out_bus", "bus_if.src")
+            .probe(
+                "iface_top.full",
+                "iface_top",
+                ProbeType::Bits { width: 1 },
+                ProbeAccess::Read,
+            )
+            .probe(
+                "iface_top.data_q",
+                "iface_top",
+                ProbeType::Bits { width: 16 },
+                ProbeAccess::Read,
+            ),
+        // The counter with coverage counters (tests/e2e_stage3).
+        shared_as("counter_cov", "counter").coverage(true),
+        Dut::new("dpi")
+            .sources(["../../tests/duts/dpi/dpi.sv"])
+            .top("dpi"),
+        // The same design with both imports in C (the reference implementation).
+        Dut::new("dpi_c")
+            .sources(["../../tests/duts/dpi/dpi.sv"])
+            .top("dpi")
+            .dpi_in_c(["dpi_add", "dpi_tick"])
+            .recipe(CppRecipe {
+                model_sources: vec!["../../tests/duts/dpi/dpi_impl.c".into()],
+                ..CppRecipe::default()
+            }),
+        Dut::new("dpi_types")
+            .sources(["tests/dpi_tests/dpi_types.sv"])
+            .top("dpi_types"),
+    ]
+}
+
 fn duts() -> Vec<Dut> {
     let async_fifo = shared("async_fifo", &["async_fifo.sv"])
         .param("WIDTH", 8)
@@ -114,25 +152,10 @@ fn duts() -> Vec<Dut> {
             .param("WIDTH", 8)
             .param("DEPTH", 4)
             .trace_fst(true),
-        shared("iface_top", &["iface_pkg.sv", "bus_if.sv", "iface_top.sv"])
-            .bind_iface("in_bus", "bus_if.dst")
-            .bind_iface("out_bus", "bus_if.src"),
-        Dut::new("dpi")
-            .sources(["../../tests/duts/dpi/dpi.sv"])
-            .top("dpi"),
-        // The same design with both imports in C (the reference implementation).
-        Dut::new("dpi_c")
-            .sources(["../../tests/duts/dpi/dpi.sv"])
-            .top("dpi")
-            .dpi_in_c(["dpi_add", "dpi_tick"])
-            .recipe(CppRecipe {
-                model_sources: vec!["../../tests/duts/dpi/dpi_impl.c".into()],
-                ..CppRecipe::default()
-            }),
-        Dut::new("dpi_types")
-            .sources(["tests/dpi_tests/dpi_types.sv"])
-            .top("dpi_types"),
     ]
+    .into_iter()
+    .chain(feature_duts())
+    .collect()
 }
 
 fn main() {

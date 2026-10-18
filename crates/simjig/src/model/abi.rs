@@ -33,6 +33,9 @@ pub(crate) const CREATE_ECHO: u32 = 1;
 
 /// `SIMJIG_FEATURE_TRACE_FST`: verilated with `--trace-fst`, so the `trace_*` entries work.
 pub(crate) const FEATURE_TRACE_FST: u64 = 2;
+/// `SIMJIG_FEATURE_COVERAGE`: verilated with `--coverage` (any kind), so the `cov_*`
+/// entries work.
+pub(crate) const FEATURE_COVERAGE: u64 = 4;
 
 /// `SIMJIG_ACCESS_READ`.
 pub(crate) const ACCESS_READ: u8 = 1;

@@ -110,6 +110,7 @@ impl VerilatorModel {
             });
         }
         model.check_table(meta)?;
+        model.raw.take_coverage_runs();
         if let Some(options) = trace {
             model.tracer = Tracer::open(&mut model.raw, meta.prefix, options)?;
         }
@@ -302,6 +303,12 @@ impl ModelBackend for VerilatorModel {
 
     fn next_time_slot(&self) -> SimTime {
         SimTime(self.raw.next_time_slot())
+    }
+
+    // Also after poisoning: the counters stay valid until destroy, and reading them calls
+    // no model code.
+    fn coverage(&self) -> Option<Vec<u32>> {
+        self.raw.coverage()
     }
 }
 

@@ -128,6 +128,19 @@ impl Sim {
         self.kernel.starts.len() - 1
     }
 
+    /// The coverage counters of model `model` (0 for a one-model simulation), copied out
+    /// now: `None` unless it is a Verilator model built with coverage
+    /// (`simjig_build::Dut::coverage`).
+    ///
+    /// The counters come in the order of the model's counter arrays (the ABI's `cov_runs`),
+    /// one entry per counter; an index names the same coverage point for one build of the
+    /// model, not across builds (docs/notes/tracecov.md). Read them between runs; the
+    /// model's `coverage.dat` names every point.
+    #[must_use]
+    pub fn coverage(&self, model: usize) -> Option<Vec<u32>> {
+        self.kernel.models.borrow().coverage(model)
+    }
+
     /// The length of one tick.
     #[must_use]
     pub fn precision(&self) -> Precision {

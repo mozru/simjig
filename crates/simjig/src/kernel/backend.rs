@@ -117,4 +117,9 @@ pub(crate) trait ModelBackend {
     fn events_pending(&self) -> bool;
     /// The time of the model's next scheduled event; only valid if `events_pending()`.
     fn next_time_slot(&self) -> SimTime;
+    /// The model's coverage counters, if it has any (a Verilator model built with
+    /// `--coverage`); `None` by default.
+    fn coverage(&self) -> Option<Vec<u32>> {
+        None
+    }
 }

@@ -165,34 +165,39 @@ impl DutConfig {
     /// params, probes, bindings, user-supplied generated inputs) but not file contents
     /// or emitter outputs, so emitters can compute it before generating anything.
     pub fn prefix(&self) -> String {
-        let mut h = KeyHasher::new("simjig-prefix-v1");
-        h.str(&self.name);
-        h.str(self.top.as_deref().unwrap_or(""));
+        // Every entry is tagged with its list, so an entry cannot move to another list (a
+        // define `W=8` to a parameter `W=8`) without changing the prefix.
+        let mut h = KeyHasher::new("simjig-prefix-v2");
+        h.str("name").str(&self.name);
+        h.str("top").str(self.top.as_deref().unwrap_or(""));
         for s in &self.sources {
-            h.path(s);
+            h.str("source").path(s);
         }
         for d in &self.include_dirs {
-            h.path(d);
+            h.str("include").path(d);
         }
-        for (k, v) in self.defines.iter().chain(&self.params) {
-            h.str(k).str(v);
+        for (k, v) in &self.defines {
+            h.str("define").str(k).str(v);
+        }
+        for (k, v) in &self.params {
+            h.str("param").str(k).str(v);
         }
         for p in &self.probes {
-            h.str(&format!("{p:?}"));
+            h.str("probe").str(&format!("{p:?}"));
         }
         for b in &self.ifaces {
-            h.str(&format!("{b:?}"));
+            h.str("iface").str(&format!("{b:?}"));
         }
-        h.field(&[
+        h.str("switches").field(&[
             u8::from(self.timing),
             u8::from(self.trace_fst),
             u8::from(self.coverage),
         ]);
         for a in &self.verilator_args {
-            h.str(a);
+            h.str("arg").str(a);
         }
         for g in &self.generated {
-            h.str(&g.file_name).str(&g.contents);
+            h.str("generated").str(&g.file_name).str(&g.contents);
         }
         format!("V{}_{}", self.name, &h.finish()[..8])
     }
@@ -804,6 +809,49 @@ mod tests {
             assert!(!seen.contains(&p), "{v:?} collides");
             seen.push(p);
         }
+    }
+
+    /// Each list is tagged, so moving an entry from one list to another (a define to a
+    /// parameter, a source to an include directory) changes the prefix.
+    #[test]
+    fn prefix_fields_do_not_run_into_each_other() {
+        let empty = DutConfig {
+            sources: vec![],
+            include_dirs: vec![],
+            defines: vec![],
+            params: vec![],
+            ..cfg()
+        };
+        let define = DutConfig {
+            defines: vec![("W".into(), "8".into())],
+            ..empty.clone()
+        };
+        let param = DutConfig {
+            params: vec![("W".into(), "8".into())],
+            ..empty.clone()
+        };
+        assert_ne!(define.prefix(), param.prefix());
+        let source = DutConfig {
+            sources: vec!["/r/a".into()],
+            ..empty.clone()
+        };
+        let include = DutConfig {
+            include_dirs: vec!["/r/a".into()],
+            ..empty.clone()
+        };
+        assert_ne!(source.prefix(), include.prefix());
+        let arg = DutConfig {
+            verilator_args: vec!["x".into()],
+            ..empty.clone()
+        };
+        let generated = DutConfig {
+            generated: vec![GeneratedInput {
+                file_name: "x".into(),
+                contents: String::new(),
+            }],
+            ..empty
+        };
+        assert_ne!(arg.prefix(), generated.prefix());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! One lowering feeds every emitter (DECISION.md table 2, row 5):
 //! - [`lower`] turns an [`svtypes::ir::Design`] and a [`CodegenConfig`] into a
 //!   [`Lowered`]. It makes every naming, slot, storage and access decision.
-//! - `emit_rust`: the typed testbench API (packed structs, enums, unions, package
+//! - [`emit_rust`]: the typed testbench API (packed structs, enums, unions, package
 //!   constants and the `Dut` struct).
 //! - `emit_vlt`: the Verilator control file making probed signals public.
 //! - `emit_layout_check`: an SV module that fails elaboration if Verilator's layout of a
@@ -20,6 +20,8 @@ mod error;
 mod lower;
 mod lowered;
 mod names;
+mod rust;
+mod writer;
 
 pub use config::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 pub use error::Error;
@@ -29,3 +31,4 @@ pub use lowered::{
     ItemKind, Layout, LayoutCheck, LayoutMember, LayoutValue, Lowered, RustType, Signal,
     SignalTarget, StructField, UnionView, Wrapper, WrapperIface, WrapperPort,
 };
+pub use rust::emit_rust;

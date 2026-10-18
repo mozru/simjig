@@ -462,8 +462,9 @@ impl ForkHook {
     }
 
     /// Adds a third half, run in a branch child just before it exits (whatever the
-    /// branch's ending): the child `_exit`s without running destructors, so this is where
-    /// a resource is finished (a trace's last sample dumped and its file closed).
+    /// branch's ending, unless a signal kills the child): the child `_exit`s without
+    /// running destructors, so this is where a resource is finished (a trace's last sample
+    /// dumped and its file closed).
     ///
     /// It runs only if this hook's `in_child` succeeded in that child: after a failed
     /// `in_child`, or when an earlier hook's failed first, the resource is still the

@@ -4,6 +4,14 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A build that stops on a width diagnostic (`%Warning-WIDTHTRUNC` under the default
+  fatal lint, or an `-Werror-WIDTH*` in the JSON pass) of a DUT whose module and a bound
+  interface default a shared parameter to different values starts its error with
+  ``hint: the width error may come from interface `out_if` (bound to `out`) defaulting
+  `W_OUT` to 8 while `gearbox` defaults it to 16; ..``. Before, the interface-parameter
+  warning was printed only by a build that succeeded.
+- The interface-parameter warning and hint also name the change-free way to silence
+  them: binding the interface's own value, `.bind_iface_with_params(.., [("W_OUT", 8)])`.
 - `Error::Command` has a new field, `hints`: what the configuration suggests about the
   failure, printed first, one `hint:` line each (breaking for a pattern or literal that
   names every field).

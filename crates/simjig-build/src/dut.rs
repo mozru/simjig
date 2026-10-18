@@ -965,7 +965,9 @@ impl Dut {
         let top = self.config.validate()?;
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
-        let (front, ir, placed, mut warnings) = self.front_end(env, &cache, &verilator, top)?;
+        let (front, ir, placed, mismatches) = self.front_end(env, &cache, &verilator, top)?;
+        let mut warnings: Vec<String> =
+            mismatches.iter().map(|m| m.warning(&self.config)).collect();
         // After the front end's checks (the JSON pass, `dpi_in_c`, the emitters, the
         // layout check): a build they fail leaves no claim in the shared cache.
         pipeline::claim_prefix(&cache, &self.config, &prefix)?;
@@ -975,13 +977,12 @@ impl Dut {
         }
         let args = self.config.verilator_args(&prefix, &ir.top, &generated);
         let name = &self.config.name;
-        let model = cache.verilate(
-            name,
-            &verilator,
-            &args,
-            &self.config.include_dirs,
-            &env.out_dir,
-        )?;
+        let dirs = &self.config.include_dirs;
+        let model = cache.verilate(name, &verilator, &args, dirs, &env.out_dir);
+        // The default fatal lint stops a mismatch here, at a width warning inside the
+        // wrapper, before its warning could be printed.
+        let model =
+            model.map_err(|e| pipeline::hint_width_error(e, &self.config, || mismatches))?;
         warnings.extend(env.unshared_cache_warning());
         warnings.extend(
             model
@@ -1078,15 +1079,23 @@ fn check_dpi_header(imports: &[DpiImport], obj_dir: &Path, prefix: &str) -> Resu
 
 impl Dut {
     /// The IR (cached or from the JSON pass), the emitted files placed, and the layout
-    /// check run unless it passed for this IR before; with the IR's warnings
-    /// ([`pipeline::iface_param_warnings`]), given on a cached IR too.
+    /// check run unless it passed for this IR before; with the IR's
+    /// [`pipeline::IfaceParamMismatch`]es, found on a cached IR too.
     fn front_end(
         &self,
         env: &BuildEnv,
         cache: &cache::Cache,
         verilator: &Verilator,
         top: &str,
-    ) -> Result<(Front, pipeline::Ir, emit::Placed, Vec<String>), Error> {
+    ) -> Result<
+        (
+            Front,
+            pipeline::Ir,
+            emit::Placed,
+            Vec<pipeline::IfaceParamMismatch>,
+        ),
+        Error,
+    > {
         let sv_inputs = self
             .config
             .sv_inputs()
@@ -1104,8 +1113,8 @@ impl Dut {
         {
             pipeline::layout_check(&self.config, &sv_inputs, verilator, cache, check)?;
         }
-        let warnings = pipeline::iface_param_warnings(&self.config, &ir.design);
-        Ok((front, ir, placed, warnings))
+        let mismatches = pipeline::iface_param_mismatches(&self.config, &ir.design);
+        Ok((front, ir, placed, mismatches))
     }
 }
 

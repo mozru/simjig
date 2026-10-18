@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A misspelled interface parameter in `bind_iface_with_params("up", "acc_if.sink",
+  [("WW", 12)])` fails like a misspelled `.param`: ``interface `acc_if` (bound to `up`)
+  has no parameter `WW`; did you mean `W`? (it has W)``, instead of Verilator's
+  `PINNOTFOUND` in the hashed generated top. Overriding a localparam, the module's or an
+  interface's, says ``module `acc` has no parameter `L`: `L` is a localparam and cannot
+  be overridden``.
 - `--threads N` is refused only when Verilator would run more than one thread: it
   reads `N` with C's `atoi`, so `--threads 01` (and the deprecated `0`) are one thread
   and pass. `--prefix=Vx`, `--top-module=x` and the other `=` forms are no longer

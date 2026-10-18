@@ -257,3 +257,74 @@ fn a_misspelled_param_names_the_modules_parameters() {
         );
     }
 }
+
+/// An accumulator whose interface port has its own width `W`, like the module's, and a
+/// localparam `L`; `iface` puts the input behind the port.
+fn acc(s: &Sandbox, name: &str, iface: bool) -> Dut {
+    let rtl = s.path().join("acc");
+    std::fs::create_dir_all(&rtl).unwrap();
+    let (ports, rhs) = if iface {
+        ("acc_if.sink up", "up.d")
+    } else {
+        ("input logic [W-1:0] d", "d")
+    };
+    std::fs::write(
+        rtl.join("acc.sv"),
+        format!(
+            "interface acc_if #(parameter int W = 8);\n  localparam int K = 1;\n  \
+             logic [W-1:0] d;\n  modport sink(input d);\nendinterface\n\
+             module acc #(parameter int W = 8)({ports}, output logic [W-1:0] q);\n  \
+             localparam int L = 3;\n  assign q = {rhs};\nendmodule\n"
+        ),
+    )
+    .unwrap();
+    Dut::new(name).sources([rtl.join("acc.sv")]).top("acc")
+}
+
+/// A misspelled interface parameter names the interface's parameters, like a misspelled
+/// `.param` names the module's, instead of a `PINNOTFOUND` in the generated top.
+#[test]
+fn a_misspelled_interface_param_names_the_interfaces_parameters() {
+    let s = Sandbox::new();
+    let err = acc(&s, "acc_ww", true)
+        .param("W", 12)
+        .bind_iface_with_params("up", "acc_if.sink", [("WW", 12)])
+        .build_in(&s.env())
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid DUT `acc_ww` configuration: interface `acc_if` (bound to `up`) has no \
+         parameter `WW`; did you mean `W`? (it has W)"
+    );
+}
+
+/// Overriding a localparam says so, for the module (by `-G` or through the generated
+/// top) and for an interface.
+#[test]
+fn overriding_a_localparam_says_it_is_one() {
+    for iface in [false, true] {
+        let s = Sandbox::new();
+        let d = acc(&s, "acc_l", iface).param("L", 1);
+        let d = if iface {
+            d.bind_iface("up", "acc_if.sink")
+        } else {
+            d
+        };
+        assert_eq!(
+            d.build_in(&s.env()).unwrap_err().to_string(),
+            "invalid DUT `acc_l` configuration: module `acc` has no parameter `L`: `L` is a \
+             localparam and cannot be overridden (it has W)",
+            "interface port: {iface}"
+        );
+    }
+    let s = Sandbox::new();
+    let err = acc(&s, "acc_k", true)
+        .bind_iface_with_params("up", "acc_if.sink", [("K", 2)])
+        .build_in(&s.env())
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid DUT `acc_k` configuration: interface `acc_if` (bound to `up`) has no \
+         parameter `K`: `K` is a localparam and cannot be overridden (it has W)"
+    );
+}

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use svtypes::ir::Design;
+use svtypes::ir::{Design, Module, VariableKind};
 
 use crate::cache::Cache;
 use crate::codegen;
@@ -116,19 +116,23 @@ pub(crate) fn design_ir(
 }
 
 /// Verilator's diagnostics for a parameter override the design does not have (5.052): a
-/// `-G` on the command line, and a `#(.NAME(..))` in a generated top (`PINNOTFOUND`).
+/// `-G` on the command line, a `#(.NAME(..))` in a generated top (`PINNOTFOUND`), and a
+/// `#(.NAME(..))` naming a localparam or a variable (checked for both).
 const CMDLINE_PARAM_NOT_FOUND: &str = "Parameters from the command line were not found";
 const PARAM_NOT_FOUND: &str = ": Parameter not found: '";
+const OVERRIDES_NON_PARAM: &str = ": Instance attempts to override '";
 
 /// When the JSON pass failed because a [`crate::Dut::param`] names no parameter of the
-/// top module, the error that names it, the closest real one and all of them, instead of
-/// Verilator's message about the command line or about the generated top.
+/// top module, or a [`crate::Dut::bind_iface_with_params`] none of its interface, the
+/// error that names it, the closest real one and all of them (or says it is a
+/// localparam), instead of Verilator's message about the command line or about the
+/// generated top.
 ///
 /// Why a second JSON pass: the failing pass wrote no IR, and the parameters are only in
 /// the IR. It runs only on this failure path, without the overrides (and for a DUT with
 /// interface ports, through the elaboration top, whose IR has the DUT as a submodule).
-/// When that pass fails too, or every `.param` exists (the mistake is in the sources or an
-/// interface binding), Verilator's error stands.
+/// When that pass fails too, or every override exists (the mistake is in the sources),
+/// Verilator's error stands.
 fn unknown_params(
     config: &DutConfig,
     generated: &[PathBuf],
@@ -141,16 +145,56 @@ fn unknown_params(
     };
     // The user's top: the pass that failed may have been through a generated top.
     let top = config.top.as_deref()?;
-    if config.params.is_empty()
-        || !(stderr.contains(CMDLINE_PARAM_NOT_FOUND) || stderr.contains(PARAM_NOT_FOUND))
+    let overrides = !config.params.is_empty() || config.ifaces.iter().any(|b| !b.params.is_empty());
+    if !overrides
+        || ![
+            CMDLINE_PARAM_NOT_FOUND,
+            PARAM_NOT_FOUND,
+            OVERRIDES_NON_PARAM,
+        ]
+        .iter()
+        .any(|d| stderr.contains(d))
     {
         return None;
     }
+    let design = bare_ir(config, top, generated, verilator, cache)?;
+    let module = design.modules.iter().find(|m| m.orig_name == top)?;
+    let mut lines = unknown_in(&format!("module `{top}`"), module, &config.params);
+    for b in &config.ifaces {
+        let Some(port) = module.iface_ports.iter().find(|p| p.name == b.port) else {
+            continue; // a binding mistake, which `iface_diag` explains
+        };
+        let unit = format!("interface `{}` (bound to `{}`)", b.interface, b.port);
+        lines.extend(unknown_in(&unit, design.module(port.interface), &b.params));
+    }
+    lines.dedup();
+    (!lines.is_empty()).then(|| Error::Config {
+        dut: config.name.clone(),
+        msg: lines.join("\n"),
+    })
+}
+
+/// The IR of `config` without any parameter override, the DUT's or its interfaces'.
+fn bare_ir(
+    config: &DutConfig,
+    top: &str,
+    generated: &[PathBuf],
+    verilator: &Verilator,
+    cache: &Cache,
+) -> Option<Design> {
     let bare = DutConfig {
         params: Vec::new(),
+        ifaces: config
+            .ifaces
+            .iter()
+            .map(|b| codegen::IfaceBinding {
+                params: Vec::new(),
+                ..b.clone()
+            })
+            .collect(),
         ..config.clone()
     };
-    let design = match bare.iface_top() {
+    match bare.iface_top() {
         None => svtypes::verilator::json_pass(&bare.json_pass_opts(top, generated, &[], verilator)),
         Some(iface) => {
             let elab_top = codegen::elab_module(top);
@@ -164,8 +208,12 @@ fn unknown_params(
             svtypes::verilator::json_pass(&opts)
         }
     }
-    .ok()?;
-    let module = design.modules.iter().find(|m| m.orig_name == top)?;
+    .ok()
+}
+
+/// One line per override in `params` that `unit` (`module` described for the user) has
+/// no parameter for.
+fn unknown_in(unit: &str, module: &Module, params: &[(String, String)]) -> Vec<String> {
     let known: Vec<&str> = module
         .params
         .iter()
@@ -178,19 +226,26 @@ fn unknown_params(
         format!("it has {}", known.join(", "))
     };
     let mut lines: Vec<String> = Vec::new();
-    for (name, _) in &config.params {
-        let line = format!(
-            "module `{top}` has no parameter `{name}`{} ({it_has})",
-            codegen::did_you_mean(name, known.iter().copied())
-        );
-        if !known.contains(&name.as_str()) && !lines.contains(&line) {
+    for (name, _) in params.iter().filter(|(n, _)| !known.contains(&n.as_str())) {
+        let local = module
+            .variables
+            .iter()
+            .any(|v| v.name == *name && v.kind == VariableKind::Localparam);
+        let line = if local {
+            format!(
+                "{unit} has no parameter `{name}`: `{name}` is a localparam and cannot be overridden ({it_has})"
+            )
+        } else {
+            format!(
+                "{unit} has no parameter `{name}`{} ({it_has})",
+                codegen::did_you_mean(name, known.iter().copied())
+            )
+        };
+        if !lines.contains(&line) {
             lines.push(line);
         }
     }
-    (!lines.is_empty()).then(|| Error::Config {
-        dut: config.name.clone(),
-        msg: lines.join("\n"),
-    })
+    lines
 }
 
 /// Lints the layout check with the model's flags, without `-G` (docs/notes/codegen.md).

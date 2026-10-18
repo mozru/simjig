@@ -5,13 +5,19 @@
 //!
 //! The entry point is [`Sim::run`], which runs an async main task against a model. Inside
 //! it, tasks ([`spawn`], [`scope`]) await triggers ([`rising`], [`Timer`], [`ReadOnly`],
-//! ...) and read and write signals through [`RawSig`] handles. The scheduler's semantics
-//! match cocotb 2.x on Verilator; see the `kernel::sched` module docs for the loop.
+//! ...) and read and write signals through typed handles ([`In`], [`Out`], ...) or untyped
+//! [`RawSig`]s. The scheduler's semantics match cocotb 2.x on Verilator; see the
+//! `kernel::sched` module docs for the loop.
+//!
+//! A generated Verilator model is loaded by its generated `Dut` type, which returns a
+//! [`Sim`] plus one typed handle per signal (or a [`LoadError`] if the model and the
+//! generated Rust disagree).
 #![deny(unsafe_code)]
 
 mod harness;
 mod kernel;
 mod model;
+mod signal;
 
 pub use harness::Result;
 pub use harness::ctx::TestCtx;
@@ -36,6 +42,9 @@ pub use kernel::trigger::{
     Edge, Elapsed, NextTimeStep, ReadOnly, ReadWrite, Timer, YieldNow, changed, cycles, falling,
     now, rising, with_timeout, yield_now,
 };
+pub use model::meta::LoadError;
+pub use model::values::{FieldDiff, InvalidEnum};
+pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
 
 /// Marks an `async fn` as a simjig test; see the attribute's own documentation.
 pub use simjig_macros::test;
@@ -47,4 +56,13 @@ pub mod __private {
         RunEnv, TestMeta, TestOutcome, Timeout, assert_test_output, run, run_test,
     };
     pub use crate::kernel::combinator::{MaybeDone, boxed};
+
+    // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,
+    // "The `__private` contract", and `model::bind` for the model glue.
+    pub use crate::model::bind::{Binder, ModelBinder, create, instantiate};
+    pub use crate::model::meta::{Access, ModelMeta, SignalMeta, Storage, Vtable};
+    pub use crate::model::values::{FieldDiff, InvalidEnum, pack_field, unpack_field};
+    pub use crate::signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
+    pub use crate::{__dut_model as dut_model, __link_model as link_model};
+    pub use simjig_bits as bits;
 }

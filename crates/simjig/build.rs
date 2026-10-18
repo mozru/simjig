@@ -1,4 +1,6 @@
-//! Builds the C ABI test models that `tests/abi_counter.rs` links against.
+//! Builds the Verilator test models that the integration tests link against:
+//! `tests/abi_counter.rs` (the raw C ABI) and `tests/model_tests` (the Verilator backend and
+//! typed handles, over the shared DUTs in `tests/duts`).
 //!
 //! Cargo has no test-only build scripts, so this one runs for every build of `simjig`, but its
 //! output reaches only integration-test binaries (`cargo::rustc-link-arg-tests`), never the
@@ -18,13 +20,93 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The test models: SystemVerilog file stem, and whether it is verilated with `--timing`.
-const MODELS: &[(&str, bool)] = &[("counter", false), ("ticker", true)];
+/// One test model.
+struct Model {
+    /// SystemVerilog source, relative to the crate.
+    sv: &'static str,
+    /// Verilator `--prefix`.
+    prefix: &'static str,
+    /// Verilated with `--timing`.
+    timing: bool,
+    /// Extra Verilator arguments (paths relative to the crate end in `.vlt`).
+    args: &'static [&'static str],
+}
+
+/// The cocotb goldens were recorded with `--timescale 1ns/1ps` (tests/conformance/README.md).
+const DUT_ARGS: &[&str] = &["--timescale", "1ns/1ps"];
+
+const MODELS: &[Model] = &[
+    Model {
+        sv: "tests/abi_counter/counter.sv",
+        prefix: "Vcounter",
+        timing: false,
+        args: &[],
+    },
+    Model {
+        sv: "tests/abi_counter/ticker.sv",
+        prefix: "Vticker",
+        timing: true,
+        args: &[],
+    },
+    Model {
+        sv: "../../tests/duts/inv/inv.sv",
+        prefix: "Vdut_inv",
+        timing: false,
+        args: DUT_ARGS,
+    },
+    Model {
+        sv: "../../tests/duts/flop/flop.sv",
+        prefix: "Vdut_flop",
+        timing: false,
+        args: DUT_ARGS,
+    },
+    Model {
+        sv: "../../tests/duts/counter/counter.sv",
+        prefix: "Vdut_counter",
+        timing: false,
+        args: DUT_ARGS,
+    },
+    Model {
+        sv: "../../tests/duts/comb_chain/comb_chain.sv",
+        prefix: "Vdut_comb_chain",
+        timing: false,
+        args: &["--timescale", "1ns/1ps", "tests/model_tests/comb_chain.vlt"],
+    },
+    Model {
+        sv: "../../tests/duts/fatal/fatal.sv",
+        prefix: "Vdut_fatal",
+        timing: false,
+        args: DUT_ARGS,
+    },
+    Model {
+        sv: "../../tests/duts/wide/wide.sv",
+        prefix: "Vdut_wide",
+        timing: false,
+        args: DUT_ARGS,
+    },
+    Model {
+        sv: "../../tests/duts/timing_dut/timing_dut.sv",
+        prefix: "Vdut_timing",
+        timing: true,
+        args: &[],
+    },
+    Model {
+        sv: "tests/model_tests/hello.sv",
+        prefix: "Vhello",
+        timing: false,
+        args: DUT_ARGS,
+    },
+];
+
+/// The hand-written shims (what simjig-build will generate), one per test binary.
+const SHIMS: &[&str] = &["tests/abi_counter/shim.cpp", "tests/model_tests/shim.cpp"];
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(simjig_abi_models)");
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=tests/abi_counter");
+    println!("cargo::rerun-if-changed=tests/model_tests");
+    println!("cargo::rerun-if-changed=../../tests/duts");
     println!("cargo::rerun-if-changed=../simjig-build/cpp");
     println!("cargo::rerun-if-env-changed=VERILATOR_ROOT");
     match build_models() {
@@ -41,17 +123,11 @@ fn build_models() -> Result<(), String> {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
     let out = PathBuf::from(env::var("OUT_DIR").map_err(|e| e.to_string())?);
     let cpp = manifest.join("../simjig-build/cpp");
-    let sv_dir = manifest.join("tests/abi_counter");
     let root = verilator_root()?;
 
     let mut model_dirs = Vec::new();
-    for &(name, timing) in MODELS {
-        model_dirs.push(verilate(
-            &sv_dir.join(format!("{name}.sv")),
-            name,
-            timing,
-            &out,
-        )?);
+    for model in MODELS {
+        model_dirs.push(verilate(&manifest, model, &out)?);
     }
 
     let include = root.join("include");
@@ -66,7 +142,9 @@ fn build_models() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let mut models = base_build(&include, &cpp);
-    models.file(sv_dir.join("shim.cpp"));
+    for shim in SHIMS {
+        models.file(manifest.join(shim));
+    }
     for dir in &model_dirs {
         models.include(dir);
         for file in generated_sources(dir)? {
@@ -110,15 +188,28 @@ fn verilator_root() -> Result<PathBuf, String> {
 }
 
 /// Runs `verilator --cc` for one model; returns its output directory.
-fn verilate(sv: &Path, name: &str, timing: bool, out: &Path) -> Result<PathBuf, String> {
-    let mdir = out.join(format!("V{name}"));
+fn verilate(manifest: &Path, model: &Model, out: &Path) -> Result<PathBuf, String> {
+    let mdir = out.join(model.prefix);
+    let sv = manifest.join(model.sv);
+    let args = model.args.iter().map(|a| {
+        if Path::new(a).extension().is_some_and(|e| e == "vlt") {
+            manifest.join(a).into_os_string()
+        } else {
+            a.into()
+        }
+    });
     let output = Command::new("verilator")
         .arg("--cc")
-        .arg(if timing { "--timing" } else { "--no-timing" })
-        .args(["--prefix", &format!("V{name}")])
+        .arg(if model.timing {
+            "--timing"
+        } else {
+            "--no-timing"
+        })
+        .args(["--prefix", model.prefix])
+        .args(args)
         .arg("--Mdir")
         .arg(&mdir)
-        .arg(sv)
+        .arg(&sv)
         .output()
         .map_err(|e| format!("cannot run `verilator` ({e})"))?;
     if !output.status.success() {

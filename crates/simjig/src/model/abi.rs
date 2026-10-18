@@ -444,3 +444,12 @@ pub(crate) unsafe fn write_wide(sig: &Signal, words: &[u32]) {
         unsafe { word.write(v) }
     }
 }
+
+impl ModelVtable {
+    /// The model's Verilator `--prefix`.
+    pub(crate) fn prefix(&self) -> String {
+        // SAFETY: the ABI makes `prefix` null or a NUL-terminated static string (the
+        // generated vtable is a `constexpr` table of string literals).
+        unsafe { c_string(self.prefix) }
+    }
+}

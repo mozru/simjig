@@ -23,8 +23,8 @@ projects built on top of simjig.
 - `simjig-build` depends only on `svtypes`; build-time and run-time crates never depend on
   each other.
 - Nothing depends on `xtask`. `cargo-simjig` is a leaf tool; runtime crates never depend on it.
-- `unsafe` exists only in `simjig::{model::abi, kernel::waker, fork}`; every other module and
-  crate forbids it.
+- `unsafe` exists only in `simjig::{model::abi, model::raw, kernel::waker, fork}`; every other
+  module and crate forbids it.
 - `simjig::kernel` imports nothing from `simjig::model`, so the scheduler can be tested
   against a fake model.
 - No Rust reference to Verilator model memory ever exists. Testbench writes go through the

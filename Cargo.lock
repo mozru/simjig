@@ -495,7 +495,9 @@ version = "0.0.0"
 dependencies = [
  "cc",
  "insta",
+ "proptest",
  "serde_json",
+ "simjig-bits",
  "simjig-macros",
  "trybuild",
 ]

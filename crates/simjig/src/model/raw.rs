@@ -7,8 +7,8 @@
 //!   ever runs concurrently with another, and none is reentrant (model code never calls back
 //!   into Rust: `$display` text goes to the C++ message ring).
 //! - `signals` is a copy of the model's table, validated once at creation: every row is
-//!   readable, has a non-null pointer, and its `storage` and `words` are exactly what
-//!   Verilator uses for its `width`. `read` and `write` index it and check the buffer length
+//!   readable, has a non-null pointer aligned for its storage type, and its `storage` and
+//!   `words` are exactly what Verilator uses for its `width`. `read` and `write` index it and check the buffer length
 //!   and the write bit before touching model memory, so the `abi` raw accessors' preconditions
 //!   hold.
 //! - Drained message strings are copied out before the next entry point call.
@@ -243,6 +243,20 @@ fn validate(slot: usize, row: &Signal) -> Result<(), String> {
     if row.ptr.is_null() {
         return Err("its member pointer is null".to_owned());
     }
+    // `abi`'s accessors read the member as its storage type (`VlWide` as `u32` words), so
+    // the pointer must be aligned for it; the shim's static_asserts cannot check addresses.
+    let align = match storage {
+        Storage::C => align_of::<u8>(),
+        Storage::S => align_of::<u16>(),
+        Storage::I | Storage::W => align_of::<u32>(),
+        Storage::Q => align_of::<u64>(),
+    };
+    if !row.ptr.addr().is_multiple_of(align) {
+        return Err(format!(
+            "its member pointer {:p} is not {align}-byte aligned, as {storage:?} storage needs",
+            row.ptr
+        ));
+    }
     if row.access & ACCESS_READ == 0 {
         return Err("it is not readable".to_owned());
     }
@@ -428,5 +442,49 @@ pub(crate) mod fake {
     /// Resets this thread's fake state.
     pub(crate) fn reset() {
         STATE.with_borrow_mut(|s| *s = State::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::c_void;
+
+    use super::super::abi::Dir;
+    use super::*;
+
+    /// A readable row of `width` bits whose member is at `offset` bytes into `base`.
+    fn row_at(width: u32, base: &mut [u64; 4], offset: usize) -> Signal {
+        Signal {
+            id: 0,
+            width,
+            words: width.div_ceil(32),
+            storage: Storage::for_width(width) as u8,
+            dir: Dir::In as u8,
+            access: ACCESS_READ,
+            reserved: 0,
+            name: c"top.x".as_ptr(),
+            ptr: base
+                .as_mut_ptr()
+                .cast::<u8>()
+                .wrapping_add(offset)
+                .cast::<c_void>(),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_a_member_misaligned_for_its_storage_class() {
+        let mut base = [0u64; 4];
+        // (width, storage alignment): C 1, S 2, I 4, Q 8, W 4 (u32 words).
+        for (width, align) in [(8, 1), (16, 2), (32, 4), (64, 8), (96, 4)] {
+            assert_eq!(validate(0, &row_at(width, &mut base, 0)), Ok(()), "{width}");
+            assert_eq!(validate(0, &row_at(width, &mut base, align)), Ok(()));
+            if align > 1 {
+                let error = validate(0, &row_at(width, &mut base, 1)).unwrap_err();
+                assert!(
+                    error.contains(&format!("not {align}-byte aligned")),
+                    "{width}: {error}"
+                );
+            }
+        }
     }
 }

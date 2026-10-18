@@ -270,6 +270,25 @@ pub fn sweep_members() -> Vec<Case> {
     ]
 }
 
+/// `cases/sweep_nested` at `W`: a member of the fixpoint test (a chain of structs whose
+/// innermost follows `W`).
+pub fn nested_sweep_member(name: &str, w: u32) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/sweep_nested/design.sv")];
+    let design = json_pass(&JsonPassOpts {
+        sources: sources.clone(),
+        top: "nx_top".to_owned(),
+        params: vec![("W".into(), w.to_string())],
+        ..JsonPassOpts::default()
+    })
+    .unwrap_or_else(|e| panic!("{name}: {e}"));
+    Case {
+        name: name.to_owned(),
+        design,
+        config: CodegenConfig::default(),
+        sources,
+    }
+}
+
 /// `cases/iface_param` with `K` set, and the interface's `W` when given: a member of the
 /// interface sweep tests.
 pub fn iface_sweep_member(name: &str, k: u32, w: Option<u32>) -> Case {

@@ -256,3 +256,18 @@ fn a_bundle_trait_reaches_each_members_bundle() {
     assert_eq!(bus(k3), bus(k5));
     assert!(bus(k3).1.ends_with("bus_d"), "{:?}", bus(k3));
 }
+
+/// The fixpoint. `Mid` and `Outer` are alike in both members but reach `Inner`, which
+/// follows `W` (`Outer` only through `Mid`, so it is dropped on the second pass); only the
+/// parameter-free `Tag` and `Wrap` are shared.
+#[test]
+fn a_struct_reaching_an_unshared_type_through_another_is_not_shared() {
+    let members = [
+        cases::nested_sweep_member("nx_a", 8),
+        cases::nested_sweep_member("nx_b", 4),
+    ];
+    let (sweep, _) = files("nx", &members);
+    let shared: Vec<&str> = sweep.items.iter().map(|i| i.name.as_str()).collect();
+    // Each module-local struct is named `NxTop<Name>` with a `<Name>` alias.
+    assert_eq!(shared, ["NxTopTag", "Tag", "NxTopWrap", "Wrap"]);
+}

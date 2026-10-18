@@ -1,0 +1,17 @@
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"rst","value":1}
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"en","value":1}
+{"time":10000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"rst","value":0}
+{"time":15000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"count","value":1}
+{"time":25000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"clk","value":1}
+{"time":25000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"count","value":2}
+{"time":35000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"clk","value":1}
+{"time":35000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"count","value":3}
+{"time":40000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"en","value":0}
+{"time":40000,"phase":"active","trigger":"ValueChange(en)","task":"en_watch","op":"read","signal":"en","value":0}
+{"time":40000,"phase":"active","trigger":"ValueChange(en)","task":"en_watch","op":"read","signal":"count","value":3}
+{"time":60000,"phase":"active","trigger":"Timer(20ns)","task":"main","op":"write","signal":"en","value":1}
+{"time":60000,"phase":"active","trigger":"ValueChange(en)","task":"en_watch","op":"read","signal":"en","value":1}
+{"time":60000,"phase":"active","trigger":"ValueChange(en)","task":"en_watch","op":"read","signal":"count","value":3}
+{"time":65000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"clk","value":1}
+{"time":65000,"phase":"active","trigger":"ValueChange(count)","task":"main","op":"read","signal":"count","value":4}

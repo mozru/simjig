@@ -63,7 +63,7 @@ pub(crate) struct Original<'a> {
 struct Written {
     fst: PathBuf,
     model: usize,
-    branch: Vec<usize>,
+    branch: Option<usize>,
 }
 
 /// Replays `original` with waves as `request` asks, with the test binary `exe`.
@@ -103,7 +103,7 @@ pub(crate) fn replay(exe: &Path, original: &Original<'_>, request: &WavesRequest
 fn waves_file(original: &Original<'_>, from: SimTime, written: Written) -> WavesFile {
     let failing = original
         .failed_branch
-        .filter(|b| written.branch.first() == Some(&b.index));
+        .filter(|b| written.branch == Some(b.index));
     let (marker, died) = match failing.map(|b| b.end) {
         Some(BranchEnd::Died(exit)) => (None, Some(exit)),
         Some(BranchEnd::Failed(time)) => (Some(time.max(from)), None),
@@ -262,23 +262,23 @@ fn move_waves(root: &Path, run_dir: &Path) -> Result<Vec<Written>, String> {
     Ok(written)
 }
 
-/// The model and fork branch path of a trace file stem the replay writes: `waves`, then
-/// optionally `.model-<i>` (`ModelOptions::for_model`), then `.branch-<j>` once per
-/// checkpoint level (`model::trace::branch_path`). `None` for any other name.
-fn trace_identity(stem: &str) -> Option<(usize, Vec<usize>)> {
+/// The model and fork branch of a trace file stem the replay writes: `waves`, then
+/// optionally `.model-<i>` (`ModelOptions::for_model`), then optionally `.branch-<j>`
+/// (`model::trace::branch_path`; checkpoints do not nest, `ForkError::Nested`). `None` for
+/// any other name.
+fn trace_identity(stem: &str) -> Option<(usize, Option<usize>)> {
     let rest = stem.strip_prefix("waves")?;
-    let mut model = 0;
-    let mut branch = Vec::new();
-    for (i, part) in rest.split('.').enumerate() {
-        match (i, part) {
-            (0, "") => {}
-            (0, _) => return None,
-            (1, part) if part.starts_with("model-") => {
-                model = part.strip_prefix("model-")?.parse().ok()?;
-            }
-            (_, part) => branch.push(part.strip_prefix("branch-")?.parse().ok()?),
+    let (model, rest) = match rest.strip_prefix(".model-") {
+        Some(after) => {
+            let (number, tail) = after.find('.').map_or((after, ""), |i| after.split_at(i));
+            (number.parse().ok()?, tail)
         }
-    }
+        None => (0, rest),
+    };
+    let branch = match rest {
+        "" => None,
+        _ => Some(rest.strip_prefix(".branch-")?.parse().ok()?),
+    };
     Some((model, branch))
 }
 
@@ -325,18 +325,17 @@ mod tests {
 
     #[test]
     fn trace_file_names_give_the_model_and_branch() {
-        assert_eq!(trace_identity("waves"), Some((0, vec![])));
-        assert_eq!(trace_identity("waves.model-2"), Some((2, vec![])));
-        assert_eq!(trace_identity("waves.branch-3"), Some((0, vec![3])));
-        assert_eq!(trace_identity("waves.model-1.branch-0"), Some((1, vec![0])));
-        assert_eq!(
-            trace_identity("waves.branch-1.branch-4"),
-            Some((0, vec![1, 4]))
-        );
+        assert_eq!(trace_identity("waves"), Some((0, None)));
+        assert_eq!(trace_identity("waves.model-2"), Some((2, None)));
+        assert_eq!(trace_identity("waves.branch-3"), Some((0, Some(3))));
+        assert_eq!(trace_identity("waves.model-1.branch-0"), Some((1, Some(0))));
         for other in [
             "wavesx",
             "waves.model-x",
+            "waves.model-",
+            "waves.model-1.",
             "waves.branch-0.model-1",
+            "waves.branch-1.branch-4",
             "summary",
             "waves.x",
         ] {

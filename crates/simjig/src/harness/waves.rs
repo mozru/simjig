@@ -291,9 +291,8 @@ pub struct WavesFile {
     pub gtkw: Option<PathBuf>,
     /// The model it traces (0 for the first DUT).
     pub model: usize,
-    /// The fork branch it traces: empty for the test's own process, `[j]` for branch `j`
-    /// of a checkpoint, `[j, k]` for branch `k` of a checkpoint inside branch `j`.
-    pub branch: Vec<usize>,
+    /// The fork branch it traces: `None` for the test's own process.
+    pub branch: Option<usize>,
     /// Where the save file's marker is: the failure (the failing branch's own failure, in
     /// its files), or the end of a passing run. `None` in the files of a failing branch
     /// whose child died ([`died`](Self::died)): it has no failure time.
@@ -312,9 +311,8 @@ impl WavesFile {
         if self.model > 0 {
             parts.push(format!("model {}", self.model));
         }
-        if !self.branch.is_empty() {
-            let path: Vec<String> = self.branch.iter().map(ToString::to_string).collect();
-            parts.push(format!("fork branch {}", path.join(".")));
+        if let Some(branch) = self.branch {
+            parts.push(format!("fork branch {branch}"));
         }
         match (self.died, self.marker) {
             (Some(exit), _) => parts.push(format!("died ({exit}); file incomplete")),

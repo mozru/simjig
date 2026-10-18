@@ -60,7 +60,9 @@
 //! # Limits
 //! Unix only, nextest only (one test per process), branches run one at a time, and a
 //! branch cannot hand a [`Failure`] back as data: the parent sees a [`RemoteFailure`]
-//! (kind, time, task, location, message and the full text).
+//! (kind, time, task, location, message and the full text). Checkpoints cannot be nested:
+//! inside a branch, `run_from_checkpoint` returns [`ForkError::Nested`] (fork a branch's
+//! variations from the test's own checkpoint instead, with more branches).
 
 #[cfg(unix)]
 #[expect(
@@ -149,6 +151,8 @@ pub enum ForkError {
     },
     /// Called outside a running simulation, or while it was ending.
     NoSimulation,
+    /// Called inside a fork branch: checkpoints cannot be nested.
+    Nested,
     /// Called from a task other than `main`.
     NotMainTask {
         /// The calling task.
@@ -188,6 +192,7 @@ impl fmt::Display for ForkError {
                 "run_from_checkpoint needs a running simulation; call it from the main task \
                  inside Sim::run or a #[simjig::test]",
             ),
+            Self::Nested => f.write_str("checkpoints cannot be nested inside a fork branch"),
             Self::NotMainTask { task } => write!(
                 f,
                 "run_from_checkpoint was called from task `{task}`; call it from the main task"
@@ -604,6 +609,9 @@ where
     F: FnMut(Branch) -> Fut,
     Fut: Future<Output = crate::Result<T>>,
 {
+    if imp::in_branch() {
+        return Err(ForkError::Nested);
+    }
     check_quiet()?;
     let threads = imp::thread_count()?;
     if threads > 2 {
@@ -679,6 +687,12 @@ mod imp {
             const { std::cell::RefCell::new(None) };
     }
 
+    /// Whether this process is a branch's child: it holds the socket to its parent from
+    /// the fork until it exits.
+    pub(super) fn in_branch() -> bool {
+        CHANNEL.with_borrow(Option::is_some)
+    }
+
     pub(super) fn thread_count() -> Result<usize, ForkError> {
         sys::thread_count().map_err(|reason| ForkError::Unsupported { reason })
     }
@@ -724,8 +738,6 @@ mod imp {
         if pid == 0 {
             drop(parent_end);
             CHANNEL.set(Some(child_end));
-            // A nested checkpoint's child inherits its parent branch's armed hooks.
-            super::ARMED.with_borrow_mut(Vec::clear);
             for hook in hooks {
                 if let Err(message) = (hook.in_child)(branch) {
                     finish_child(&wire::failure_report(&hook_failure(&message)));
@@ -809,6 +821,10 @@ mod imp {
 #[cfg(not(unix))]
 mod imp {
     use super::{Branch, BranchOutcome, BranchValue, ForkError};
+
+    pub(super) fn in_branch() -> bool {
+        false
+    }
 
     pub(super) fn thread_count() -> Result<usize, ForkError> {
         Err(ForkError::Unsupported {

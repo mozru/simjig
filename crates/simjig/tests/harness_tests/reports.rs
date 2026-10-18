@@ -271,7 +271,7 @@ fn a_replay_lists_every_waves_file_with_the_failing_branch_first() {
     );
     let mut report = FailureReport::new(&f, run(), None, None);
     let file =
-        |name: &str, model: usize, branch: Vec<usize>, marker: u64, failing: bool| WavesFile {
+        |name: &str, model: usize, branch: Option<usize>, marker: u64, failing: bool| WavesFile {
             fst: PathBuf::from(format!("/runs/r/{name}.fst")),
             gtkw: Some(PathBuf::from(format!("/runs/r/{name}.gtkw"))),
             model,
@@ -282,10 +282,10 @@ fn a_replay_lists_every_waves_file_with_the_failing_branch_first() {
         };
     report.waves = Some(WavesReplay {
         files: vec![
-            file("waves.branch-1", 0, vec![1], 1750, true),
-            file("waves.model-1.branch-1", 1, vec![1], 1750, true),
-            file("waves", 0, vec![], 1250, false),
-            file("waves.model-1", 1, vec![], 1250, false),
+            file("waves.branch-1", 0, Some(1), 1750, true),
+            file("waves.model-1.branch-1", 1, Some(1), 1750, true),
+            file("waves", 0, None, 1250, false),
+            file("waves.model-1", 1, None, 1250, false),
         ],
         from: SimTime(250),
         to: None,
@@ -308,7 +308,7 @@ fn the_file_of_a_dead_fork_branch_is_labelled_incomplete() {
         "panicked: 1 of 2 fork branches failed",
     );
     let mut report = FailureReport::new(&f, run(), None, None);
-    let readable = |name: &str, branch: Vec<usize>| WavesFile {
+    let readable = |name: &str, branch: Option<usize>| WavesFile {
         fst: PathBuf::from(format!("/runs/r/{name}.fst")),
         gtkw: Some(PathBuf::from(format!("/runs/r/{name}.gtkw"))),
         model: 0,
@@ -319,13 +319,13 @@ fn the_file_of_a_dead_fork_branch_is_labelled_incomplete() {
     };
     report.waves = Some(WavesReplay {
         files: vec![
-            readable("waves", vec![]),
-            readable("waves.branch-0", vec![0]),
+            readable("waves", None),
+            readable("waves.branch-0", Some(0)),
             WavesFile {
                 fst: PathBuf::from("/runs/r/waves.branch-1.fst"),
                 gtkw: None,
                 model: 0,
-                branch: vec![1],
+                branch: Some(1),
                 marker: None,
                 failing_branch: true,
                 died: Some(fork::ChildExit::Signaled(6)),

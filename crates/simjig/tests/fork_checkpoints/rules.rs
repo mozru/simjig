@@ -209,3 +209,23 @@ fn buffered_output_is_printed_once() {
     );
     assert_eq!(stdout.matches(MARK).count(), 1, "{stdout}");
 }
+
+/// A checkpoint inside a fork branch is refused with its own error, not as a quiet-point
+/// problem (the branch's kernel-internal task) the user cannot fix.
+#[simjig::test(timeout = "1us")]
+async fn a_checkpoint_inside_a_branch_is_refused_as_nested(ctx: &TestCtx, dut: counter::Dut) {
+    clock(dut.clk, ns(10)).start();
+    let branches = fork::run_from_checkpoint(ctx.seed(), 2, |branch| async move {
+        dut.clk.rising().await;
+        let inner = fork::run_from_checkpoint(branch.seed(), 2, |_| async { Ok(()) }).await;
+        Ok(format!("{:?}", inner.map(|_| ())))
+    })
+    .await
+    .unwrap();
+    let expected = format!("{:?}", Err::<(), _>(ForkError::Nested));
+    assert_eq!(branches.into_values(), [expected.clone(), expected]);
+    assert_eq!(
+        ForkError::Nested.to_string(),
+        "checkpoints cannot be nested inside a fork branch"
+    );
+}

@@ -254,3 +254,8 @@ the public API, the generated code or simulation semantics.
   and gets no `.gtkw` or `gtkwave` command when the FST has no header. `WavesFile`:
   `marker` becomes `Option<SimTime>`; new field `died: Option<fork::ChildExit>`.
   `fork::ChildExit` implements `Display` (`killed by signal 6`, `exited with code 1`).
+- New `ForkError::Nested`: `run_from_checkpoint` inside a fork branch is refused as
+  "checkpoints cannot be nested inside a fork branch". It used to fail as `OtherTasks`,
+  naming the branch's internal `main.fork_sentinel` task. `WavesFile::branch` becomes
+  `Option<usize>` (it was a path of branch indices, one per checkpoint level), and the
+  replay recognises only one `.branch-<j>` in a trace file name.

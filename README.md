@@ -171,6 +171,10 @@ async fn after_reset(ctx: &simjig::TestCtx, dut: counter::Dut) {
 }
 ```
 
+Checkpoints do not nest: inside a branch, `run_from_checkpoint` returns
+`ForkError::Nested`. Branches run one at a time; see the `simjig::fork` docs for the
+other limits.
+
 ### Coverage
 A model built with `.coverage(true)` exposes its counters: `Sim::coverage(model)` (or
 `TestCtx::coverage` inside a test) reads them, `zero_coverage` clears them, and

@@ -11,6 +11,7 @@ mod multi;
 mod phases;
 mod s3c5m;
 mod s3c6r;
+mod s3c7m;
 mod swarm;
 mod sync;
 mod timing;

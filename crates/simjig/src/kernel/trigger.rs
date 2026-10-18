@@ -354,7 +354,10 @@ pub fn now() -> SimTime {
 ///
 /// It converts into a [`Failure`] ([`FailureKind::Timeout`]), so `with_timeout(..).await?`
 /// works in a test returning [`simjig::Result`](crate::Result).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Debug` (what `.unwrap()` and `.expect(..)` print) shows the times in physical units:
+/// `Elapsed { after: 3 ns, at: 5 ns, precision: 1ns }`.
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Elapsed {
     /// The timeout that elapsed.
@@ -369,6 +372,21 @@ impl fmt::Display for Elapsed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let after = SimTime(self.after.ticks()).display(self.precision);
         write!(f, "timed out after {after}")
+    }
+}
+
+/// Ticks mean nothing without the precision, and every `.expect()` on a timeout prints
+/// this, so the fields print in physical units, as [`SimTime::display`] does.
+impl fmt::Debug for Elapsed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Elapsed")
+            .field(
+                "after",
+                &format_args!("{}", SimTime(self.after.ticks()).display(self.precision)),
+            )
+            .field("at", &format_args!("{}", self.at.display(self.precision)))
+            .field("precision", &format_args!("{}", self.precision))
+            .finish()
     }
 }
 

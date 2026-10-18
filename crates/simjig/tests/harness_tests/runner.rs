@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use serde_json::Value;
 use simjig::__private::{RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, run};
 use simjig::{
-    DutModel, Failure, FakeModel, ModelOptions, Precision, Seed, SeedSource, Sim, SimTime, TestCtx,
-    TimeUnit, rising, yield_now,
+    DutModel, Failure, FakeModel, ModelOptions, Precision, Seed, SeedSource, Sim, SimDuration,
+    SimTime, TestCtx, TimeUnit, rising, yield_now,
 };
 
 use crate::counter;
@@ -139,6 +139,44 @@ fn a_test_without_a_timeout_stops_at_the_default() {
     let dir = outcome.run_dir.expect("written");
     let summary = read_json(&dir.join("summary.json"));
     assert_eq!(summary["timeout"]["source"], "default");
+}
+
+/// An empty model at the precision `10^EXP` s.
+struct AtPrecision<const EXP: i8>;
+
+impl<const EXP: i8> DutModel for AtPrecision<EXP> {
+    fn instantiate(_options: &ModelOptions) -> Result<Sim, Failure> {
+        let precision = Precision::from_exponent(EXP).expect("in range");
+        Ok(Sim::from_fake(FakeModel::new(precision)))
+    }
+
+    fn create(_sim: &mut Sim) -> Result<Self, Failure> {
+        Ok(Self)
+    }
+}
+
+/// Waits one tick at a time, for 20 ticks: longer than any default timeout below.
+async fn twenty_ticks() {
+    for _ in 0..20 {
+        simjig::Timer::new(SimDuration::from_ticks(1)).await;
+    }
+}
+
+/// The default timeout's end time, in ticks, at the precision `10^EXP` s.
+fn default_timeout_ticks<const EXP: i8>() -> Option<u64> {
+    let name = if EXP == 0 { "coarse_s" } else { "coarse_10ms" };
+    let outcome =
+        run::<AtPrecision<EXP>, _, _>(&meta(name), &env(None, name), |_, _| twenty_ticks());
+    let report = outcome.failure.expect("the default timeout fires");
+    assert_eq!(report.kind, "TimeLimit");
+    outcome.end_time.map(SimTime::ticks)
+}
+
+#[test]
+fn the_default_timeout_is_10ms_rounded_up_to_whole_ticks() {
+    // 1 s and 10 ms per tick: 10 ms rounds up to one tick, not to ten (10 s and 100 ms).
+    assert_eq!(default_timeout_ticks::<0>(), Some(1));
+    assert_eq!(default_timeout_ticks::<-2>(), Some(1));
 }
 
 async fn run_20ms() {

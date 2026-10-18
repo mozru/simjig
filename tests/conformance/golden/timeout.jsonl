@@ -1,0 +1,12 @@
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"rst","value":1}
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"d","value":0}
+{"time":10000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"rst","value":0}
+{"time":13000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),3ns)","task":"main","op":"note","signal":"outcome","value":"SimTimeoutError"}
+{"time":13000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),3ns)","task":"main","op":"read","signal":"clk","value":0}
+{"time":13000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),3ns)","task":"main","op":"read","signal":"q","value":0}
+{"time":15000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),5ns)","task":"main","op":"note","signal":"outcome","value":"fired"}
+{"time":15000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),5ns)","task":"main","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),5ns)","task":"main","op":"read","signal":"q","value":0}
+{"time":25000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),10ns)","task":"main","op":"note","signal":"outcome","value":"SimTimeoutError"}
+{"time":25000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),10ns)","task":"main","op":"read","signal":"clk","value":0}
+{"time":25000,"phase":"active","trigger":"with_timeout(RisingEdge(clk),10ns)","task":"main","op":"read","signal":"q","value":0}

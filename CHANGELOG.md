@@ -17,6 +17,10 @@ the public API, the generated code or simulation semantics.
   (`Variable { name, kind: VariableKind::{Signal, Parameter, Localparam} }`), both omitted
   from the JSON when empty. Every IR hash, and so every generated `IR_HASH`/`kIrHash`,
   changes once.
+- IR schema 4: `Module::generate_blocks` (`GenerateBlock { name, instances, variables,
+  generate_blocks }`, named as Verilator names the scope: `g_x`, `genblk2`, `g[0]`) and
+  `Instance::array` (an instance array), each omitted from the JSON when empty or false.
+  Every IR hash, and so every generated `IR_HASH`/`kIrHash`, changes once.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

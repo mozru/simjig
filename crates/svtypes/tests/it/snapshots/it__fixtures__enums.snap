@@ -3,7 +3,7 @@ source: crates/svtypes/tests/it/fixtures.rs
 expression: json
 ---
 {
-  "schema": 3,
+  "schema": 4,
   "producer": {
     "tool": "verilator",
     "version": "5.052"

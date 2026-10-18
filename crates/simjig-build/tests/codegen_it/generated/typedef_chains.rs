@@ -70,6 +70,7 @@ pub type VecT = ::simjig::__private::bits::Bits<10>;
 pub type VecAlias = VecT;
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `top.a2`: input, 8 bits.
     pub a2: ::simjig::__private::In<Alias2>,
@@ -148,3 +149,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vtop",
+    symbol = "simjig_vtable_Vtop",
+    precision_exponent = -12,
+);

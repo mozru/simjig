@@ -24,6 +24,7 @@ pub mod cfg {
 }
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `top.data`: input, 12 bits.
     pub data: ::simjig::__private::In<Word>,
@@ -62,3 +63,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vtop",
+    symbol = "simjig_vtable_Vtop",
+    precision_exponent = -12,
+);

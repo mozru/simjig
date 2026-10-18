@@ -1,10 +1,20 @@
 //! Snapshots of every emitter's output for every case.
 
 use simjig_build::codegen::{
-    ShimOptions, emit_layout_check, emit_rust, emit_shim, emit_vlt, emit_wrapper, lower,
+    Lowered, RustOptions, ShimOptions, emit_layout_check, emit_rust, emit_shim, emit_vlt,
+    emit_wrapper, lower,
 };
 
-use crate::cases;
+use crate::cases::{self, Case};
+
+/// The model glue every case is emitted with: the prefix the shim snapshots use, and the
+/// design's own precision.
+fn rust_options(case: &Case, lowered: &Lowered) -> RustOptions {
+    RustOptions {
+        prefix: format!("V{}", lowered.top),
+        precision_exponent: case.design.time_precision.0,
+    }
+}
 
 #[test]
 fn emitter_snapshots() {
@@ -12,7 +22,10 @@ fn emitter_snapshots() {
         let lowered =
             lower(&case.design, &case.config).unwrap_or_else(|e| panic!("{}: {e}", case.name));
         let name = &case.name;
-        insta::assert_snapshot!(format!("{name}__rust"), emit_rust(&lowered));
+        insta::assert_snapshot!(
+            format!("{name}__rust"),
+            emit_rust(&lowered, &rust_options(&case, &lowered))
+        );
         insta::assert_snapshot!(format!("{name}__vlt"), emit_vlt(&lowered));
         insta::assert_snapshot!(format!("{name}__layout"), emit_layout_check(&lowered));
         if let Some(wrapper) = &lowered.wrapper {
@@ -39,7 +52,7 @@ fn committed_generated_rust_is_current() {
     let bless = std::env::var_os("SIMJIG_BLESS").is_some();
     for case in cases::all() {
         let lowered = lower(&case.design, &case.config).unwrap();
-        let text = emit_rust(&lowered);
+        let text = emit_rust(&lowered, &rust_options(&case, &lowered));
         let path = dir.join(format!("{}.rs", case.name));
         if bless {
             std::fs::write(&path, &text).unwrap();

@@ -467,6 +467,7 @@ impl ::core::convert::From<IAnonVariant> for IAnon {
 }
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `top.i_impl`: input, 3 bits.
     pub i_impl: ::simjig::__private::In<Implicit>,
@@ -555,3 +556,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vtop",
+    symbol = "simjig_vtable_Vtop",
+    precision_exponent = -12,
+);

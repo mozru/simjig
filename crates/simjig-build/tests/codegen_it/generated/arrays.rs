@@ -52,6 +52,7 @@ impl Pair {
 }
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `top.pa2`: input, 12 bits.
     pub pa2: ::simjig::__private::In<::simjig::__private::bits::Bits<12>>,
@@ -150,3 +151,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vtop",
+    symbol = "simjig_vtable_Vtop",
+    precision_exponent = -12,
+);

@@ -309,6 +309,7 @@ pub mod wide_pkg {
 }
 
 /// The signals of model `wide_top`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `wide_top.clk`: input, 1 bit.
     pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,
@@ -437,3 +438,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vwide_top",
+    symbol = "simjig_vtable_Vwide_top",
+    precision_exponent = -12,
+);

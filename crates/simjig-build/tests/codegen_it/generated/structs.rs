@@ -359,6 +359,7 @@ impl InAnon {
 }
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `top.in_i`: input, 16 bits.
     pub in_i: ::simjig::__private::In<Inner>,
@@ -437,3 +438,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vtop",
+    symbol = "simjig_vtable_Vtop",
+    precision_exponent = -12,
+);

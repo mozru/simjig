@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use svtypes::ir::{Design, Direction, TypeKind};
 
 use crate::Error;
-use crate::codegen::{self, ShimOptions};
+use crate::codegen::{self, RustOptions, ShimOptions};
 use crate::dut::{DutConfig, GeneratedInput};
 use crate::header::{HeaderPort, PortDir, Storage};
 
@@ -81,8 +81,12 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
         prefix: config.prefix(),
         timing: config.timing,
     };
+    let rust = RustOptions {
+        prefix: opts.prefix.clone(),
+        precision_exponent: design.time_precision.0,
+    };
     Ok(Emitted {
-        rust: Some(codegen::emit_rust(&lowered)),
+        rust: Some(codegen::emit_rust(&lowered, &rust)),
         shim_cpp: Some(codegen::emit_shim(&lowered, &opts).map_err(fail)?),
         vlt: Some(codegen::emit_vlt(&lowered)),
         layout_check: Some(SvModule {

@@ -153,6 +153,7 @@ pub mod struct_pipe_pkg {
 }
 
 /// The signals of model `struct_pipe`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `struct_pipe.clk`: input, 1 bit.
     pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,
@@ -241,3 +242,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vstruct_pipe",
+    symbol = "simjig_vtable_Vstruct_pipe",
+    precision_exponent = -12,
+);

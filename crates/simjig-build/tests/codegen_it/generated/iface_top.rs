@@ -86,6 +86,7 @@ pub mod iface_pkg {
 }
 
 /// Interface modport `bus_if.dst`, as seen by the testbench.
+#[derive(Clone, Copy, Debug)]
 pub struct BusIfDst {
     /// `valid`.
     pub valid: ::simjig::__private::In<::simjig::__private::bits::Bit>,
@@ -110,6 +111,7 @@ impl BusIfDst {
 }
 
 /// Interface modport `bus_if.src`, as seen by the testbench.
+#[derive(Clone, Copy, Debug)]
 pub struct BusIfSrc {
     /// `valid`.
     pub valid: ::simjig::__private::Out<::simjig::__private::bits::Bit>,
@@ -134,6 +136,7 @@ impl BusIfSrc {
 }
 
 /// The signals of model `simjig_wrap_iface_top`: its ports in declaration order, then its probes.
+#[derive(Clone, Copy, Debug)]
 pub struct Dut {
     /// `simjig_wrap_iface_top.clk`: input, 1 bit.
     pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,
@@ -234,3 +237,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vsimjig_wrap_iface_top",
+    symbol = "simjig_vtable_Vsimjig_wrap_iface_top",
+    precision_exponent = -12,
+);

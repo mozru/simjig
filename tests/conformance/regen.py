@@ -51,6 +51,8 @@ SUITES = [
      ["loser_scheduled", "nested_combinators", "timeout_combinators", "cycles_join",
       "rise_changed", "many_kinds", "primed_walk", "spawned_combinators", "sync_losers",
       "cancelled_nest"]),
+    ("counter", "counter", ["counter.sv"], {"WIDTH": 8}, "test_sync_ready",
+     ["event_ready", "lock_ready", "queue_get_ready", "queue_put_ready"]),
 ]  # fmt: skip
 
 

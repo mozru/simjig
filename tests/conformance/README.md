@@ -64,6 +64,10 @@ python tests/conformance/show.py golden/timer.jsonl # print a log as a table
 | `spawned_combinators` | counter | `First`, `Combine`, `with_timeout` and a plain wait in spawned tasks, decided by an `Event` set in the edge callback |
 | `sync_losers` | counter | `First` losers waiting on an `Event`, a `Lock` and a `Queue`: cancelled while waiting, they take nothing from later waiters |
 | `cancelled_nest` | counter | a `First` whose losing operand is a waiting `Combine`: the caller resumes three hops after the edge |
+| `event_ready` | counter | `Event.wait()` on a set Event resumes one hop later, after the tasks already queued, even if the Event is cleared meanwhile; on a cleared one, after the tasks woken before `set`; inside a `First` |
+| `lock_ready` | counter | `Lock.acquire()` on a free Lock takes it at once and resumes one hop later; a released Lock goes to the oldest waiter, which resumes after the tasks already queued |
+| `queue_get_ready` | counter | `Queue.get()` on a non-empty queue takes no hop; a task that runs before a woken getter takes its item, and the getter waits again behind the others |
+| `queue_put_ready` | counter | the same for `Queue.put()` on a non-full queue and a woken putter |
 
 ## Log format
 JSON Lines: one compact JSON object per line (`json.dumps(..., separators=(",", ":"))`),

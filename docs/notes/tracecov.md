@@ -272,8 +272,8 @@ upstream.
 - Probe paths through generate blocks (`top.g[0].u.x`, `top.gen_blk.x`) are not supported
   yet: the lowering accepts only plain identifiers, and the IR's instance tree
   (`Module::instances`) lists only instances directly in a module body. Verilator's scope
-  table names such a scope plainly, `g.gb[0].u` (checked on 5.052; only the C++ member is
-  mangled, `__Vscopep_g__gb__BRA__0__KET____u`), so `find_probe` could find it; supporting
+  table names such a scope plainly, `g.gb[0].u` (checked on 5.052; only the C++ member
+  name is mangled), so `find_probe` could find it; supporting
   them needs the IR to record generate scopes and the lowering to accept `name[index]`
   segments.
 - The `CHANGELOG.md` now exists and records the ABI and build changes.

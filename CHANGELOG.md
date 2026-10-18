@@ -22,3 +22,5 @@ the public API, the generated code or simulation semantics.
   edge or `cycles` due exactly at the timeout now times out (a future's own `Timer` used
   to win); a spawned task whose `Timer` was registered before the call still returns its
   result.
+- `BlockedTask` implements `Display` (`` `main.d` awaits rising(clk) ``), the rendering
+  `Failure`'s `Display` and the failure report share.

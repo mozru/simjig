@@ -305,17 +305,7 @@ fn details(
 
 /// One `blocked:` line per task: what it awaits.
 fn blocked_lines(blocked: &[BlockedTask]) -> Vec<String> {
-    blocked
-        .iter()
-        .map(|b| {
-            let awaiting = if b.awaiting.is_empty() {
-                "a future the kernel cannot see".to_owned()
-            } else {
-                b.awaiting.join(", ")
-            };
-            format!("blocked:  `{}` awaits {awaiting}", b.task)
-        })
-        .collect()
+    blocked.iter().map(|b| format!("blocked:  {b}")).collect()
 }
 
 impl fmt::Display for FailureReport {

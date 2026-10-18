@@ -91,6 +91,18 @@ pub struct BlockedTask {
     pub awaiting: Vec<String>,
 }
 
+/// The one rendering of a blocked task (`` `main.driver` awaits rising(clk) ``), used by
+/// [`Failure`]'s `Display` and by the harness's failure report.
+impl fmt::Display for BlockedTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.awaiting.is_empty() {
+            write!(f, "`{}` awaits a future the kernel cannot see", self.task)
+        } else {
+            write!(f, "`{}` awaits {}", self.task, self.awaiting.join(", "))
+        }
+    }
+}
+
 /// The kind of failure, with the data specific to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FailureKind {
@@ -265,15 +277,7 @@ impl fmt::Display for Failure {
         } = &self.kind
         {
             for b in blocked {
-                if b.awaiting.is_empty() {
-                    write!(
-                        f,
-                        "\n  task `{}` awaits a future the kernel cannot see",
-                        b.task
-                    )?;
-                } else {
-                    write!(f, "\n  task `{}` awaits {}", b.task, b.awaiting.join(", "))?;
-                }
+                write!(f, "\n  task {b}")?;
             }
         }
         if let Some(help) = self.help() {
@@ -308,6 +312,20 @@ mod tests {
         assert_eq!(
             (a.file(), a.line(), a.column()),
             (here.file(), here.line(), here.column())
+        );
+    }
+
+    #[test]
+    fn a_blocked_task_names_what_it_awaits() {
+        let mut b = BlockedTask {
+            task: "main.d".into(),
+            awaiting: vec!["rising(clk)".into(), "Event `go`".into()],
+        };
+        assert_eq!(b.to_string(), "`main.d` awaits rising(clk), Event `go`");
+        b.awaiting.clear();
+        assert_eq!(
+            b.to_string(),
+            "`main.d` awaits a future the kernel cannot see"
         );
     }
 

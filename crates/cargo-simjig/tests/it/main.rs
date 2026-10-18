@@ -79,3 +79,42 @@ fn doctor_fails_on_inconsistent_verilator_root() {
     assert!(stdout.contains("FAIL verilator-root"), "{stdout}");
     assert!(stdout.contains("fix: unset VERILATOR_ROOT"), "{stdout}");
 }
+
+/// `cargo simjig waves` in one command: runs simjig's own passing `on_fail::counter_counts`
+/// (an FST-traced counter) and finds its waves in the run directory.
+///
+/// No `-p`: from the workspace root, nextest then builds what `cargo xtask ci`'s
+/// `nextest run --workspace` already built (same feature unification), so this test never
+/// rebuilds test binaries that other tests are running.
+#[test]
+fn waves_writes_the_waves_of_a_test_in_one_command() {
+    let runs = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-waves");
+    std::fs::remove_dir_all(&runs).ok();
+    let binary = env!("CARGO_BIN_EXE_cargo-simjig");
+    let mut command = if env::var_os("PIXI_ENVIRONMENT_NAME").is_some() {
+        Command::new(binary)
+    } else {
+        let mut pixi = Command::new("pixi");
+        pixi.args(["run", "--locked", binary]);
+        pixi
+    };
+    command
+        .args([
+            "simjig",
+            "waves",
+            "on_fail::counter_counts",
+            "--seed",
+            "0x2a",
+            "--window",
+            "100ns..",
+        ])
+        .env("SIMJIG_RUNS_DIR", &runs)
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let output = command.output().expect("cargo simjig waves runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let dir = runs.join("simjig/waves_tests/on_fail__counter_counts/000000000000002a");
+    assert!(dir.join("waves.fst").is_file(), "{stderr}");
+    assert!(dir.join("waves.gtkw").is_file(), "{stderr}");
+    assert!(stderr.contains("replay:   reproduced"), "{stderr}");
+}

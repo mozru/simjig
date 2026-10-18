@@ -129,3 +129,51 @@ fn a_prefix_owned_by_another_configuration_is_rejected() {
     );
     assert_eq!(s.verilations(), 0);
 }
+
+/// The model archive's entry directory (from its link directives).
+fn model_entry(built: &simjig_build::Built) -> std::path::PathBuf {
+    built
+        .directives
+        .iter()
+        .filter_map(|d| d.strip_prefix("cargo::rustc-link-search=native="))
+        .map(std::path::PathBuf::from)
+        .find(|d| d.components().any(|c| c.as_os_str() == "archives"))
+        .expect("a model archive directory")
+}
+
+/// An archive entry holds only the archive: its objects are inside it.
+#[test]
+fn archive_entries_hold_only_the_archive() {
+    let s = Sandbox::new();
+    let built = counter(&s.rtl(), 8).build_in(&s.env()).unwrap();
+    for kind in ["archives", "libverilated"] {
+        for entry in std::fs::read_dir(s.path().join("cache").join(kind)).unwrap() {
+            let files: Vec<std::path::PathBuf> = std::fs::read_dir(entry.unwrap().path())
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+            assert!(
+                files.len() == 1 && files[0].extension().is_some_and(|e| e == "a"),
+                "{kind}: {files:?}"
+            );
+        }
+    }
+    assert!(model_entry(&built).is_dir());
+}
+
+/// An entry directory without its archive (an interrupted older build) is a miss, and
+/// the build puts the archive back instead of linking a missing file.
+#[test]
+fn an_entry_without_its_archive_is_rebuilt() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let built = counter(&rtl, 8).build_in(&s.env()).unwrap();
+    let entry = model_entry(&built);
+    for f in std::fs::read_dir(&entry).unwrap() {
+        std::fs::remove_file(f.unwrap().path()).unwrap();
+    }
+    let again = counter(&rtl, 8).build_in(&s.env()).unwrap();
+    assert_eq!(model_entry(&again), entry);
+    let archives = std::fs::read_dir(&entry).unwrap().count();
+    assert_eq!(archives, 1, "the archive is back");
+}

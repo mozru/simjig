@@ -469,6 +469,33 @@ fn a_dut_from_a_file_list_reads_it_in_order() {
     assert!(e.contains("fl_pkg"), "{e}");
 }
 
+/// An interface-ported DUT's parameter constants document the user's module, not the
+/// generated wrapper (what `cargo simjig show` prints).
+#[test]
+fn parameter_docs_name_the_users_module() {
+    let s = Sandbox::new();
+    let rtl = s.path().join("pd.sv");
+    std::fs::write(
+        &rtl,
+        "interface pd_if;\n  logic v;\n  modport sink (input v);\nendinterface\n\
+         module pd_top #(parameter int N = 1) (pd_if.sink in, output logic [N-1:0] y);\n  \
+         assign y = {N{in.v}};\nendmodule\n",
+    )
+    .unwrap();
+    Dut::new("pd")
+        .sources([&rtl])
+        .top("pd_top")
+        .param("N", 3)
+        .bind_iface("in", "pd_if.sink")
+        .build_in(&s.env())
+        .unwrap();
+    let module = generated(&s, "pd");
+    assert!(
+        module.contains("/// Parameter `N` of `pd_top`.\n"),
+        "{module}"
+    );
+}
+
 /// The generated module of the DUT `name` in `s`'s `OUT_DIR`.
 fn generated(s: &Sandbox, name: &str) -> String {
     std::fs::read_to_string(s.path().join(format!("out/simjig/{name}.rs"))).unwrap()

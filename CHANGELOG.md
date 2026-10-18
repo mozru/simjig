@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Generated code: the doc comment of an interface-ported DUT's parameter constant names
+  the user's module (`/// Parameter `N` of `pkt_parser`.`), not the generated wrapper
+  `simjig_wrap_<top>`, which has no parameters. No snapshot covered it.
 - A successful build whose emitter writes no Rust (`Emitted::rust: None`) removes
   `OUT_DIR/simjig/<name>.rs`: a failure stub (or module) an earlier build left survived.
 - A build script refuses a second DUT whose name differs from an earlier one's only in

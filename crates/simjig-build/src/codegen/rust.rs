@@ -313,13 +313,13 @@ fn emit_dut(w: &mut Writer, lowered: &Lowered) {
     ));
     w.line("");
     emit_signal_table(w, lowered);
+    // The user's module: an interface-ported DUT's parameters are its own, not the
+    // generated wrapper's (which has none).
+    let declared_in = lowered.wrapper.as_ref().map_or(&lowered.top, |w| &w.dut);
     for c in &lowered.dut_params {
         let (ty, expr) = const_parts(&c.value, "");
         w.line("");
-        w.line(format!(
-            "/// Parameter `{}` of `{}`.",
-            c.sv_name, lowered.top
-        ));
+        w.line(format!("/// Parameter `{}` of `{declared_in}`.", c.sv_name));
         w.line(format!("pub const {}: {ty} = {expr};", c.name));
     }
     w.line("");

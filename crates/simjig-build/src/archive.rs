@@ -27,7 +27,9 @@
 //! directories that build the same configuration share one model archive.
 //!
 //! An input edited while the compiler reads it leaves the archive out of the cache (see
-//! `manifest`): it is linked from `OUT_DIR/simjig-unpublished/` by that build alone.
+//! `manifest`): it is linked from `OUT_DIR/simjig-unpublished/` by that build alone. So is
+//! a model archive compiled from a verilation kept out of the cache that way: its
+//! sources' path is in its pre key, and names no entry a later build finds.
 //!
 //! A Verilator runtime is looked up once per build script ([`RUNTIMES`]): every model of
 //! the script links the same one, and its sources do not change while the script runs.
@@ -126,8 +128,21 @@ impl Toolchain<'_> {
 
     fn cached_archive_keyed(&self, spec: &Spec<'_>, pre: &str) -> Result<Archive, Error> {
         let cache = self.i.cache;
+        let out_dir = &self.i.env.out_dir;
         let manifest = cache.root().join("manifests").join(pre);
-        let known = match lookup(cache, spec, pre, &manifest) {
+        let label = format!("{}-{}", spec.kind, spec.what);
+        // Compiled from an output kept out of the cache (a model verilated while its input
+        // changed): its path names no entry a later build finds, so neither is this.
+        let transient = spec
+            .sources
+            .iter()
+            .any(|s| cache.is_unpublished(s, out_dir));
+        let found = if transient {
+            Err(None)
+        } else {
+            lookup(cache, spec, pre, &manifest)
+        };
+        let known = match found {
             Ok(hit) => return Ok(hit),
             Err(known) => known,
         };
@@ -142,15 +157,18 @@ impl Toolchain<'_> {
             }
         };
         let recorded = match Manifest::record(&deps, &snapshot) {
-            Recorded::Stable(m) => m,
-            Recorded::Changed(path) => {
-                let label = format!("{}-{}", spec.kind, spec.what);
-                let dir = cache::keep_unpublished(&work, &self.i.env.out_dir, &label)?;
+            Recorded::Stable(m) if !transient => m,
+            unpublished => {
+                let dir = cache::keep_unpublished(&work, out_dir, &label)?;
+                let changed = match unpublished {
+                    Recorded::Changed(path) => Some(path),
+                    Recorded::Stable(_) => None,
+                };
                 return Ok(Archive {
                     dir,
                     name: provisional_name(spec.what),
                     deps,
-                    changed: Some(path),
+                    changed,
                 });
             }
         };

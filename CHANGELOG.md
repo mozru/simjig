@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A model archive compiled from a verilation kept out of the cache (an input edited while
+  Verilator read it) is kept out too, in `OUT_DIR/simjig-unpublished/`: its key named
+  that one-off output, so the entry was never found again.
 - The shared cache is found in a target directory without Cargo's `CACHEDIR.TAG` too, by
   `OUT_DIR`'s layout (`<target>/[<triple>/]<profile>/build/<pkg>-<hash>/out`): a target
   directory another tool created first (`--target-dir target/rust-analyzer` creates

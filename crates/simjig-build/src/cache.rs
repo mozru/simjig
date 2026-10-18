@@ -121,6 +121,8 @@ impl Cache {
     ) -> Result<Verilated, Error> {
         let pre = pre_key(verilator, args, include_dirs)?;
         let manifest = self.root.join("manifests").join(&pre);
+        let prefix = prefix_of(args);
+        let label = format!("verilated-{prefix}");
         let known = match self.lookup(&pre, &manifest) {
             Ok(hit) => return Ok(hit),
             Err(known) => known,
@@ -134,12 +136,11 @@ impl Cache {
             remove_best_effort(&work);
             return Err(e);
         }
-        let prefix = prefix_of(args);
         let deps = read_deps(&obj, prefix)?;
         let recorded = match Manifest::record(&keyed_deps(&deps), &snapshot) {
             Recorded::Stable(m) => m,
             Recorded::Changed(path) => {
-                let dir = keep_unpublished(&work, out_dir, &format!("verilated-{prefix}"))?;
+                let dir = keep_unpublished(&work, out_dir, &label)?;
                 return Ok(Verilated {
                     obj_dir: dir.join("obj"),
                     deps,
@@ -252,6 +253,12 @@ impl Cache {
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
+
+    /// Whether `path` is in an output kept out of the cache (see [`keep_unpublished`]),
+    /// where it stays or where it falls back to.
+    pub(crate) fn is_unpublished(&self, path: &Path, out_dir: &Path) -> bool {
+        path.starts_with(unpublished_dir(out_dir)) || path.starts_with(self.root.join("tmp"))
+    }
 }
 
 fn pre_key(
@@ -342,7 +349,7 @@ fn parse_deps_listing(text: &str) -> Option<Vec<PathBuf>> {
 /// the cache), it stays in `tmp/`, removed an hour later; by then Cargo has run the
 /// build script again, since the edited input is newer than its last run.
 pub(crate) fn keep_unpublished(work: &Path, out_dir: &Path, label: &str) -> Result<PathBuf, Error> {
-    let parent = out_dir.join("simjig-unpublished");
+    let parent = unpublished_dir(out_dir);
     std::fs::create_dir_all(&parent).map_err(Error::io("creating", &parent))?;
     let dst = parent.join(label);
     if dst.exists() {
@@ -352,6 +359,11 @@ pub(crate) fn keep_unpublished(work: &Path, out_dir: &Path, label: &str) -> Resu
         Ok(()) => dst,
         Err(_) => work.to_path_buf(),
     })
+}
+
+/// Where [`keep_unpublished`] keeps outputs.
+fn unpublished_dir(out_dir: &Path) -> PathBuf {
+    out_dir.join("simjig-unpublished")
 }
 
 /// How old a work directory must be before it counts as left behind by a killed build.

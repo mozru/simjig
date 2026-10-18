@@ -39,6 +39,8 @@ the public API, the generated code or simulation semantics.
 - Every archive key (models and Verilator runtimes) covers the compiler's identity: the
   executable its path resolves to, with size and modification time, and its `--version`
   output (run once per build script). Every archive is compiled again once.
+- `Dut::verilator_args` also refuses `--sc`, `--main`, `--binary`, `--lib-create`, `-o`,
+  `--hierarchical`, and the `--prefix=`, `--Mdir=`, `--top=` and `--top-module=` forms.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

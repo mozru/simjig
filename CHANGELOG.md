@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A failed `Dut::build` prints the error as `cargo::error=` lines (one per line of the
+  message) and none of that DUT's directives. Cargo shows them as `error:` lines right
+  after `Compiling`, before its dump of the build script's stdout (the `rerun-if-changed`
+  lines of the DUTs built before), and the error is still the last stdout line.
 - Breaking: dropping a `Task` handle before its task ever ran, without awaiting it, fails
   the run (`FailureKind::Setup`, at the `spawn` call, naming the task and the fixes:
   `.detach()`, `.await`, `.cancel()`). It printed a warning that test runners capture, so

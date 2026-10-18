@@ -9,9 +9,16 @@
 //! match cocotb 2.x on Verilator; see the `kernel::sched` module docs for the loop.
 #![deny(unsafe_code)]
 
+mod harness;
 mod kernel;
 mod model;
 
+pub use harness::Result;
+pub use harness::ctx::TestCtx;
+pub use harness::dut::{DutModel, ModelOptions};
+pub use harness::report::{FailureReport, RunIdentity, Signature};
+pub use harness::runner::TestOutput;
+pub use harness::seed::{Rng, Seed, SeedSource};
 pub use kernel::clock::{Clock, ClockError};
 pub use kernel::failure::{BlockedTask, Failure, FailureKind};
 pub use kernel::fake::{FakeModel, FakeSig, FakeState};
@@ -30,8 +37,14 @@ pub use kernel::trigger::{
     now, rising, with_timeout, yield_now,
 };
 
+/// Marks an `async fn` as a simjig test; see the attribute's own documentation.
+pub use simjig_macros::test;
+
 /// Support for the exported macros; not public API.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::harness::runner::{
+        RunEnv, TestMeta, TestOutcome, Timeout, assert_test_output, run, run_test,
+    };
     pub use crate::kernel::combinator::{MaybeDone, boxed};
 }

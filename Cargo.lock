@@ -412,6 +412,7 @@ name = "simjig"
 version = "0.0.0"
 dependencies = [
  "cc",
+ "simjig-macros",
 ]
 
 [[package]]

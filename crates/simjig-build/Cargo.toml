@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 cc.workspace = true
 sha2.workspace = true
+svtypes.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

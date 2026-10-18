@@ -7,9 +7,13 @@ use crate::support::{Sandbox, dut, logging_ccache};
 
 /// Every compile command of one build, as (source file, command line).
 fn compiles(log: &std::path::Path) -> Vec<(String, String)> {
-    std::fs::read_to_string(log)
+    let lines: Vec<String> = std::fs::read_dir(log)
         .unwrap()
-        .lines()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    lines
+        .iter()
+        .flat_map(|l| l.lines())
         .filter(|l| l.split(' ').any(|a| a == "-c"))
         .map(|l| {
             let src = l

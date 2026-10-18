@@ -9,6 +9,7 @@ fn counter(rtl: &std::path::Path, width: u32) -> Dut {
         .sources([rtl.join("counter.sv")])
         .include_dirs([rtl])
         .param("WIDTH", width)
+        .top("counter")
 }
 
 fn count_entries(dir: &std::path::Path) -> usize {

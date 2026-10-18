@@ -112,12 +112,52 @@ pub enum Error {
         /// The `cc` error; its message carries the compiler command line and output.
         source: cc::Error,
     },
+    /// The JSON pass (`svtypes`) could not decode the design.
+    #[error("reading the type IR of DUT `{dut}`: {source}")]
+    Ir {
+        /// The DUT name.
+        dut: String,
+        /// The `svtypes` error; it names the JSON node and the source location.
+        source: svtypes::error::Error,
+    },
+    /// An emitter cannot generate code for this design.
+    #[error("generating code for DUT `{dut}`: {msg}")]
+    Emit {
+        /// The DUT name.
+        dut: String,
+        /// What is unsupported or wrong, and how to fix it.
+        msg: String,
+    },
     /// The ports in the generated header disagree with the expected ports.
     #[error(transparent)]
     Ports(#[from] PortMismatch),
 }
 
 impl Error {
+    /// Converts a JSON pass failure. A failed Verilator run becomes [`Error::Command`],
+    /// like every other failed tool, so it names the offending source file.
+    pub(crate) fn json_pass(dut: &str, e: svtypes::error::Error) -> Self {
+        match e {
+            svtypes::error::Error::Tool {
+                command,
+                status,
+                stderr,
+            } => Self::Command {
+                status: status.map_or_else(
+                    || "killed by a signal".to_owned(),
+                    |s| format!("exit status: {s}"),
+                ),
+                path: offending_path(&stderr),
+                stderr: excerpt(&stderr),
+                command,
+            },
+            source => Self::Ir {
+                dut: dut.to_owned(),
+                source,
+            },
+        }
+    }
+
     pub(crate) fn io(op: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> Self {
         let path = path.to_path_buf();
         move |source| Self::Io { op, path, source }

@@ -2,7 +2,10 @@
 
 use std::path::Path;
 
-use simjig_build::{Built, CacheStatus, Dut, HeaderPort, PortDir, Storage};
+use simjig_build::svtypes::ir::Design;
+use simjig_build::{
+    Built, CacheStatus, Dut, DutConfig, Emitted, Error, HeaderPort, PortDir, Storage,
+};
 
 use crate::support::Sandbox;
 
@@ -106,23 +109,31 @@ fn check_reruns(rtl: &Path, directives: &[String]) {
     }
 }
 
+/// An emitter that claims `count` is 8 bits wide.
+#[expect(clippy::unnecessary_wraps, reason = "the `Emitter` signature")]
+fn wrong_ports(_: &Design, _: &DutConfig) -> Result<Emitted, Error> {
+    Ok(Emitted {
+        ports: Some(vec![HeaderPort {
+            name: "count".into(),
+            dir: PortDir::Out,
+            msb: 7,
+            lsb: 0,
+            storage: Storage::C8,
+        }]),
+        ..Emitted::default()
+    })
+}
+
 #[test]
 fn expected_ports_are_checked_against_the_header() {
     let s = Sandbox::new();
     let rtl = s.rtl();
-    let wrong = vec![HeaderPort {
-        name: "count".into(),
-        dir: PortDir::Out,
-        msb: 7,
-        lsb: 0,
-        storage: Storage::C8,
-    }];
     let err = counter(&rtl)
-        .expect_ports(wrong)
+        .emitter(wrong_ports)
         .build_in(&s.env())
         .unwrap_err();
     let msg = err.to_string();
-    assert!(matches!(err, simjig_build::Error::Ports(_)), "{msg}");
+    assert!(matches!(err, Error::Ports(_)), "{msg}");
     assert!(
         msg.contains(
             "`count`: expected Out count[7:0] as C8, header declares Out count[11:0] as S16"

@@ -129,14 +129,17 @@ pub(crate) fn dut(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// A stand-in for ccache that logs every compiler command line and runs it.
+/// A stand-in for ccache that records each compiler command line in its own file under
+/// the returned directory (one file per process: parallel compiles appending to a shared
+/// log would interleave long lines) and runs it.
 pub(crate) fn logging_ccache(s: &Sandbox) -> (PathBuf, PathBuf) {
     let script = s.path().join("fake-ccache");
-    let log = s.path().join("cxx.log");
+    let log = s.path().join("cxx-log");
+    std::fs::create_dir_all(&log).unwrap();
     write_script(
         &script,
         &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec \"$@\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'/$$\nexec \"$@\"\n",
             log.display()
         ),
     );

@@ -1,20 +1,25 @@
 //! The `build.rs`-facing description of one design under test, and the build pipeline.
 //!
-//! [`Dut`] records configuration only. [`Dut::build`] then runs the pipeline in a fixed
-//! order: locate Verilator, verilate through the content-hash cache, cross-check the
-//! header ports, compile the C++ and emit Cargo directives.
+//! [`Dut`] records configuration only. [`Dut::build_in`] then runs the pipeline in a
+//! fixed order:
+//! 1. locate and version-check Verilator;
+//! 2. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
+//!    `-G` and extra arguments, always `--no-timing`, giving the type IR;
+//! 3. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
+//!    and an optional wrapper top (see [`crate::emit`] for where each goes);
+//! 4. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
+//! 5. cross-check the header's ports against the IR's (or the emitter's);
+//! 6. compile and link the C++ (see `compile`), and collect the `cargo::` directives.
 //!
-//! Seams for the emitters (which are not written yet): they read [`DutConfig`] (probes,
-//! interface bindings, the model prefix) and plug results back in through three inputs,
-//! all of which are hashed into the cache keys:
-//! - [`Dut::verilator_input`]: generated Verilator inputs (`.vlt`, wrapper SV);
-//! - [`Dut::recipe`]: additions to the C ABI [`CppRecipe`] (shim, defines);
-//! - [`Dut::expect_ports`]: the ports the IR expects, checked against the header.
+//! The IR comes before verilation because the emitters' outputs are Verilator inputs.
 
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
+use svtypes::ir::Design;
+
 use crate::compile::{self, CppRecipe};
+use crate::emit::{self, Emitter};
 use crate::hash::KeyHasher;
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
@@ -71,7 +76,7 @@ pub struct DutConfig {
     pub defines: Vec<(String, String)>,
     /// Top-level parameter overrides (`-G`).
     pub params: Vec<(String, String)>,
-    /// Top module; Verilator picks it when `None`.
+    /// Top module. Required by [`Dut::build`]: the JSON pass and the emitters need it.
     pub top: Option<String>,
     /// Internal signals to expose.
     pub probes: Vec<Probe>,
@@ -126,9 +131,15 @@ impl DutConfig {
         format!("V{}_{}", self.name, &h.finish()[..8])
     }
 
-    /// The Verilator arguments, without `-Mdir`. `generated` are the on-disk paths of
-    /// [`DutConfig::generated`].
-    pub(crate) fn verilator_args(&self, prefix: &str, generated: &[PathBuf]) -> Vec<String> {
+    /// The Verilator arguments, without `-Mdir`. `top` is the module to verilate (the
+    /// user's top or the emitted wrapper); `generated` are the on-disk paths of the
+    /// generated inputs, passed before the sources.
+    pub(crate) fn verilator_args(
+        &self,
+        prefix: &str,
+        top: &str,
+        generated: &[PathBuf],
+    ) -> Vec<String> {
         let mut a: Vec<String> = ["--cc", "--MMD", "--prefix", prefix]
             .map(str::to_owned)
             .into();
@@ -146,9 +157,7 @@ impl DutConfig {
         if self.coverage {
             a.push("--coverage".to_owned());
         }
-        if let Some(top) = &self.top {
-            a.extend(["--top-module".to_owned(), top.clone()]);
-        }
+        a.extend(["--top-module".to_owned(), top.to_owned()]);
         a.extend(
             self.include_dirs
                 .iter()
@@ -166,7 +175,24 @@ impl DutConfig {
         a
     }
 
-    fn validate(&self) -> Result<(), Error> {
+    /// The JSON pass inputs: the same design as the model build sees.
+    fn json_pass_opts(&self, top: &str) -> svtypes::verilator::JsonPassOpts {
+        svtypes::verilator::JsonPassOpts {
+            sources: self.sources.clone(),
+            top: top.to_owned(),
+            defines: self
+                .defines
+                .iter()
+                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                .collect(),
+            params: self.params.clone(),
+            include_dirs: self.include_dirs.clone(),
+            extra_args: self.verilator_args.clone(),
+        }
+    }
+
+    /// Checks the configuration and returns the top module.
+    fn validate(&self) -> Result<&str, Error> {
         let fail = |msg: String| {
             Err(Error::Config {
                 dut: self.name.clone(),
@@ -193,7 +219,10 @@ impl DutConfig {
         {
             return fail("a source or include path is empty".to_owned());
         }
-        Ok(())
+        match self.top.as_deref() {
+            Some(top) if !top.is_empty() => Ok(top),
+            _ => fail("no top module; set it with `.top(\"module\")`".to_owned()),
+        }
     }
 }
 
@@ -210,6 +239,10 @@ pub struct Built {
     pub cache: CacheStatus,
     /// The Verilator that was used.
     pub verilator: Verilator,
+    /// The type IR of the user's design, from the JSON pass.
+    pub design: Design,
+    /// `OUT_DIR/simjig/<name>.rs`, when the emitter generated Rust.
+    pub rust_file: Option<PathBuf>,
     /// The `cargo::` lines this build needs, in order. [`Dut::build`] prints them.
     pub directives: Vec<String>,
 }
@@ -242,12 +275,22 @@ impl Built {
 ///     .build()?;
 /// # Ok::<(), simjig_build::Error>(())
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[must_use]
 pub struct Dut {
     config: DutConfig,
     recipe: CppRecipe,
-    expected_ports: Option<Vec<HeaderPort>>,
+    emitter: Emitter,
+}
+
+impl Default for Dut {
+    fn default() -> Self {
+        Self {
+            config: DutConfig::default(),
+            recipe: CppRecipe::default(),
+            emitter: emit::DEFAULT_EMITTER,
+        }
+    }
 }
 
 impl Dut {
@@ -357,9 +400,9 @@ impl Dut {
         self
     }
 
-    /// Requires the header's ports to equal `ports` (seam for the IR cross-check).
-    pub fn expect_ports(mut self, ports: Vec<HeaderPort>) -> Self {
-        self.expected_ports = Some(ports);
+    /// Replaces the code generator (default: [`emit::DEFAULT_EMITTER`]).
+    pub fn emitter(mut self, emitter: Emitter) -> Self {
+        self.emitter = emitter;
         self
     }
 
@@ -379,26 +422,27 @@ impl Dut {
         Ok(built)
     }
 
-    /// Runs the whole pipeline in an explicit environment and returns the directives
-    /// instead of printing them.
+    /// Runs the whole pipeline (see the module docs) in an explicit environment and
+    /// returns the directives instead of printing them.
     pub fn build_in(self, env: &BuildEnv) -> Result<Built, Error> {
-        self.config.validate()?;
+        let top = self.config.validate()?;
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
-        let generated = self
-            .config
-            .generated
+        let design = self.json_pass(top, &verilator)?;
+        let emitted = (self.emitter)(&design, &self.config)?;
+        let placed = emit::place(emitted, &design, &self.config, top, &env.out_dir)?;
+        let generated = placed
+            .inputs
             .iter()
+            .chain(&self.config.generated)
             .map(|g| cache.store_input(g))
             .collect::<Result<Vec<_>, _>>()?;
-        let args = self.config.verilator_args(&prefix, &generated);
+        let args = self.config.verilator_args(&prefix, &placed.top, &generated);
         let model = cache.verilate(&verilator, &args, &self.config.include_dirs)?;
         let header_ports =
             header::read_header_ports(&verilator::output_file(&model.obj_dir, &prefix, ".h"))?;
-        if let Some(expected) = &self.expected_ports {
-            header::check_ports(&header_ports, expected)?;
-        }
+        header::check_ports(&header_ports, &placed.ports)?;
         let mut directives = compile::compile(&compile::Inputs {
             env,
             cache: &cache,
@@ -406,7 +450,7 @@ impl Dut {
             prefix: &prefix,
             obj_dir: &model.obj_dir,
             recipe: &self.recipe,
-            model_sources: &[],
+            model_sources: &placed.model_sources,
         })?;
         directives.extend(rerun_directives(&model.deps, &self.recipe));
         Ok(Built {
@@ -415,8 +459,31 @@ impl Dut {
             header_ports,
             cache: model.status,
             verilator,
+            design,
+            rust_file: placed.rust,
             directives,
         })
+    }
+
+    /// Runs the JSON pass. `svtypes` runs the `verilator` on the process `PATH`, which
+    /// must be the same release as the located one: the IR and the model must come from
+    /// the same elaboration rules.
+    fn json_pass(&self, top: &str, verilator: &Verilator) -> Result<Design, Error> {
+        let design = svtypes::verilator::json_pass(&self.config.json_pass_opts(top))
+            .map_err(|e| Error::json_pass(&self.config.name, e))?;
+        let model = verilator.version.to_string();
+        if design.producer.version != model {
+            return Err(Error::Config {
+                dut: self.config.name.clone(),
+                msg: format!(
+                    "the JSON pass ran Verilator {} (the `verilator` on PATH) but the model \
+                     build uses Verilator {model} ({}); put that one first on PATH",
+                    design.producer.version,
+                    verilator.exe.display()
+                ),
+            });
+        }
+        Ok(design)
     }
 }
 
@@ -466,7 +533,7 @@ mod tests {
         .trace_fst(true)
         .verilator_args(["-Wno-WIDTH"])
         .config;
-        let args = c.verilator_args("Vfifo_1234abcd", &[PathBuf::from("/c/p.vlt")]);
+        let args = c.verilator_args("Vfifo_1234abcd", "fifo", &[PathBuf::from("/c/p.vlt")]);
         assert_eq!(
             args.join(" "),
             "--cc --MMD --prefix Vfifo_1234abcd --no-timing --trace-fst --top-module fifo \
@@ -478,12 +545,12 @@ mod tests {
         };
         assert!(
             timing
-                .verilator_args("V", &[])
+                .verilator_args("V", "fifo", &[])
                 .contains(&"--timing".to_owned())
         );
         assert!(
             !timing
-                .verilator_args("V", &[])
+                .verilator_args("V", "fifo", &[])
                 .contains(&"--no-timing".to_owned())
         );
     }
@@ -606,6 +673,10 @@ mod tests {
                 ..cfg()
             }),
             "invalid DUT `fifo` configuration: no sources; add them with `.sources([..])`"
+        );
+        assert_eq!(
+            msg(DutConfig { top: None, ..cfg() }),
+            "invalid DUT `fifo` configuration: no top module; set it with `.top(\"module\")`"
         );
     }
 }

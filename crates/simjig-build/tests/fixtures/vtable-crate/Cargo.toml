@@ -1,0 +1,16 @@
+# A minimal user crate: its build.rs builds models from tests/duts with simjig-build and a
+# small emitter of its own, and its tests call the exported vtables through a hand-written
+# mirror of the C ABI, without the simjig runtime crate. The integration test
+# (tests/it/fixture_crate.rs) copies this directory together with the DUTs, points the
+# simjig-build path at the crate under test, and runs `cargo test` in it.
+[package]
+name = "simjig-fixture-vtable"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[build-dependencies]
+simjig-build = { path = "../../.." }
+
+# Not part of the simjig workspace.
+[workspace]

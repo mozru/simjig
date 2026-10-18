@@ -6,6 +6,7 @@ expression: text
 /// The DPI-C imports of `dpi`, implemented in Rust; register an implementation with
 /// [`Dut::set_dpi`]. Each method runs inside the model's eval, in the middle of a
 /// time step: it cannot read or write signals or await, and a panic fails the run.
+/// A DPI implementation can't drive another simjig model inside a call.
 pub trait Dpi {
     /// `int dpi_add(input int x, input int y)` (`dpi.sv:11`).
     fn dpi_add(&mut self, x: i32, y: i32) -> i32;

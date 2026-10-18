@@ -315,6 +315,7 @@ fn emit_trait(w: &mut Writer, name: &str, top: &str, methods: &[Method<'_>]) {
     ));
     w.line("/// [`Dut::set_dpi`]. Each method runs inside the model's eval, in the middle of a");
     w.line("/// time step: it cannot read or write signals or await, and a panic fails the run.");
+    w.line("/// A DPI implementation can't drive another simjig model inside a call.");
     w.open(format!("pub trait {name} {{"));
     for (i, m) in methods.iter().enumerate() {
         if i > 0 {

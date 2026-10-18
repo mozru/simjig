@@ -128,6 +128,8 @@ the public API, the generated code or simulation semantics.
 - **Limit:** two instances of one DPI build cannot run in one simulation (lockstep
   included): `set_dpi` cannot address the second one, whose first DPI call fails the run
   as `Setup`. Build the design a second time under another `simjig_build::Dut::new` name.
+- The generated `Dpi` trait's docs say that an implementation can't drive another simjig
+  model inside a call.
 - Inside a DPI call every kernel entry point (signal reads and writes, triggers, `spawn`,
   `now()`, timers, sync primitives) panics with "DPI-C import `f` used <what>: DPI
   functions run inside eval; they can't access signals or await".

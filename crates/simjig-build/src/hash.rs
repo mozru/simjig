@@ -181,7 +181,7 @@ mod tests {
     fn ir_hash_tracks_the_design_and_every_config_field() {
         let base = CodegenConfig {
             probes: vec![probe(ProbeAccess::Read)],
-            iface_top: None,
+            ..CodegenConfig::default()
         };
         let binding = IfaceBinding {
             port: "s".into(),

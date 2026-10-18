@@ -1,0 +1,12 @@
+simjig: FAILED (caught)
+thread 'c_full::fifo' (10301142) panicked at tests/bench.rs:195:13:
+assertion `left == right` failed: count
+  left: 15
+ right: 16
+  message:  panicked: assertion `left == right` failed: count
+              left: 15
+             right: 16
+cocotb: FAILED (caught)
+                                                            assert int(count.value) == length, "count"
+                                                        AssertionError: count
+                                                        assert 15 == 16

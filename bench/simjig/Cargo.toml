@@ -1,0 +1,23 @@
+# simjig side of the simjig-vs-cocotb benchmark (bench/README.md). A standalone workspace
+# on purpose, like tests/spikes: it stays out of the root workspace and out of
+# `cargo xtask ci`. Run it through `bench/run.sh`.
+[package]
+name = "simjig-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Throughput benchmark of a sync_fifo testbench, against an equivalent cocotb one."
+
+[workspace]
+
+[dev-dependencies]
+simjig = { path = "../../crates/simjig" }
+
+[build-dependencies]
+simjig-build = { path = "../../crates/simjig-build" }
+
+# The measured profile: `cargo test --profile bench` is release with line tables, so a
+# profiler can attribute samples to source lines without changing the code generated.
+[profile.bench]
+debug = "line-tables-only"

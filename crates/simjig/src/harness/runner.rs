@@ -4,18 +4,15 @@
 //! reads the environment, runs, and turns a failure into a test failure. Keeping [`run`]
 //! free of process state (environment, panics) lets the harness's own tests drive it.
 //!
-//! The kernel records a `TaskPanic` without its source location (the panic hook prints it,
-//! the payload does not carry it). The harness wraps the panic hook to remember the
-//! location of each panic on the test's thread during a run, and attaches the one whose
-//! message matches the failure.
+//! A `TaskPanic`'s source location comes from the kernel (`kernel::panics` captures it
+//! for the exact poll or drop that panicked); the harness installs no panic hook of its
+//! own.
 
-use std::cell::RefCell;
 use std::future::Future;
 use std::panic;
 use std::path::PathBuf;
-use std::sync::Once;
 
-use crate::{Failure, FailureKind, Sim, SimDuration, SimTime, TimeUnit};
+use crate::{Failure, Sim, SimDuration, SimTime, TimeUnit};
 
 use super::ctx::TestCtx;
 use super::dut::{DutModel, ModelOptions};
@@ -161,10 +158,8 @@ where
         seed,
         ignored: meta.ignored,
     };
-    start_capture();
     let executed = execute(meta, &options, ctx, body);
-    let panics = finish_capture();
-    finish(run, env, &options, executed, &panics)
+    finish(run, env, &options, executed)
 }
 
 fn execute<D, F, Fut>(meta: &TestMeta, options: &ModelOptions, ctx: TestCtx, body: F) -> Executed
@@ -213,7 +208,6 @@ fn finish(
     env: &RunEnv,
     options: &ModelOptions,
     executed: Executed,
-    panics: &[(String, String)],
 ) -> TestOutcome {
     let Executed {
         sim,
@@ -225,11 +219,7 @@ fn finish(
         .as_ref()
         .map(|root| rundir::run_dir(root, &run.test, run.seed));
     let mut failure = result.err().map(|failure| {
-        let location = match &failure.kind {
-            FailureKind::TaskPanic { message } => panic_location(panics, message),
-            _ => None,
-        };
-        let mut report = FailureReport::new(&failure, run.clone(), location, timeout);
+        let mut report = FailureReport::new(&failure, run.clone(), None, timeout);
         report.run_dir.clone_from(&dir);
         report
     });
@@ -324,50 +314,3 @@ where
 /// Compile-time check that a test's declared output type is a [`TestOutput`]; the macro
 /// spans the call at the user's return type, so the error points there.
 pub const fn assert_test_output<T: TestOutput>() {}
-
-/// Panics seen on this thread during the current run: `(message, file:line:col)`.
-const PANICS_KEPT: usize = 64;
-
-thread_local! {
-    static PANICS: RefCell<Option<Vec<(String, String)>>> = const { RefCell::new(None) };
-}
-
-static HOOK: Once = Once::new();
-
-/// Starts recording panic locations on this thread (installing the hook once per process;
-/// it chains to the previous hook, so panics still print as usual).
-fn start_capture() {
-    HOOK.call_once(|| {
-        let previous = panic::take_hook();
-        panic::set_hook(Box::new(move |info| {
-            let message = info
-                .payload_as_str()
-                .unwrap_or("<non-string panic payload>")
-                .to_owned();
-            let location = info.location().map(ToString::to_string);
-            PANICS.with_borrow_mut(|panics| {
-                if let (Some(panics), Some(location)) = (panics, location) {
-                    if panics.len() == PANICS_KEPT {
-                        panics.remove(0);
-                    }
-                    panics.push((message, location));
-                }
-            });
-            previous(info);
-        }));
-    });
-    PANICS.set(Some(Vec::new()));
-}
-
-fn finish_capture() -> Vec<(String, String)> {
-    PANICS.take().unwrap_or_default()
-}
-
-/// The location of the most recent panic with `message`.
-fn panic_location(panics: &[(String, String)], message: &str) -> Option<String> {
-    panics
-        .iter()
-        .rev()
-        .find(|(m, _)| m == message)
-        .map(|(_, location)| location.clone())
-}

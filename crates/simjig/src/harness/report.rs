@@ -153,9 +153,8 @@ pub struct FailureReport {
 impl FailureReport {
     /// The report of `failure` in `run`.
     ///
-    /// `location` overrides the failure's own location (the harness passes the panic
-    /// location of a `TaskPanic`, which the kernel does not capture). `timeout` is the
-    /// test's `timeout`, named in a `TimeLimit` report.
+    /// `location` overrides the failure's own location (`None` keeps the kernel's).
+    /// `timeout` is the test's `timeout`, named in a `TimeLimit` report.
     #[must_use]
     pub fn new(
         failure: &Failure,

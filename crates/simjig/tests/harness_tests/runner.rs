@@ -136,6 +136,44 @@ fn a_task_panic_reports_its_source_location() {
     assert_eq!(report.task.as_deref(), Some("main"));
 }
 
+/// Panics with the same message as [`main_panics_after_detaching`], at another line.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("boom");
+    }
+}
+
+/// The line of the `panic!` in [`main_panics_after_detaching`].
+const MAIN_PANIC_LINE: u32 = line!() + 9;
+
+async fn main_panics_after_detaching() {
+    simjig::spawn("b", async {
+        let _guard = PanicsOnDrop;
+        std::future::pending::<()>().await;
+    })
+    .detach();
+    yield_now().await;
+    panic!("boom");
+}
+
+#[test]
+fn a_later_panic_with_the_same_message_does_not_move_the_location() {
+    // `main` fails first; cancelling `b` then panics "boom" again, in its `Drop`. The
+    // report must keep the kernel's location of the first panic.
+    let outcome = run::<(), _, _>(&meta("drop_boom"), &env(None, "drop_boom"), |_, ()| {
+        main_panics_after_detaching()
+    });
+    let report = outcome.failure.expect("main panics");
+    assert_eq!(report.task.as_deref(), Some("main"));
+    let location = report.location.as_deref().unwrap_or_default();
+    assert!(
+        location.ends_with(&format!("harness_tests/runner.rs:{MAIN_PANIC_LINE}:5")),
+        "{location}"
+    );
+}
+
 /// A DUT whose model has none of the signals it looks for.
 struct NoSignals;
 

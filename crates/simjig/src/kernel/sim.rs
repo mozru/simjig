@@ -129,8 +129,8 @@ impl Sim {
         self.kernel.starts.len() - 1
     }
 
-    /// The coverage counters of model `model` (0 for a one-model simulation), copied out
-    /// now: `None` unless it is a Verilator model built with coverage
+    /// The coverage counters of model `model` (the model index, 0 = first DUT, then the
+    /// test's DUTs in parameter order), copied out now: `None` unless it is a Verilator model built with coverage
     /// (`simjig_build::Dut::coverage`).
     ///
     /// The counters come in the order of the model's counter arrays (the ABI's `cov_runs`),
@@ -149,7 +149,8 @@ impl Sim {
         self.kernel.models.borrow().can_trace()
     }
 
-    /// Sets every coverage counter of model `model` to zero (Verilator's
+    /// Sets every coverage counter of model `model` (model index, 0 = first DUT) to zero
+    /// (Verilator's
     /// `VerilatedCovContext::zero`, the ABI's `cov_zero`), to count only what follows.
     ///
     /// # Errors
@@ -158,7 +159,7 @@ impl Sim {
         zero_coverage_in(&self.kernel, model)
     }
 
-    /// Writes model `model`'s coverage file to `path`: Verilator's `coverage.dat`, with
+    /// Writes model `model`'s (model index, 0 = first DUT) coverage file to `path`: Verilator's `coverage.dat`, with
     /// every point's name (file, line, hierarchy, kind) and count, as `verilator_coverage`
     /// reads it (the ABI's `cov_write`). The counts are the ones [`coverage`](Self::coverage)
     /// returns.

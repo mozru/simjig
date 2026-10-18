@@ -318,7 +318,10 @@ impl Future for YieldNow {
     }
 }
 
-/// The current simulation time.
+/// The current simulation time, in ticks of the design's precision. To print it in
+/// physical units, give it the precision: `now().display(ctx.precision())` prints
+/// `1250 ns` (`ctx` is the test's [`TestCtx`](crate::TestCtx); outside a test,
+/// [`Sim::precision`](crate::Sim::precision)).
 ///
 /// # Panics
 /// Outside [`Sim::run`](crate::Sim::run).

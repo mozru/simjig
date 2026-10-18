@@ -4,6 +4,14 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `Dut::dpi_in_c` is no longer part of a DUT's identity: moving a DPI-C import from Rust
+  to C (it changes only the generated Rust, not the model) failed the next build with
+  "model prefix ... is already used by a different configuration; rename the DUT" until
+  the cache was cleared. A prefix claim now records the full digest the prefix is cut
+  from (`DutConfig::model_digest`), and the prefix hashes probes and interface bindings
+  field by field instead of through their `Debug` form (`simjig-prefix-v3`), so every
+  model prefix changes and every model is verilated and compiled again once. Within one
+  build script, a DUT name rebuilt with another `dpi_in_c` is still refused.
 - `fork::run_from_checkpoint` inside an operand of a `join!`, `first!` or `with_timeout`
   of the main task returns the new `ForkError::InCombinator`. It forked: the other
   operands ran on inside every branch, and an operand that won a `first!` in the child

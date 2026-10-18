@@ -4,7 +4,8 @@
 //! `Hash` impls or the Rust release. That is why this is SHA-256 rather than
 //! `std::hash::DefaultHasher`, whose algorithm is explicitly unspecified. Every field is
 //! length-prefixed, so `("ab", "c")` and `("a", "bc")` hash differently. For the same
-//! reason no key hashes `Debug` output: its format is not a stable interface.
+//! reason no key hashes `Debug` output: its format is not a stable interface. Structured
+//! values are hashed field by field here ([`probe`], [`binding`], [`iface_top`]).
 //!
 //! The model's IR hash ([`ir_hash`]) uses the same scheme.
 
@@ -95,7 +96,7 @@ pub(crate) fn iface_top<'h>(h: &'h mut KeyHasher, top: &IfaceTop) -> &'h mut Key
     h
 }
 
-fn probe(h: &mut KeyHasher, p: &Probe) {
+pub(crate) fn probe(h: &mut KeyHasher, p: &Probe) {
     h.str(&p.path).str(&p.module);
     match &p.ty {
         ProbeType::Named(name) => h.str("named").str(name),
@@ -107,7 +108,7 @@ fn probe(h: &mut KeyHasher, p: &Probe) {
     });
 }
 
-fn binding(h: &mut KeyHasher, b: &IfaceBinding) {
+pub(crate) fn binding(h: &mut KeyHasher, b: &IfaceBinding) {
     h.str(&b.port).str(&b.interface);
     pairs(h, &b.params);
     match &b.modport {

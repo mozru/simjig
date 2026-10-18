@@ -28,8 +28,9 @@ use crate::{BuildEnv, Error};
 struct Model {
     out_dir: PathBuf,
     name: String,
-    /// The configuration identity (see `pipeline::claim`).
-    identity: String,
+    /// The whole configuration: the name also names the generated Rust, so a rebuild
+    /// must match it in every field, `dpi_in_c` included.
+    config: DutConfig,
     prefix: String,
     /// The DPI functions and tasks the model exports, from `<prefix>__Dpi.h`.
     dpi_exports: Vec<String>,
@@ -74,18 +75,13 @@ fn config_error(config: &DutConfig, msg: String) -> Error {
 }
 
 /// Records the DUT, or checks that a DUT of the same name had the same configuration.
-pub(crate) fn claim_name(
-    env: &BuildEnv,
-    config: &DutConfig,
-    identity: &str,
-    prefix: &str,
-) -> Result<(), Error> {
+pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Result<(), Error> {
     let mut built = built();
     match built
         .iter()
         .find(|m| m.out_dir == env.out_dir && m.name == config.name)
     {
-        Some(m) if m.identity != identity => Err(config_error(
+        Some(m) if m.config != *config => Err(config_error(
             config,
             "a DUT of this name was already built with a different configuration in this \
              build script; give each configuration its own name"
@@ -96,7 +92,7 @@ pub(crate) fn claim_name(
             built.push(Model {
                 out_dir: env.out_dir.clone(),
                 name: config.name.clone(),
-                identity: identity.to_owned(),
+                config: config.clone(),
                 prefix: prefix.to_owned(),
                 dpi_exports: Vec::new(),
                 covergroup_coverage: None,

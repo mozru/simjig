@@ -73,7 +73,8 @@ fn unsupported_verilator_versions_are_rejected() {
         err.to_string(),
         format!(
             "unsupported Verilator at {}: `Verilator 5.050 2025-01-01 rev v5.050`; \
-             supported versions: 5.052; install the pinned one: `pixi install --locked`",
+             supported versions: 5.052; install Verilator 5.052 (in the simjig repo: \
+             `pixi install --locked`)",
             fake.display()
         )
     );

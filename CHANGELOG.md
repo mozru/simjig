@@ -55,3 +55,7 @@ the public API, the generated code or simulation semantics.
 - `Dut::verilator_args` refuses the arguments the pipeline sets itself (`--prefix`,
   `-Mdir`/`--Mdir`, `--top-module`/`--top`, `--cc`, `--exe`, `--build`), each with the
   builder method or setting to use instead.
+- `cargo simjig doctor` and the build's Verilator errors say "install Verilator 5.052 (in
+  the simjig repo: `pixi install --locked`)" (and the same for the other tools) instead of
+  assuming the simjig repository; the doctor's Verilator line says that builds keep the
+  Verilator their build script found, so switching `PATH` alone does not rebuild.

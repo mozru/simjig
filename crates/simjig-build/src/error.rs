@@ -47,9 +47,11 @@ pub enum Error {
     },
     /// No `verilator` executable was found.
     #[error(
-        "`verilator` not found (looked in: {}); install it (e.g. `pixi install`), put it on \
-         PATH, set VERILATOR_ROOT, or set SIMJIG_VERILATOR to the executable",
-        display_paths(searched)
+        "`verilator` not found (looked in: {}); install Verilator {} (in the simjig repo: \
+         `pixi install --locked`) and put it on PATH, set VERILATOR_ROOT, or set \
+         SIMJIG_VERILATOR to the executable",
+        display_paths(searched),
+        svtypes::version::supported_list()
     )]
     VerilatorNotFound {
         /// Every location that was checked, in order.
@@ -58,9 +60,10 @@ pub enum Error {
     /// The Verilator found is not in the supported-version table
     /// ([`svtypes::version::SUPPORTED`]).
     #[error(
-        "unsupported Verilator at {}: `{found}`; supported versions: {}; install the \
-         pinned one: `pixi install --locked`",
+        "unsupported Verilator at {}: `{found}`; supported versions: {}; install Verilator \
+         {} (in the simjig repo: `pixi install --locked`)",
         path.display(),
+        svtypes::version::supported_list(),
         svtypes::version::supported_list()
     )]
     UnsupportedVerilator {

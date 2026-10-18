@@ -290,6 +290,8 @@ where
     Fut: Future + 'static,
     Fut::Output: TestOutput,
 {
+    // A branch an earlier run on this thread recorded is not this run's.
+    crate::fork::forget_failed_branch();
     let test = meta.test_path();
     let seed = env.seed.map_or_else(
         || Seed::from_test_name(meta.package, &test),
@@ -516,8 +518,7 @@ fn replay_with_waves(
     request: &WavesRequest,
 ) -> WavesReplay {
     let not_run = |why: &str| WavesReplay {
-        fst: None,
-        gtkw: None,
+        files: Vec::new(),
         from: SimTime::ZERO,
         to: None,
         precision: outcome.precision.unwrap_or(Precision::PS),
@@ -551,6 +552,7 @@ fn replay_with_waves(
         target: failure.map_or(end, |f| f.time),
         precision,
         signals: failure.map(|f| f.signals.clone()).unwrap_or_default(),
+        failed_branch: failure.and_then(|_| crate::fork::take_failed_branch()),
     };
     replay::replay(&exe, &original, request)
 }

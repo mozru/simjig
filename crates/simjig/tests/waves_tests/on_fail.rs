@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use simjig::fork;
 use simjig::{
-    DutModel, Failure, FakeModel, ModelOptions, Precision, RawSig, ReadOnly, Sim, Timer, clock, ns,
+    DutModel, Failure, FakeModel, ModelOptions, Precision, RawSig, ReadOnly, Sim, TestCtx, Timer,
+    clock, ns,
 };
 
-use crate::counter_fst;
 use crate::fst;
+use crate::{counter_fst, fifo_fst};
 
 /// Fails in the `ReadOnly` of the 300th rising edge after reset, at t = 3000 ns.
 #[simjig::test(timeout = "10us")]
@@ -42,6 +44,57 @@ async fn counter_counts(dut: counter_fst::Dut) {
     for _ in 0..50 {
         dut.clk.rising().await;
     }
+}
+
+/// Two traced DUTs, both clocked; fails at t = 3000 ns like `counter_overflows`.
+#[simjig::test(timeout = "10us")]
+#[ignore = "fails on purpose; run by the tests below in a child process"]
+async fn two_duts_overflow(counter: counter_fst::Dut, fifo: fifo_fst::Dut) {
+    clock(counter.clk, ns(10)).start();
+    clock(fifo.clk, ns(10)).start();
+    counter.rst.set(1);
+    counter.en.set(1);
+    fifo.rst.set(1);
+    counter.clk.falling().await;
+    counter.rst.set(0);
+    fifo.rst.set(0);
+    fifo.in_valid.set(1);
+    fifo.out_ready.set(1);
+    for _ in 0..300 {
+        counter.clk.rising().await;
+    }
+    ReadOnly::new().await;
+    assert_eq!(
+        counter.count.get().to_u128(),
+        0,
+        "the counter kept counting"
+    );
+}
+
+/// Forks two branches after 100 cycles (t = 1000 ns): branch 0 passes, branch 1 fails 50
+/// cycles later (t = 1500 ns), so the test fails at the checkpoint.
+#[simjig::test(timeout = "10us")]
+#[ignore = "fails on purpose; run by the tests below in a child process"]
+async fn a_branch_overflows(ctx: &TestCtx, dut: counter_fst::Dut) {
+    clock(dut.clk, ns(10)).start();
+    dut.rst.set(1);
+    dut.en.set(1);
+    dut.clk.falling().await;
+    dut.rst.set(0);
+    for _ in 0..100 {
+        dut.clk.rising().await;
+    }
+    let branches = fork::run_from_checkpoint(ctx.seed(), 2, |branch| async move {
+        for _ in 0..5 + 45 * branch.index() {
+            dut.clk.rising().await;
+        }
+        ReadOnly::new().await;
+        assert_eq!(branch.index(), 0, "branch 1 fails");
+        Ok(())
+    })
+    .await
+    .expect("forks");
+    branches.into_values();
 }
 
 /// A DUT whose model reads the wall clock: `limit` is the current nanosecond within the
@@ -231,4 +284,88 @@ fn a_replay_that_ends_differently_is_reported_as_non_determinism() {
         replay["failure"]["time"]["ticks"],
         summary(&dir)["failure"]["time"]["ticks"]
     );
+}
+
+/// The `.gtkw` file's `[dumpfile]`.
+fn dumpfile(gtkw: &Path) -> PathBuf {
+    let text = std::fs::read_to_string(gtkw).unwrap_or_else(|e| panic!("{}: {e}", gtkw.display()));
+    let line = text
+        .lines()
+        .find_map(|l| l.strip_prefix("[dumpfile] "))
+        .unwrap_or_else(|| panic!("no [dumpfile] in {}", gtkw.display()));
+    PathBuf::from(line.trim_matches('"'))
+}
+
+#[test]
+fn every_model_of_a_failed_multi_dut_test_gets_its_waves() {
+    let test = "on_fail::two_duts_overflow";
+    let (output, dir) = run_child(test, "two-duts", &[("SIMJIG_WAVES_ON_FAIL", "1")]);
+    let err = stderr(&output);
+    assert!(!output.status.success(), "{err}");
+    assert!(err.contains("replay:   reproduced"), "{err}");
+    for (fst_name, gtkw_name) in [
+        ("waves.fst", "waves.gtkw"),
+        ("waves.model-1.fst", "waves.model-1.gtkw"),
+    ] {
+        let fst_path = dir.join(fst_name);
+        let waves = fst::read(&fst_path);
+        assert_eq!(waves.end, 3_000_000, "{fst_name} ends at the failure");
+        assert!(
+            err.contains(&fst_path.display().to_string()),
+            "the report names {fst_name}:\n{err}"
+        );
+        let gtkw = dir.join(gtkw_name);
+        assert_eq!(dumpfile(&gtkw), fst_path, "{gtkw_name}");
+        assert!(
+            err.contains(&format!("gtkwave {}", gtkw.display())),
+            "the report names {gtkw_name}:\n{err}"
+        );
+    }
+}
+
+#[test]
+fn a_failing_fork_branch_gets_the_waves_of_its_own_span() {
+    let test = "on_fail::a_branch_overflows";
+    let (output, dir) = run_child(test, "branch", &[("SIMJIG_WAVES_ON_FAIL", "1")]);
+    let err = stderr(&output);
+    assert!(!output.status.success(), "{err}");
+    assert!(err.contains("replay:   reproduced"), "{err}");
+    // The checkpoint is at the 100th rising edge after the falling edge at 5 ns.
+    let checkpoint = 1_000_000;
+    let failed_at = checkpoint + 50 * 10_000;
+    assert_eq!(
+        summary(&dir)["failure"]["time"]["ticks"].as_u64(),
+        Some(checkpoint),
+        "{err}"
+    );
+
+    let branch = dir.join("waves.branch-1.fst");
+    let waves = fst::read(&branch);
+    assert_eq!(
+        waves.end, failed_at,
+        "the branch's waves go on past the checkpoint, to its failure"
+    );
+    let waves_line = err
+        .lines()
+        .find(|l| l.trim_start().starts_with("waves:"))
+        .unwrap_or_else(|| panic!("no waves line:\n{err}"));
+    assert!(
+        waves_line.contains(&branch.display().to_string()),
+        "the waves line names the failing branch's file:\n{err}"
+    );
+    let gtkw_path = dir.join("waves.branch-1.gtkw");
+    assert_eq!(dumpfile(&gtkw_path), branch);
+    let gtkw = std::fs::read_to_string(&gtkw_path).expect("the branch's .gtkw");
+    assert_eq!(
+        marker(&gtkw),
+        failed_at,
+        "the marker is at the branch's failure"
+    );
+    for other in ["waves.fst", "waves.branch-0.fst"] {
+        fst::read(&dir.join(other));
+        assert!(
+            err.contains(&dir.join(other).display().to_string()),
+            "the report names {other}:\n{err}"
+        );
+    }
 }

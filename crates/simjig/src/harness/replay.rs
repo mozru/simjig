@@ -12,18 +12,26 @@
 //! design's precision). It writes its run directory under a private root (a dot-directory
 //! next to this run's directory, so it never replaces this run's own), and the parent moves
 //! the results into this run's directory:
-//! - `waves.fst` and `waves.gtkw` (a `GTKWave` save file with the marker at the failure);
+//! - every FST file the replay wrote, each with its `GTKWave` save file (`<stem>.gtkw`, the
+//!   marker at the failure): `waves.fst` for the first model, `waves.model-<i>.fst` for the
+//!   others, and `waves[.model-<i>].branch-<j>.fst` for each `fork` branch;
 //! - `replay/` (the replay's `summary.json` and `events.jsonl`, to compare with this run's).
+//!
+//! When a fork branch failed the test (`Branches::into_values`), the test fails at the
+//! checkpoint's time, but the branch ran on past it: its files are listed first and their
+//! marker is at the branch's own failure. The trace is never cut at the checkpoint (a
+//! default window runs to the end of every process).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::fork::FailedBranch;
 use crate::{Precision, SimTime};
 
 use super::report::RunIdentity;
 use super::rundir;
-use super::waves::{RunEnd, Verdict, WavesReplay, WavesRequest, gtkw};
+use super::waves::{RunEnd, Verdict, WavesFile, WavesReplay, WavesRequest, gtkw};
 
 /// The variables a replay child reads, and the waves variables it must not see (or it would
 /// replay itself).
@@ -43,39 +51,44 @@ pub(crate) struct Original<'a> {
     pub(crate) precision: Precision,
     /// Signals the failure names, shown in the waves view.
     pub(crate) signals: Vec<String>,
+    /// The fork branch whose failure failed the test, if one did.
+    pub(crate) failed_branch: Option<FailedBranch>,
+}
+
+/// A trace file the replay wrote, moved into the run directory: which model and branch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Written {
+    fst: PathBuf,
+    model: usize,
+    branch: Vec<usize>,
 }
 
 /// Replays `original` with waves as `request` asks, with the test binary `exe`.
 pub(crate) fn replay(exe: &Path, original: &Original<'_>, request: &WavesRequest) -> WavesReplay {
-    let (from, to, verdict, fst) = match request.span(original.target, original.precision) {
-        Err(why) => (SimTime::ZERO, None, Verdict::NotRun(why), None),
+    let (from, to, verdict, written) = match request.span(original.target, original.precision) {
+        Err(why) => (SimTime::ZERO, None, Verdict::NotRun(why), Vec::new()),
         Ok((from, to)) => match run_child(exe, original, from, to) {
-            Ok((end, fst)) => {
+            Ok((end, written)) => {
                 let lines = original.end.differences(&end, original.precision);
                 let verdict = if lines.is_empty() {
                     Verdict::Reproduced
                 } else {
                     Verdict::NonDeterministic(lines)
                 };
-                (from, to, verdict, fst)
+                (from, to, verdict, written)
             }
-            Err(why) => (from, to, Verdict::NotRun(why), None),
+            Err(why) => (from, to, Verdict::NotRun(why), Vec::new()),
         },
     };
-    let gtkw = fst.as_ref().and_then(|fst| {
-        let path = original.run_dir.join("waves.gtkw");
-        let title = format!(
-            "simjig: {} seed={} (marker: t={})",
-            original.run.test,
-            original.run.seed,
-            original.target.display(original.precision)
-        );
-        let text = gtkw(fst, &title, from, original.target, &original.signals);
-        fs::write(&path, text).ok().map(|()| path)
+    let mut files: Vec<WavesFile> = written
+        .into_iter()
+        .map(|w| waves_file(original, from, w))
+        .collect();
+    files.sort_by(|a, b| {
+        (!a.failing_branch, &a.branch, a.model).cmp(&(!b.failing_branch, &b.branch, b.model))
     });
     WavesReplay {
-        fst,
-        gtkw,
+        files,
         from,
         to,
         precision: original.precision,
@@ -83,14 +96,41 @@ pub(crate) fn replay(exe: &Path, original: &Original<'_>, request: &WavesRequest
     }
 }
 
+/// The report's view of one written file, with its `GTKWave` save file written next to it.
+fn waves_file(original: &Original<'_>, from: SimTime, written: Written) -> WavesFile {
+    let failing = original
+        .failed_branch
+        .filter(|b| written.branch.first() == Some(&b.index));
+    let marker = failing
+        .and_then(|b| b.time)
+        .unwrap_or(original.target)
+        .max(from);
+    let path = written.fst.with_extension("gtkw");
+    let title = format!(
+        "simjig: {} seed={} (marker: t={})",
+        original.run.test,
+        original.run.seed,
+        marker.display(original.precision)
+    );
+    let text = gtkw(&written.fst, &title, from, marker, &original.signals);
+    WavesFile {
+        gtkw: fs::write(&path, text).ok().map(|()| path),
+        fst: written.fst,
+        model: written.model,
+        branch: written.branch,
+        marker,
+        failing_branch: failing.is_some(),
+    }
+}
+
 /// Runs the child and moves its results into the run directory; returns how it ended and
-/// the waves file, if one was written.
+/// the trace files it wrote.
 fn run_child(
     exe: &Path,
     original: &Original<'_>,
     from: SimTime,
     to: Option<SimTime>,
-) -> Result<(RunEnd, Option<PathBuf>), String> {
+) -> Result<(RunEnd, Vec<Written>), String> {
     let run = original.run;
     let parent = original
         .run_dir
@@ -114,7 +154,7 @@ fn child_in(
     root: &Path,
     from: SimTime,
     to: Option<SimTime>,
-) -> Result<(RunEnd, Option<PathBuf>), String> {
+) -> Result<(RunEnd, Vec<Written>), String> {
     let run = original.run;
     let waves = root.join("waves.fst");
     let mut command = Command::new(exe);
@@ -156,14 +196,64 @@ fn child_in(
     let replay_dir = original.run_dir.join("replay");
     fs::remove_dir_all(&replay_dir).ok(); // An earlier replay of this run directory.
     fs::rename(&child_dir, &replay_dir).map_err(|e| format!("{}: {e}", replay_dir.display()))?;
-    let fst = if waves.is_file() {
-        let dest = original.run_dir.join("waves.fst");
-        fs::rename(&waves, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-        Some(dest)
-    } else {
-        None
+    Ok((end, move_waves(root, original.run_dir)?))
+}
+
+/// Moves every trace file the replay wrote into `root` (`waves*.fst`) to `run_dir`,
+/// after removing an earlier replay's files there.
+fn move_waves(root: &Path, run_dir: &Path) -> Result<Vec<Written>, String> {
+    let names = |dir: &Path| -> Vec<String> {
+        fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
     };
-    Ok((end, fst))
+    for stale in names(run_dir) {
+        let stem = stale
+            .strip_suffix(".fst")
+            .or_else(|| stale.strip_suffix(".gtkw"));
+        if stem.and_then(trace_identity).is_some() {
+            fs::remove_file(run_dir.join(&stale)).ok(); // Best effort; a rename replaces it.
+        }
+    }
+    let mut written = Vec::new();
+    for name in names(root) {
+        let Some((model, branch)) = name.strip_suffix(".fst").and_then(trace_identity) else {
+            continue;
+        };
+        let dest = run_dir.join(&name);
+        fs::rename(root.join(&name), &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        written.push(Written {
+            fst: dest,
+            model,
+            branch,
+        });
+    }
+    Ok(written)
+}
+
+/// The model and fork branch path of a trace file stem the replay writes: `waves`, then
+/// optionally `.model-<i>` (`ModelOptions::for_model`), then `.branch-<j>` once per
+/// checkpoint level (`model::trace::branch_path`). `None` for any other name.
+fn trace_identity(stem: &str) -> Option<(usize, Vec<usize>)> {
+    let rest = stem.strip_prefix("waves")?;
+    let mut model = 0;
+    let mut branch = Vec::new();
+    for (i, part) in rest.split('.').enumerate() {
+        match (i, part) {
+            (0, "") => {}
+            (0, _) => return None,
+            (1, part) if part.starts_with("model-") => {
+                model = part.strip_prefix("model-")?.parse().ok()?;
+            }
+            (_, part) => branch.push(part.strip_prefix("branch-")?.parse().ok()?),
+        }
+    }
+    Some((model, branch))
 }
 
 /// How the run in a `summary.json` (as `rundir` writes it) ended.
@@ -201,4 +291,30 @@ fn number_field(text: &str, key: &str) -> Option<u64> {
     let (_, rest) = text.split_once(&format!("\"{key}\": "))?;
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_file_names_give_the_model_and_branch() {
+        assert_eq!(trace_identity("waves"), Some((0, vec![])));
+        assert_eq!(trace_identity("waves.model-2"), Some((2, vec![])));
+        assert_eq!(trace_identity("waves.branch-3"), Some((0, vec![3])));
+        assert_eq!(trace_identity("waves.model-1.branch-0"), Some((1, vec![0])));
+        assert_eq!(
+            trace_identity("waves.branch-1.branch-4"),
+            Some((0, vec![1, 4]))
+        );
+        for other in [
+            "wavesx",
+            "waves.model-x",
+            "waves.branch-0.model-1",
+            "summary",
+            "waves.x",
+        ] {
+            assert_eq!(trace_identity(other), None, "{other}");
+        }
+    }
 }

@@ -353,6 +353,16 @@ impl<T> Branches<T> {
     /// (and so fails the test, as a `TaskPanic` at the caller's line).
     #[track_caller]
     pub fn into_values(self) -> Vec<T> {
+        if let Some(first) = self.failures().next() {
+            let time = match &first.error {
+                BranchError::Failed(failure) => Some(failure.time),
+                BranchError::Died(_) => None,
+            };
+            FAILED_BRANCH.set(Some(FailedBranch {
+                index: first.branch.index,
+                time,
+            }));
+        }
         let failures: Vec<String> = self.failures().map(|f| f.to_string()).collect();
         assert!(
             failures.is_empty(),
@@ -366,6 +376,32 @@ impl<T> Branches<T> {
             .filter_map(|o| o.result.ok())
             .collect()
     }
+}
+
+/// The first failed branch of a checkpoint whose [`Branches::into_values`] failed the test,
+/// for the harness's waves on failure: the failure time of the parent is the checkpoint's,
+/// while the branch's waves go on to its own failure (`harness::replay`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FailedBranch {
+    /// The branch's index.
+    pub(crate) index: usize,
+    /// When it failed, if its child reported a failure (not for a child that died).
+    pub(crate) time: Option<SimTime>,
+}
+
+thread_local! {
+    static FAILED_BRANCH: Cell<Option<FailedBranch>> = const { Cell::new(None) };
+}
+
+/// The branch recorded by the last failing [`Branches::into_values`] on this thread, which
+/// is then forgotten.
+pub(crate) fn take_failed_branch() -> Option<FailedBranch> {
+    FAILED_BRANCH.take()
+}
+
+/// Forgets the recorded branch (at the start of a run).
+pub(crate) fn forget_failed_branch() {
+    FAILED_BRANCH.set(None);
 }
 
 /// Code that keeps a resource a forked child must not share with its parent: an open

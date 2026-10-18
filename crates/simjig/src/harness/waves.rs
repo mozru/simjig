@@ -263,10 +263,11 @@ impl RunEnd {
 /// What a replay with waves produced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WavesReplay {
-    /// The FST file, in the run directory; `None` if the model wrote none.
-    pub fst: Option<PathBuf>,
-    /// The `GTKWave` save file next to it.
-    pub gtkw: Option<PathBuf>,
+    /// Every FST file the replay wrote, moved into the run directory: one per model
+    /// (`waves.fst`, `waves.model-<i>.fst`) and per fork branch of each
+    /// (`waves[.model-<i>].branch-<j>.fst`). The files of a failing fork branch come first,
+    /// then the rest in (branch, model) order; empty if no model could trace.
+    pub files: Vec<WavesFile>,
     /// The traced span: from, and to (`None`: the end of the run).
     pub from: SimTime,
     /// The last time traced, if not the end.
@@ -275,6 +276,55 @@ pub struct WavesReplay {
     pub precision: Precision,
     /// The verdict.
     pub verdict: Verdict,
+}
+
+/// One FST file of a replay, and its `GTKWave` save file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WavesFile {
+    /// The FST file, in the run directory.
+    pub fst: PathBuf,
+    /// The `GTKWave` save file for it (`<stem>.gtkw`), if it could be written.
+    pub gtkw: Option<PathBuf>,
+    /// The model it traces (0 for the first DUT).
+    pub model: usize,
+    /// The fork branch it traces: empty for the test's own process, `[j]` for branch `j`
+    /// of a checkpoint, `[j, k]` for branch `k` of a checkpoint inside branch `j`.
+    pub branch: Vec<usize>,
+    /// Where the save file's marker is: the failure (the failing branch's own failure, in
+    /// its files), or the end of a passing run.
+    pub marker: SimTime,
+    /// Whether this is a file of the fork branch whose failure failed the test.
+    pub failing_branch: bool,
+}
+
+impl WavesFile {
+    /// The file's model and branch, `None` for model 0 outside any branch.
+    fn label(&self, precision: Precision) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.model > 0 {
+            parts.push(format!("model {}", self.model));
+        }
+        if !self.branch.is_empty() {
+            let path: Vec<String> = self.branch.iter().map(ToString::to_string).collect();
+            parts.push(format!("fork branch {}", path.join(".")));
+        }
+        if self.failing_branch {
+            parts.push(format!("failed at t={}", self.marker.display(precision)));
+        }
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+
+    /// `<fst> (<what>); open with: gtkwave <gtkw>`.
+    fn line(&self, what: &str) -> String {
+        match &self.gtkw {
+            Some(gtkw) => format!(
+                "{} ({what}); open with: gtkwave {}",
+                self.fst.display(),
+                gtkw.display()
+            ),
+            None => format!("{} ({what})", self.fst.display()),
+        }
+    }
 }
 
 /// Whether the replay reproduced the run.
@@ -311,19 +361,26 @@ impl fmt::Display for WavesReplay {
             ),
             None => format!("from t={}", self.from.display(self.precision)),
         };
-        match (&self.fst, &self.gtkw) {
-            (Some(fst), Some(gtkw)) => write!(
-                f,
-                "  waves:    {} ({span}); open with: gtkwave {}",
-                fst.display(),
-                gtkw.display()
-            )?,
-            (Some(fst), None) => write!(f, "  waves:    {} ({span})", fst.display())?,
-            (None, _) => write!(
+        let mut files = self.files.iter();
+        match files.next() {
+            Some(first) => {
+                let what = match first.label(self.precision) {
+                    Some(label) => format!("{label}; {span}"),
+                    None => span,
+                };
+                write!(f, "  waves:    {}", first.line(&what))?;
+            }
+            None => write!(
                 f,
                 "  waves:    none written: the DUT's model cannot trace (a FakeModel, or a \
                  Verilator model built without `.trace_fst(true)`)"
             )?,
+        }
+        for file in files {
+            let what = file
+                .label(self.precision)
+                .unwrap_or_else(|| "model 0".to_owned());
+            write!(f, "\n            {}", file.line(&what))?;
         }
         match &self.verdict {
             Verdict::Reproduced => write!(

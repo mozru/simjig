@@ -57,6 +57,11 @@ the public API, the generated code or simulation semantics.
   report's `waves:` line is now the working command `SIMJIG_WAVES=1 <repro>` (report
   snapshots changed in that line only). `TestOutcome` gains `precision`, `RunEnv` gains
   `waves` and `trace`.
+- A replay keeps every trace file it wrote: one per model (`waves.fst`,
+  `waves.model-<i>.fst`) and per fork branch (`waves[.model-<i>].branch-<j>.fst`), each
+  with its own `.gtkw`. `WavesReplay::files: Vec<WavesFile>` (model, branch path, marker,
+  save file) replaces `WavesReplay::{fst, gtkw}`. When a fork branch fails the test, its
+  files come first in the report, with the marker at the branch's own failure.
 - `cargo simjig waves <test> --seed <seed> [--window ..]`.
 - A traced model in a `fork` branch child continues its waves in
   `<stem>.branch-<i>.fst`; a child never writes the parent's file.

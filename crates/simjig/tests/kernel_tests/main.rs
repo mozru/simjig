@@ -9,6 +9,7 @@ mod conformance;
 mod failures;
 mod multi;
 mod phases;
+mod regions;
 mod s3c5m;
 mod s3c6r;
 mod s3c7m;

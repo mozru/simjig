@@ -11,6 +11,9 @@
 //! | [`ReadOnly`] | in the `ReadOnly` region of this timestep; writes are failures there |
 //! | [`yield_now`] | after the other ready tasks |
 //!
+//! [`TriggerExt`] adds `.read_write()` and `.read_only()` to the edge, cycle and timer
+//! triggers: the trigger, then that region of the same timestep, in one expression.
+//!
 //! Edge timing follows from the loop (see `sched`): an edge of a signal the testbench
 //! drives (a kernel clock, an input) fires *before* the eval that reacts to it, so right
 //! after `rising(clk)` flops still show their old values (cocotb on Verilator does the
@@ -154,15 +157,45 @@ impl Future for Edge {
 /// # Panics
 /// Here, if `n` is negative (or does not fit in a `u64`); otherwise as [`rising`].
 #[track_caller]
-pub fn cycles(sig: impl Into<RawSig>, n: impl TryInto<u64>) -> impl Future<Output = ()> {
+pub fn cycles(sig: impl Into<RawSig>, n: impl TryInto<u64>) -> Cycles {
     let sig = sig.into();
     let Ok(n) = n.try_into() else {
         panic!("cycles: the count of edges must be a non-negative integer that fits in u64")
     };
-    async move {
-        for _ in 0..n {
-            rising(sig).await;
+    Cycles {
+        sig,
+        left: n,
+        edge: None,
+    }
+}
+
+/// Waits for a number of rising edges; made by [`cycles`].
+///
+/// A named type rather than an `async` block so that it can take
+/// [`TriggerExt::read_write`] and [`TriggerExt::read_only`].
+#[derive(Debug)]
+#[must_use = "triggers do nothing unless awaited"]
+pub struct Cycles {
+    sig: RawSig,
+    left: u64,
+    edge: Option<Edge>,
+}
+
+impl Future for Cycles {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = &mut *self;
+        while this.left > 0 {
+            let sig = this.sig;
+            let edge = this.edge.get_or_insert_with(|| rising(sig));
+            if Pin::new(edge).poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            this.edge = None;
+            this.left -= 1;
         }
+        Poll::Ready(())
     }
 }
 
@@ -304,6 +337,88 @@ phase_trigger!(
     WaitOn::NextTimeStep,
     |_| Ok(())
 );
+
+mod sealed {
+    /// Only the edge, cycle and timer triggers take a region suffix.
+    pub trait Sealed {}
+    impl Sealed for super::Edge {}
+    impl Sealed for super::Cycles {}
+    impl Sealed for super::Timer {}
+}
+
+/// `.read_write()` and `.read_only()` on [`rising`], [`falling`], [`changed`] (functions
+/// and handle methods), [`cycles`] and [`Timer`]: await the trigger, then the
+/// [`ReadWrite`] (respectively [`ReadOnly`]) region of the same timestep.
+///
+/// `dut.clk.rising().read_write().await` is `dut.clk.rising().await;
+/// ReadWrite::new().await;` in one expression: flops clocked by that edge show their new
+/// values and writes are still allowed, though a later write in the timestep may change
+/// combinational values again. After `.read_only()` values are final for the timestep and
+/// any write fails the run (`WriteInReadOnly`). cocotb spells these `await RisingEdge(clk);
+/// await ReadWrite()` and `await ReadOnly()`.
+///
+/// Sealed: [`Event`](crate::Event), [`Lock`](crate::Lock) and [`Queue`](crate::Queue) can
+/// resume a task in any region, where "the region of the same timestep" may already be
+/// past.
+pub trait TriggerExt: sealed::Sealed + Future<Output = ()> + Unpin + Sized {
+    /// Awaits this trigger, then the [`ReadWrite`] region of the timestep it fired in.
+    ///
+    /// # Panics
+    /// When awaited, if this trigger completes in the `ReadOnly` phase (only `cycles(.., 0)`
+    /// can); the panic points at this call.
+    #[track_caller]
+    fn read_write(self) -> ThenRegion<Self, ReadWrite> {
+        ThenRegion {
+            trigger: Some(self),
+            region: ReadWrite::new(),
+        }
+    }
+
+    /// Awaits this trigger, then the [`ReadOnly`] region of the timestep it fired in.
+    ///
+    /// # Panics
+    /// As [`read_write`](Self::read_write).
+    #[track_caller]
+    fn read_only(self) -> ThenRegion<Self, ReadOnly> {
+        ThenRegion {
+            trigger: Some(self),
+            region: ReadOnly::new(),
+        }
+    }
+}
+
+impl<T: sealed::Sealed + Future<Output = ()> + Unpin> TriggerExt for T {}
+
+/// A trigger followed by a region of the same timestep; made by [`TriggerExt`].
+///
+/// Each half registers when first polled and deregisters when dropped, so dropping this
+/// (as the loser of [`first!`](crate::first)) leaves nothing registered.
+#[derive(Debug)]
+#[must_use = "triggers do nothing unless awaited"]
+pub struct ThenRegion<T, R> {
+    trigger: Option<T>,
+    region: R,
+}
+
+impl<T, R> Future for ThenRegion<T, R>
+where
+    T: Future<Output = ()> + Unpin,
+    R: Future<Output = ()> + Unpin,
+{
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = &mut *self;
+        if let Some(trigger) = &mut this.trigger {
+            if Pin::new(trigger).poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            this.trigger = None;
+        }
+        // The region trigger registers now, in the timestep the trigger fired in.
+        Pin::new(&mut this.region).poll(cx)
+    }
+}
 
 /// Returned by [`yield_now`].
 #[derive(Debug, Default)]

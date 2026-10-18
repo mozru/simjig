@@ -4,6 +4,15 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `.read_write()` and `.read_only()` on triggers (`TriggerExt`, sealed; new types
+  `ThenRegion` and `Cycles`): `dut.clk.rising().read_write().await` awaits the edge, then
+  the `ReadWrite` region of the same timestep (cocotb's `await RisingEdge(clk); await
+  ReadWrite()`), and `.read_only()` the `ReadOnly` region. They exist on `rising`,
+  `falling`, `changed` (functions and handle methods), `cycles` and `Timer`, not on
+  `Event`, `Lock` or `Queue`. `cycles` now returns the named future `Cycles` instead of
+  `impl Future<Output = ()>` (source-compatible). The `WriteInReadOnly` help names
+  `.read_only()` and points to `.read_write()`. No scheduler change: the conformance
+  goldens are unchanged.
 - README "A parameter sweep": the test snippet uses the short names `use sync_fifo::*;`
   allows (`duts = [fifo_8x4::Dut, ..]`, `D: Ports`), as the long form warns
   (`unused_qualifications`) next to that import; `examples/lib`'s `sync_fifo` tests do

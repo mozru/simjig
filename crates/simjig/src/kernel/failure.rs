@@ -249,7 +249,8 @@ impl FailureKind {
                  task or serialize the writers with a Lock"
             }
             Self::WriteInReadOnly { .. } => {
-                "ReadOnly is for sampling settled values; await a Timer, an edge or \
+                "ReadOnly and `.read_only()` are for sampling final values; to write right after \
+                 a trigger use `.read_write()` instead, or await a Timer, an edge or \
                  NextTimeStep before writing"
             }
             Self::Starved { .. } => {

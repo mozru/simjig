@@ -97,8 +97,8 @@ pub use kernel::time::{
     Precision, SimDuration, SimTime, TimeDisplay, TimeError, TimeUnit, fs, ms, ns, ps, us,
 };
 pub use kernel::trigger::{
-    Edge, Elapsed, NextTimeStep, ReadOnly, ReadWrite, Timer, YieldNow, changed, cycles, falling,
-    now, now_display, rising, with_timeout, yield_now,
+    Cycles, Edge, Elapsed, NextTimeStep, ReadOnly, ReadWrite, ThenRegion, Timer, TriggerExt,
+    YieldNow, changed, cycles, falling, now, now_display, rising, with_timeout, yield_now,
 };
 pub use model::meta::LoadError;
 pub use model::trace::TraceOptions;

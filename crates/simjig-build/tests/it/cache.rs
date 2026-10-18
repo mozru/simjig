@@ -198,3 +198,31 @@ fn stale_work_dirs_are_removed() {
     assert!(!old.exists(), "the stale work dir is gone");
     assert!(young.exists(), "a recent work dir is kept");
 }
+
+/// Verilator 5.052's `.d` lists the option files it read (`-f`, `-F`), nested ones too, so
+/// an option file no argument names is part of the key: editing it verilates again.
+#[test]
+fn editing_a_nested_option_file_misses() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let (outer, inner) = (s.path().join("outer.f"), s.path().join("inner.f"));
+    std::fs::write(&outer, format!("-f {}\n", inner.display())).unwrap();
+    std::fs::write(&inner, "-Wno-WIDTH\n").unwrap();
+    let build = || {
+        counter(&rtl, 8)
+            .verilator_args(["-f".to_owned(), outer.display().to_string()])
+            .build_in(&s.env())
+            .unwrap()
+    };
+    let first = build();
+    assert!(
+        first
+            .directives
+            .contains(&format!("cargo::rerun-if-changed={}", inner.display())),
+        "{:?}",
+        first.directives
+    );
+    assert_eq!((build().cache, s.verilations()), (CacheStatus::Hit, 1));
+    std::fs::write(&inner, "-Wno-UNUSED\n").unwrap();
+    assert_eq!((build().cache, s.verilations()), (CacheStatus::Miss, 2));
+}

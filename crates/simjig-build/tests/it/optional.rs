@@ -33,11 +33,19 @@ fn prepare(root: &Path) -> PathBuf {
         krate.join("Cargo.lock"),
     )
     .unwrap();
+    // A fresh copy must rebuild its build script: `std::fs::copy` keeps the source's
+    // mtime on macOS, which can be older than a build script compiled from an older copy.
+    std::fs::File::options()
+        .append(true)
+        .open(krate.join("build.rs"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now())
+        .unwrap();
     krate
 }
 
-/// `cargo <args>` in the fixture crate, with `opt` broken when `broken`.
-fn cargo(krate: &Path, target: &Path, args: &[&str], broken: bool) -> Output {
+/// `cargo <args>` in the fixture crate, with `opt` working and its failure handled.
+fn command(krate: &Path, target: &Path, args: &[&str]) -> Command {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(cargo);
     command
@@ -46,13 +54,28 @@ fn cargo(krate: &Path, target: &Path, args: &[&str], broken: bool) -> Output {
         .env("CARGO_TARGET_DIR", target)
         // simjig's own test models are for its repository; the fixture builds none.
         .env("SIMJIG_TEST_MODELS", "0")
-        .env_remove("SIMJIG_CACHE_DIR");
+        .env_remove("SIMJIG_CACHE_DIR")
+        .env_remove("FIXTURE_BREAK");
+    command
+}
+
+/// `cargo <args>` in the fixture crate, with `opt` broken when `broken`.
+fn cargo(krate: &Path, target: &Path, args: &[&str], broken: bool) -> Output {
+    let mut command = command(krate, target, args);
     if broken {
         command.env("FIXTURE_BREAK", "1");
-    } else {
-        command.env_remove("FIXTURE_BREAK");
     }
     command.output().unwrap()
+}
+
+/// The prepared fixture crate and its target dir, with the lock that serialises the tests.
+fn fixture() -> (PathBuf, PathBuf, std::fs::File) {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fixture-optional");
+    std::fs::create_dir_all(&root).unwrap();
+    let lock = std::fs::File::create(root.join("lock")).unwrap();
+    lock.lock().unwrap();
+    let krate = prepare(&root);
+    (krate, root.join("target"), lock)
 }
 
 fn text(out: &Output) -> String {
@@ -65,12 +88,7 @@ fn text(out: &Output) -> String {
 
 #[test]
 fn a_failed_optional_dut_is_a_compile_error_or_gated_off() {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fixture-optional");
-    std::fs::create_dir_all(&root).unwrap();
-    let lock = std::fs::File::create(root.join("lock")).unwrap();
-    lock.lock().unwrap();
-    let krate = prepare(&root);
-    let target = root.join("target");
+    let (krate, target, _lock) = fixture();
     let test = ["test", "--offline"];
 
     let good = cargo(&krate, &target, &test, false);

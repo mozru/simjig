@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(duts = [a::Dut, b::a::Dut]), quote!\n{ async fn t<D: X>(dut: D) {} })"
+---
+error: the test for this DUT would be `t::a`, which another DUT or the function already names; list each DUT once

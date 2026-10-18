@@ -1,0 +1,63 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(timeout = \"1us\", duts = [fifo::small::Dut, fifo::big::Dut]),\nquote!\n{\n    #[doc = r\" Docs go on the module.\"] #[ignore] pub async fn resets<D:\n    fifo::Ports>(sim: &TestCtx, dut: D) -> simjig::Result { Ok(()) }\n})"
+---
+/// Docs go on the module.
+pub mod resets {
+    #[allow(unused_imports)]
+    use super::*;
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn resets<D: fifo::Ports>(sim: &TestCtx, dut: D) -> simjig::Result {
+        Ok(())
+    }
+    #[::core::prelude::v1::test]
+    #[ignore]
+    fn small() {
+        ::simjig::__private::assert_test_output::<simjig::Result>();
+        ::simjig::__private::run_test::<
+            fifo::small::Dut,
+            _,
+            _,
+        >(
+            &::simjig::__private::TestMeta {
+                module_path: ::core::module_path!(),
+                name: ::core::stringify!(small),
+                package: ::core::env!("CARGO_PKG_NAME"),
+                timeout: ::simjig::__private::TimeoutArg::Given(::simjig::__private::Timeout {
+                    value: 1u64,
+                    unit: ::simjig::TimeUnit::Us,
+                }),
+                ignored: true,
+                should_panic: false,
+            },
+            |__simjig_sim, __simjig_dut| async move {
+                resets(&__simjig_sim, __simjig_dut).await
+            },
+        );
+    }
+    #[::core::prelude::v1::test]
+    #[ignore]
+    fn big() {
+        ::simjig::__private::assert_test_output::<simjig::Result>();
+        ::simjig::__private::run_test::<
+            fifo::big::Dut,
+            _,
+            _,
+        >(
+            &::simjig::__private::TestMeta {
+                module_path: ::core::module_path!(),
+                name: ::core::stringify!(big),
+                package: ::core::env!("CARGO_PKG_NAME"),
+                timeout: ::simjig::__private::TimeoutArg::Given(::simjig::__private::Timeout {
+                    value: 1u64,
+                    unit: ::simjig::TimeUnit::Us,
+                }),
+                ignored: true,
+                should_panic: false,
+            },
+            |__simjig_sim, __simjig_dut| async move {
+                resets(&__simjig_sim, __simjig_dut).await
+            },
+        );
+    }
+}

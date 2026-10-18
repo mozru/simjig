@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(duts = []), quote! { async fn t<D: X>(dut: D) {} })"
+---
+error: `duts` lists no DUT type: `duts = [small::Dut, big::Dut]`

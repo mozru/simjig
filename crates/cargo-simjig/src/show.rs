@@ -1,7 +1,8 @@
 //! `cargo simjig show <dut>`: the Rust module that `simjig::include_dut!(<dut>)` includes.
 //!
-//! simjig-build writes each DUT's bindings to `OUT_DIR/simjig/<dut>.rs`, under a hashed
-//! directory of the target dir, and `include_dut!` splices the file in as `mod <dut>`. To
+//! simjig-build writes each DUT's bindings to `OUT_DIR/simjig/<dut>.rs` (its `emit.rs`),
+//! under a hashed directory of the target dir, and `include_dut!` splices the file in as
+//! `mod <dut>`. To
 //! learn the generated names (`Status::EMPTY`, `StatusVariant`, `r#in`) without hunting
 //! for that directory, this command asks Cargo where the build scripts' `OUT_DIR`s are:
 //! it runs `cargo check --tests --message-format=json` (which runs the build scripts, as

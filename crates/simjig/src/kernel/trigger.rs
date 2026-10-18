@@ -46,8 +46,9 @@ fn poll_registered(
 ) -> Poll<()> {
     match reg {
         None => {
-            let registered =
-                state::try_current(|k| register(k).map(|on| Registration::new(k, on, cx)));
+            let registered = state::try_current(|k| {
+                register(k).map(|on| Registration::new(k, on, cx, Some(at)))
+            });
             match registered {
                 Some(Ok(r)) => *reg = Some(r),
                 Some(Err(message)) => panics::panic_at(at, format_args!("{message}")),

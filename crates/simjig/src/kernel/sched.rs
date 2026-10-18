@@ -23,7 +23,11 @@
 //!    model's `next_time_slot()` among those with `events_pending()`. If there is none and
 //!    the main task is still blocked, the run fails as `Starved` or `Deadlock`.
 //!
-//! More than [`DELTA_MAX`] evals in one timestep is a `DeltaLimit` failure.
+//! Two limits make a timestep that never settles fail loudly:
+//! - more than [`DELTA_MAX`] evals between two `ReadWrite` rounds (an oscillation, or a
+//!   model `#0` loop) is a `DeltaLimit` failure naming the signals still being written;
+//! - more than [`READ_WRITE_MAX`] `ReadWrite` rounds that woke a task is a `ReadWriteLimit`
+//!   failure naming those tasks and where they await `ReadWrite`.
 //!
 //! # `--timing` safety (Verilator 5.052, docs/notes/spikes.md §4)
 //! Verilator exits the process if `nextTimeSlot()` is called while `eventsPending()` is
@@ -33,18 +37,33 @@
 //! timesteps (Verilator does not check). A model reporting a slot before now is a
 //! `ModelFatal` failure.
 
+use std::panic::Location;
+
 use super::backend::EvalStatus;
 use super::clock::ClockEntry;
 use super::failure::{BlockedTask, FailureKind};
 use super::recorder::TraceKind;
 use super::signal::{self, Writer};
+use super::slab::Key;
 use super::state::{Kernel, Phase};
 use super::tasks::run_ready;
 use super::time::SimTime;
 use super::waits::{WaitTable, Wake, wake_sorted};
 
-/// Evals allowed in one timestep before the run fails with `DeltaLimit`.
+/// Evals allowed between two `ReadWrite` rounds of one timestep (or before the first)
+/// before the run fails with `DeltaLimit`.
 pub const DELTA_MAX: u32 = 64;
+
+/// `ReadWrite` rounds that wake a task allowed in one timestep before the run fails with
+/// `ReadWriteLimit`.
+///
+/// cocotb on Verilator has no such limit: its main loop returns to the deltas after every
+/// `ReadWrite` callback that wrote, so a task that writes and awaits `ReadWrite` forever
+/// hangs it. Each round is a deliberate step of the testbench (a handshake resolved
+/// within one time, a register file filled at t=0), so a legitimate test may take many,
+/// unlike delta oscillation; 10 000 rounds is far past any such test and still fails a
+/// runaway loop within milliseconds.
+pub const READ_WRITE_MAX: u32 = 10_000;
 
 fn stopped(k: &Kernel) -> bool {
     k.failed() || k.main_done.get()
@@ -126,7 +145,7 @@ fn step(k: &Kernel) {
     }
     run_ready(k);
 
-    let mut evals = 0;
+    let (mut evals, mut rounds) = (0, 0);
     loop {
         loop {
             if stopped(k) || !eval(k, &mut evals) {
@@ -140,6 +159,15 @@ fn step(k: &Kernel) {
         }
         if stopped(k) {
             return;
+        }
+        let waiters = k.waits.borrow().read_write_waiters();
+        if !waiters.is_empty() {
+            if rounds == READ_WRITE_MAX {
+                read_write_limit(k, &waiters);
+                return;
+            }
+            rounds += 1;
+            evals = 0;
         }
         wake_from(k, WaitTable::fire_read_write);
         run_ready(k);
@@ -172,14 +200,17 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
             .iter()
             .map(|&s| k.names[s as usize].to_string())
             .collect();
-        let message = format!(
-            "the timestep did not settle in {DELTA_MAX} evals; still being written: {}",
-            if names.is_empty() {
-                "(nothing; a task keeps awaiting ReadWrite)".to_owned()
-            } else {
+        let message = if names.is_empty() {
+            format!(
+                "the timestep did not settle in {DELTA_MAX} evals: the model keeps scheduling \
+                 events at this time"
+            )
+        } else {
+            format!(
+                "the timestep did not settle in {DELTA_MAX} evals; still being written: {}",
                 names.join(", ")
-            }
-        );
+            )
+        };
         k.fail(
             FailureKind::DeltaLimit {
                 limit: DELTA_MAX,
@@ -225,6 +256,36 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         }
     }
     false
+}
+
+/// Fails the run as `ReadWriteLimit`, naming the `ReadWrite` waiters (the first one is the
+/// failure's task and location).
+#[cold]
+fn read_write_limit(k: &Kernel, waiters: &[(Option<Key>, Option<&'static Location<'static>>)]) {
+    let blocked: Vec<BlockedTask> = waiters
+        .iter()
+        .map(|&(task, at)| BlockedTask {
+            task: task.map_or_else(|| "<no task>".to_owned(), |t| k.task_name(t)),
+            awaiting: vec![match at {
+                Some(at) => format!("ReadWrite at {at}"),
+                None => "ReadWrite".to_owned(),
+            }],
+        })
+        .collect();
+    let (task, at) = waiters[0];
+    let message = format!(
+        "{READ_WRITE_MAX} ReadWrite rounds in one timestep, and {} task(s) await ReadWrite again",
+        blocked.len()
+    );
+    k.fail(
+        FailureKind::ReadWriteLimit {
+            limit: READ_WRITE_MAX,
+            waiters: blocked,
+        },
+        task,
+        at.map(Into::into),
+        message,
+    );
 }
 
 /// Applies the write log, then wakes waiters of watched slots that changed since the

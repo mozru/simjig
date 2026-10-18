@@ -254,6 +254,7 @@ fn run_seed(seed: u64) -> (String, u64) {
                 FailureKind::WriteConflict { .. }
                 | FailureKind::WriteInReadOnly { .. }
                 | FailureKind::DeltaLimit { .. }
+                | FailureKind::ReadWriteLimit { .. }
                 | FailureKind::Starved { .. }
                 | FailureKind::Deadlock { .. }
                 | FailureKind::TimeLimit { .. } => true,

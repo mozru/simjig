@@ -99,12 +99,22 @@ pub enum FailureKind {
         /// The panic message.
         message: String,
     },
-    /// Writes kept arriving: the timestep did not settle within the delta limit.
+    /// Writes kept arriving: the deltas did not settle within the delta limit (an
+    /// oscillation, or a model that keeps scheduling events at the current time).
     DeltaLimit {
         /// The delta limit that was hit.
         limit: u32,
         /// Signals written in the last delta.
         signals: Vec<String>,
+    },
+    /// Tasks kept writing and awaiting [`ReadWrite`](crate::ReadWrite), so the timestep
+    /// looped back from the `ReadWrite` region more than the limit allows.
+    ReadWriteLimit {
+        /// The limit on `ReadWrite` loop-backs in one timestep.
+        limit: u32,
+        /// The tasks that were awaiting `ReadWrite` again, each with the line that made
+        /// the trigger (`ReadWrite at tests/bus.rs:12:9`).
+        waiters: Vec<BlockedTask>,
     },
     /// Two writers wrote one signal in the same delta.
     WriteConflict {
@@ -156,6 +166,7 @@ impl FailureKind {
         match self {
             Self::TaskPanic { .. } => "TaskPanic",
             Self::DeltaLimit { .. } => "DeltaLimit",
+            Self::ReadWriteLimit { .. } => "ReadWriteLimit",
             Self::WriteConflict { .. } => "WriteConflict",
             Self::WriteInReadOnly { .. } => "WriteInReadOnly",
             Self::Starved { .. } => "Starved",
@@ -172,6 +183,11 @@ impl FailureKind {
             Self::DeltaLimit { .. } => {
                 "a task re-writes a signal every delta (often in reaction to its own write); \
                  await an edge or a Timer between writes"
+            }
+            Self::ReadWriteLimit { .. } => {
+                "a listed task writes and awaits ReadWrite in a loop that never settles; stop \
+                 the loop once the value is right, or await an edge, a Timer or NextTimeStep \
+                 between iterations"
             }
             Self::WriteConflict { .. } => {
                 "only one task may drive a signal per delta; give the signal a single owner \
@@ -233,7 +249,10 @@ impl fmt::Display for Failure {
         }
         if let FailureKind::Starved { blocked }
         | FailureKind::Deadlock { blocked }
-        | FailureKind::TimeLimit { blocked, .. } = &self.kind
+        | FailureKind::TimeLimit { blocked, .. }
+        | FailureKind::ReadWriteLimit {
+            waiters: blocked, ..
+        } = &self.kind
         {
             for b in blocked {
                 if b.awaiting.is_empty() {

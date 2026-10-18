@@ -30,7 +30,7 @@ pub use kernel::failure::{BlockedTask, Failure, FailureKind, SourceLocation};
 pub use kernel::fake::{FakeModel, FakeSig, FakeState};
 pub use kernel::models::ModelSetError;
 pub use kernel::recorder::{TraceKind, TraceRecord};
-pub use kernel::sched::DELTA_MAX;
+pub use kernel::sched::{DELTA_MAX, READ_WRITE_MAX};
 pub use kernel::signal::RawSig;
 pub use kernel::sim::Sim;
 pub use kernel::state::KernelStats;

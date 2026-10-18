@@ -15,6 +15,7 @@
 //! the snapshot is the value at the previous comparison. Only watched slots are compared.
 
 use std::collections::BTreeMap;
+use std::panic::Location;
 use std::rc::Rc;
 use std::task::{Context, Waker};
 
@@ -60,6 +61,8 @@ struct Waiter {
     fired: bool,
     seq: u64,
     on: WaitOn,
+    /// Where the trigger was made, for triggers that know it.
+    at: Option<&'static Location<'static>>,
 }
 
 struct WaitList {
@@ -72,6 +75,14 @@ struct WaitList {
 struct SlotWatch {
     waiters: Vec<Key>,
     snapshot: Vec<u32>,
+}
+
+/// What [`WaitTable::add`] needs to register a waiter.
+struct NewWaiter {
+    on: WaitOn,
+    task: Option<Key>,
+    waker: Waker,
+    at: Option<&'static Location<'static>>,
 }
 
 /// A fired registration's wake, ordered by registration.
@@ -111,14 +122,21 @@ impl WaitTable {
         }
     }
 
-    fn add(&mut self, on: WaitOn, task: Option<Key>, waker: Waker, model: &Models) -> Key {
+    fn add(&mut self, waiter: NewWaiter, model: &Models) -> Key {
         self.seq += 1;
+        let NewWaiter {
+            on,
+            task,
+            waker,
+            at,
+        } = waiter;
         let key = self.waiters.insert(Waiter {
             task,
             waker,
             fired: false,
             seq: self.seq,
             on,
+            at,
         });
         match on {
             WaitOn::Edge { slot, .. } => {
@@ -214,6 +232,18 @@ impl WaitTable {
     pub(crate) fn fire_read_write(&mut self, out: &mut Vec<Wake>) {
         let keys = std::mem::take(&mut self.read_write);
         self.fire_all(keys, out);
+    }
+
+    /// The task and trigger location of every pending `ReadWrite` waiter, in
+    /// registration order.
+    pub(crate) fn read_write_waiters(
+        &self,
+    ) -> Vec<(Option<Key>, Option<&'static Location<'static>>)> {
+        self.read_write
+            .iter()
+            .filter_map(|&key| self.waiters.get(key))
+            .map(|w| (w.task, w.at))
+            .collect()
     }
 
     pub(crate) fn fire_read_only(&mut self, out: &mut Vec<Wake>) {
@@ -396,13 +426,22 @@ pub(crate) struct Registration {
 }
 
 impl Registration {
-    /// Registers the current task as waiting on `on`, to be woken through `cx`'s waker.
-    pub(crate) fn new(k: &Kernel, on: WaitOn, cx: &Context<'_>) -> Self {
+    /// Registers the current task as waiting on `on`, to be woken through `cx`'s waker;
+    /// `at` is where the trigger was made, if known.
+    pub(crate) fn new(
+        k: &Kernel,
+        on: WaitOn,
+        cx: &Context<'_>,
+        at: Option<&'static Location<'static>>,
+    ) -> Self {
         let model = k.models.borrow();
-        let key = k
-            .waits
-            .borrow_mut()
-            .add(on, k.current.get(), cx.waker().clone(), &model);
+        let waiter = NewWaiter {
+            on,
+            task: k.current.get(),
+            waker: cx.waker().clone(),
+            at,
+        };
+        let key = k.waits.borrow_mut().add(waiter, &model);
         Self {
             sim_gen: k.sim_gen,
             key,

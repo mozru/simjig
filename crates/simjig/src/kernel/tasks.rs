@@ -360,7 +360,7 @@ impl<T: 'static> Future for Task<T> {
                 Some(r) => {
                     r.poll_fired(cx);
                 }
-                None => this.join = Some(Registration::new(k, WaitOn::List(join), cx)),
+                None => this.join = Some(Registration::new(k, WaitOn::List(join), cx, None)),
             }
             Some(Poll::Pending)
         });

@@ -64,7 +64,7 @@ impl OwnedList {
     }
 
     fn register(&self, cx: &Context<'_>) -> Registration {
-        self.with(|k| Registration::new(k, WaitOn::List(self.key), cx))
+        self.with(|k| Registration::new(k, WaitOn::List(self.key), cx, None))
     }
 }
 

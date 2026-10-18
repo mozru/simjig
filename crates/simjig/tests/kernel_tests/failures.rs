@@ -3,8 +3,8 @@
 use std::panic::{self, AssertUnwindSafe};
 
 use simjig::{
-    BlockedTask, DELTA_MAX, Event, FailureKind, FakeModel, Lock, Precision, ReadOnly, Sim, SimTime,
-    Timer, changed, rising, spawn,
+    BlockedTask, DELTA_MAX, Event, FailureKind, FakeModel, Lock, Precision, READ_WRITE_MAX,
+    ReadOnly, ReadWrite, Sim, SimTime, Timer, changed, rising, spawn,
 };
 
 use super::{assert_clean, clocked, dut, ticks};
@@ -94,6 +94,59 @@ fn delta_limit_names_the_signal_still_written() {
     };
     assert_eq!(*limit, DELTA_MAX);
     assert!(signals.contains(&"a".to_owned()), "{f}");
+    assert_eq!(f.time, SimTime(0));
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn read_write_loop_backs_have_their_own_higher_limit() {
+    // 100 write-then-ReadWrite rounds in one timestep: more than DELTA_MAX evals, but each
+    // round settles, so it is not an oscillation.
+    let mut d = dut();
+    let (a, sum) = (d.a, d.sum);
+    let out = d.sim.run(async move {
+        for i in 0..100 {
+            a.write_u64(i);
+            ReadWrite::new().await;
+            assert_eq!(sum.read_u64(), i, "the fan-out settled before ReadWrite");
+        }
+        simjig::now()
+    });
+    assert_eq!(out.unwrap(), SimTime(0));
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn read_write_limit_names_the_task_and_line_that_keep_looping_back() {
+    let mut d = dut();
+    let a = d.a;
+    let f = d
+        .sim
+        .run(async move {
+            loop {
+                a.write_u64(a.read_u64() ^ 1);
+                ReadWrite::new().await; // loops back forever
+            }
+        })
+        .unwrap_err();
+    let FailureKind::ReadWriteLimit { limit, waiters } = &f.kind else {
+        panic!("{f}")
+    };
+    assert_eq!(*limit, READ_WRITE_MAX);
+    assert_eq!(waiters.len(), 1, "{f}");
+    assert_eq!(waiters[0].task, "main");
+    let line = include_str!("failures.rs")
+        .lines()
+        .position(|l| l.ends_with("// loops back forever"))
+        .unwrap()
+        + 1;
+    let at = format!("failures.rs:{line}:");
+    assert!(waiters[0].awaiting[0].contains(&at), "{f}");
+    assert_eq!(f.task.as_deref(), Some("main"));
+    assert_eq!(f.location.unwrap().line() as usize, line, "{f}");
+    let text = f.to_string();
+    assert!(text.contains("task `main` awaits ReadWrite at"), "{text}");
+    assert!(!text.contains("signals"), "no empty signal list: {text}");
     assert_eq!(f.time, SimTime(0));
     assert_clean(&d.sim);
 }

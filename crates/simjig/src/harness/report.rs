@@ -198,6 +198,13 @@ fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration
             format!("limit:    {limit} evals in one timestep"),
             format!("signals:  {}", signals.join(", ")),
         ],
+        FailureKind::ReadWriteLimit { limit, waiters } => {
+            let mut lines = vec![format!(
+                "limit:    {limit} ReadWrite rounds in one timestep"
+            )];
+            lines.extend(blocked_lines(waiters));
+            lines
+        }
         FailureKind::WriteConflict {
             signal,
             first,

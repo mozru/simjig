@@ -50,7 +50,7 @@ listed here with what keeps the copies equal.
 | Naming, slot, storage and access decisions | `codegen::lower` |
 | The "did you mean" hint | `codegen::names::did_you_mean` |
 | Two-step cache keys | `cache.rs` (Verilator output), `front.rs` (IR), `archive.rs` (archives), over the manifests of `manifest.rs` |
-| What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`) |
+| What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`); the path `OUT_DIR/simjig/<name>.rs` is read back by `simjig::include_dut!` and by `cargo-simjig`'s `show` (which may not depend on `simjig-build`), kept equal by their docs naming `emit.rs` |
 | Environment variables that rerun the build script | `BuildEnv::TRACKED_VARS` |
 | Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |
 | Rendering a failure | `Display` of `kernel::failure::Failure` and of `BlockedTask` (one blocked task); the harness's report (`harness::report::FailureReport`) builds on them |

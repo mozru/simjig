@@ -57,7 +57,8 @@ pixi run cargo nextest run -p quickstart
 
 A new crate needs a target before its first build: with only `Cargo.toml` and
 `build.rs`, cargo stops with `no targets specified in the manifest`. Add the first test
-file (`tests/<name>.rs`) or an empty `src/lib.rs`.
+file (`tests/<name>.rs`) or an empty `src/lib.rs`. A library target is fine, for
+helpers that several test files share: the models link into the tests either way.
 
 Each file opens with a `//!` line because the repository's lints (`[lints] workspace =
 true`, as in the quickstart) warn on `missing_docs`, and a build script and each test
@@ -265,6 +266,25 @@ Verilator 5.052 does not check interfaces. Add the `timeunit`, or give the rest 
 `.verilator_args(["--timescale", "1ns/1ps"])`. The wrapper simjig generates for a DUT
 with interface ports is exempt: it takes the design's unit.
 
+### Interface parameters
+A Verilator top cannot have interface ports, so `.bind_iface("up", "bus_if.sink")`
+makes the generated wrapper instantiate one `bus_if` per port. Its parameters follow one
+rule:
+1. **A value the binding sets always wins**:
+   `.bind_iface_with_params("up", "bus_if.sink", [("WIDTH", 16)])`.
+2. **Otherwise a `.param` of the same name is the default**: `.param("WIDTH", 16)` also
+   gives each bound interface that declares `WIDTH`, and whose binding leaves it unset,
+   `WIDTH` 16.
+3. **Otherwise each side keeps its own default**, and when a parameter both declare ends
+   up with two values (a module defaulting to 16, an interface to 8), the build warns
+   (`cargo::warning`), naming both values and the `.bind_iface_with_params(..)` that
+   settles it. Setting either side explicitly silences it.
+
+The tie is by name only, a heuristic: an interface port header carries no parameter
+assignments (IEEE 1800-2017 §25.5), so nothing in the design says that a module's
+`WIDTH` and its port's `WIDTH` are one quantity. A module may read a wider interface
+through its port (`out.W`), which rule 1 allows.
+
 ### A parameter sweep
 Each build of one top is its own DUT (`Dut::new("pkt_small")...param("MAX_LEN", 4)`,
 `Dut::new("pkt_big")...param("MAX_LEN", 64)`), with its own generated module: its
@@ -272,7 +292,9 @@ Each build of one top is its own DUT (`Dut::new("pkt_small")...param("MAX_LEN", 
 SystemVerilog. To write each test once, write it against a small trait of your own,
 implement the trait for each configuration's `Dut` (a short `macro_rules!` that holds
 only the impl), and keep one `#[simjig::test]` line per configuration. A failure then
-points at the generic test body, not at a macro call:
+points at the generic test body, not at a macro call. Here `pkt_parser`'s `in` is an
+interface port (`beat_if.sink`, bound with `.bind_iface("in", "beat_if.sink")`), so its
+signals are a bundle, `self.r#in.valid`:
 
 ```rust
 use simjig::bits::{Bit, Bits};

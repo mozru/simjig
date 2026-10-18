@@ -34,7 +34,9 @@ models (`abi_counter`, `abi_ticker`).
 - `pixi run cargo xtask ci`: all steps pass (506 nextest tests).
 
 ## API friction found writing the tests as a user
-1. **A crate with a library target cannot link its models into integration tests.**
+1. **(Fixed since: `compile.rs` also emits every library as `rustc-link-arg`, so a
+   library target is fine, for shared helpers.)** At the time, **a crate with a library
+   target could not link its models into integration tests.**
    `Dut::build` prints `rustc-link-lib`, which Cargo gives to the library; an integration
    test that never names the library does not link it, so the vtable symbol is undefined
    (`ld: symbol(s) not found`). Without a library target the directives reach every target,

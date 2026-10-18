@@ -23,6 +23,9 @@ longer refused. `--threads` is refused only when C's `atoi` of the value is abov
 (checked: 5.052 accepts `01`, `+1`, `1x`, ` 1`, and `0` with a DEPRECATED warning).
 
 ## Interface parameters follow the module's
+(Superseded in s3c11, `docs/notes/s3c11-fix.md`: the refusal is gone, a binding value
+always wins, and differing unset values warn instead.)
+
 Verified first: `.param("W", 12)` with an 8-bit `acc_if` and `-Wno-fatal` built, the
 top's `up_d` 8 bits and `q` 12 bits (WIDTHEXPAND only as a warning); without
 `-Wno-fatal` it fails on lint. Chosen: (b) plus (a). `pipeline::elaborate` adds each

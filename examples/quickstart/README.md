@@ -12,10 +12,9 @@ The smallest simjig project. Copy this directory to start your own.
 | `.config/nextest.toml` | a wall-clock timeout for hung tests (`slow-timeout`, `terminate-after`) |
 
 `Cargo.toml` needs `simjig` and `simjig-bits` for the tests and `simjig-build` for the
-build script. The package has no library target on purpose: the build script's link
-directives go to the library when there is one, and an integration test that never names
-that library does not link it, so the model would be missing (see the glue notes,
-`docs/notes/glue.md`). Verilator 5.052 must be on `PATH` (in this repository: `pixi run`).
+build script. A `src/lib.rs` is fine, for helpers that several test files share: the
+build script links the models into the tests whether or not the package has a library.
+Verilator 5.052 must be on `PATH` (in this repository: `pixi run`).
 
 `[lints] workspace = true` inherits the repository's lints, including `missing_docs`
 (warn), which is why `build.rs` and every test file open with a `//!` comment: each is a

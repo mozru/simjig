@@ -117,8 +117,9 @@ during it); `rtl/skid_buffer.sv` says why.
 
 A Verilator top cannot have interface ports, so `build.rs` binds each port to an
 interface instance in the generated wrapper. `stream_if` has its own `WIDTH` parameter;
-`.param("WIDTH", ..)` reaches it too, because a module and the interfaces bound to it
-must agree on a parameter they both declare:
+`.param("WIDTH", ..)` reaches it too, as the default of every binding that leaves it
+unset (a value the binding sets wins; the tie is by name only, see the top README's
+"Interface parameters"):
 
 ```rust
 Dut::new("skid_buffer")
@@ -130,8 +131,11 @@ Dut::new("skid_buffer")
     .build()?;
 ```
 
-An interface parameter the module does not declare is set on its binding, with
-`.bind_iface_with_params(port, iface, [(name, value)])`.
+An interface parameter the module does not declare, or one that should differ from the
+module's, is set on its binding, with
+`.bind_iface_with_params(port, iface, [(name, value)])`. Without the `.param` here, the
+module's `WIDTH` (default 8) and the interfaces' (default 8) would agree; had they
+differed, the build would warn.
 
 Every RTL unit here declares `timeunit 1ns; timeprecision 1ps;`. The wrapper simjig
 generates for the interface ports declares none and needs none: it takes the design's

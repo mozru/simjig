@@ -48,7 +48,7 @@ listed here with what keeps the copies equal.
 | Widths and packed storage at build time | `svtypes::width` |
 | The design's Verilator arguments (JSON pass, layout check, model) | `DutConfig::design` (`svtypes::verilator::JsonPassOpts::design_args`) |
 | Reading Verilator option files (`-f`/`-F`, nested; as bytes) and resolving their paths | `simjig_build::optfile::traverse` (visited by `find`, `inputs` and `untracked`); `Dut::file_list` passes through `DutConfig::option_args` |
-| Tying a bound interface's parameters to the DUT's same-named `.param` | `simjig_build::pipeline::elaborate` |
+| Defaulting a bound interface's parameters to the DUT's same-named `.param` (a binding value wins), and warning when the two stay apart | `simjig_build::pipeline::elaborate`; `pipeline::iface_param_warnings` |
 | Naming, slot, storage and access decisions | `codegen::lower` |
 | The "did you mean" hint | `codegen::names::did_you_mean` |
 | Two-step cache keys | `cache.rs` (Verilator output), `front.rs` (IR), `archive.rs` (archives), over the manifests of `manifest.rs` |

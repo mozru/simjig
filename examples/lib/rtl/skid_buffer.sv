@@ -31,8 +31,11 @@ module skid_buffer #(
   if (WIDTH < 1) begin : g_bad_width
     $fatal(1, "skid_buffer: WIDTH must be at least 1 (got %0d)", WIDTH);
   end
-  // Each interface instance has its own WIDTH parameter, which this module's WIDTH does
-  // not set; a mismatch would silently truncate or pad every beat.
+  // Each interface instance has its own WIDTH parameter, and nothing in the language ties
+  // it to this module's: an interface port header carries no parameter assignments (IEEE
+  // 1800-2017 §25.5). simjig's binding defaults it to the module's `.param("WIDTH", ..)`,
+  // but another instantiation may not; a mismatch would silently truncate or pad every
+  // beat.
   if ($bits(up.data) != WIDTH || $bits(down.data) != WIDTH) begin : g_bad_iface_width
     $fatal(1, "skid_buffer: WIDTH is %0d but up.data has %0d bits and down.data %0d",
            WIDTH, $bits(up.data), $bits(down.data));

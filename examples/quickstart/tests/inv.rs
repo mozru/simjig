@@ -1,10 +1,6 @@
 //! A combinational design: drive an input, let time pass, check the output.
 
-use simjig::{Timer, ns};
-use simjig_bits::Bit;
-
-// The bindings `build.rs` generated: `inv::Dut`, one typed handle per port.
-simjig::include_dut!(inv);
+use quickstart::*;
 
 #[simjig::test]
 async fn y_is_not_a(dut: inv::Dut) {

@@ -6,19 +6,23 @@ The smallest simjig project. Copy this directory to start your own.
 |---|---|
 | `rtl/inv.sv`, `rtl/flop.sv` | the designs |
 | `build.rs` | one `simjig_build::Dut` per design: verilate, generate bindings, link; the flop with `.trace_fst(true)` for waves |
+| `src/lib.rs` | the testbench library: `pub use simjig::prelude::*;`, one `simjig::include_dut!` per design, and the shared `reset` helper |
 | `tests/inv.rs` | a combinational test: `set`, `Timer`, `get` |
-| `tests/flop.rs` | a clocked test: `simjig::clock`, `rising`, `ReadOnly` |
+| `tests/flop.rs` | a clocked test: `clock`, and `rising().read_write()` to check what an edge produced |
 | `tests/inv_flop.rs` | two DUTs in one test, the inverter feeding the flop |
 | `.config/nextest.toml` | a wall-clock timeout for hung tests (`slow-timeout`, `terminate-after`) |
 
-`Cargo.toml` needs `simjig` and `simjig-bits` for the tests and `simjig-build` for the
-build script. A `src/lib.rs` is fine, for helpers that several test files share: the
-build script links the models into the tests whether or not the package has a library.
-Verilator 5.052 must be on `PATH` (in this repository: `pixi run`).
+This is the recommended layout: the DUTs and helpers live in the library, and each test
+file starts with one line, `use quickstart::*;`. (`simjig::include_dut!` in a test file
+works too; the build script links the models into the tests either way.) `Cargo.toml`
+needs `simjig` as a dependency (its `simjig::bits` has the value types) and
+`simjig-build` for the build script. Verilator 5.052 must be on `PATH` (in this
+repository: `pixi run`).
 
-`[lints] workspace = true` inherits the repository's lints, including `missing_docs`
-(warn), which is why `build.rs` and every test file open with a `//!` comment: each is a
-crate of its own. Keep one in each file you add.
+`Cargo.toml` lists its own lints: the repository's, except that `unwrap_used`,
+`expect_used` and `missing_docs` are allowed, so tests can unwrap and need no doc
+comments. Cargo cannot add local entries to `[lints] workspace = true`, so the table
+repeats every lint it keeps.
 
 ```sh
 pixi run cargo nextest run -p quickstart
@@ -30,7 +34,8 @@ simjig is not on crates.io yet, so a copy of this directory elsewhere depends on
 checkout (`<simjig>` below; a path without spaces) and borrows its pixi environment:
 
 1. In `Cargo.toml`, replace each `.workspace = true` key with its own value, and the
-   dependencies with paths into the checkout. Drop `[lints]` or write your own:
+   dependencies with paths into the checkout. Keep the `[lints.*]` tables, or write
+   your own:
 
    ```toml
    [package]
@@ -39,14 +44,14 @@ checkout (`<simjig>` below; a path without spaces) and borrows its pixi environm
    edition = "2024"
    publish = false
 
-   [dev-dependencies]
+   [dependencies]
    simjig = { path = "<simjig>/crates/simjig" }
-   simjig-bits = { path = "<simjig>/crates/simjig-bits" }
 
    [build-dependencies]
    simjig-build = { path = "<simjig>/crates/simjig-build" }
    ```
 
+   Then `use quickstart::*;` in the tests becomes `use my_tb::*;`.
 2. Copy `<simjig>/rust-toolchain.toml` next to your `Cargo.toml`: simjig needs that
    exact toolchain (rustup installs it on the first cargo command).
 3. Run cargo through the checkout's pixi environment, which has Verilator:
@@ -58,7 +63,7 @@ checkout (`<simjig>` below; a path without spaces) and borrows its pixi environm
    The `repro:` line of a failure carries the same `--manifest-path`, so it can be pasted
    as is. Install `cargo simjig` (below) from the checkout, and run it the same way.
 
-Each test file names a design with `simjig::include_dut!(inv);`, which brings in the
+`src/lib.rs` names each design with `simjig::include_dut!(inv);`, which brings in the
 module `inv` with `inv::Dut`: one typed handle per port (`In<Bit>` for inputs, `Out<..>`
 for outputs). A `#[simjig::test]` takes the `Dut` as its argument and runs as an async
 function in simulation time.

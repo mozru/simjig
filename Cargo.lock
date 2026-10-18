@@ -366,7 +366,6 @@ name = "quickstart"
 version = "0.0.0"
 dependencies = [
  "simjig",
- "simjig-bits",
  "simjig-build",
 ]
 

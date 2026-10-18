@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `examples/quickstart` uses the recommended lib-target layout: `src/lib.rs` has `pub use
+  simjig::prelude::*;`, the `include_dut!`s and a shared `reset`, and each test file
+  starts with `use quickstart::*;`. It depends on `simjig` only (`simjig::bits`, no
+  `simjig-bits`), lists its own `[lints.*]` tables (the workspace's, with `unwrap_used`,
+  `expect_used` and `missing_docs` allowed), and the flop test checks the edge's result
+  with `dut.clk.rising().read_write().await`. `include_dut!` in a test file still works.
 - `simjig::prelude`: one glob import (`use simjig::prelude::*;`) for what nearly every
   testbench uses: `clock`, `cycles`, `ns`/`us`/`ps`/`ms`, `spawn`, `first!`, `join!`,
   `with_timeout`, `Timer`, `ReadWrite`, `ReadOnly`, `TriggerExt`, `Queue`, `Event`,

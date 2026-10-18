@@ -25,6 +25,7 @@ fn backpressure() {
                 unit: ::simjig::TimeUnit::Ms,
             }),
             ignored: true,
+            should_panic: false,
         },
         |__simjig_sim, __simjig_dut| async move {
             backpressure(&__simjig_sim, __simjig_dut).await

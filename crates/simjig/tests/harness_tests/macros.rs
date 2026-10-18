@@ -81,3 +81,20 @@ async fn the_default_timeout_fails_a_hang() {
         Timer::new(simjig::ms(1)).await;
     }
 }
+
+/// Runs one test of this binary in a child process, output uncaptured.
+fn run_uncaptured(test: &str) -> std::process::Output {
+    std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", test, "--nocapture"])
+        .env_remove("SIMJIG_SEED")
+        .output()
+        .expect("the child runs")
+}
+
+#[test]
+fn a_passing_should_panic_test_prints_no_report() {
+    let output = run_uncaptured("macros::timeout_fails_the_test");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("FAIL macros::"), "{stderr}");
+}

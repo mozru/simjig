@@ -63,6 +63,10 @@ pub struct TestMeta {
     pub timeout: TimeoutArg,
     /// Whether the test has an `#[ignore]` attribute.
     pub ignored: bool,
+    /// Whether the test has a `#[should_panic]` attribute: its failure is the expected
+    /// outcome, so the report is not printed (libtest shows the payload if the panic
+    /// does not match).
+    pub should_panic: bool,
 }
 
 impl TestMeta {
@@ -434,7 +438,9 @@ where
     }
     if let Some(report) = outcome.failure {
         let text = report.to_string();
-        eprintln!("{text}");
+        if !meta.should_panic {
+            eprintln!("{text}");
+        }
         // `resume_unwind` skips the panic hook, so the block is printed once, and without
         // a misleading "panicked at <harness file>" line.
         panic::resume_unwind(Box::new(text));

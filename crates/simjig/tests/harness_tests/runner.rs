@@ -19,6 +19,7 @@ fn meta(name: &'static str) -> TestMeta {
         package: "simjig",
         timeout: TimeoutArg::Default,
         ignored: false,
+        should_panic: false,
     }
 }
 

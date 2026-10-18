@@ -19,6 +19,7 @@ pub fn smoke() {
             package: ::core::env!("CARGO_PKG_NAME"),
             timeout: ::simjig::__private::TimeoutArg::Default,
             ignored: false,
+            should_panic: false,
         },
         |_, _| async move { smoke().await },
     );

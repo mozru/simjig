@@ -17,6 +17,7 @@ fn soak() {
             package: ::core::env!("CARGO_PKG_NAME"),
             timeout: ::simjig::__private::TimeoutArg::Disabled,
             ignored: false,
+            should_panic: false,
         },
         |_, _| async move { soak().await },
     );

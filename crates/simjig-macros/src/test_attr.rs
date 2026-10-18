@@ -282,6 +282,7 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
     // `simjig::Result` carries the plain-data `Failure`, which is large by design.
     let allow = quote!(#[allow(clippy::unused_async, clippy::result_large_err)]);
     let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
+    let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
     let output_check = match &sig.output {
         ReturnType::Default => quote!(),
         ReturnType::Type(_, ty) => quote_spanned!(ty.span()=>
@@ -302,6 +303,7 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
                     package: ::core::env!("CARGO_PKG_NAME"),
                     timeout: #timeout,
                     ignored: #ignored,
+                    should_panic: #should_panic,
                 },
                 |#sim_pat, #dut_pat| async move { #ident(#(#call_args),*).await },
             );

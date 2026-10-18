@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `cargo simjig show` prints the file's path relative to the current directory, and the
+  module with `::simjig::__private::` and `::core::primitive::` removed (`In<Bit>`, `u8`),
+  saying so in its first line; `--path` still prints the absolute path.
 - A failed JSON pass reads "parsing DUT `x` (Verilator JSON pass) failed ..." (was
   "JSON pass for DUT `x` failed ...").
 - `cycles(clk, n)` takes any integer count (`n: impl TryInto<u64>`: `u32`, `usize`,

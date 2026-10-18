@@ -79,6 +79,9 @@ pixi run cargo simjig show fifo -p mycrate # the DUT of one package of a workspa
 
 `show` runs `cargo check --tests` first (which runs the build scripts), so the file is
 current; run it in the crate whose `build.rs` builds the DUT, or name that crate with `-p`.
+The module is printed shortened for reading (`In<Bit>` for
+`::simjig::__private::In<::simjig::__private::bits::Bit>`); the file at the path is the
+exact text.
 
 ### Generated names
 Each SystemVerilog name becomes a Rust name by these rules (`codegen::names`,

@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `Dut::sources` skips a path already added (it used to pass Verilator the file twice,
+  defining its modules twice). Its docs and `Dut::param`'s say that `.sources` appends
+  while `.param` replaces, with the pattern for one member's own RTL.
 - Sweep modules (generated code): a `Ports`, bundle or fields trait method named like a
   blanket impl's (`into`, `from`, `try_into`, `try_from`, `to_owned`, `clone_into`,
   `borrow`, `borrow_mut`) gets `_` appended like `clone_`, as `x.into()` was ambiguous

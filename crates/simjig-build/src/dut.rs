@@ -786,8 +786,19 @@ impl Dut {
     /// Adds source files. Relative paths are made absolute against the current directory
     /// (in a build script, the package root) right away, so [`DutConfig::prefix`] is the
     /// same before and during the build.
+    ///
+    /// A second call appends to the first (unlike [`Dut::param`], which replaces): a sweep
+    /// member's `base().sources(["rtl/extra.sv"])` adds a file. A path already added is
+    /// skipped (a file passed twice would define its modules twice), so the order is
+    /// each path's first call. To give one member other RTL, pass the sources to the
+    /// base configuration as an argument (`|name, rtl: &str| Dut::new(name).sources([rtl])`)
+    /// rather than adding them after.
     pub fn sources(mut self, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Self {
-        self.config.sources.extend(paths.into_iter().map(absolute));
+        for path in paths.into_iter().map(absolute) {
+            if !self.config.sources.contains(&path) {
+                self.config.sources.push(path);
+            }
+        }
         self
     }
 
@@ -834,7 +845,8 @@ impl Dut {
     ///
     /// Setting a parameter again replaces its value: the last call wins, so a sweep
     /// member can override a base configuration (`base().param("WIDTH", 32)`). The
-    /// parameter keeps the place of its first call among the others.
+    /// parameter keeps the place of its first call among the others. ([`Dut::sources`]
+    /// appends instead.)
     pub fn param(mut self, name: impl Into<String>, value: impl Display) -> Self {
         let (name, value) = (name.into(), value.to_string());
         match self.config.params.iter_mut().find(|(n, _)| *n == name) {
@@ -1749,6 +1761,23 @@ mod tests {
             ..empty
         };
         assert_ne!(arg.prefix(), generated.prefix());
+    }
+
+    #[test]
+    fn a_source_added_twice_is_kept_once_in_its_first_place() {
+        let d = Dut::new("t")
+            .sources(["a.sv", "b.sv"])
+            .sources(["c.sv", "./a.sv", "b.sv", "c.sv"]);
+        let names: Vec<_> = d.config().sources.iter().map(|p| p.file_name()).collect();
+        assert_eq!(names, ["a.sv", "b.sv", "c.sv"].map(|n| Some(n.as_ref())));
+        assert_eq!(
+            d.config().prefix(),
+            Dut::new("t")
+                .sources(["a.sv", "b.sv", "c.sv"])
+                .config()
+                .prefix(),
+            "the same model as adding each once"
+        );
     }
 
     #[test]

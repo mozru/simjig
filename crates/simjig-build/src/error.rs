@@ -262,6 +262,21 @@ fn display_paths(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
+/// What to change for a Verilator diagnostic whose fix is a `Dut` option, if `stderr` has
+/// one. A DUT is verilated with `--no-timing` unless it asks for `--timing`, and Verilator
+/// then ignores a `#` delay (STMTDLY) or rejects an event control inside a procedure
+/// (NOTIMING), naming the flag, not the `simjig_build` option.
+fn hint(stderr: &str) -> Option<&'static str> {
+    let timing = ["%Warning-STMTDLY", "%Error-STMTDLY", "%Error-NOTIMING"];
+    stderr
+        .lines()
+        .any(|line| timing.iter().any(|tag| line.starts_with(tag)))
+        .then_some(
+            "the design has `#` delays or event controls that need `--timing`; add \
+             `.timing(true)` to its `simjig_build::Dut`",
+        )
+}
+
 fn display_command_failure(
     what: &str,
     command: &str,
@@ -280,6 +295,10 @@ fn display_command_failure(
     if !stderr.trim().is_empty() {
         out.push_str("\nstderr:\n");
         out.push_str(stderr.trim_end());
+    }
+    if let Some(hint) = hint(stderr) {
+        out.push_str("\nhint: ");
+        out.push_str(hint);
     }
     out.push_str("\ncommand: ");
     out.push_str(command);
@@ -382,6 +401,38 @@ mod tests {
             "JSON pass for DUT `shreg` failed (exit status: 1) on `/r/shreg.sv`\nstderr:\n\
              %Error: /r/shreg.sv:3:5: syntax error\ncommand: verilator --json-only shreg.sv"
         );
+    }
+
+    /// A delay or event control that needs `--timing` (Verilator's STMTDLY warning, its
+    /// NOTIMING error) gets the build option to add; other failures get no such hint.
+    #[test]
+    fn timing_diagnostics_suggest_timing_true() {
+        let failure = |stderr: &str| {
+            Error::Command {
+                what: "verilating DUT `d`".into(),
+                command: "verilator --cc --no-timing d.sv".into(),
+                status: Some(1),
+                stderr: stderr.into(),
+                path: None,
+            }
+            .to_string()
+        };
+        let hint = "hint: the design has `#` delays or event controls that need `--timing`; \
+                    add `.timing(true)` to its `simjig_build::Dut`";
+        for stderr in [
+            "%Warning-STMTDLY: /r/d.sv:4:5: Ignoring delay on this statement due to --no-timing\n",
+            "%Error-NOTIMING: /r/d.sv:7:5: Event control statement in this location requires \
+             --timing\n",
+        ] {
+            let text = failure(stderr);
+            assert!(text.contains(hint), "{text}");
+            assert!(
+                text.ends_with("command: verilator --cc --no-timing d.sv"),
+                "{text}"
+            );
+        }
+        let text = failure("%Error: /r/d.sv:3:5: syntax error\n");
+        assert!(!text.contains("hint:"), "{text}");
     }
 
     #[test]

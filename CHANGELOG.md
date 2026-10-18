@@ -223,3 +223,26 @@ the public API, the generated code or simulation semantics.
 - Prefix claims in the cache moved to `prefixes/<scheme>/<prefix>`, the scheme naming
   the simjig-build version and the shape of `DutConfig`; a cache written by another
   simjig-build no longer reports every prefix as a collision.
+
+#### Stage 3 review cycle 2 fixes
+- Fork: a branch child runs `ForkHook::at_child_exit` only for hooks whose `in_child`
+  succeeded. Before, a failing hook (a user's hook registered before a traced model, or
+  a trace whose branch file could not be created) left the other hooks to finish, and a
+  trace hook that never detached closed its inherited writer into the parent's FST.
+- Traces: a fork child never closes or destroys a trace it did not reopen (one stopped
+  before the fork, or whose reopen failed); C ABI `trace_reopen` now detaches the
+  inherited writer (redirect to /dev/null, close) before checking the new path, so
+  `IO_ERROR` leaves no trace open, and abandons the writer unclosed when the descriptor
+  cannot be redirected.
+- `ModelMeta` gains `module` (the generated module's `module_path!()`) and `dut_name()`;
+  `dut_model!` fills it. A load failure's message starts with ``DUT `<name>`:``, and
+  `LoadError`'s `Display` no longer repeats the advice its `help()` gives.
+- `SIMJIG_WAVES_ON_FAIL=1` no longer replays a failure no model of which can trace;
+  `SIMJIG_WAVES` still replays any run (the determinism check).
+- The report of a test failed by a fork branch reads
+  `t=<branch failure time> in fork branch <i> (checkpoint t=<time>)` and has no `help:`
+  line of its own (each branch's help is in the message).
+- `Lockstep::output` names both signals: `a.count vs b.count`, or
+  `counter.count (model 0) vs counter.count (model 1)` when the names are equal.
+- `simjig-build`: a failed Verilator run whose stderr has STMTDLY or NOTIMING ends with a
+  hint to add `.timing(true)`.

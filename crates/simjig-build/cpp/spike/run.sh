@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Spike: does throwing through Verilator-generated code unwind cleanly?
+# Historical (docs/notes/abi.md): it prints its results and asserts nothing, so no gate runs
+# it; crates/simjig/tests/abi_counter.rs tests the behaviours it showed.
 # Run from the repository root: pixi run bash crates/simjig-build/cpp/spike/run.sh [asan|ubsan]
 # Builds each model with `verilator --cc --exe --build`, adding the simjig runtime and the
 # forced-include config to *every* compile (VM_USER_CFLAGS reaches libverilated too).

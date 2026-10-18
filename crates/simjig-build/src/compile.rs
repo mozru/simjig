@@ -43,7 +43,8 @@
 //! header edit anywhere (next to a recipe source, in an include directory, in the
 //! toolchain) compiles it again (see `archive`). The build script reruns on those files
 //! too, except the ones under the cache and `OUT_DIR`, which derive from tracked inputs,
-//! and on the compiler's executable (`archive::compiler_files`).
+//! and the toolchain's own headers (`archive::toolchain_dirs`), which change only with the
+//! compiler; and it reruns on the compiler's executable (`archive::compiler_files`).
 //!
 //! ccache is used when available (see [`ccache_compiler`]).
 
@@ -311,18 +312,13 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     }
     d.extend(libs.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
     d.extend(link_args(&archives, &natives, &libs));
-    d.extend(rerun_on_deps(i, &archives));
+    d.extend(rerun_on_deps(i, &archives, &compiler));
     for a in &archives {
         if let Some(path) = &a.changed {
             let run = format!("compiling `{}`", a.name);
             d.push(crate::manifest::changed_warning(&i.config.name, &run, path));
         }
     }
-    d.extend(
-        archive::compiler_files(i.env, &compiler)
-            .into_iter()
-            .map(|p| format!("cargo::rerun-if-changed={}", p.display())),
-    );
     Ok(script::once_per_script(&i.env.out_dir, d))
 }
 
@@ -376,16 +372,22 @@ fn shared_runtime(tc: &Toolchain<'_>, runtime: &Runtime) -> Result<Archive, Erro
 }
 
 /// `rerun-if-changed` for every file the compiler read, except the ones under the cache
-/// and `OUT_DIR`: those derive from tracked inputs, and this run may have just written
-/// them, which Cargo would take as a change on the next build.
-fn rerun_on_deps(i: &Inputs<'_>, archives: &[&Archive]) -> Vec<String> {
-    let mut deps: Vec<&PathBuf> = archives
+/// and `OUT_DIR` (those derive from tracked inputs, and this run may have just written
+/// them, which Cargo would take as a change on the next build) and the toolchain's own
+/// headers (`archive::toolchain_dirs`: they change only with the compiler, whose files
+/// come last, `archive::compiler_files`; the archive keys still hash them).
+fn rerun_on_deps(i: &Inputs<'_>, archives: &[&Archive], compiler: &cc::Tool) -> Vec<String> {
+    let toolchain = archive::toolchain_dirs(i.env, compiler);
+    let mut deps: Vec<PathBuf> = archives
         .iter()
         .flat_map(|a| &a.deps)
         .filter(|p| !p.starts_with(i.cache.root()) && !p.starts_with(&i.env.out_dir))
+        .filter(|p| !archive::under_any(p, &toolchain))
+        .cloned()
         .collect();
     deps.sort();
     deps.dedup();
+    deps.extend(archive::compiler_files(i.env, compiler));
     deps.into_iter()
         .map(|p| format!("cargo::rerun-if-changed={}", p.display()))
         .collect()

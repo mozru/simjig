@@ -306,6 +306,112 @@ pub(crate) fn compiler_files(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
     files
 }
 
+/// The directories of the toolchain's own headers: the compiler's `#include <...>` search
+/// list (its C++ library, its resource directory, the SDK or sysroot), asked of the
+/// compiler with its arguments but without their include-path flags, and the `include/`
+/// of the prefix it is installed in (`<prefix>/bin/c++`: a conda environment's
+/// `include/`, which its activation adds with `-isystem`). Each as named and canonical.
+///
+/// A file under them changes only with the toolchain, which [`compiler_identity`] and
+/// [`compiler_files`] already track, so the build script need not rerun on each (they
+/// are most of a model's dependencies); the archive keys still hash them. Asked once per
+/// build script (`OUT_DIR`) and compiler; a compiler that cannot answer (no `-v`) gives
+/// the prefix alone.
+pub(crate) fn toolchain_dirs(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
+    static DIRS: Mutex<Vec<(PathBuf, PathBuf, Vec<PathBuf>)>> = Mutex::new(Vec::new());
+    let (found, exe) = resolve(env, tool.path());
+    // A panic while holding the lock leaves the list itself consistent.
+    let mut known = DIRS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, _, dirs)) = known
+        .iter()
+        .find(|(out, path, _)| *out == env.out_dir && *path == exe)
+    {
+        return dirs.clone();
+    }
+    let args: Vec<&std::ffi::OsStr> = without_include_flags(tool.args());
+    let mut dirs = std::process::Command::new(&found)
+        .args(args)
+        .args(["-E", "-x", "c++", "-v", "-"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map(|o| system_search_list(&String::from_utf8_lossy(&o.stderr)))
+        .unwrap_or_default();
+    for bin in [&found, &exe] {
+        dirs.extend(
+            bin.parent()
+                .and_then(Path::parent)
+                .map(|p| p.join("include")),
+        );
+    }
+    let canonical: Vec<PathBuf> = dirs
+        .iter()
+        .filter_map(|d| std::fs::canonicalize(d).ok())
+        .collect();
+    dirs.extend(canonical);
+    let mut dirs: Vec<PathBuf> = dirs.iter().map(|d| lexical(d)).collect();
+    dirs.sort();
+    dirs.dedup();
+    known.push((env.out_dir.clone(), exe, dirs.clone()));
+    dirs
+}
+
+/// Whether `path` is under one of `dirs` ([`toolchain_dirs`]), compared with `.` and
+/// `..` removed as the compiler's `-MD` output may keep them (`bin/../include`).
+pub(crate) fn under_any(path: &Path, dirs: &[PathBuf]) -> bool {
+    let path = lexical(path);
+    dirs.iter().any(|d| path.starts_with(d))
+}
+
+/// `path` with `.` dropped and each `..` taking off the component before it.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir if out.file_name().is_some() => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `args` without the include-path flags (`-I`, `-isystem`, `-iquote`, `-idirafter`,
+/// `-include`, joined or with a separate value), which name the user's and simjig's
+/// directories rather than the toolchain's.
+fn without_include_flags(args: &[std::ffi::OsString]) -> Vec<&std::ffi::OsStr> {
+    const OPTS: &[&str] = &["-isystem", "-iquote", "-idirafter", "-include", "-I"];
+    let mut out = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let text = a.to_string_lossy();
+        match OPTS.iter().find(|o| text.starts_with(**o)) {
+            Some(opt) if text.len() == opt.len() => {
+                it.next();
+            }
+            Some(_) => {}
+            None => out.push(a.as_os_str()),
+        }
+    }
+    out
+}
+
+/// The directories between `#include <...> search starts here:` and `End of search
+/// list.` in the stderr of `-E -v` (GCC and Clang), without Clang's ` (framework
+/// directory)` suffix.
+fn system_search_list(stderr: &str) -> Vec<PathBuf> {
+    stderr
+        .lines()
+        .skip_while(|l| !l.starts_with("#include <...> search starts here:"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("End of search list."))
+        .map(|l| l.trim().trim_end_matches(" (framework directory)"))
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
 /// The path `named` is found at (through `PATH` when it is a bare name), and the
 /// executable that path resolves to through symlinks.
 fn resolve(env: &BuildEnv, named: &Path) -> (PathBuf, PathBuf) {
@@ -464,6 +570,69 @@ pub(crate) fn hash_listing(h: &mut KeyHasher, dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_system_search_list_is_read_from_the_compilers_report() {
+        let clang = "clang version 21\n#include \"...\" search starts here:\n/q\n\
+                     #include <...> search starts here:\n /p/bin/../include/c++/v1\n \
+                     /sdk/usr/include\n /sdk/System/Library/Frameworks (framework \
+                     directory)\nEnd of search list.\n# 1 \"<stdin>\"\n";
+        assert_eq!(
+            system_search_list(clang),
+            [
+                "/p/bin/../include/c++/v1",
+                "/sdk/usr/include",
+                "/sdk/System/Library/Frameworks"
+            ]
+            .map(PathBuf::from)
+        );
+        assert_eq!(system_search_list("no -v here"), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn toolchain_dirs_hold_its_headers_however_they_are_spelled() {
+        let dirs = [
+            PathBuf::from("/p/include"),
+            PathBuf::from("/sdk/usr/include"),
+        ];
+        assert!(under_any(
+            Path::new("/p/bin/../include/c++/v1/vector"),
+            &dirs
+        ));
+        assert!(under_any(Path::new("/sdk/usr/include/./stdio.h"), &dirs));
+        assert!(!under_any(
+            Path::new("/p/share/verilator/include/verilated.h"),
+            &dirs
+        ));
+        assert!(!under_any(Path::new("/work/cpp/hook.h"), &dirs));
+        assert!(
+            !under_any(Path::new("/p/includes/x.h"), &dirs),
+            "whole components"
+        );
+    }
+
+    #[test]
+    fn the_probe_drops_include_path_flags_and_keeps_the_rest() {
+        let args: Vec<std::ffi::OsString> = [
+            "-O2",
+            "-I/rt",
+            "-I",
+            "/vl",
+            "-isystem",
+            "/p/include",
+            "-include",
+            "cfg.h",
+            "-isysroot",
+            "/sdk",
+            "--target=x",
+        ]
+        .map(Into::into)
+        .into();
+        assert_eq!(
+            without_include_flags(&args),
+            ["-O2", "-isysroot", "/sdk", "--target=x"]
+        );
+    }
 
     #[test]
     fn include_flags_name_their_directories() {

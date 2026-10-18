@@ -357,3 +357,78 @@ fn s3c9_a_built_dut_with_the_package_as_a_cpp_include_dir_settles() {
     assert!(build(&krate, &target, &envs), "the edited script runs");
     assert!(!build(&krate, &target, &envs), "no change: no rerun");
 }
+
+/// The newest build-script output (`target/debug/build/<pkg>-*/output`): what the last run
+/// printed to Cargo.
+fn last_output(target: &Path) -> String {
+    let newest = out_dirs(target)
+        .into_iter()
+        .map(|d| d.with_file_name("output"))
+        .filter(|f| f.is_file())
+        .max_by_key(|f| f.metadata().unwrap().modified().unwrap())
+        .unwrap();
+    std::fs::read_to_string(newest).unwrap()
+}
+
+/// A model reruns its script on the user's C++ headers, not on the toolchain's (the C++
+/// library, the SDK, the compiler's prefix), which the compiler's identity covers: those
+/// were most of a failed build's `--- stdout` dump. A rerun with no change stays a
+/// no-op, and an edit to the user's header still reruns.
+#[test]
+fn a_model_reruns_on_the_users_headers_and_not_the_toolchains() {
+    let (krate, _, _lock) = fixture();
+    let target = krate.parent().unwrap().join("target");
+    let envs = [
+        (
+            "SIMJIG_CACHE_DIR",
+            krate.parent().unwrap().join("cache").into_os_string(),
+        ),
+        ("SIMJIG_CCACHE", "0".into()),
+    ];
+    let cpp = krate.join("cpp");
+    std::fs::create_dir_all(&cpp).unwrap();
+    let header = cpp.join("hook.h");
+    std::fs::write(
+        &header,
+        "#include <vector>\ninline int hook() { return 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cpp.join("hook.cpp"),
+        "#include \"hook.h\"\nint simjig_fixture_hook() { return hook(); }\n",
+    )
+    .unwrap();
+    let script = krate.join("build.rs");
+    let text = std::fs::read_to_string(&script).unwrap().replace(
+        r#"dut("inv").build()?;"#,
+        r#"dut("inv").recipe(simjig_build::CppRecipe { model_sources: vec!["cpp/hook.cpp".into()], include_dirs: vec!["cpp".into()], ..Default::default() }).build()?;"#,
+    );
+    assert!(text.contains("hook.cpp"));
+    std::fs::write(&script, text).unwrap();
+    assert!(build(&krate, &target, &envs), "the edited script runs");
+    let reruns: Vec<String> = last_output(&target)
+        .lines()
+        .filter_map(|l| l.strip_prefix("cargo::rerun-if-changed="))
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        reruns.iter().any(|r| Path::new(r).ends_with("cpp/hook.h")),
+        "{reruns:#?}"
+    );
+    // libc++ and libstdc++ both live in `<dir>/include/c++/`; `<vector>` reached them.
+    let toolchain: Vec<&String> = reruns
+        .iter()
+        .filter(|r| r.contains("/include/c++/") || r.contains(".sdk/"))
+        .collect();
+    assert!(toolchain.is_empty(), "{toolchain:#?}");
+    assert!(!build(&krate, &target, &envs), "no change: no rerun");
+    std::fs::write(
+        &header,
+        "#include <vector>\ninline int hook() { return 2; }\n",
+    )
+    .unwrap();
+    assert!(
+        build(&krate, &target, &envs),
+        "an edit to the user's header reruns the script"
+    );
+}

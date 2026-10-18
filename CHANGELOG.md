@@ -4,6 +4,13 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A model's build script no longer prints `cargo::rerun-if-changed` for the toolchain's
+  own headers: the compiler's `#include <...>` search list (its C++ library, resource
+  directory, SDK or sysroot) and the `include/` of the prefix the compiler is installed
+  in (a conda environment's). They change only with the compiler, whose identity keys
+  the archives and whose executable the script reruns on; the archive keys still hash
+  them. This was most of a failed build's `--- stdout` (about 1,200 lines per script
+  here, now under 100).
 - `Dut::param` set twice for one parameter keeps the last value (in the first call's
   place) instead of passing Verilator two `-G` options ("Duplicate parameter
   connection"), so a sweep member can override a base configuration. A second

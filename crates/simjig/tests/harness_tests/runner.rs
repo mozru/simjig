@@ -382,3 +382,40 @@ fn bits_values_do_not_change_the_signature() {
     assert!(a.message.contains("8'h"), "{}", a.message);
     assert_eq!(a.signature, b.signature, "{}\n{}", a.message, b.message);
 }
+
+/// The lines of the two `rng("stim")` calls in [`reuses_a_stream`].
+const FIRST_RNG_LINE: u32 = line!() + 4;
+const SECOND_RNG_LINE: u32 = line!() + 6;
+
+async fn reuses_a_stream(ctx: TestCtx) {
+    let mut a = ctx.rng("stim");
+    let _other = ctx.rng("ready");
+    yield_now().await;
+    let mut b = ctx.rng("stim");
+    // Without the check, `b` silently repeats `a`'s values.
+    assert_ne!(a.next_u64(), b.next_u64());
+}
+
+#[test]
+fn reusing_a_stream_path_fails_at_the_second_call() {
+    let outcome = run::<(), _, _>(&meta("reuse"), &env(None, "reuse"), |ctx, ()| {
+        reuses_a_stream(ctx)
+    });
+    let report = outcome.failure.expect("the second rng(\"stim\") panics");
+    assert_eq!(report.kind, "TaskPanic");
+    let location = report.location.as_deref().unwrap_or_default();
+    assert!(
+        location.ends_with(&format!("harness_tests/runner.rs:{SECOND_RNG_LINE}:21")),
+        "{location}"
+    );
+    assert!(
+        report
+            .message
+            .contains("the random stream \"stim\" was already taken")
+            && report
+                .message
+                .contains(&format!("harness_tests/runner.rs:{FIRST_RNG_LINE}:21")),
+        "{}",
+        report.message
+    );
+}

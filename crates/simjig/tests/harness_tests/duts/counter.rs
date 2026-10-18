@@ -1,6 +1,9 @@
 // A hand-written stand-in for simjig-build's generated bindings (see `include_dut!`): an
 // accumulator on a FakeModel. On each rising edge of `clk` (a 10 ns kernel clock), if `en`
 // is set, `acc` += `data`.
+//
+// Plain `//`, not `//!`: the file is pulled in with `include!`, which rejects inner doc
+// comments (E0753); the module's doc comment comes from `include_dut!`.
 
 /// The DUT handles.
 #[derive(Debug, Clone, Copy)]

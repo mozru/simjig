@@ -175,6 +175,63 @@ fn falling_and_changed_follow_value_changes() {
 }
 
 #[test]
+fn a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice() {
+    let mut d = dut();
+    let a = d.a;
+    let seen = d.sim.run(async move {
+        let watcher = spawn("watch", async move {
+            changed(a).await;
+            let first = (now(), a.read_u64());
+            changed(a).await;
+            (first, (now(), a.read_u64()))
+        });
+        Timer::new(ticks(1)).await;
+        a.write_u64(5);
+        ReadWrite::new().await;
+        a.write_u64(0);
+        watcher.await
+    });
+    assert_eq!(seen.unwrap(), ((SimTime(1), 5), (SimTime(1), 0)));
+}
+
+#[test]
+fn first_of_coincident_edges_goes_to_the_leftmost_operand() {
+    let mut m = FakeModel::new(Precision::NS);
+    m.signal("c1", 1);
+    m.signal("c2", 1);
+    let mut sim = Sim::from_fake(m);
+    let c1 = sim.signal("c1").unwrap();
+    let c2 = sim.signal("c2").unwrap();
+    sim.add_clock(Clock::new(c1, ticks(10))).unwrap();
+    sim.add_clock(Clock::new(c2, ticks(10))).unwrap();
+    let won = sim.run(async move {
+        Timer::new(ticks(1)).await;
+        let a = simjig::first!(
+            async {
+                rising(c2).await;
+                "c2"
+            },
+            async {
+                rising(c1).await;
+                "c1"
+            }
+        );
+        let b = simjig::first!(
+            async {
+                rising(c1).await;
+                "c1"
+            },
+            async {
+                rising(c2).await;
+                "c2"
+            }
+        );
+        (a, b)
+    });
+    assert_eq!(won.unwrap(), ("c2", "c1"));
+}
+
+#[test]
 fn model_events_advance_time() {
     // A `--timing` stand-in: the model has an event at 42 and nothing else is scheduled.
     let mut m = FakeModel::new(Precision::NS);

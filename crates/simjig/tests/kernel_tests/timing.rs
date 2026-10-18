@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use simjig::{
-    Clock, DELTA_MAX, FailureKind, FakeModel, FakeSig, FakeState, Precision, Sim, SimTime, Timer,
-    TraceKind, changed, now, rising,
+    Clock, DELTA_MAX, FailureKind, FakeModel, FakeSig, FakeState, Precision, ReadOnly, Sim,
+    SimTime, Timer, TraceKind, changed, now, rising,
 };
 
 use super::ticks;
@@ -39,6 +39,24 @@ fn steps(sim: &Sim) -> Vec<u64> {
 
 fn multiples(of: u64, upto: u64) -> impl Iterator<Item = u64> {
     (0..=upto / of).map(move |i| i * of)
+}
+
+#[test]
+fn a_timer_resumes_before_the_designs_event_at_the_same_time() {
+    // A `#10 x = 1` in the design and a Timer due at 10: the Timer task sees x = 0 (as
+    // cocotb on Verilator: timed callbacks run before the eval that runs the event).
+    let mut m = FakeModel::new(Precision::NS);
+    let x = m.signal("x", 1);
+    m.at(SimTime(10), move |s| s.set(x, 1));
+    let mut sim = Sim::from_fake(m);
+    let x = sim.signal("x").unwrap();
+    let seen = sim.run(async move {
+        Timer::new(ticks(10)).await;
+        let at_timer = x.read_u64();
+        ReadOnly::new().await;
+        (at_timer, x.read_u64())
+    });
+    assert_eq!(seen.unwrap(), (0, 1));
 }
 
 #[test]

@@ -179,6 +179,22 @@ Every edge, Timer and ReadOnly observation is identical in the two modes.
   `rclk` trigger was primed at 60 ns; the `wclk` trigger was re-primed at 65 ns after
   firing. This explanation is a hypothesis; only the order itself is in the golden.
 
+### Further rules, confirmed but not in a golden
+Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel_tests`).
+- `NextTimeStep` waiters resume before that time step's `Timer` waiters (step 1 above;
+  `phases::next_time_step_resumes_at_the_next_scheduled_time_before_timers`).
+- `First` of edges that fire in the same comparison goes to the **leftmost** operand
+  (`phases::first_of_coincident_edges_goes_to_the_leftmost_operand`).
+- A bus that changes and changes back within one time step, in two deltas, fires
+  `ValueChange` **twice** (`phases::a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice`).
+- A task woken from a `ReadOnly` waiter (an `Event` set, a `Queue` put) runs in that
+  `ReadOnly` phase. cocotb raises `RuntimeError` on a write there; simjig fails the run
+  with `WriteInReadOnly`
+  (`failures::a_task_woken_from_read_only_runs_there_and_cannot_write`).
+- Under `--timing`, `Timer`s due at time t resume before the design's `#` events at t:
+  they run in step 1, before the `eval_step()` that executes those events
+  (`timing::a_timer_resumes_before_the_designs_event_at_the_same_time`).
+
 ### Simulation end
 The simulation ends when no timed callback and no `--timing` event is left. A test that
 awaits `ReadWrite` from inside `ReadWrite` with nothing pending, and no clock running,

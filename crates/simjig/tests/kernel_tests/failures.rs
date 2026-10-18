@@ -1,6 +1,7 @@
 //! Every failure kind: when it is raised, and what it says.
 
 use std::panic::{self, AssertUnwindSafe};
+use std::rc::Rc;
 
 use simjig::{
     BlockedTask, DELTA_MAX, Event, FailureKind, FakeModel, Lock, Precision, READ_WRITE_MAX,
@@ -50,6 +51,34 @@ fn one_task_rewriting_a_signal_keeps_the_last_value() {
         a.read_u64()
     });
     assert_eq!(out.unwrap(), 2);
+}
+
+#[test]
+fn a_task_woken_from_read_only_runs_there_and_cannot_write() {
+    // An Event set by a ReadOnly waiter wakes its waiter in that ReadOnly phase; cocotb
+    // raises RuntimeError on its write, simjig fails the run.
+    let mut d = dut();
+    let a = d.a;
+    let f = d
+        .sim
+        .run(async move {
+            let event = Rc::new(Event::new("e"));
+            let e = Rc::clone(&event);
+            let writer = spawn("writer", async move {
+                e.wait().await;
+                a.write_u64(1);
+            });
+            ReadOnly::new().await;
+            event.set();
+            writer.await;
+        })
+        .unwrap_err();
+    assert_eq!(f.kind, FailureKind::WriteInReadOnly { signal: "a".into() });
+    assert!(
+        f.task.as_deref().is_some_and(|t| t.ends_with("writer")),
+        "{f}"
+    );
+    assert_clean(&d.sim);
 }
 
 #[test]

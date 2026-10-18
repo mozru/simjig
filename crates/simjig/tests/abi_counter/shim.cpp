@@ -23,6 +23,13 @@ struct CounterTraits {
         SIMJIG_SIGNAL(t, m.half_out, "counter.half_out", 16, SIMJIG_DIR_OUT, kRead);
         SIMJIG_SIGNAL(t, m.quad_out, "counter.quad_out", 40, SIMJIG_DIR_OUT, kRead);
         SIMJIG_SIGNAL(t, m.wide_out, "counter.wide_out", 100, SIMJIG_DIR_OUT, kRead);
+        SIMJIG_SIGNAL(t, m.tiny_in, "counter.tiny_in", 5, SIMJIG_DIR_IN, kReadWrite);
+        SIMJIG_SIGNAL(t, m.mid_in, "counter.mid_in", 12, SIMJIG_DIR_IN, kReadWrite);
+        SIMJIG_SIGNAL(t, m.quad_in, "counter.quad_in", 40, SIMJIG_DIR_IN, kReadWrite);
+        SIMJIG_SIGNAL(t, m.tiny_ext, "counter.tiny_ext", 8, SIMJIG_DIR_OUT, kRead);
+        SIMJIG_SIGNAL(t, m.mid_ext, "counter.mid_ext", 16, SIMJIG_DIR_OUT, kRead);
+        SIMJIG_SIGNAL(t, m.quad_ext, "counter.quad_ext", 64, SIMJIG_DIR_OUT, kRead);
+        SIMJIG_SIGNAL(t, m.all_ones, "counter.all_ones", 1, SIMJIG_DIR_OUT, kRead);
     }
 };
 

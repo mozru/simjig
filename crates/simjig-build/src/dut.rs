@@ -163,6 +163,17 @@ impl DutConfig {
         CodegenConfig {
             probes: self.probes.clone(),
             iface_top: self.iface_top(),
+            verilator_args: self.verilator_args.clone(),
+            control_files: self
+                .generated
+                .iter()
+                .filter(|g| {
+                    Path::new(&g.file_name)
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("vlt"))
+                })
+                .map(|g| g.contents.clone())
+                .collect(),
         }
     }
 

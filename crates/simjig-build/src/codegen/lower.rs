@@ -11,6 +11,7 @@
 //!
 //! Type names are decided in [`types`], identifier rules in [`names`](super::names).
 
+mod inlining;
 mod sv;
 mod types;
 mod wrapper;
@@ -18,9 +19,10 @@ mod wrapper;
 use svtypes::ir::{Design, Param, ParamValue, Storage, TypeId, TypeKind};
 use svtypes::width::packed_storage;
 
-use self::sv::{Mode, nameable, spell_packed};
+use self::sv::{LayoutSpeller, nameable};
 use self::types::{Root, Types, Use, bits, lower_types};
-pub use self::wrapper::{elab_module, lower_wrapper, wrapper_module};
+use self::wrapper::dut_module;
+pub use self::wrapper::{DUT_INSTANCE, elab_module, lower_wrapper, wrapper_module};
 use super::names::{Namespace, camel, screaming, snake};
 use super::{
     Access, Bundle, BundleMember, CodegenConfig, Const, ConstGroup, ConstValue, DutField, Error,
@@ -38,6 +40,7 @@ use super::{
 /// ports, enums above 128 bits, ...); [`Error::Config`] when probes or interface bindings
 /// do not match the design.
 pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> {
+    inlining::check(config)?;
     let top = design.top_module();
     let wrapper = config
         .iface_top
@@ -60,7 +63,12 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
     let (signals, fields, bundles) = lower_signals(design, config, &mut types, wrapper.as_ref())?;
     let packages = lower_packages(design, &types)?;
     let mut param_ns = Namespace::with_reserved(&["SIGNALS", "IR_HASH"]);
-    let dut_params = top
+    // The wrapper has no parameters: an interface-ported DUT's come from its own module.
+    let params_of = match &config.iface_top {
+        Some(t) => dut_module(design, t)?,
+        None => top,
+    };
+    let dut_params = params_of
         .params
         .iter()
         .map(|p| lower_const(design, &types, p, &mut param_ns))
@@ -81,12 +89,19 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
     })
 }
 
-/// FNV-1a 64 over the IR's JSON form and the configuration's `Debug` form; both are
-/// deterministic (the IR holds no maps, the configuration only vectors).
+/// FNV-1a 64 over the IR's JSON form and the `Debug` form of the configuration fields that
+/// shape the generated code; both are deterministic (the IR holds no maps, the
+/// configuration only vectors).
 fn ir_hash(design: &Design, config: &CodegenConfig) -> u64 {
     // Serialising plain derived structs to a Vec cannot fail.
     let json = serde_json::to_vec(design).unwrap_or_default();
-    let config = format!("{config:?}");
+    // The derived `Debug` text of a configuration with only these two fields, so adding
+    // fields that can only reject a configuration (`verilator_args`, `control_files`)
+    // changes no hash.
+    let config = format!(
+        "CodegenConfig {{ probes: {:?}, iface_top: {:?} }}",
+        config.probes, config.iface_top
+    );
     json.iter()
         .chain(config.as_bytes())
         .fold(0xcbf2_9ce4_8422_2325, |h, &b| {
@@ -223,7 +238,7 @@ fn lower_signals(
         index += group;
     }
     for probe in &config.probes {
-        let (signal, name) = lower_probe(design, types, probe, slot(signals.len()))?;
+        let (signal, name) = lower_probe(design, types, probe, slot(signals.len()), wrapper)?;
         fields.push(DutField::Signal {
             name: fields_ns.claim(&snake(&name)),
             slot: signal.slot,
@@ -303,19 +318,28 @@ fn slot(index: usize) -> u32 {
 }
 
 /// One probe's signal, and the base of its field name (the path below the top).
+///
+/// The path starts at the DUT the testbench sees. For an interface-ported DUT that is the
+/// DUT module, not the wrapper Verilator elaborates as top: the wrapper is an
+/// implementation detail, so its name is rejected, and the path is rewritten under the
+/// wrapper's [`DUT_INSTANCE`] to find the C++ member.
 fn lower_probe(
     design: &Design,
     types: &Types,
     probe: &Probe,
     slot: u32,
+    wrapper: Option<&Wrapper>,
 ) -> Result<(Signal, String), Error> {
     let item = || format!("probe {}", probe.path);
-    let top = &design.top_module().orig_name;
     let segments: Vec<&str> = probe.path.split('.').collect();
-    if segments.len() < 2 || segments[0] != top {
+    let (what, dut) = match wrapper {
+        Some(w) => ("the DUT", w.dut.as_str()),
+        None => ("the top module", design.top_module().orig_name.as_str()),
+    };
+    if segments.len() < 2 || segments[0] != dut {
         return Err(Error::config(
             item(),
-            format!("the path must start with the top module, e.g. `{top}.u_core.state`"),
+            format!("the path must start with {what} `{dut}`, e.g. `{dut}.u_core.state`"),
         ));
     }
     if let Some(bad) = segments.iter().find(|s| !is_simple_ident(s)) {
@@ -342,7 +366,14 @@ fn lower_probe(
     }
     let storage: Storage = packed_storage(width).map_err(|e| Error::unsupported(item(), e.0))?;
     let var = segments[segments.len() - 1].to_owned();
-    let root_member = segments
+    let model_path: Vec<&str> = match wrapper {
+        Some(w) => [w.module.as_str(), DUT_INSTANCE]
+            .into_iter()
+            .chain(segments[1..].iter().copied())
+            .collect(),
+        None => segments.clone(),
+    };
+    let root_member = model_path
         .iter()
         .map(|s| encode_name(s))
         .collect::<Vec<_>>()
@@ -507,6 +538,7 @@ fn real_literal(text: &str) -> Option<String> {
 /// unions, and the constants of nameable enums.
 fn lower_layout(design: &Design, types: &Types) -> Layout {
     let mut checks = Vec::new();
+    let mut speller = LayoutSpeller::default();
     for (id, item) in &types.items {
         if item.storage.is_none() {
             continue;
@@ -518,7 +550,7 @@ fn lower_layout(design: &Design, types: &Types) -> Layout {
             continue;
         }
         // Only an unpacked aggregate fails to spell, and those have no storage.
-        let Ok(sv_type) = spell_packed(design, *id, Mode::Layout) else {
+        let Ok(sv_type) = speller.spell(design, *id) else {
             continue;
         };
         let members = match &ty.kind {
@@ -552,6 +584,7 @@ fn lower_layout(design: &Design, types: &Types) -> Layout {
             _ => Vec::new(),
         };
         checks.push(LayoutCheck {
+            sv_name: item.sv_name.clone(),
             sv_type,
             width: item.width,
             members,
@@ -560,6 +593,7 @@ fn lower_layout(design: &Design, types: &Types) -> Layout {
     }
     Layout {
         module: format!("simjig_layout_{}", design.top_module().orig_name),
+        typedefs: speller.into_typedefs(),
         checks,
     }
 }

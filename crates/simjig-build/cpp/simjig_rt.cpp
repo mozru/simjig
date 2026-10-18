@@ -14,10 +14,19 @@
 // precedes an $error tells them apart (Runtime::adopt_print).
 #include "simjig_rt.h"
 
+#include "verilated_syms.h"
+
 #include <algorithm>
+#include <cerrno>
+#include <stdexcept>
 #include <cstdio>
 #include <cstring>
 #include <utility>
+
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace simjig {
 namespace {
@@ -48,20 +57,127 @@ const char* or_empty(const char* s) { return s != nullptr ? s : ""; }
 
 Runtime* active() noexcept { return t_active; }
 
-Scope::Scope(Runtime& rt) noexcept : m_previous{t_active} {
-    t_active = &rt;
-    // Verilator's hooks and VL_*_MT wrappers use the thread context, not the model's: point it
-    // at this model's context so several models on one thread stay separate.
-    Verilated::threadContextp(&rt.context());
+VlRNG& thread_rng() noexcept {
+    // The address of a thread_local is fixed for the thread's lifetime, so it is taken once.
+    // The first call may reseed: the state then belongs to no model yet.
+    static thread_local VlRNG* t_rng = nullptr;
+    if (t_rng == nullptr) {
+        t_rng = &VlRNG::vl_thread_rng();
+        return *t_rng;
+    }
+    const VlRNG keep = *t_rng;
+    (void)VlRNG::vl_thread_rng();  // syncs the thread's seed epoch; may overwrite the state
+    *t_rng = keep;
+    return *t_rng;
 }
 
-Scope::~Scope() { t_active = m_previous; }
+Scope::Scope(Runtime& rt) noexcept : m_rt{rt}, m_previous{t_active} {
+    t_active = &rt;
+    // Verilator's hooks and VL_*_MT wrappers use the thread context, not the model's: point it
+    // at this model's context so several models on one thread stay separate. It must be set
+    // before thread_rng(), whose reseed path reads it.
+    Verilated::threadContextp(&rt.context());
+    std::swap(thread_rng(), rt.rng());
+}
+
+Scope::~Scope() {
+    std::swap(thread_rng(), m_rt.rng());
+    t_active = m_previous;
+    if (m_previous != nullptr) Verilated::threadContextp(&m_previous->context());
+}
+
+FileId file_id(const char* path) noexcept {
+    struct stat st{};
+    if (path == nullptr || ::stat(path, &st) != 0) return FileId{};
+    return FileId{static_cast<uint64_t>(st.st_dev), static_cast<uint64_t>(st.st_ino), true};
+}
+
+int redirect_to_devnull(const FileId& id) noexcept {
+    if (!id.valid) return 0;
+    const int null_fd = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
+    if (null_fd < 0) return -1;
+    // Descriptors are small integers below the soft limit; cap the scan for "unlimited".
+    struct rlimit lim{};
+    rlim_t max_fd = 1024;
+    if (::getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != RLIM_INFINITY) {
+        max_fd = std::min<rlim_t>(lim.rlim_cur, 65536);
+    }
+    int moved = 0;
+    for (int fd = 0; fd < static_cast<int>(max_fd); ++fd) {
+        struct stat st{};
+        if (fd == null_fd || ::fstat(fd, &st) != 0) continue;
+        if (static_cast<uint64_t>(st.st_dev) == id.dev
+            && static_cast<uint64_t>(st.st_ino) == id.ino && ::dup2(null_fd, fd) == fd) {
+            ++moved;
+        }
+    }
+    ::close(null_fd);
+    return moved;
+}
+
+bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
+    if (path != nullptr) {
+        if (std::FILE* f = std::fopen(path, "wb")) {
+            std::fclose(f);
+            return true;
+        }
+    }
+    try {
+        const std::string msg = std::string{"cannot create "} + what + " '" + or_empty(path)
+                                + "': " + (path != nullptr ? std::strerror(errno) : "no path");
+        rt.on_warn("", 0, "", msg.c_str());
+    } catch (...) {
+        rt.on_warn("", 0, "", "cannot create an output file");
+    }
+    return false;
+}
+
+void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s) {
+    const std::string path = or_empty(s.name);
+    const size_t dot = path.rfind('.');
+    const std::string scope_name =
+        std::string{or_empty(model_name)} + "." + (dot == std::string::npos ? "" : path.substr(0, dot));
+    const std::string var_name = dot == std::string::npos ? path : path.substr(dot + 1);
+    const auto fail = [&](const std::string& why) {
+        throw std::runtime_error("simjig: probe '" + path + "': " + why);
+    };
+    const VerilatedScope* scope = ctx.scopeFind(scope_name.c_str());
+    if (scope == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
+    const VerilatedVar* var = scope->varFind(var_name.c_str());
+    if (var == nullptr) fail("no public variable '" + var_name + "' in scope '" + scope_name + "'");
+    if (var->datap() != s.ptr) fail("bound to a different member than the model's variable");
+    if (var->udims() != 0) fail("the model's variable is an unpacked array");
+    if (var->entBits() != s.width) {
+        fail("the model's variable is " + std::to_string(var->entBits()) + " bits wide, but it is bound as "
+             + std::to_string(s.width) + " bits");
+    }
+}
 
 Runtime::Runtime(const simjig_create_opts* opts, bool coroutines)
     : m_context{std::make_unique<VerilatedContext>()}, m_coroutines{coroutines} {
     // Only Verilator's default vl_stop reads this; set it anyway so nothing else exits.
     m_context->fatalOnError(false);
+    // The default is the hardware concurrency, and the first model added to the context then
+    // starts that many - 1 pool threads even for a --threads 1 model (docs/notes/spikes.md §1,
+    // surprise 1). Threads break fork() and are never used by simjig's --threads 1 models.
+    m_context->threads(1);
     if (opts != nullptr) m_echo = (opts->flags & SIMJIG_CREATE_ECHO) != 0;
+}
+
+void Runtime::reseed(uint64_t seed) noexcept {
+    if (active() == this) {
+        thread_rng() = VlRNG{seed};
+    } else {
+        m_rng = VlRNG{seed};
+    }
+}
+
+uint64_t Runtime::context_seed() const {
+    // Verilator's formula, including its sign extension of a negative seed. Verilator draws a
+    // nondeterministic seed for randSeed 0; +verilator+seed+0 already replaces 0 with a drawn
+    // seed at parse time, so 0 only comes from code and is kept as the (deterministic) 0.
+    const auto s = static_cast<uint64_t>(m_context->randSeed());
+    return (s << 32) ^ s;
 }
 
 void Runtime::push(Record record) noexcept {
@@ -304,13 +420,16 @@ extern "C" {
 
 void simjig_rt_destroy(simjig_handle* h) {
     if (h == nullptr) return;
-    // The model's destructor may consult the thread context, so make this model's current.
-    const simjig::Scope scope{h->rt};
-    try {
-        delete h;
-    } catch (...) {
-        // Destructors are noexcept; nothing reaches here in practice. Never let it escape.
+    {
+        // The model's destructor may consult the thread context, so make this model's current.
+        const simjig::Scope scope{h->rt};
+        h->teardown();
     }
+    // Outside the Scope: it swaps the RNG back through `h->rt`, which delete frees.
+    delete h;
+    // ~VerilatedContext leaves the thread context null; an enclosing entry point (a DPI call
+    // that destroyed another model) needs its own back.
+    if (simjig::Runtime* outer = simjig::active()) Verilated::threadContextp(&outer->context());
 }
 
 void simjig_rt_set_time(simjig_handle* h, uint64_t time) {
@@ -321,18 +440,69 @@ size_t simjig_rt_drain_msgs(simjig_handle* h, simjig_msg* out, size_t cap) {
     return h != nullptr ? h->rt.drain(out, cap) : 0;
 }
 
-simjig_status simjig_rt_trace_open_unsupported(simjig_handle*, const char*) {
-    return SIMJIG_UNSUPPORTED;
+simjig_status simjig_rt_rng_seed(simjig_handle* h, uint64_t seed) {
+    if (h == nullptr) return SIMJIG_EXCEPTION;
+    if (h->rt.poisoned()) return SIMJIG_POISONED;
+    h->rt.reseed(seed);
+    return SIMJIG_OK;
 }
-simjig_status simjig_rt_trace_dump_unsupported(simjig_handle*, uint64_t) {
-    return SIMJIG_UNSUPPORTED;
-}
-simjig_status simjig_rt_trace_close_unsupported(simjig_handle*) { return SIMJIG_UNSUPPORTED; }
 
-uint32_t* simjig_rt_cov_counters_none(simjig_handle*, size_t* count) {
-    if (count != nullptr) *count = 0;
-    return nullptr;
+#define SIMJIG_FIELD(T, F) \
+    simjig_abi_field { #T, #F, offsetof(T, F), sizeof(static_cast<T*>(nullptr)->F) }
+const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
+    static const simjig_abi_field fields[] = {
+        SIMJIG_FIELD(simjig_model_vtable, abi_version),
+        SIMJIG_FIELD(simjig_model_vtable, size),
+        SIMJIG_FIELD(simjig_model_vtable, prefix),
+        SIMJIG_FIELD(simjig_model_vtable, verilator_version),
+        SIMJIG_FIELD(simjig_model_vtable, ir_hash),
+        SIMJIG_FIELD(simjig_model_vtable, create),
+        SIMJIG_FIELD(simjig_model_vtable, destroy),
+        SIMJIG_FIELD(simjig_model_vtable, eval),
+        SIMJIG_FIELD(simjig_model_vtable, final),
+        SIMJIG_FIELD(simjig_model_vtable, set_time),
+        SIMJIG_FIELD(simjig_model_vtable, events_pending),
+        SIMJIG_FIELD(simjig_model_vtable, next_time_slot),
+        SIMJIG_FIELD(simjig_model_vtable, signals),
+        SIMJIG_FIELD(simjig_model_vtable, drain_msgs),
+        SIMJIG_FIELD(simjig_model_vtable, trace_open),
+        SIMJIG_FIELD(simjig_model_vtable, trace_dump),
+        SIMJIG_FIELD(simjig_model_vtable, trace_close),
+        SIMJIG_FIELD(simjig_model_vtable, cov_counters),
+        SIMJIG_FIELD(simjig_model_vtable, features),
+        SIMJIG_FIELD(simjig_model_vtable, trace_open_ex),
+        SIMJIG_FIELD(simjig_model_vtable, trace_flush),
+        SIMJIG_FIELD(simjig_model_vtable, trace_reopen),
+        SIMJIG_FIELD(simjig_model_vtable, cov_zero),
+        SIMJIG_FIELD(simjig_model_vtable, cov_write),
+        SIMJIG_FIELD(simjig_model_vtable, rng_seed),
+        SIMJIG_FIELD(simjig_signal, id),
+        SIMJIG_FIELD(simjig_signal, width),
+        SIMJIG_FIELD(simjig_signal, words),
+        SIMJIG_FIELD(simjig_signal, storage),
+        SIMJIG_FIELD(simjig_signal, dir),
+        SIMJIG_FIELD(simjig_signal, access),
+        SIMJIG_FIELD(simjig_signal, reserved),
+        SIMJIG_FIELD(simjig_signal, name),
+        SIMJIG_FIELD(simjig_signal, ptr),
+        SIMJIG_FIELD(simjig_msg, kind),
+        SIMJIG_FIELD(simjig_msg, line),
+        SIMJIG_FIELD(simjig_msg, time),
+        SIMJIG_FIELD(simjig_msg, file),
+        SIMJIG_FIELD(simjig_msg, hier),
+        SIMJIG_FIELD(simjig_msg, msg),
+        SIMJIG_FIELD(simjig_msg, msg_len),
+        SIMJIG_FIELD(simjig_create_opts, size),
+        SIMJIG_FIELD(simjig_create_opts, flags),
+        SIMJIG_FIELD(simjig_create_opts, name),
+        SIMJIG_FIELD(simjig_create_opts, error_limit),
+        SIMJIG_FIELD(simjig_create_opts, argc),
+        SIMJIG_FIELD(simjig_create_opts, argv),
+    };
+    if (count != nullptr) *count = sizeof(fields) / sizeof(fields[0]);
+    return fields;
 }
+#undef SIMJIG_FIELD
 
 size_t simjig_rt_abi_layout(uint32_t* out, size_t cap) {
     const uint32_t layout[] = {

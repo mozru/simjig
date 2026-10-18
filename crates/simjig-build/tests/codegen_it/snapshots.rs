@@ -23,10 +23,35 @@ fn emitter_snapshots() {
             &ShimOptions {
                 prefix: format!("V{}", lowered.top),
                 timing: false,
+                trace_fst: false,
+                coverage: false,
             },
         );
         let shim = shim.unwrap_or_else(|e| format!("error: {e}"));
         insta::assert_snapshot!(format!("{name}__shim"), shim);
+    }
+}
+
+/// The build options only change the traits' flags and, for coverage, the includes; one
+/// case with probes and one without cover both include rules.
+#[test]
+fn shim_option_snapshots() {
+    for case in [cases::wide(), cases::struct_pipe()] {
+        let lowered = lower(&case.design, &case.config).unwrap();
+        let name = &case.name;
+        for (tag, timing, trace_fst, coverage) in [
+            ("timing_trace", true, true, false),
+            ("coverage", false, false, true),
+        ] {
+            let opts = ShimOptions {
+                prefix: format!("V{}", lowered.top),
+                timing,
+                trace_fst,
+                coverage,
+            };
+            let shim = emit_shim(&lowered, &opts).unwrap();
+            insta::assert_snapshot!(format!("{name}__shim_{tag}"), shim);
+        }
     }
 }
 

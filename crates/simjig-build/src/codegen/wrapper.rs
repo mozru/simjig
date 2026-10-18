@@ -10,7 +10,7 @@
 use svtypes::ir::Direction;
 
 use super::writer::Writer;
-use super::{IfaceTop, Wrapper, elab_module};
+use super::{DUT_INSTANCE, IfaceTop, Wrapper, elab_module};
 
 /// `#(.A(x), .B(y)) ` or nothing.
 fn param_list(params: &[(String, String)]) -> String {
@@ -53,7 +53,7 @@ pub fn emit_elab_top(config: &IfaceTop) -> String {
         .map(|b| format!(".{0}({0})", b.port))
         .collect();
     w.line(format!(
-        "{} {}dut ({});",
+        "{} {}{DUT_INSTANCE} ({});",
         config.dut,
         param_list(&config.params),
         conns.join(", ")
@@ -123,7 +123,7 @@ pub fn emit_wrapper(wrapper: &Wrapper) -> String {
             .map(|i| format!(".{0}({0}.{1})", i.instance, i.modport)),
     );
     w.open(format!(
-        "{} {}dut (",
+        "{} {}{DUT_INSTANCE} (",
         wrapper.dut,
         param_list(&wrapper.dut_params)
     ));

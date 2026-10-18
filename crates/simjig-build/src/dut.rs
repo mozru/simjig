@@ -500,13 +500,15 @@ impl DutConfig {
         };
         let args = self.option_args();
         if let Some(found) = crate::optfile::find(&args, refused_arg) {
+            // A vendor list is often not the user's to edit: the copy is the way out.
             return Some(format!(
-                "{} `{}` has `{}` on line {}: {}",
+                "{} `{}` has `{}` on line {line}: {}; if the list is not yours to edit, \
+                 copy it, delete line {line} from the copy and build from the copy",
                 kind(&found.file),
                 found.file.display(),
                 found.word,
-                found.line,
-                found.why
+                found.why,
+                line = found.line,
             ));
         }
         crate::optfile::untracked(&args).map(|found| {
@@ -1755,7 +1757,11 @@ mod tests {
             let m = listed.validate().unwrap_err().to_string();
             assert!(
                 m.contains(&format!("file list `{path}` has `{word}` on line {line}: "))
-                    && m.contains(hint),
+                    && m.contains(hint)
+                    && m.ends_with(&format!(
+                        "; if the list is not yours to edit, copy it, delete line {line} \
+                         from the copy and build from the copy"
+                    )),
                 "{text:?}: {m}"
             );
             let m = with_args(&["-f", &path])

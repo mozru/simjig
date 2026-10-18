@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- An option refused in a file list or option file ends with the way out for a vendor
+  list that is not the user's to edit: ``copy it, delete line N from the copy and build
+  from the copy``.
 - A Verilator failure whose first error has no location names the offending file in the
   headline (``failed (exit status: 1) on `/r/d.sv`: ..``), as before the headline
   change; a first error on the last line of stderr, without a newline, is no longer

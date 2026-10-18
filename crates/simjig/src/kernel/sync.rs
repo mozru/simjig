@@ -4,6 +4,15 @@
 //! `Deadlock` reports with what it waits for, and every waiting future deregisters in
 //! `Drop`. Waiters are served first-come first-served, which keeps runs deterministic.
 //! Handles are cheap `Rc` clones; move a clone into each task that needs it.
+//!
+//! # Readiness, as in cocotb 2.1 (goldens `event_ready`, `lock_ready`)
+//! Awaiting a set [`Event`] or a free [`Lock`] does not continue at once: cocotb's
+//! `_Event._prime` and `Lock._prime_lock` fire the trigger while it is being primed, which
+//! schedules the task at the back of the ready queue. Here the wait takes the same hop
+//! ([`yield_now`]); a free lock is taken before the hop, so tasks that run in between see
+//! it locked. [`Queue::get`] and [`Queue::put`] take no hop when they can complete (they
+//! await nothing in cocotb), and a woken getter or putter that finds its item or slot
+//! taken by a task that ran first waits again, last in line.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -16,6 +25,7 @@ use std::task::{Context, Poll};
 use super::OrInvariant;
 use super::slab::Key;
 use super::state::{self, Kernel};
+use super::trigger::{YieldNow, yield_now};
 use super::waits::{self, ListKind, Registration, WaitOn};
 
 /// A wait list owned by a primitive, freed when the last handle drops.
@@ -133,14 +143,15 @@ impl Event {
         self.inner.set.get()
     }
 
-    /// Waits until the event is set; returns at once if it already is.
+    /// Waits until the event is set. If it already is, resumes after the tasks already
+    /// ready (one hop, as cocotb), even if the event is cleared meanwhile.
     ///
     /// # Cancellation
     /// Cancel-safe.
     pub fn wait(&self) -> EventWait<'_> {
         EventWait {
             event: self,
-            reg: None,
+            state: EventState::Fresh,
         }
     }
 }
@@ -150,25 +161,37 @@ impl Event {
 #[must_use = "futures do nothing unless awaited"]
 pub struct EventWait<'a> {
     event: &'a Event,
-    reg: Option<Registration>,
+    state: EventState,
+}
+
+#[derive(Debug)]
+enum EventState {
+    Fresh,
+    /// The event was set when awaited.
+    Hop(YieldNow),
+    Waiting(Registration),
 }
 
 impl Future for EventWait<'_> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        match &self.reg {
-            None if self.event.is_set() => Poll::Ready(()),
-            None => {
-                self.reg = Some(self.event.inner.list.register(cx));
-                Poll::Pending
+        let state = match std::mem::replace(&mut self.state, EventState::Fresh) {
+            EventState::Fresh if self.event.is_set() => EventState::Hop(yield_now()),
+            EventState::Fresh => EventState::Waiting(self.event.inner.list.register(cx)),
+            started => started,
+        };
+        match state {
+            EventState::Hop(mut hop) => {
+                if Pin::new(&mut hop).poll(cx).is_ready() {
+                    return Poll::Ready(());
+                }
+                self.state = EventState::Hop(hop);
             }
-            Some(r) if r.poll_fired(cx) => {
-                self.reg = None;
-                Poll::Ready(())
-            }
-            Some(_) => Poll::Pending,
+            EventState::Waiting(r) if r.poll_fired(cx) => return Poll::Ready(()),
+            waiting => self.state = waiting,
         }
+        Poll::Pending
     }
 }
 
@@ -217,16 +240,18 @@ impl Lock {
         }
     }
 
-    /// Waits for the lock. The guard releases it when dropped, including when its task is
-    /// cancelled.
+    /// Waits for the lock. A free lock is taken at once, and the task resumes after the
+    /// tasks already ready (one hop, as cocotb). The guard releases it when dropped,
+    /// including when its task is cancelled.
     ///
     /// # Cancellation
     /// Cancel-safe: a lock granted to a future that is dropped before it resumes is passed
-    /// on to the next waiter.
+    /// on to the next waiter (cocotb keeps it held by the cancelled task; conformance README,
+    /// "Known differences").
     pub fn lock(&self) -> LockFuture<'_> {
         LockFuture {
             lock: self,
-            reg: None,
+            state: LockState::Fresh,
         }
     }
 
@@ -252,7 +277,15 @@ impl Lock {
 #[must_use = "futures do nothing unless awaited"]
 pub struct LockFuture<'a> {
     lock: &'a Lock,
-    reg: Option<Registration>,
+    state: LockState<'a>,
+}
+
+#[derive(Debug)]
+enum LockState<'a> {
+    Fresh,
+    /// The lock was free when awaited: taken, and resumed after one hop.
+    Hop(LockGuard<'a>, YieldNow),
+    Waiting(Registration),
 }
 
 impl<'a> Future for LockFuture<'a> {
@@ -260,27 +293,32 @@ impl<'a> Future for LockFuture<'a> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<LockGuard<'a>> {
         let lock = self.lock;
-        match &self.reg {
-            None => {
-                if let Some(guard) = lock.try_lock() {
+        let state = match std::mem::replace(&mut self.state, LockState::Fresh) {
+            LockState::Fresh => match lock.try_lock() {
+                Some(guard) => LockState::Hop(guard, yield_now()),
+                None => LockState::Waiting(lock.inner.list.register(cx)),
+            },
+            started => started,
+        };
+        match state {
+            LockState::Hop(guard, mut hop) => {
+                if Pin::new(&mut hop).poll(cx).is_ready() {
                     return Poll::Ready(guard);
                 }
-                self.reg = Some(lock.inner.list.register(cx));
-                Poll::Pending
+                self.state = LockState::Hop(guard, hop);
             }
             // Fired means granted: `release` kept the lock locked for us.
-            Some(r) if r.poll_fired(cx) => {
-                self.reg = None;
-                Poll::Ready(LockGuard { lock })
-            }
-            Some(_) => Poll::Pending,
+            LockState::Waiting(r) if r.poll_fired(cx) => return Poll::Ready(LockGuard { lock }),
+            waiting => self.state = waiting,
         }
+        Poll::Pending
     }
 }
 
 impl Drop for LockFuture<'_> {
+    // A guard held through the hop releases in its own `Drop`.
     fn drop(&mut self) {
-        if let Some(reg) = self.reg.take()
+        if let LockState::Waiting(reg) = std::mem::replace(&mut self.state, LockState::Fresh)
             && reg.is_fired()
         {
             drop(reg);

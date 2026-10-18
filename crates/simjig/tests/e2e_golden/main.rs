@@ -1,4 +1,4 @@
-//! The 29 cocotb conformance scenarios (`tests/conformance`) replayed against real
+//! The 33 cocotb conformance scenarios (`tests/conformance`) replayed against real
 //! Verilator models through the public API only: `include_dut!` bindings, `#[simjig::test]`
 //! and `simjig::clock`. Each test mirrors its `tests/conformance/tb/test_<dut>.py` function
 //! line by line and diffs its log byte for byte with `tests/conformance/golden/<name>.jsonl`
@@ -43,6 +43,8 @@ mod test_derived_clk;
 mod test_fifo;
 #[cfg(simjig_test_models)]
 mod test_flop;
+#[cfg(simjig_test_models)]
+mod test_sync_ready;
 #[cfg(simjig_test_models)]
 mod test_timeout_ties;
 #[cfg(simjig_test_models)]

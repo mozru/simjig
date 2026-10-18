@@ -10,7 +10,7 @@ use crate::start_clock;
 
 type Dut = crate::counter::Dut;
 
-async fn counter_start(p: &mut Probe, dut: Dut) {
+pub(crate) async fn counter_start(p: &mut Probe, dut: Dut) {
     dut.clk.set(0);
     start_clock(dut.clk, 10);
     p.write(&dut.rst, 1);
@@ -20,7 +20,7 @@ async fn counter_start(p: &mut Probe, dut: Dut) {
     p.write(&dut.rst, 0);
 }
 
-fn seen(dut: Dut) -> impl Fn(&Probe) + Copy {
+pub(crate) fn seen(dut: Dut) -> impl Fn(&Probe) + Copy {
     move |probe: &Probe| probe.read(&[&dut.clk, &dut.count])
 }
 

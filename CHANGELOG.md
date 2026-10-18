@@ -39,6 +39,11 @@ the public API, the generated code or simulation semantics.
   yielded once or twice afterwards. The cost is one helper entry and two or three extra
   polls of the caller's task per combinator. Trace hashes of runs with combinators
   change. `__private::{hop, boxed}` are gone (macro internals).
+- `Event::wait` on a set event and `Lock::lock` on a free lock resume after the tasks
+  already ready (one hop), as cocotb 2.1's `Event.wait()` and `Lock.acquire()` do (goldens
+  `event_ready`, `lock_ready`); they used to continue at once. The free lock is taken
+  before the hop, so a task that runs in between sees it locked. Trace hashes of runs
+  that await a set event or a free lock change.
 - `yield_now()` ends only in a run of the task (or combinator helper) that awaits it. A
   hand-written join in a task's future that also awaits `first!`/`join!` used to see it
   end early, when the combinator's helpers ran.

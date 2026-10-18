@@ -10,7 +10,7 @@ use super::{assert_clean, dut, ticks};
 type Trace = Rc<RefCell<Vec<String>>>;
 
 #[test]
-fn event_wakes_all_waiters_in_wait_order_and_a_set_event_returns_at_once() {
+fn event_wakes_all_waiters_in_wait_order_and_a_set_event_resumes_after_the_ready_tasks() {
     let mut d = dut();
     let trace: Trace = Rc::default();
     let t = Rc::clone(&trace);
@@ -32,11 +32,20 @@ fn event_wakes_all_waiters_in_wait_order_and_a_set_event_returns_at_once() {
                 w.await;
             }
             e.set();
-            e.wait().await;
+            let (e2, t2) = (e.clone(), Rc::clone(&t));
+            let other = spawn("other", async move {
+                e2.clear(); // a set event already fired for main
+                t2.borrow_mut().push("other".into());
+            });
+            e.wait().await; // cocotb: one hop, behind `other`
             t.borrow_mut().push("already set".into());
+            other.await;
         })
         .unwrap();
-    assert_eq!(*trace.borrow(), ["w1 at 4", "w2 at 4", "already set"]);
+    assert_eq!(
+        *trace.borrow(),
+        ["w1 at 4", "w2 at 4", "other", "already set"]
+    );
     assert_clean(&d.sim);
 }
 
@@ -72,6 +81,29 @@ fn lock_is_granted_in_arrival_order_and_passed_on_by_a_cancelled_waiter() {
         })
         .unwrap();
     assert_eq!(*trace.borrow(), ["b at 1", "c at 3"]);
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn a_free_lock_is_taken_at_once_and_its_task_resumes_after_the_ready_tasks() {
+    let mut d = dut();
+    let trace: Trace = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let lock = Lock::new("bus");
+            let (l2, t2) = (lock.clone(), Rc::clone(&t));
+            let other = spawn("other", async move {
+                let locked = l2.is_locked();
+                t2.borrow_mut().push(format!("other sees locked={locked}"));
+            });
+            let guard = lock.lock().await; // cocotb: taken now, resumed one hop later
+            t.borrow_mut().push("main has it".into());
+            other.await;
+            drop(guard);
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["other sees locked=true", "main has it"]);
     assert_clean(&d.sim);
 }
 

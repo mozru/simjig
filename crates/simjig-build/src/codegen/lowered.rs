@@ -21,7 +21,7 @@ pub struct Lowered {
     pub items: Vec<Item>,
     /// Package parameters, one Rust module per package that has any.
     pub packages: Vec<ConstGroup>,
-    /// The top module's parameters, as associated consts of `Dut`.
+    /// The DUT module's parameters (not the wrapper's), as associated consts of `Dut`.
     pub dut_params: Vec<Const>,
     /// Every signal the testbench can reach; `signals[i].slot == i`.
     pub signals: Vec<Signal>,

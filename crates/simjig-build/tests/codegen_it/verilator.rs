@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use simjig_build::codegen::{
-    Access, ItemKind, LAYOUT_CHECK_FLAGS, Lowered, ShimOptions, emit_layout_check, emit_shim,
-    emit_vlt, emit_wrapper, lower,
+    Access, ConstValue, ItemKind, LAYOUT_CHECK_FLAGS, Lowered, ShimOptions, emit_layout_check,
+    emit_rust, emit_shim, emit_vlt, emit_wrapper, lower,
 };
 
 use crate::cases::{self, Case};
@@ -80,6 +80,25 @@ fn layout_check_names_nested_anonymous_aggregates() {
         stderr(&out)
     );
     insta::assert_snapshot!("nested_anon__layout", emit_layout_check(&lowered));
+}
+
+/// The model top of an interface-ported DUT is the wrapper, which has no parameters; the
+/// `Dut` consts come from the DUT's own module.
+#[test]
+fn iface_dut_parameters_become_dut_consts() {
+    let case = cases::iface_param();
+    let lowered = lower(&case.design, &case.config).unwrap();
+    let params: Vec<(&str, &ConstValue)> = lowered
+        .dut_params
+        .iter()
+        .map(|c| (c.name.as_str(), &c.value))
+        .collect();
+    let three = ConstValue::Int {
+        ty: "i32",
+        value: "3".into(),
+    };
+    assert_eq!(params, [("K", &three)]);
+    assert!(emit_rust(&lowered).contains("pub const K: i32 = 3;"));
 }
 
 /// Damages a lowering the way a wrong IR would.

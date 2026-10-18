@@ -31,7 +31,7 @@ pub fn elab_module(dut: &str) -> String {
 }
 
 /// The DUT module of `config` in `design`.
-fn dut_module<'d>(design: &'d Design, config: &IfaceTop) -> Result<&'d Module, Error> {
+pub(crate) fn dut_module<'d>(design: &'d Design, config: &IfaceTop) -> Result<&'d Module, Error> {
     let found: Vec<&Module> = design
         .modules
         .iter()

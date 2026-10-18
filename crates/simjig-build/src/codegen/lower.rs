@@ -20,6 +20,7 @@ use svtypes::width::packed_storage;
 
 use self::sv::{LayoutSpeller, nameable};
 use self::types::{Root, Types, Use, bits, lower_types};
+use self::wrapper::dut_module;
 pub use self::wrapper::{elab_module, lower_wrapper, wrapper_module};
 use super::names::{Namespace, camel, screaming, snake};
 use super::{
@@ -60,7 +61,12 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
     let (signals, fields, bundles) = lower_signals(design, config, &mut types, wrapper.as_ref())?;
     let packages = lower_packages(design, &types)?;
     let mut param_ns = Namespace::with_reserved(&["SIGNALS", "IR_HASH"]);
-    let dut_params = top
+    // The wrapper has no parameters: an interface-ported DUT's come from its own module.
+    let params_of = match &config.iface_top {
+        Some(t) => dut_module(design, t)?,
+        None => top,
+    };
+    let dut_params = params_of
         .params
         .iter()
         .map(|p| lower_const(design, &types, p, &mut param_ns))

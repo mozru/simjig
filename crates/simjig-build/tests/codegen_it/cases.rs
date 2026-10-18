@@ -215,6 +215,23 @@ pub fn nested_anon() -> Case {
     }
 }
 
+/// `cases/iface_param`: a parameterised interface-ported DUT, `K = 3`, through the wrapper.
+/// Not in [`all`]: the parameter and probe tests use it.
+pub fn iface_param() -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/iface_param/design.sv")];
+    let iface = IfaceTop {
+        dut: "r_dut".into(),
+        params: vec![("K".into(), "3".into())],
+        bindings: vec![IfaceBinding {
+            port: "bus".into(),
+            interface: "r_if".into(),
+            params: Vec::new(),
+            modport: None,
+        }],
+    };
+    through_wrapper("iface_param", sources, iface)
+}
+
 /// Every case: the fixtures, then the Verilator-elaborated ones.
 pub fn all() -> Vec<Case> {
     let mut cases: Vec<Case> = fixture_names().iter().map(|n| fixture(n)).collect();

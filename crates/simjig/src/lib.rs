@@ -98,7 +98,7 @@ pub use kernel::time::{
 };
 pub use kernel::trigger::{
     Edge, Elapsed, NextTimeStep, ReadOnly, ReadWrite, Timer, YieldNow, changed, cycles, falling,
-    now, rising, with_timeout, yield_now,
+    now, now_display, rising, with_timeout, yield_now,
 };
 pub use model::meta::LoadError;
 pub use model::trace::TraceOptions;
@@ -121,6 +121,7 @@ pub mod __private {
     };
     pub use crate::harness::waves::{WavesRequest, WavesWhen, Window, WindowEnd};
     pub use crate::kernel::combinator::{Fork, MaybeDone, Operand};
+    pub use crate::kernel::trigger::log_prefix;
 
     // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,
     // "The `__private` contract", and `model::bind` for the model glue.

@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `simjig::now_display()` prints the current time in physical units without the
+  precision (`now().display(ctx.precision())` needed `ctx`), and `simjig::log!(..)`
+  prints a `format!` line prefixed with it and the running task:
+  `[1250 ns main.monitor] hdr len=3`. The `first!` docs and the cocotb table show how to
+  tell which operand won (an enum of your own).
 - Generated code: the doc comment of an interface-ported DUT's parameter constant names
   the user's module (`/// Parameter `N` of `pkt_parser`.`), not the generated wrapper
   `simjig_wrap_<top>`, which has no parameters. No snapshot covered it.

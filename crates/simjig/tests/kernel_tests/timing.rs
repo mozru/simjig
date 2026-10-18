@@ -191,3 +191,28 @@ fn an_event_scheduled_in_the_past_is_a_model_failure() {
         "{message}"
     );
 }
+
+/// `now_display()` and `simjig::log!`'s prefix print the time in the design's units and
+/// the running task, with no precision passed in.
+#[test]
+fn log_prefix_names_the_time_in_units_and_the_task() {
+    let mut sim = Sim::from_fake(FakeModel::new(Precision::PS));
+    let (shown, prefix, main_prefix) = sim
+        .run(async {
+            let task = simjig::spawn("monitor", async {
+                Timer::new(simjig::ns(1)).await;
+                Timer::new(simjig::SimDuration::from_ticks(250)).await;
+                simjig::log!("from the task");
+                (
+                    simjig::now_display().to_string(),
+                    simjig::__private::log_prefix(),
+                )
+            });
+            let (shown, prefix) = task.await;
+            (shown, prefix, simjig::__private::log_prefix())
+        })
+        .unwrap();
+    assert_eq!(shown, "1250 ps");
+    assert_eq!(prefix, "[1250 ps main.monitor]");
+    assert_eq!(main_prefix, "[1250 ps main]");
+}

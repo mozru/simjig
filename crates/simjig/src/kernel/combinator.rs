@@ -357,6 +357,32 @@ macro_rules! join {
 /// });
 /// assert_eq!(out.unwrap(), "fast");
 /// ```
+///
+/// To know *which* operand won when their outputs differ (cocotb's
+/// `First(RisingEdge(done), Timer(..))` then `if t is timer`), end each operand with a
+/// variant of a small enum of your own and `match` on the result:
+///
+/// ```
+/// # use simjig::{FakeModel, Precision, Sim, SimDuration, Timer, first};
+/// enum Won {
+///     Done(u32),
+///     TimedOut,
+/// }
+/// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
+/// let out = sim.run(async {
+///     match first!(
+///         async { Timer::new(SimDuration::from_ticks(2)).await; Won::Done(7) },
+///         async { Timer::new(SimDuration::from_ticks(500)).await; Won::TimedOut },
+///     ) {
+///         Won::Done(n) => n,
+///         Won::TimedOut => panic!("done within 500 ns"),
+///     }
+/// });
+/// assert_eq!(out.unwrap(), 7);
+/// ```
+///
+/// For one operand and a timeout, [`with_timeout`](crate::with_timeout) returns a
+/// `Result` instead.
 #[macro_export]
 macro_rules! first {
     ($($fut:expr),+ $(,)?) => {

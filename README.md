@@ -125,12 +125,13 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `cocotb.start_soon(coro)` | `spawn("name", fut).detach()` |
 | `task = cocotb.start_soon(coro)`; `await task` | `let task = spawn("name", fut);` `task.await` |
 | `task.cancel()` | `task.cancel()` (or drop a `Task` that has run) |
-| `await First(a, b)` | `first!(a, b)` (same output type; ties go to the leftmost) |
+| `await First(a, b)` | `first!(a, b)` (same output type; ties go to the leftmost; to tell the winner, end each operand with a variant of your own enum and `match`) |
 | `await Combine(a, b)` | `join!(a, b)` (a tuple of the outputs) |
 | `await with_timeout(x, 10, "ns")`, `SimTimeoutError` | `with_timeout(ns(10), x).await` (`&mut task` for a Task that must keep running), `Err(Elapsed)` |
 | `dut.x.value = 5` | `dut.x.set(5)` |
 | `int(dut.x.value)`, `bool(dut.x.value)` | `dut.x.get().to_u128()`, `dut.bit.get().to_bool()` |
-| `get_sim_time("ns")` | `simjig::now()`; print it with `now().display(ctx.precision())` (`1250 ns`) |
+| `get_sim_time("ns")` | `simjig::now()`; print it with `simjig::now_display()` (`1250 ns`) |
+| `dut._log.info("x=%d", x)` | `simjig::log!("x={x}")` (prints `[1250 ns main.monitor] x=3`) |
 | `Event`, `Queue`, `Lock` | `simjig::{Event, Queue, Lock}` |
 
 What to keep in mind:

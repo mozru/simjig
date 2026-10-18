@@ -37,7 +37,7 @@ use super::panics;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
 use super::tasks;
-use super::time::{Precision, SimDuration, SimTime};
+use super::time::{Precision, SimDuration, SimTime, TimeDisplay};
 use super::waits::{EdgeKind, Registration, WaitOn};
 
 /// Shared poll logic: register on first poll, then complete once fired.
@@ -338,9 +338,8 @@ impl Future for YieldNow {
 }
 
 /// The current simulation time, in ticks of the design's precision. To print it in
-/// physical units, give it the precision: `now().display(ctx.precision())` prints
-/// `1250 ns` (`ctx` is the test's [`TestCtx`](crate::TestCtx); outside a test,
-/// [`Sim::precision`](crate::Sim::precision)).
+/// physical units, use [`now_display`] (`1250 ns`), or [`log!`](crate::log) for a line
+/// with the time and the task.
 ///
 /// # Panics
 /// Outside [`Sim::run`](crate::Sim::run).
@@ -348,6 +347,64 @@ impl Future for YieldNow {
 #[track_caller]
 pub fn now() -> SimTime {
     state::with_current("now()", |k| k.now.get())
+}
+
+/// The current simulation time in physical units, ready to print (`1250 ns`): `now()`
+/// displayed with the running simulation's precision, which no caller has to thread
+/// through. [`log!`](crate::log) prints it with the task's name.
+///
+/// # Panics
+/// Outside [`Sim::run`](crate::Sim::run).
+#[must_use]
+#[track_caller]
+pub fn now_display() -> TimeDisplay {
+    state::with_current("now_display()", |k| k.now.get().display(k.precision))
+}
+
+/// The `[<time> <task>]` prefix of [`log!`](crate::log): the time as [`now_display`]
+/// prints it and the hierarchical name of the running task.
+#[doc(hidden)]
+#[must_use]
+#[track_caller]
+pub fn log_prefix() -> String {
+    state::with_current("simjig::log!", |k| {
+        let time = k.now.get().display(k.precision);
+        match k.current.get() {
+            Some(task) => format!("[{time} {}]", k.task_name(task)),
+            None => format!("[{time}]"),
+        }
+    })
+}
+
+/// Prints a line to stdout, prefixed with the simulation time in physical units and the
+/// running task's name, like cocotb's `dut._log.info`: `[1250 ns monitor] hdr len=3`.
+/// Takes `format!` arguments. Inside a test, the harness captures stdout like any
+/// `println!` (shown for a failing test, or with `--nocapture`).
+///
+/// ```
+/// # use simjig::{FakeModel, Precision, Sim, SimDuration, Timer, spawn};
+/// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
+/// sim.run(async {
+///     spawn("monitor", async {
+///         Timer::new(SimDuration::from_ticks(1250)).await;
+///         simjig::log!("hdr len={}", 3); // [1250 ns monitor] hdr len=3
+///     })
+///     .await;
+/// })
+/// .unwrap();
+/// ```
+///
+/// # Panics
+/// Outside [`Sim::run`](crate::Sim::run).
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {
+        ::std::println!(
+            "{} {}",
+            $crate::__private::log_prefix(),
+            ::core::format_args!($($arg)*)
+        )
+    };
 }
 
 /// [`with_timeout`] ran out of time.

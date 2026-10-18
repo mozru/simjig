@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A malformed parameter value names its call in the error's headline:
+  ``elaborating DUT `acc` (its `.param("W", ..)` = `3#`) failed ...``, for a `-G`
+  override reported at the parameter's declaration and for a value in the generated
+  elaboration top (`.param` or `.bind_iface_with_params`). The interface-default `hint:`
+  line now starts with the DUT (``DUT `gb`: the width error may come from ...``), so a
+  sweep member's hint says which member.
 - A model's build script no longer prints `cargo::rerun-if-changed` for the toolchain's
   own headers: the compiler's `#include <...>` search list (its C++ library, resource
   directory, SDK or sysroot) and the `include/` of the prefix the compiler is installed

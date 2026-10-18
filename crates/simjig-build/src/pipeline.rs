@@ -84,7 +84,9 @@ pub(crate) fn design_ir(
                 iface_diag::unbound_iface_ports(config, &e)
                     .or_else(|| iface_diag::binding_mistakes(config, &e))
                     .or_else(|| unknown_params(config, generated, verilator, cache, &e))
-                    .unwrap_or_else(|| Error::json_pass(&config.name, e, extra))
+                    .unwrap_or_else(|| {
+                        blame_param(Error::json_pass(&config.name, e, extra), config)
+                    })
             })
             .map_err(|e| {
                 hint_width_error(e, config, || {
@@ -282,9 +284,10 @@ impl IfaceParamMismatch {
             theirs,
         } = self;
         format!(
-            "the width error may come from interface `{iface}` (bound to `{port}`) \
-             defaulting `{name}` to {theirs} while `{module}` defaults it to {ours}; if they \
-             are one quantity, {settle}",
+            "DUT `{dut}`: the width error may come from interface `{iface}` (bound to \
+             `{port}`) defaulting `{name}` to {theirs} while `{module}` defaults it to \
+             {ours}; if they are one quantity, {settle}",
+            dut = config.name,
             iface = b.interface,
             port = b.port,
             module = config.top.as_deref().unwrap_or_default(),
@@ -325,6 +328,75 @@ const WIDTH_CODES: [&str; 5] = [
     "WIDTHTRUNC",
     "WIDTHXZEXPAND",
 ];
+
+/// `e` with the parameter override its first error is at named in its headline
+/// (``elaborating DUT `x` (its `.param("W", ..)` = `3#`) failed``), when it is one:
+/// Verilator reports a malformed value where it lands, in the generated elaboration top
+/// (`.W(3#)`) or, for a `-G` override, at the parameter's declaration, and neither names
+/// the call to fix.
+fn blame_param(mut e: Error, config: &DutConfig) -> Error {
+    let Error::Command { what, stderr, .. } = &mut e else {
+        return e;
+    };
+    let Some((path, line, col)) = crate::error::first_error_location(stderr) else {
+        return e;
+    };
+    let Some(text) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| t.lines().nth(line.saturating_sub(1)).map(str::to_owned))
+    else {
+        return e;
+    };
+    let before = text.get(..col.saturating_sub(1)).unwrap_or(&text);
+    let blamed = if let Some(name) = assigned_param(before) {
+        // A generated top: the DUT's instance, or an interface's.
+        let binding = config.ifaces.iter().find(|b| {
+            text.trim_start().starts_with(&format!("{} ", b.interface))
+                && b.params.iter().any(|(n, _)| n == name)
+        });
+        match binding {
+            Some(b) => b.params.iter().find(|(n, _)| n == name).map(|(n, v)| {
+                format!(
+                    "`.bind_iface_with_params({:?}, ..)` parameter `{n}` = `{v}`",
+                    b.port
+                )
+            }),
+            None => config
+                .params
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(n, v)| format!("`.param({n:?}, ..)` = `{v}`")),
+        }
+    } else {
+        // A `-G` override, reported at the declaration of the parameter it sets.
+        let ident: String = text
+            .get(col.saturating_sub(1)..)
+            .unwrap_or_default()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        config
+            .params
+            .iter()
+            .find(|(n, _)| config.iface_top().is_none() && *n == ident)
+            .map(|(n, v)| format!("`.param({n:?}, ..)` = `{v}`"))
+    };
+    if let Some(blamed) = blamed {
+        *what = format!("{what} (its {blamed})");
+    }
+    e
+}
+
+/// The parameter of the last named assignment `.NAME(` in `before` (text of a generated
+/// top up to an error's column), whose value the error is in. A port connection has the
+/// same shape; its name matches no parameter.
+fn assigned_param(before: &str) -> Option<&str> {
+    before.match_indices('.').rev().find_map(|(i, _)| {
+        let (name, _) = before[i + 1..].split_once('(')?;
+        let ident = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        ident.then_some(name)
+    })
+}
 
 /// `e` with a leading `hint:` per mismatch when it is a Verilator run that stopped on a
 /// width diagnostic (a fatal `%Warning-WIDTH*`, or an `%Error-WIDTH*` from `-Werror-`).

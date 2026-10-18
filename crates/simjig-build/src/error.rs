@@ -263,6 +263,15 @@ impl Error {
     }
 }
 
+/// Where the first `%Error` of a Verilator `stderr` is: its file, line and column (1-based).
+pub(crate) fn first_error_location(stderr: &str) -> Option<(PathBuf, usize, usize)> {
+    let (_, loc, _) = parse_error(first_error(stderr)?)?;
+    let mut parts = loc?.rsplitn(3, ':');
+    let col = parts.next()?.parse().ok()?;
+    let line = parts.next()?.parse().ok()?;
+    Some((PathBuf::from(parts.next()?), line, col))
+}
+
 /// The first `%Error` line of a Verilator `stderr`, which the headline carries.
 fn first_error(stderr: &str) -> Option<&str> {
     stderr

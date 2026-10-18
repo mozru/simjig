@@ -516,12 +516,17 @@ fn gearbox(s: &Sandbox, name: &str, iface_w_out: u32, reps: &str) -> Dut {
         .bind_iface("out", "out_if.src")
 }
 
-const GEARBOX_HINT: &str = "hint: the width error may come from interface `out_if` (bound \
-     to `out`) defaulting `W_OUT` to 8 while `gearbox` defaults it to 16; if they are one \
-     quantity, set it with `.bind_iface_with_params(\"out\", \"out_if.src\", \
-     [(\"W_OUT\", 16)])` or `.param(\"W_OUT\", 16)`, which reaches both; if the \
-     interface's 8 is intended, bind it: `.bind_iface_with_params(\"out\", \"out_if.src\", \
-     [(\"W_OUT\", 8)])` changes no width\n";
+/// The hint of the gearbox DUT `name`, which names it (a sweep member's hint says which).
+fn gearbox_hint(name: &str) -> String {
+    format!(
+        "hint: DUT `{name}`: the width error may come from interface `out_if` (bound to \
+         `out`) defaulting `W_OUT` to 8 while `gearbox` defaults it to 16; if they are one \
+         quantity, set it with `.bind_iface_with_params(\"out\", \"out_if.src\", \
+         [(\"W_OUT\", 16)])` or `.param(\"W_OUT\", 16)`, which reaches both; if the \
+         interface's 8 is intended, bind it: `.bind_iface_with_params(\"out\", \"out_if.src\", \
+         [(\"W_OUT\", 8)])` changes no width\n"
+    )
+}
 
 /// Under the default fatal lint, a default mismatch stops the model build at a width
 /// warning inside the generated wrapper, before the mismatch warning could be printed: the
@@ -545,7 +550,7 @@ fn an_interface_default_mismatch_leads_a_width_error() {
     for (name, dut, headline) in cases {
         let msg = dut.build_in(&s.env()).unwrap_err().to_string();
         let rest = msg
-            .strip_prefix(GEARBOX_HINT)
+            .strip_prefix(&gearbox_hint(name))
             .unwrap_or_else(|| panic!("{name}: {msg}"));
         assert!(rest.starts_with(headline), "{name}: {msg}");
         assert!(rest.contains("WIDTHTRUNC"), "{name}: {msg}");
@@ -565,4 +570,35 @@ fn equal_interface_defaults_leave_a_width_error_unhinted() {
         msg.contains("WIDTHTRUNC") && !msg.contains("may come from"),
         "{msg}"
     );
+}
+
+/// A malformed `.param` value names the parameter and the DUT in the headline, whether
+/// Verilator stops on it at the module's declaration (`-G`) or in the generated
+/// elaboration top (a DUT with interface ports), as does a malformed interface binding
+/// value.
+#[test]
+fn a_malformed_parameter_value_names_the_call_in_the_headline() {
+    let s = [Sandbox::new(), Sandbox::new(), Sandbox::new()];
+    let cases = [
+        (
+            acc(&s[0], "acc_g", false).param("W", "3#"),
+            "`.param(\"W\", ..)` = `3#`",
+        ),
+        (
+            acc(&s[1], "acc_i", true)
+                .param("W", "3#")
+                .bind_iface_with_params("up", "acc_if.sink", [("W", 8)]),
+            "`.param(\"W\", ..)` = `3#`",
+        ),
+        (
+            acc(&s[2], "acc_b", true).bind_iface_with_params("up", "acc_if.sink", [("W", "2#")]),
+            "`.bind_iface_with_params(\"up\", ..)` parameter `W` = `2#`",
+        ),
+    ];
+    for ((dut, blamed), s) in cases.into_iter().zip(&s) {
+        let name = dut.config().name.clone();
+        let msg = dut.build_in(&s.env()).unwrap_err().to_string();
+        let headline = format!("elaborating DUT `{name}` (its {blamed}) failed");
+        assert!(msg.starts_with(&headline), "{msg}");
+    }
 }

@@ -146,8 +146,10 @@ struct FileId {
     bool valid = false;
 };
 FileId file_id(const char* path) noexcept;
-// Points every descriptor of this process open on `id` at /dev/null (dup2). Returns how many
-// were redirected, or -1 if /dev/null could not be opened.
+// Points every descriptor of this process open on `id` at /dev/null (dup2). The descriptors
+// come from the kernel's list (/proc/self/fd, /dev/fd), not a scan up to RLIMIT_NOFILE, and the
+// soft limit is raised for the call if one lies above it. Returns how many were redirected, or
+// -1 if /dev/null could not be opened.
 int redirect_to_devnull(const FileId& id) noexcept;
 // Creates (or truncates) `path` for writing and closes it again, so that a writer that cannot
 // report an open failure (fstcpp's std::ofstream) or reports it with a fatal

@@ -24,6 +24,7 @@
 #include <cstring>
 #include <utility>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -131,18 +132,58 @@ FileId file_id(const char* path) noexcept {
     return FileId{static_cast<uint64_t>(st.st_dev), static_cast<uint64_t>(st.st_ino), true};
 }
 
-int redirect_to_devnull(const FileId& id) noexcept {
-    if (!id.valid) return 0;
-    const int null_fd = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
-    if (null_fd < 0) return -1;
-    // Descriptors are small integers below the soft limit; cap the scan for "unlimited".
+// The descriptors this process has open, from the kernel's own list: /proc/self/fd on Linux,
+// /dev/fd on macOS (where it lists every descriptor, not just 0-2). Scanning up to
+// RLIMIT_NOFILE instead costs a syscall per possible descriptor (a million with the usual
+// limits) and misses descriptors above a limit lowered after they were opened. Falls back to
+// that scan only if neither directory can be read.
+std::vector<int> open_descriptors() {
+    std::vector<int> fds;
+    for (const char* dir : {"/proc/self/fd", "/dev/fd"}) {
+        DIR* d = ::opendir(dir);
+        if (d == nullptr) continue;
+        const int own = ::dirfd(d);
+        while (const dirent* e = ::readdir(d)) {
+            char* end = nullptr;
+            const long fd = std::strtol(e->d_name, &end, 10);
+            if (end != e->d_name && *end == '\0' && fd != own) fds.push_back(static_cast<int>(fd));
+        }
+        ::closedir(d);
+        return fds;
+    }
     struct rlimit lim{};
     rlim_t max_fd = 1024;
     if (::getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != RLIM_INFINITY) {
         max_fd = std::min<rlim_t>(lim.rlim_cur, 65536);
     }
+    for (int fd = 0; fd < static_cast<int>(max_fd); ++fd) fds.push_back(fd);
+    return fds;
+}
+
+int redirect_to_devnull(const FileId& id) noexcept {
+    if (!id.valid) return 0;
+    std::vector<int> fds;
+    try {
+        fds = open_descriptors();
+    } catch (...) {
+        return -1;
+    }
+    const int null_fd = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
+    if (null_fd < 0) return -1;
+    // dup2 onto a descriptor at or above the soft limit fails (EBADF), and the limit may have
+    // been lowered after the trace was opened: raise it to cover them for the duration.
+    struct rlimit lim{};
+    const bool have_lim = ::getrlimit(RLIMIT_NOFILE, &lim) == 0;
+    const int highest = fds.empty() ? 0 : *std::max_element(fds.begin(), fds.end());
+    const bool raise = have_lim && lim.rlim_cur != RLIM_INFINITY
+                       && static_cast<rlim_t>(highest) >= lim.rlim_cur;
+    if (raise) {
+        struct rlimit wide = lim;
+        wide.rlim_cur = std::min<rlim_t>(static_cast<rlim_t>(highest) + 1, lim.rlim_max);
+        ::setrlimit(RLIMIT_NOFILE, &wide);
+    }
     int moved = 0;
-    for (int fd = 0; fd < static_cast<int>(max_fd); ++fd) {
+    for (const int fd : fds) {
         struct stat st{};
         if (fd == null_fd || ::fstat(fd, &st) != 0) continue;
         if (static_cast<uint64_t>(st.st_dev) == id.dev
@@ -150,6 +191,7 @@ int redirect_to_devnull(const FileId& id) noexcept {
             ++moved;
         }
     }
+    if (raise) ::setrlimit(RLIMIT_NOFILE, &lim);
     ::close(null_fd);
     return moved;
 }

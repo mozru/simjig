@@ -6,6 +6,9 @@
 #include "simjig_abi.h"
 #include "simjig_rt.h"
 
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -394,6 +397,32 @@ void unwritable_paths_are_io_errors_not_fatals() {
 
 // A forked child detaches from the inherited trace and writes its own; the parent's file
 // stays valid (docs/notes/spikes.md §1 rule 4).
+// redirect_to_devnull finds every descriptor open on the file, including one above the
+// current soft RLIMIT_NOFILE (the limit can be lowered after the descriptor was opened), by
+// listing the open descriptors instead of scanning up to the limit.
+void devnull_redirect_finds_descriptors_above_the_limit() {
+    const std::string file = path("redirect.txt");
+    const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    CHECK(fd >= 0);
+    constexpr int kHigh = 3000;
+    CHECK_EQ(::dup2(fd, kHigh), kHigh);
+    struct rlimit old{};
+    CHECK_EQ(::getrlimit(RLIMIT_NOFILE, &old), 0);
+    struct rlimit low = old;
+    low.rlim_cur = 256;
+    CHECK_EQ(::setrlimit(RLIMIT_NOFILE, &low), 0);
+    const int moved = simjig::redirect_to_devnull(simjig::file_id(file.c_str()));
+    CHECK_EQ(::setrlimit(RLIMIT_NOFILE, &old), 0);
+    CHECK_EQ(moved, 2);
+    struct stat high{};
+    struct stat null{};
+    CHECK_EQ(::fstat(kHigh, &high), 0);
+    CHECK_EQ(::stat("/dev/null", &null), 0);
+    CHECK(high.st_rdev == null.st_rdev && high.st_ino == null.st_ino);
+    ::close(kHigh);
+    ::close(fd);
+}
+
 void fork_child_detaches_and_reopens() {
     CHECK_EQ(thread_count(), 1u);
     Model m{simjig_vtable_Vtc_full(), "TOP"};
@@ -677,6 +706,8 @@ int main(int argc, char** argv) {
         {"unwritable_paths_are_io_errors_not_fatals", unwritable_paths_are_io_errors_not_fatals},
         {"coverage_counters_count_and_zero", coverage_counters_count_and_zero},
         {"coverage_dat_is_written", coverage_dat_is_written},
+        {"devnull_redirect_finds_descriptors_above_the_limit",
+         devnull_redirect_finds_descriptors_above_the_limit},
         {"counters_of_every_module_object_are_runs", counters_of_every_module_object_are_runs},
         {"urandom_streams_are_per_model_and_reproducible",
          urandom_streams_are_per_model_and_reproducible},

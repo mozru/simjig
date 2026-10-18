@@ -38,7 +38,13 @@ fn verilator_errors_name_the_command_and_file() {
         )),
         "{msg}"
     );
-    assert!(msg.ends_with(&format!("\ncommand: {command}")), "{msg}");
+    assert!(
+        msg.ends_with(&format!(
+            "\ncommand: {command}\n(its `-Mdir` was a temporary directory, removed after the \
+             run)"
+        )),
+        "{msg}"
+    );
 
     let models = s.path().join("cache/models");
     assert_eq!(

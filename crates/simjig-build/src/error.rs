@@ -76,7 +76,7 @@ pub enum Error {
     /// failed (``elaborating DUT `x` ``, ``verilating DUT `x` ``) and the first error's
     /// `file:line:col` and message, then the rest of the stderr excerpt, a hint when one
     /// applies, and last the command line.
-    #[error("{}", display_command_failure(what, command, *status, stderr))]
+    #[error("{}", display_command_failure(what, command, *status, stderr, path.as_deref()))]
     Command {
         /// What the run was for, e.g. ``verilating DUT `counter` ``.
         what: String,
@@ -433,7 +433,15 @@ fn only_lint_warnings(stderr: &str) -> bool {
     warned && !stderr.lines().any(is_error_line)
 }
 
-fn display_command_failure(what: &str, command: &str, status: Option<i32>, stderr: &str) -> String {
+/// What [`Error::Command`] displays (see there). `path` is shown when the first error has
+/// no location of its own.
+fn display_command_failure(
+    what: &str,
+    command: &str,
+    status: Option<i32>,
+    stderr: &str,
+    path: Option<&Path>,
+) -> String {
     let status = status.map_or_else(
         || "killed by a signal".to_owned(),
         |s| format!("exit status: {s}"),
@@ -450,14 +458,16 @@ fn display_command_failure(what: &str, command: &str, status: Option<i32>, stder
         }
         Some((code, None, msg)) => {
             let code = code.map(|c| format!("{c}: ")).unwrap_or_default();
-            format!("{what} failed ({status}): {code}{msg}")
+            format!("{what} failed ({status}){}: {code}{msg}", on(path))
         }
-        None => format!("{what} failed ({status})"),
+        None => format!("{what} failed ({status}){}", on(path)),
     };
-    let mut rest = stderr.to_owned();
-    if let Some(first) = first {
-        rest = stderr.replacen(&format!("{first}\n"), "", 1);
+    // The excerpt without the headline's line (once: the same text may recur).
+    let mut rest: Vec<&str> = stderr.lines().collect();
+    if let Some(i) = first.and_then(|f| rest.iter().position(|l| *l == f)) {
+        rest.remove(i);
     }
+    let rest = rest.join("\n");
     if !rest.trim().is_empty() {
         out.push('\n');
         out.push_str(rest.trim_end());
@@ -468,7 +478,18 @@ fn display_command_failure(what: &str, command: &str, status: Option<i32>, stder
     }
     out.push_str("\ncommand: ");
     out.push_str(command);
+    if command.contains(" -Mdir ") {
+        // The JSON pass and the cache verilate into a work directory they remove when
+        // the run fails, so the path above no longer exists.
+        out.push_str("\n(its `-Mdir` was a temporary directory, removed after the run)");
+    }
     out
+}
+
+/// The suffix naming `path`, for a headline without a location.
+fn on(path: Option<&Path>) -> String {
+    path.map(|p| format!(" on `{}`", p.display()))
+        .unwrap_or_default()
 }
 
 /// The code (`PINNOTFOUND`), location (`file:line:col`) and message of a Verilator error
@@ -623,6 +644,43 @@ mod tests {
         assert_eq!(
             parse_error("%Error: /a/b c.sv:3: msg: 1"),
             Some((None, Some("/a/b c.sv:3"), "msg: 1"))
+        );
+    }
+
+    /// The first error is dropped from the excerpt even as its last line without a
+    /// newline; a headline without a location names the offending path; and a temporary
+    /// `-Mdir` in the command line says it is gone.
+    #[test]
+    fn the_headline_layout_holds_at_the_edges() {
+        let failure = |stderr: &str, command: &str, path: Option<&str>| {
+            Error::Command {
+                what: "verilating DUT `d`".into(),
+                command: command.into(),
+                status: Some(1),
+                stderr: stderr.into(),
+                path: path.map(PathBuf::from),
+            }
+            .to_string()
+        };
+        assert_eq!(
+            failure("%Error: /r/d.sv:3:5: syntax error", "verilator d.sv", None),
+            "verilating DUT `d` failed (exit status: 1) at /r/d.sv:3:5: syntax error\n\
+             command: verilator d.sv"
+        );
+        assert_eq!(
+            failure(
+                "%Error: Cannot find file containing module: 'x'\n%Error: /r/d.sv:1:1: y\n",
+                "verilator d.sv",
+                Some("/r/d.sv")
+            ),
+            "verilating DUT `d` failed (exit status: 1) on `/r/d.sv`: Cannot find file \
+             containing module: 'x'\n%Error: /r/d.sv:1:1: y\ncommand: verilator d.sv"
+        );
+        assert!(
+            failure("%Error: x", "verilator -Mdir /tmp/w/obj --cc d.sv", None).ends_with(
+                "command: verilator -Mdir /tmp/w/obj --cc d.sv\n(its `-Mdir` was a \
+                 temporary directory, removed after the run)"
+            )
         );
     }
 

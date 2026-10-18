@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A Verilator failure whose first error has no location names the offending file in the
+  headline (``failed (exit status: 1) on `/r/d.sv`: ..``), as before the headline
+  change; a first error on the last line of stderr, without a newline, is no longer
+  printed twice; and a command line whose `-Mdir` was a temporary directory (the JSON
+  pass's, the cache's work directory) says it was removed after the run.
 - A DUT name claimed by an earlier DUT that failed reads as ``already claimed by an
   earlier DUT (which failed)``, not ``already built``, when a corrected configuration
   of the same name (or a name differing only in case) is refused.

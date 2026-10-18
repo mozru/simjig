@@ -17,13 +17,22 @@
 //! - After `$fatal` the model is poisoned and the C side refuses every trace call; the trace
 //!   then ends at the last completed timestep, and `destroy` closes the file (it closes an
 //!   open trace before it frees the model).
+//! - A DPI failure poisons only the Rust side: the failing timestep is dumped first, and
+//!   the C++ model is healthy, so the file is closed normally.
 //! - A trace call that fails stops the trace (with one printed line), never the simulation.
+//!
+//! So a trace has separate facts: whether it may still be *sampled* (no once the model is
+//! poisoned, or a call failed), whether its *file is open* (until it is closed), and
+//! whether only `destroy` can close it (after a FATAL, when the C side refuses every trace
+//! call; Rust then makes none). A poisoned model's file still needs closing.
 //!
 //! # Fork
 //! An open trace registers a [`ForkHook`]: in each `fork::run_from_checkpoint` child it
 //! detaches the inherited file and continues the waves in `<path stem>.branch-<i>.fst`
 //! next to it (`trace_reopen`; docs/notes/tracecov.md), so the parent's file is never
 //! written by a child, and it ends that file (last sample, header) before the child exits.
+//! A child never drops its models, so a model the branch poisoned with a `$fatal` (whose C
+//! side refuses `trace_close`) is destroyed there instead, which closes its trace.
 //! The parent does not flush before forking (see `fork_hook`).
 //!
 //! # Window
@@ -159,7 +168,14 @@ struct TraceState {
     end: Option<SimTime>,
     /// The timestep evaluated since the last sample, whose state is still to be dumped.
     pending: Option<SimTime>,
-    open: bool,
+    /// Whether samples may still be written: not after the model was poisoned or a trace
+    /// call failed.
+    sampling: bool,
+    /// Whether the file is still open, and so needs closing to get its header.
+    file_open: bool,
+    /// Whether the C side refuses every trace call (a FATAL poisoned the model), so only
+    /// `destroy` can close the file.
+    closed_by_destroy: bool,
 }
 
 impl Tracer {
@@ -192,7 +208,9 @@ impl Tracer {
                     path: options.path.clone(),
                     end: options.end,
                     pending: None,
-                    open: true,
+                    sampling: true,
+                    file_open: true,
+                    closed_by_destroy: false,
                 }));
                 let hook = fork_hook(Rc::downgrade(&state));
                 Ok(Some(Self {
@@ -227,16 +245,24 @@ impl Tracer {
         self.state.borrow_mut().close();
     }
 
-    /// The model was poisoned: no trace call may reach it again (`destroy` closes the
-    /// file).
+    /// A DPI failure poisoned the model on the Rust side only: no sample is written again,
+    /// and the C++ model, which is healthy, still closes the file normally.
     pub(crate) fn stop(&self) {
-        self.state.borrow_mut().open = false;
+        self.state.borrow_mut().sampling = false;
+    }
+
+    /// A FATAL or EXCEPTION poisoned the C++ model: no trace call may reach it again, so
+    /// its `destroy` closes the file (in a fork child, the fork hook destroys it).
+    pub(crate) fn poisoned(&self) {
+        let mut state = self.state.borrow_mut();
+        state.sampling = false;
+        state.closed_by_destroy = true;
     }
 }
 
 impl TraceState {
     fn end_timestep(&mut self) {
-        let Some(t) = self.pending.take().filter(|_| self.open) else {
+        let Some(t) = self.pending.take().filter(|_| self.sampling) else {
             return;
         };
         if self.end.is_some_and(|end| t > end) {
@@ -248,32 +274,41 @@ impl TraceState {
     }
 
     fn flush(&mut self) {
-        if self.open {
+        if self.sampling {
             let status = self.port.flush();
             self.check(status, "flush");
         }
     }
 
+    /// Closes the file with `trace_close`, unless only `destroy` can.
     fn close(&mut self) {
-        if std::mem::replace(&mut self.open, false) {
+        self.sampling = false;
+        if !self.closed_by_destroy && std::mem::replace(&mut self.file_open, false) {
             let status = self.port.close();
             self.check(status, "close");
         }
     }
 
-    /// Stops the trace after a failed call; a poisoned model fails every call silently,
+    /// Stops sampling after a failed call; a poisoned model fails every call silently,
     /// because its failure is already being reported. A destroyed model (`None`) has
     /// already closed its trace.
     fn check(&mut self, status: Option<i32>, what: &str) {
         let Some(status) = status else {
-            self.open = false;
+            self.sampling = false;
+            self.file_open = false;
             return;
         };
         match Status::try_from(status) {
             Ok(Status::Ok) => {}
-            Ok(Status::Poisoned) => self.open = false,
+            Ok(Status::Poisoned) => {
+                self.sampling = false;
+                self.closed_by_destroy = true;
+            }
             other => {
-                self.open = false;
+                // The file is not closed either: a writer that failed once is not trusted
+                // with its header (`destroy` still tries).
+                self.sampling = false;
+                self.file_open = false;
                 print_line(&format!(
                     "simjig: the trace {what} returned {other:?}; the waves stop here"
                 ));
@@ -283,7 +318,7 @@ impl TraceState {
 
     /// In a fork child: continues the waves in the branch's own file.
     fn reopen(&mut self, index: usize) -> Result<(), String> {
-        if !self.open {
+        if !self.sampling {
             return Ok(());
         }
         let file = branch_path(&self.path, index);
@@ -295,7 +330,7 @@ impl TraceState {
                 Ok(())
             }
             Some(other) => {
-                self.open = false;
+                self.sampling = false;
                 Err(format!(
                     "continuing the trace in {} returned {other:?}",
                     file.display()
@@ -330,12 +365,19 @@ fn fork_hook(state: Weak<RefCell<TraceState>>) -> ForkHook {
         },
     )
     // A child exits without dropping the model, so the trace must end here: the last
-    // timestep is dumped and the header written.
+    // timestep is dumped and the header written. A model poisoned by a `$fatal` refuses
+    // `trace_close`, so it is destroyed instead (its teardown closes the trace); the child
+    // exits right after this hook and never reaches the model again.
     .at_child_exit(move || {
         if let Some(state) = exiting.upgrade() {
             let mut state = state.borrow_mut();
             state.end_timestep();
-            state.close();
+            if state.closed_by_destroy && state.file_open {
+                state.file_open = false;
+                state.port.destroy_before_exit();
+            } else {
+                state.close();
+            }
         }
     })
 }

@@ -218,6 +218,10 @@ impl VerilatorModel {
         result.map_err(|message| {
             if poison {
                 self.poisoned = Some(message.clone());
+                // The C side now refuses every trace call; `destroy` closes the file.
+                if let Some(tracer) = &self.tracer {
+                    tracer.poisoned();
+                }
             }
             ModelError::fatal(message)
         })
@@ -280,21 +284,18 @@ impl ModelBackend for VerilatorModel {
                 tracer.on_failure();
             }
         }
-        let result = match dpi_failure {
+        match dpi_failure {
             // The DPI failure happened first: the design went on with a wrong value.
             Some(failure) => {
                 self.poisoned = Some(failure.message.clone());
+                // Never sampled again; the healthy C++ model still closes the file.
+                if let Some(tracer) = &self.tracer {
+                    tracer.stop();
+                }
                 Err(failure.into_model_error())
             }
             None => result,
-        };
-        // A poisoned model is never called again, its trace (and fork hook) included.
-        if self.poisoned.is_some()
-            && let Some(tracer) = &self.tracer
-        {
-            tracer.stop();
         }
-        result
     }
 
     fn events_pending(&self) -> bool {
@@ -335,10 +336,9 @@ impl Drop for VerilatorModel {
                 print_line(&format!("simjig: in final blocks: {}", failure.message));
             }
         }
-        // A poisoned model refuses trace calls; `destroy` closes its trace instead.
-        if self.poisoned.is_none()
-            && let Some(tracer) = &self.tracer
-        {
+        // After a DPI poisoning the C++ model is healthy and closes the trace here; after a
+        // FATAL the tracer makes no call and `destroy` closes it.
+        if let Some(tracer) = &self.tracer {
             tracer.close();
         }
     }

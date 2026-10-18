@@ -152,6 +152,14 @@ fn duts() -> Vec<Dut> {
             .param("WIDTH", 8)
             .param("DEPTH", 4)
             .trace_fst(true),
+        // A DPI-C design and the `$fatal` design, FST-traced: a model poisoned in a fork
+        // branch still finishes the branch's waves (tests/waves_tests).
+        Dut::new("dpi_fst")
+            .sources(["../../tests/duts/dpi/dpi.sv"])
+            .top("dpi")
+            .verilator_args(TIMESCALE)
+            .trace_fst(true),
+        shared_as("fatal_fst", "fatal").trace_fst(true),
     ]
     .into_iter()
     .chain(feature_duts())

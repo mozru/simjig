@@ -18,6 +18,10 @@ simjig::include_dut!(counter);
 simjig::include_dut!(counter_fst);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(fifo_fst);
+#[cfg(simjig_test_models)]
+simjig::include_dut!(dpi_fst);
+#[cfg(simjig_test_models)]
+simjig::include_dut!(fatal_fst);
 
 #[cfg(simjig_test_models)]
 mod fork;

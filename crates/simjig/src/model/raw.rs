@@ -20,6 +20,9 @@
 //!   cell before `destroy`. It is `!Send` too, and its only caller (a fork hook, which runs
 //!   in the main task's poll, never inside an eval: the kernel refuses `fork` inside a DPI
 //!   call) never runs during another entry point.
+//! - The handle is destroyed exactly once: by whoever takes it out of the shared cell,
+//!   `Drop` or [`TracePort::destroy_before_exit`]. The latter runs only in a fork child
+//!   that `_exit`s right after it, so no entry point reaches the destroyed handle.
 //!
 //! No Rust reference into model memory is ever created; `abi` reads and writes members
 //! through raw pointers at the moment of use.
@@ -97,6 +100,22 @@ impl TracePort {
         let handle = self.live.get()?;
         // SAFETY: as in `dump`.
         Some(unsafe { (self.vt.trace_flush)(handle.as_ptr()) })
+    }
+
+    /// In a fork branch's child that is about to `_exit`: destroys the model, which closes
+    /// its trace even when the model is poisoned (`trace_close` refuses a poisoned model).
+    /// The child never drops its models, so without this a poisoned model's file has no
+    /// header.
+    ///
+    /// The caller guarantees that the process exits before any other entry point of this
+    /// model runs (`fork`'s `at_child_exit` hooks are its last code); `Drop` then never runs.
+    pub(crate) fn destroy_before_exit(&self) {
+        if let Some(handle) = self.live.take() {
+            // SAFETY: `live` held the handle, so it is live; taking it out of the shared
+            // cell makes this its only destroy (`Drop` and every port call see `None`), and
+            // the caller's contract keeps the model's own methods from running again.
+            unsafe { (self.vt.destroy)(handle.as_ptr()) }
+        }
     }
 
     /// In a fork child: detaches the inherited trace and continues it in `path`; the raw
@@ -354,10 +373,12 @@ impl RawModel {
 
 impl Drop for RawModel {
     fn drop(&mut self) {
-        self.live.set(None);
-        // SAFETY: `handle` is live and is destroyed exactly once, here; `destroy` accepts
-        // poisoned handles (the ABI contract) and never unwinds.
-        unsafe { (self.vt.destroy)(self.handle.as_ptr()) }
+        if let Some(handle) = self.live.take() {
+            // SAFETY: `live` still held the handle, so it is live and was not destroyed;
+            // taking it makes this its only destroy. `destroy` accepts poisoned handles (the
+            // ABI contract) and never unwinds.
+            unsafe { (self.vt.destroy)(handle.as_ptr()) }
+        }
     }
 }
 

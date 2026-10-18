@@ -166,7 +166,19 @@ impl fmt::Display for Failure {
                 }
             }
         }
-        write!(f, "\n  help: {}", self.kind.help())
+        if let Some(help) = self.help() {
+            write!(f, "\n  help: {help}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Failure {
+    /// What to do about the failure: one line of advice, the `help:` line of the
+    /// `Display`. Every kind has one today; `None` leaves room for kinds without advice.
+    #[must_use]
+    pub fn help(&self) -> Option<&str> {
+        Some(self.kind.help())
     }
 }
 
@@ -197,6 +209,8 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("task `main.a` awaits Lock `bus`"), "{text}");
-        assert!(text.contains("help: "), "{text}");
+        let help = failure.help().unwrap();
+        assert!(help.starts_with("each listed task waits on another"), "{help}");
+        assert!(text.ends_with(&format!("\n  help: {help}")), "{text}");
     }
 }

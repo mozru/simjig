@@ -4,6 +4,7 @@
 
 fn main() -> Result<(), simjig_build::Error> {
     round_robin_arbiter()?;
+    async_fifo()?;
     Ok(())
 }
 
@@ -14,6 +15,18 @@ fn round_robin_arbiter() -> Result<(), simjig_build::Error> {
         .sources(["rtl/round_robin_arbiter.sv"])
         .top("round_robin_arbiter")
         .param("N", 5)
+        .trace_fst(true)
+        .build()?;
+    Ok(())
+}
+
+/// The dual-clock FIFO, 8 entries of 8 bits: shallow, so random traffic reaches full often.
+fn async_fifo() -> Result<(), simjig_build::Error> {
+    simjig_build::Dut::new("async_fifo")
+        .sources(["rtl/async_fifo.sv"])
+        .top("async_fifo")
+        .param("WIDTH", 8)
+        .param("DEPTH", 8)
         .trace_fst(true)
         .build()?;
     Ok(())

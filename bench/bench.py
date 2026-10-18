@@ -12,7 +12,7 @@ appends one JSON line per run to FILE: the testbench's own timing of its body
 before the batch (`load`), and what the testbench counted (`pushes`, `pops`, `hash`),
 which must agree between the two flows.
 
-Before each batch it waits until the 1-minute load average is below --max-load (1.0) and
+Before each batch it waits until the 1-minute load average is below --max-load (2.5; see bench/README.md, "Idle machine") and
 no `cargo`, `rustc`, `clang`, `verilator` or `nextest` process is running (the machine
 runs other agents; this driver builds nothing while it measures). With --max-wait set, a
 batch that gave up waiting is marked `quiet: false` and flagged in the table.
@@ -250,7 +250,7 @@ def main() -> None:
     r.add_argument("--variants", type=lambda s: s.split(","), default=VARIANTS)
     r.add_argument("--cocotb-max", type=int, default=10_000_000,
                    help="largest size cocotb runs (extrapolate beyond it)")  # fmt: skip
-    r.add_argument("--max-load", type=float, default=1.0)
+    r.add_argument("--max-load", type=float, default=2.5)
     r.add_argument("--max-wait", type=float, default=None, help="seconds; default forever")
     r.add_argument("--out", type=Path, default=TARGET / "bench-results.jsonl")
     sub.add_parser("build")

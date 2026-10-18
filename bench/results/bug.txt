@@ -1,5 +1,6 @@
+injected: 'wire do_push = push && (!full || do_pop);' -> 'wire do_push = push && !full;'
 simjig: FAILED (caught)
-thread 'c_full::fifo' (10301142) panicked at tests/bench.rs:195:13:
+thread 'c_full::fifo' (10460078) panicked at tests/bench.rs:195:13:
 assertion `left == right` failed: count
   left: 15
  right: 16

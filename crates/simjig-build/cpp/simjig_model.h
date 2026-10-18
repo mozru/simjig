@@ -4,7 +4,7 @@
 // headers and this file, defines a traits struct and exports the vtable:
 //
 //   #include "Vcounter.h"
-//   #include "Vcounter___024root.h"   // only with kCoverage (with __Syms.h: the counter arrays)
+//   #include "Vcounter___024root.h"   // only with kCoverage (with __Syms.h: the symbol table type)
 //   #include "Vcounter__Syms.h"        // only with kCoverage
 //   #include "simjig_model.h"
 //   struct CounterTraits {

@@ -19,10 +19,10 @@
 //!   abort the process (`docs/notes/abi.md`, open issue 5). Nothing can check this one.
 //! - `kTraceFst` turns on the trace entries. `simjig_model.h` statically asserts it equals
 //!   the model's `traceCapable`, so a mismatch fails the C++ build.
-//! - `kCoverage` turns on the coverage entries, which read the counter arrays declared in
-//!   `<prefix>___024root.h` and `<prefix>__Syms.h`, so the shim then includes both. Without
-//!   `--coverage` the shim does not compile with it set (no `__Vcoverage` to size), unless the
-//!   design has no coverage points at all.
+//! - `kCoverage` turns on the coverage entries. The shim then includes `<prefix>___024root.h`
+//!   and `<prefix>__Syms.h`, whose types bound the symbol table object in which `cov_runs`
+//!   keeps the counters every point reports (`VL_COVER_INSERT`, `simjig_vl_config.h`). It
+//!   must match the model's `VM_COVERAGE`, which the compile step checks.
 //!
 //! Models built without trace or coverage need neither `verilated_fst_c.cpp` nor
 //! `verilated_cov.cpp` at link time (`docs/notes/tracecov.md`).

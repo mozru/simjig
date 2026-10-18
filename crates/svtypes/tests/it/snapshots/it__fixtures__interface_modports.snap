@@ -1,0 +1,249 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 4,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": true,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Bits",
+        "width": 16,
+        "signed": false,
+        "range": {
+          "left": 15,
+          "right": 0
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "bus_if__W10",
+      "orig_name": "bus_if",
+      "kind": "Interface",
+      "params": [
+        {
+          "name": "W",
+          "value": {
+            "Bits": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                16
+              ]
+            }
+          },
+          "ty": 0
+        }
+      ],
+      "ports": [
+        {
+          "name": "clk",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": null,
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": [
+        {
+          "name": "src",
+          "members": [
+            {
+              "name": "data",
+              "dir": "Output",
+              "ty": 2
+            },
+            {
+              "name": "valid",
+              "dir": "Output",
+              "ty": 1
+            },
+            {
+              "name": "ready",
+              "dir": "Input",
+              "ty": 1
+            },
+            {
+              "name": "clk",
+              "dir": "Input",
+              "ty": 1
+            }
+          ]
+        },
+        {
+          "name": "snk",
+          "members": [
+            {
+              "name": "data",
+              "dir": "Input",
+              "ty": 2
+            },
+            {
+              "name": "valid",
+              "dir": "Input",
+              "ty": 1
+            },
+            {
+              "name": "ready",
+              "dir": "Output",
+              "ty": 1
+            },
+            {
+              "name": "clk",
+              "dir": "Input",
+              "ty": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "consumer__Bz1",
+      "orig_name": "consumer",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "seen",
+          "dir": "Output",
+          "ty": 1,
+          "cpp_member": null,
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [
+        {
+          "name": "bus",
+          "interface": 0,
+          "modport": "snk"
+        }
+      ],
+      "modports": []
+    },
+    {
+      "name": "monitor__Bz1",
+      "orig_name": "monitor",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "busy",
+          "dir": "Output",
+          "ty": 1,
+          "cpp_member": null,
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [
+        {
+          "name": "bus",
+          "interface": 0,
+          "modport": null
+        }
+      ],
+      "modports": []
+    },
+    {
+      "name": "producer__Bz1",
+      "orig_name": "producer",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "go",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": null,
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [
+        {
+          "name": "bus",
+          "interface": 0,
+          "modport": "src"
+        }
+      ],
+      "modports": []
+    },
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "clk",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": "clk",
+          "storage": "CData"
+        },
+        {
+          "name": "go",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": "go",
+          "storage": "CData"
+        },
+        {
+          "name": "seen",
+          "dir": "Output",
+          "ty": 1,
+          "cpp_member": "seen",
+          "storage": "CData"
+        },
+        {
+          "name": "busy",
+          "dir": "Output",
+          "ty": 1,
+          "cpp_member": "busy",
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": []
+}

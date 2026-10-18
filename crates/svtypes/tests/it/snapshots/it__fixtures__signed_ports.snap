@@ -1,0 +1,259 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 0,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Bits",
+        "width": 16,
+        "signed": true,
+        "range": {
+          "left": 15,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Bits",
+        "width": 16,
+        "signed": false,
+        "range": {
+          "left": 15,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 5,
+      "kind": {
+        "kind": "Bits",
+        "width": 5,
+        "signed": true,
+        "range": {
+          "left": 4,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 8,
+      "kind": {
+        "kind": "Bits",
+        "width": 8,
+        "signed": true,
+        "range": {
+          "left": 7,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 16,
+      "kind": {
+        "kind": "Bits",
+        "width": 16,
+        "signed": true,
+        "range": {
+          "left": 15,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": true,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 64,
+      "kind": {
+        "kind": "Bits",
+        "width": 64,
+        "signed": true,
+        "range": {
+          "left": 63,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": true,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 64,
+      "kind": {
+        "kind": "Bits",
+        "width": 64,
+        "signed": false,
+        "range": {
+          "left": 63,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 80,
+      "kind": {
+        "kind": "Bits",
+        "width": 80,
+        "signed": true,
+        "range": {
+          "left": 79,
+          "right": 0
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "s16",
+          "dir": "Input",
+          "ty": 0,
+          "cpp_member": "s16",
+          "storage": "SData"
+        },
+        {
+          "name": "u16",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": "u16",
+          "storage": "SData"
+        },
+        {
+          "name": "s5_2state",
+          "dir": "Input",
+          "ty": 2,
+          "cpp_member": "s5_2state",
+          "storage": "CData"
+        },
+        {
+          "name": "by",
+          "dir": "Input",
+          "ty": 3,
+          "cpp_member": "by",
+          "storage": "CData"
+        },
+        {
+          "name": "si",
+          "dir": "Input",
+          "ty": 4,
+          "cpp_member": "si",
+          "storage": "SData"
+        },
+        {
+          "name": "i",
+          "dir": "Input",
+          "ty": 5,
+          "cpp_member": "i",
+          "storage": "IData"
+        },
+        {
+          "name": "li",
+          "dir": "Input",
+          "ty": 6,
+          "cpp_member": "li",
+          "storage": "QData"
+        },
+        {
+          "name": "ig",
+          "dir": "Input",
+          "ty": 7,
+          "cpp_member": "ig",
+          "storage": "IData"
+        },
+        {
+          "name": "tm",
+          "dir": "Input",
+          "ty": 8,
+          "cpp_member": "tm",
+          "storage": "QData"
+        },
+        {
+          "name": "s80",
+          "dir": "Input",
+          "ty": 9,
+          "cpp_member": "s80",
+          "storage": {
+            "VlWide": {
+              "words": 3
+            }
+          }
+        },
+        {
+          "name": "neg",
+          "dir": "Output",
+          "ty": 0,
+          "cpp_member": "neg",
+          "storage": "SData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": []
+}

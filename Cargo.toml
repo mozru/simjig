@@ -14,7 +14,10 @@ svtypes = { path = "crates/svtypes" }
 simjig-bits = { path = "crates/simjig-bits" }
 simjig-build = { path = "crates/simjig-build" }
 simjig-macros = { path = "crates/simjig-macros" }
+insta = { version = "1.49.0", default-features = false }
 proptest = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

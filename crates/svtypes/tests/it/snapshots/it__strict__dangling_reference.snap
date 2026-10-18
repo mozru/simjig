@@ -1,0 +1,5 @@
+---
+source: crates/svtypes/tests/it/strict.rs
+expression: message
+---
+Verilator 5.052 JSON at /miscsp/0/typesp/11/membersp/1 (design.sv:11:17): `refDTypep` is `(NOPE)`, which names no node in this file

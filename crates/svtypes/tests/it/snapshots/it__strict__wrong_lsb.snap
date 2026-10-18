@@ -1,0 +1,5 @@
+---
+source: crates/svtypes/tests/it/strict.rs
+expression: message
+---
+Verilator 5.052 JSON at /miscsp/0/typesp/6/membersp/0 (design.sv:6:25): Verilator says lsb 11, computed 12

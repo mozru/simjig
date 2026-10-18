@@ -1,0 +1,5 @@
+---
+source: crates/svtypes/tests/it/strict.rs
+expression: message
+---
+Verilator 5.052 JSON at /miscsp/0/typesp/19 (design.sv:20:11): unsupported data type node QUEUEDTYPE

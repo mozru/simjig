@@ -1,0 +1,371 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 0,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 2,
+      "kind": {
+        "kind": "Bits",
+        "width": 2,
+        "signed": false,
+        "range": {
+          "left": 1,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::state_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 2,
+      "kind": {
+        "kind": "Enum",
+        "base": 0,
+        "variants": [
+          {
+            "name": "IDLE",
+            "value": {
+              "width": 2,
+              "signed": false,
+              "words": [
+                0
+              ]
+            }
+          },
+          {
+            "name": "BUSY",
+            "value": {
+              "width": 2,
+              "signed": false,
+              "words": [
+                1
+              ]
+            }
+          },
+          {
+            "name": "DONE",
+            "value": {
+              "width": 2,
+              "signed": false,
+              "words": [
+                2
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Bits",
+        "width": 4,
+        "signed": false,
+        "range": {
+          "left": 3,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 12,
+      "kind": {
+        "kind": "Bits",
+        "width": 12,
+        "signed": true,
+        "range": {
+          "left": 11,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::inner_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Struct",
+        "packed": true,
+        "signed": false,
+        "fields": [
+          {
+            "name": "tag",
+            "ty": 2,
+            "lsb": 12
+          },
+          {
+            "name": "data",
+            "ty": 3,
+            "lsb": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 3,
+      "kind": {
+        "kind": "Bits",
+        "width": 3,
+        "signed": false,
+        "range": {
+          "left": 2,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::outer_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 22,
+      "kind": {
+        "kind": "Struct",
+        "packed": true,
+        "signed": false,
+        "fields": [
+          {
+            "name": "in",
+            "ty": 4,
+            "lsb": 6
+          },
+          {
+            "name": "st",
+            "ty": 1,
+            "lsb": 4
+          },
+          {
+            "name": "valid",
+            "ty": 5,
+            "lsb": 3
+          },
+          {
+            "name": "pad",
+            "ty": 6,
+            "lsb": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Bits",
+        "width": 16,
+        "signed": false,
+        "range": {
+          "left": 15,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Bits",
+        "width": 8,
+        "signed": false,
+        "range": {
+          "left": 7,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "PackedArray",
+        "elem": 9,
+        "range": {
+          "left": 1,
+          "right": 0
+        },
+        "signed": false
+      }
+    },
+    {
+      "name": "pkg::word_u",
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Union",
+        "packed": true,
+        "signed": false,
+        "fields": [
+          {
+            "name": "word",
+            "ty": 8,
+            "lsb": 0
+          },
+          {
+            "name": "bytes",
+            "ty": 10,
+            "lsb": 0
+          },
+          {
+            "name": "as_inner",
+            "ty": 4,
+            "lsb": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "pkg::sdata_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Struct",
+        "packed": true,
+        "signed": true,
+        "fields": [
+          {
+            "name": "hi",
+            "ty": 2,
+            "lsb": 4
+          },
+          {
+            "name": "lo",
+            "ty": 2,
+            "lsb": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Struct",
+        "packed": true,
+        "signed": false,
+        "fields": [
+          {
+            "name": "a",
+            "ty": 5,
+            "lsb": 3
+          },
+          {
+            "name": "b",
+            "ty": 6,
+            "lsb": 0
+          }
+        ]
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "in_i",
+          "dir": "Input",
+          "ty": 4,
+          "cpp_member": "in_i",
+          "storage": "SData"
+        },
+        {
+          "name": "in_o",
+          "dir": "Input",
+          "ty": 7,
+          "cpp_member": "in_o",
+          "storage": "IData"
+        },
+        {
+          "name": "in_u",
+          "dir": "Input",
+          "ty": 11,
+          "cpp_member": "in_u",
+          "storage": "SData"
+        },
+        {
+          "name": "in_s",
+          "dir": "Input",
+          "ty": 12,
+          "cpp_member": "in_s",
+          "storage": "CData"
+        },
+        {
+          "name": "in_anon",
+          "dir": "Input",
+          "ty": 13,
+          "cpp_member": "in_anon",
+          "storage": "CData"
+        },
+        {
+          "name": "out_o",
+          "dir": "Output",
+          "ty": 7,
+          "cpp_member": "out_o",
+          "storage": "IData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": [
+    {
+      "name": "pkg",
+      "params": [],
+      "typedefs": [
+        1,
+        4,
+        7,
+        11,
+        12
+      ]
+    }
+  ]
+}

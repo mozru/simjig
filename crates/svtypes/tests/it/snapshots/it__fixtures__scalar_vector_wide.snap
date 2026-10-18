@@ -1,0 +1,381 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 0,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Bits",
+        "width": 8,
+        "signed": false,
+        "range": {
+          "left": 7,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 9,
+      "kind": {
+        "kind": "Bits",
+        "width": 9,
+        "signed": false,
+        "range": {
+          "left": 8,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Bits",
+        "width": 16,
+        "signed": false,
+        "range": {
+          "left": 15,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 17,
+      "kind": {
+        "kind": "Bits",
+        "width": 17,
+        "signed": false,
+        "range": {
+          "left": 16,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": false,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 33,
+      "kind": {
+        "kind": "Bits",
+        "width": 33,
+        "signed": false,
+        "range": {
+          "left": 32,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 64,
+      "kind": {
+        "kind": "Bits",
+        "width": 64,
+        "signed": false,
+        "range": {
+          "left": 63,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 65,
+      "kind": {
+        "kind": "Bits",
+        "width": 65,
+        "signed": false,
+        "range": {
+          "left": 64,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 96,
+      "kind": {
+        "kind": "Bits",
+        "width": 96,
+        "signed": false,
+        "range": {
+          "left": 95,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 100,
+      "kind": {
+        "kind": "Bits",
+        "width": 100,
+        "signed": false,
+        "range": {
+          "left": 99,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 4,
+      "kind": {
+        "kind": "Bits",
+        "width": 4,
+        "signed": false,
+        "range": {
+          "left": 3,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Bits",
+        "width": 8,
+        "signed": false,
+        "range": {
+          "left": 0,
+          "right": 7
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 6,
+      "kind": {
+        "kind": "Bits",
+        "width": 6,
+        "signed": false,
+        "range": {
+          "left": 3,
+          "right": -2
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Bits",
+        "width": 4,
+        "signed": false,
+        "range": {
+          "left": 3,
+          "right": 0
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "clk",
+          "dir": "Input",
+          "ty": 0,
+          "cpp_member": "clk",
+          "storage": "CData"
+        },
+        {
+          "name": "b8",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": "b8",
+          "storage": "CData"
+        },
+        {
+          "name": "b9",
+          "dir": "Input",
+          "ty": 2,
+          "cpp_member": "b9",
+          "storage": "SData"
+        },
+        {
+          "name": "b16",
+          "dir": "Input",
+          "ty": 3,
+          "cpp_member": "b16",
+          "storage": "SData"
+        },
+        {
+          "name": "b17",
+          "dir": "Input",
+          "ty": 4,
+          "cpp_member": "b17",
+          "storage": "IData"
+        },
+        {
+          "name": "b32",
+          "dir": "Input",
+          "ty": 5,
+          "cpp_member": "b32",
+          "storage": "IData"
+        },
+        {
+          "name": "b33",
+          "dir": "Input",
+          "ty": 6,
+          "cpp_member": "b33",
+          "storage": "QData"
+        },
+        {
+          "name": "b64",
+          "dir": "Input",
+          "ty": 7,
+          "cpp_member": "b64",
+          "storage": "QData"
+        },
+        {
+          "name": "b65",
+          "dir": "Input",
+          "ty": 8,
+          "cpp_member": "b65",
+          "storage": {
+            "VlWide": {
+              "words": 3
+            }
+          }
+        },
+        {
+          "name": "b96",
+          "dir": "Input",
+          "ty": 9,
+          "cpp_member": "b96",
+          "storage": {
+            "VlWide": {
+              "words": 3
+            }
+          }
+        },
+        {
+          "name": "wide",
+          "dir": "Output",
+          "ty": 10,
+          "cpp_member": "wide",
+          "storage": {
+            "VlWide": {
+              "words": 4
+            }
+          }
+        },
+        {
+          "name": "two_state",
+          "dir": "Input",
+          "ty": 11,
+          "cpp_member": "two_state",
+          "storage": "CData"
+        },
+        {
+          "name": "ascending",
+          "dir": "Input",
+          "ty": 12,
+          "cpp_member": "ascending",
+          "storage": "CData"
+        },
+        {
+          "name": "negative_lsb",
+          "dir": "Input",
+          "ty": 13,
+          "cpp_member": "negative_lsb",
+          "storage": "CData"
+        },
+        {
+          "name": "bidir",
+          "dir": "Inout",
+          "ty": 14,
+          "cpp_member": "bidir",
+          "storage": "CData"
+        },
+        {
+          "name": "esc$name",
+          "dir": "Input",
+          "ty": 0,
+          "cpp_member": "esc__024name",
+          "storage": "CData"
+        },
+        {
+          "name": "char",
+          "dir": "Input",
+          "ty": 0,
+          "cpp_member": "__SYM__char",
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": []
+}

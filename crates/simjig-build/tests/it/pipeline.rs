@@ -549,6 +549,22 @@ fn a_failed_duplicate_name_keeps_the_built_module() {
     assert_eq!(generated(&s, "counter"), before);
 }
 
+/// A build whose emitter writes no Rust removes the module an earlier build left (here a
+/// failure stub): it would be included as the DUT's current bindings.
+#[test]
+fn a_build_without_rust_removes_a_stale_module() {
+    let s = Sandbox::new();
+    let stale = s.path().join("out/simjig/counter.rs");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, "::core::compile_error!(\"stale\");\n").unwrap();
+    let built = counter(&s.rtl())
+        .emitter(simjig_build::noop_emitter)
+        .build_in(&s.env())
+        .unwrap();
+    assert_eq!(built.rust_file, None);
+    assert!(!stale.exists(), "the stale module is gone");
+}
+
 /// Two DUT names differing only in case would share one generated file on a
 /// case-insensitive filesystem: the second is refused, and leaves the first's module.
 #[test]

@@ -9,7 +9,7 @@
 //!
 //! | Output | Written to | Used as |
 //! |---|---|---|
-//! | [`Emitted::rust`] | `OUT_DIR/simjig/<name>.rs` | `include!`d by the user crate |
+//! | [`Emitted::rust`] | `OUT_DIR/simjig/<name>.rs` (removed when `None`) | `include!`d by the user crate |
 //! | [`Emitted::shim_cpp`] | cache `inputs/<hash>/<prefix>_shim.cpp` | compiled into the model archive |
 //! | [`Emitted::vlt`] | cache `inputs/<hash>/<prefix>.vlt` | Verilator control file |
 //! | [`Emitted::layout_check`] | cache `inputs/<hash>/<module>.sv` | `--lint-only` run before verilating |
@@ -239,10 +239,20 @@ pub(crate) fn place(
         write_if_changed(&path, text)?;
         Ok(path)
     };
-    let rust = emitted
-        .rust
-        .map(|r| write(&dir, format!("{}.rs", config.name), &r))
-        .transpose()?;
+    let rust_path = dir.join(format!("{}.rs", config.name));
+    let rust = match emitted.rust {
+        Some(r) => Some(write(&dir, format!("{}.rs", config.name), &r)?),
+        None => {
+            // No Rust for this DUT: a module an earlier build left (a failure stub, or
+            // bindings from another emitter) would be included as if it were current.
+            match std::fs::remove_file(&rust_path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(Error::io("removing", &rust_path)(e));
+                }
+                _ => None,
+            }
+        }
+    };
     let model_sources: Vec<PathBuf> = emitted
         .shim_cpp
         .map(|contents| {

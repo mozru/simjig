@@ -4,6 +4,8 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A successful build whose emitter writes no Rust (`Emitted::rust: None`) removes
+  `OUT_DIR/simjig/<name>.rs`: a failure stub (or module) an earlier build left survived.
 - A build script refuses a second DUT whose name differs from an earlier one's only in
   case (`counter`, `Counter`): on a case-insensitive filesystem both are
   `OUT_DIR/simjig/counter.rs`, so the second overwrote the first's module (or its

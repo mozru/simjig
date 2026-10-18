@@ -26,9 +26,14 @@ fn write_conflict_names_both_tasks_only_when_values_differ() {
                 f.kind,
                 FailureKind::WriteConflict {
                     signal: "a".into(),
-                    first: "task `main`".into(),
-                    second: "task `main.other`".into(),
+                    first: "main".into(),
+                    second: "main.other".into(),
                 }
+            );
+            assert!(
+                f.message
+                    .contains("by task `main` and by task `main.other`"),
+                "{f}"
             );
             assert_eq!(f.task.as_deref(), Some("main.other"));
             assert!(f.location.unwrap().file().ends_with("failures.rs"), "{f}");

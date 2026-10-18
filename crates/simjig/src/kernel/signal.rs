@@ -242,6 +242,17 @@ impl Writer {
         k.current.get().map_or(Self::Kernel, Self::Task)
     }
 
+    /// The writer's bare name, for [`FailureKind::WriteConflict`]'s fields: the task's
+    /// hierarchical name, or `clock` / `kernel`. Renderers add their own quoting.
+    fn name(self, k: &Kernel) -> String {
+        match self {
+            Self::Task(key) => k.task_name(key),
+            Self::Clock => "clock".to_owned(),
+            Self::Kernel => "kernel".to_owned(),
+        }
+    }
+
+    /// The writer as a phrase for messages (``task `main.a` ``).
     fn label(self, k: &Kernel, slot: u32) -> String {
         match self {
             Self::Task(key) => format!("task `{}`", k.task_name(key)),
@@ -514,17 +525,17 @@ fn conflict(
     location: Option<&'static Location<'static>>,
 ) {
     let name = &k.names[slot as usize];
-    let (first, second_label) = (first.label(k, slot), second.label(k, slot));
+    let (first_label, second_label) = (first.label(k, slot), second.label(k, slot));
     k.fail(
         FailureKind::WriteConflict {
             signal: name.to_string(),
-            first: first.clone(),
-            second: second_label.clone(),
+            first: first.name(k),
+            second: second.name(k),
         },
         task_of(second),
         location.map(Into::into),
         format!(
-            "signal `{name}` written with different values by {first} and by {second_label} \
+            "signal `{name}` written with different values by {first_label} and by {second_label} \
              in the same delta"
         ),
     );

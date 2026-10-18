@@ -11,7 +11,7 @@ Agent `wiring`, branch `w2/wiring`. Checked against Verilator 5.052 (pixi, osx-a
    `simjig_elab_<dut>` → `lower_wrapper` → `emit_wrapper` → JSON pass on
    `simjig_wrap_<dut>`; no `-G` anywhere (DUT params go into `IfaceTop.params`), and the
    wrapper is the model top. The JSON pass's Verilator version must equal the located one.
-4. Emitter → `emit::place`: `<name>.rs` into `OUT_DIR/simjig/`, `<prefix>_shim.cpp` into `OUT_DIR/simjig/<name>/`
+4. Emitter → `emit::place`: `<name>.rs` and `<prefix>_shim.cpp` into `OUT_DIR/simjig/`
    (written only when changed), `<prefix>.vlt` and the layout check content-addressed
    into the cache.
 5. Layout check: `verilator -Wno-fatal --lint-only -Werror-USERFATAL --[no-]timing

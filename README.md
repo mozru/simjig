@@ -192,7 +192,8 @@ simjig_build::Dut::new("core")
 If any source declares a `timeunit` (or `` `timescale ``), every module, interface and
 package must, a package included: Verilator stops on a mix with `%Warning-TIMESCALEMOD`
 (IEEE 1800-2023 §3.14.2.3). Add the `timeunit`, or give the rest a default with
-`.verilator_args(["--timescale", "1ns/1ps"])`.
+`.verilator_args(["--timescale", "1ns/1ps"])`. The wrapper simjig generates for a DUT
+with interface ports is exempt: it takes the design's unit.
 
 ### Waves on failure
 A run is never traced while it first runs. When waves are asked for, the harness replays

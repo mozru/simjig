@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The generated wrapper of a DUT with interface ports (`simjig_wrap_<dut>`), and its
+  elaboration-only top, waive `TIMESCALEMOD` for themselves (`// verilator lint_off`
+  around the module) and take the design's time unit: a design whose units all declare
+  a `timeunit` stopped on `TIMESCALEMOD` without `--timescale`. Generated SystemVerilog:
+  two comment lines more (snapshots updated).
 - `with_timeout(ns(0), ..)` panics with "with_timeout of zero ticks", pointing at the
   `with_timeout` call; it said "Timer of zero ticks" at a line inside simjig. It is a
   plain `fn` returning the future now (`#[track_caller]`), with the same output type.

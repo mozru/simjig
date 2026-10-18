@@ -103,6 +103,40 @@ fn an_interface_ported_dut_is_built_through_the_generated_wrapper() {
     assert!(exports_vtable(&env.cache_dir(), &built));
 }
 
+/// Every unit declaring a `timeunit`, as the README recommends, needs no `--timescale`:
+/// the generated tops declare none, and Verilator 5.052 would stop on `TIMESCALEMOD` for
+/// them (IEEE 1800-2023 §3.14.2.3) unless they waive it and inherit the design's unit.
+#[test]
+fn an_interface_ported_dut_whose_units_all_declare_a_timeunit_builds() {
+    let s = Sandbox::new();
+    let src = dut("iface_top");
+    let timed = tempfile::tempdir().unwrap();
+    let unit = "  timeunit 1ns; timeprecision 1ps;";
+    for (file, after) in [
+        ("iface_pkg.sv", "package iface_pkg;"),
+        ("bus_if.sv", "interface bus_if;"),
+        ("iface_top.sv", ");"),
+    ] {
+        let text = std::fs::read_to_string(src.join(file)).unwrap();
+        let (head, tail) = text.split_once(&format!("\n{after}\n")).unwrap();
+        let text = format!("{head}\n{after}\n{unit}\n{tail}");
+        std::fs::write(timed.path().join(file), text).unwrap();
+    }
+    let d = timed.path();
+    let built = Dut::new("iface_timed")
+        .sources([
+            d.join("iface_pkg.sv"),
+            d.join("bus_if.sv"),
+            d.join("iface_top.sv"),
+        ])
+        .top("iface_top")
+        .bind_iface("in_bus", "bus_if")
+        .bind_iface("out_bus", "bus_if")
+        .build_in(&s.env())
+        .unwrap();
+    assert_eq!(built.design.time_precision.to_string(), "1ps");
+}
+
 fn failing_layout(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
     let mut e = codegen_emitter(design, config)?;
     e.layout_check = Some(SvModule {

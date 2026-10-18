@@ -179,3 +179,20 @@ fn the_json_pass_follows_verilator_root() {
     let built = counter(&rtl).build_in(&env).unwrap();
     assert_eq!(built.verilator.exe, root.join("bin/verilator"));
 }
+
+/// A define value containing `+` (which `+define+` would split) means the same to the
+/// JSON pass and the model: one argument builder spells both command lines.
+#[test]
+fn defines_reach_both_passes_alike() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let built = Dut::new("defines")
+        .sources([rtl.join("defines.sv")])
+        .top("defines")
+        .define("DEPTH", "4+4")
+        .build_in(&s.env())
+        .unwrap();
+    assert_eq!(built.header_ports[0].msb, 7, "the model saw DEPTH = 8");
+    let rust = std::fs::read_to_string(built.rust_file.unwrap()).unwrap();
+    assert!(rust.contains("pub const D: i32 = 8;"), "{rust}");
+}

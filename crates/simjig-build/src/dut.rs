@@ -5,7 +5,8 @@
 //! 1. locate and version-check Verilator;
 //! 2. claim the prefix (see `pipeline::claim`): two configurations must never share one;
 //! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
-//!    `-G` and extra arguments, always `--no-timing`, giving the type IR. A DUT with
+//!    `-G` and extra arguments (one builder, `DutConfig::design`), always `--no-timing`,
+//!    giving the type IR. A DUT with
 //!    interface ports takes two passes through generated tops (`pipeline::design_ir`);
 //! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
@@ -136,26 +137,46 @@ impl DutConfig {
         if self.coverage {
             a.push("--coverage".to_owned());
         }
-        a.extend(["--top-module".to_owned(), top.to_owned()]);
+        let sources = generated.iter().chain(&self.sources).cloned().collect();
         a.extend(
-            self.include_dirs
-                .iter()
-                .map(|d| format!("-I{}", d.display())),
+            self.design(top, sources, self.ifaces.is_empty())
+                .design_args(),
         );
-        a.extend(self.defines.iter().map(|(k, v)| format!("-D{k}={v}")));
-        // With interface ports the wrapper is the top, so `-G` would reach the wrapper:
-        // the DUT's parameters go into the wrapper instead (`IfaceTop::params`).
-        if self.ifaces.is_empty() {
-            a.extend(self.params.iter().map(|(k, v)| format!("-G{k}={v}")));
-        }
-        a.extend(
-            generated
-                .iter()
-                .chain(&self.sources)
-                .map(|p| p.display().to_string()),
-        );
-        a.extend(self.verilator_args.iter().cloned());
         a
+    }
+
+    /// The design as every Verilator run sees it (the JSON pass, the model build, the
+    /// layout check): one [`svtypes::verilator::JsonPassOpts`], so the three spell the
+    /// defines, `-I`, `-G` and extra arguments with one builder
+    /// ([`JsonPassOpts::design_args`](svtypes::verilator::JsonPassOpts::design_args)).
+    ///
+    /// `params` says whether the DUT's parameters go on the command line (`-G`). They do
+    /// not with interface ports: the wrapper is the top there, so the parameters go into
+    /// the wrapper (`IfaceTop::params`), nor for the layout check, whose types are
+    /// spelled with elaborated widths.
+    pub(crate) fn design(
+        &self,
+        top: &str,
+        sources: Vec<PathBuf>,
+        params: bool,
+    ) -> svtypes::verilator::JsonPassOpts {
+        svtypes::verilator::JsonPassOpts {
+            sources,
+            top: top.to_owned(),
+            defines: self
+                .defines
+                .iter()
+                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                .collect(),
+            params: if params {
+                self.params.clone()
+            } else {
+                Vec::new()
+            },
+            include_dirs: self.include_dirs.clone(),
+            extra_args: self.verilator_args.clone(),
+            ..svtypes::verilator::JsonPassOpts::default()
+        }
     }
 
     /// What [`crate::codegen::lower`] needs besides the IR.
@@ -175,33 +196,20 @@ impl DutConfig {
         })
     }
 
-    /// The JSON pass inputs: the same design as the model build sees, run by the
-    /// Verilator that builds the model. `extra` sources (generated tops) come after the
-    /// user's; `-G` is passed only without a wrapper.
+    /// The JSON pass inputs: the same design as the model build sees ([`Self::design`]),
+    /// run by the Verilator that builds the model. `extra` sources (generated tops) come
+    /// after the user's.
     pub(crate) fn json_pass_opts(
         &self,
         top: &str,
         extra: &[PathBuf],
         verilator: &Verilator,
     ) -> svtypes::verilator::JsonPassOpts {
-        let params = if self.ifaces.is_empty() {
-            self.params.clone()
-        } else {
-            Vec::new()
-        };
+        let sources = self.sources.iter().chain(extra).cloned().collect();
         svtypes::verilator::JsonPassOpts {
             exe: verilator.exe.clone(),
             env: verilator.child_env(),
-            sources: self.sources.iter().chain(extra).cloned().collect(),
-            top: top.to_owned(),
-            defines: self
-                .defines
-                .iter()
-                .map(|(k, v)| (k.clone(), Some(v.clone())))
-                .collect(),
-            params,
-            include_dirs: self.include_dirs.clone(),
-            extra_args: self.verilator_args.clone(),
+            ..self.design(top, sources, self.ifaces.is_empty())
         }
     }
 

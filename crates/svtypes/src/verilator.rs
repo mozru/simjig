@@ -29,15 +29,43 @@ pub struct JsonPassOpts {
     pub sources: Vec<PathBuf>,
     /// Top module name (`--top-module`).
     pub top: String,
-    /// Preprocessor defines (`+define+NAME` or `+define+NAME=VALUE`).
+    /// Preprocessor defines (`-DNAME` or `-DNAME=VALUE`). `-D` and not `+define+`,
+    /// which splits its value at every `+`.
     pub defines: Vec<(String, Option<String>)>,
     /// Top-level parameter overrides (`-GNAME=VALUE`); values are SystemVerilog
     /// expressions, e.g. `8` or `4'hc`.
     pub params: Vec<(String, String)>,
     /// Include directories (`-I`).
     pub include_dirs: Vec<PathBuf>,
-    /// Further arguments, passed through before the sources.
+    /// Further arguments, passed last (after the sources).
     pub extra_args: Vec<String>,
+}
+
+impl JsonPassOpts {
+    /// The arguments that describe the design: `--top-module`, `-I`, `-D`, `-G`, the
+    /// sources and the extra arguments, in that order.
+    ///
+    /// This is the one place these are spelled: the JSON pass uses it, and so does any
+    /// other Verilator run that must elaborate the same design (simjig-build's model
+    /// build and layout check), so a define or parameter cannot mean one thing to the IR
+    /// and another to the model.
+    #[must_use]
+    pub fn design_args(&self) -> Vec<String> {
+        let mut a = vec!["--top-module".to_owned(), self.top.clone()];
+        a.extend(
+            self.include_dirs
+                .iter()
+                .map(|d| format!("-I{}", d.display())),
+        );
+        a.extend(self.defines.iter().map(|(name, value)| match value {
+            Some(v) => format!("-D{name}={v}"),
+            None => format!("-D{name}"),
+        }));
+        a.extend(self.params.iter().map(|(n, v)| format!("-G{n}={v}")));
+        a.extend(self.sources.iter().map(|p| p.display().to_string()));
+        a.extend(self.extra_args.iter().cloned());
+        a
+    }
 }
 
 impl Default for JsonPassOpts {
@@ -127,30 +155,11 @@ fn verilator(opts: &JsonPassOpts) -> Command {
 
 fn command(opts: &JsonPassOpts, out_dir: &Path, tree: &Path, meta: &Path) -> Command {
     let mut cmd = verilator(opts);
-    cmd.args([
-        "--json-only",
-        "--no-timing",
-        "-Wno-fatal",
-        "--top-module",
-        &opts.top,
-    ]);
+    cmd.args(["--json-only", "--no-timing", "-Wno-fatal"]);
     cmd.arg("-Mdir").arg(out_dir);
     cmd.arg("--json-only-output").arg(tree);
     cmd.arg("--json-only-meta-output").arg(meta);
-    for dir in &opts.include_dirs {
-        cmd.arg(format!("-I{}", dir.display()));
-    }
-    for (name, value) in &opts.defines {
-        match value {
-            Some(v) => cmd.arg(format!("+define+{name}={v}")),
-            None => cmd.arg(format!("+define+{name}")),
-        };
-    }
-    for (name, value) in &opts.params {
-        cmd.arg(format!("-G{name}={value}"));
-    }
-    cmd.args(&opts.extra_args);
-    cmd.args(&opts.sources);
+    cmd.args(opts.design_args());
     cmd
 }
 
@@ -289,9 +298,9 @@ mod tests {
         );
         assert_eq!(
             command_line(&cmd),
-            "/opt/v/bin/verilator --json-only --no-timing -Wno-fatal --top-module t -Mdir o \
-             --json-only-output o/t.json --json-only-meta-output o/m.json -Iinc +define+X \
-             +define+Y=2 '-GP=4'\\''hc' --x-assign 0 a.sv"
+            "/opt/v/bin/verilator --json-only --no-timing -Wno-fatal -Mdir o \
+             --json-only-output o/t.json --json-only-meta-output o/m.json --top-module t \
+             -Iinc -DX -DY=2 '-GP=4'\\''hc' a.sv --x-assign 0"
         );
     }
 }

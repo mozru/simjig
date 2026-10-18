@@ -185,17 +185,13 @@ fn layout_check_args(config: &DutConfig, module: &str, file: &Path) -> Vec<Strin
         }
         .to_owned(),
     );
-    a.extend(["--top-module".to_owned(), module.to_owned()]);
-    a.extend(
-        config
-            .include_dirs
-            .iter()
-            .map(|d| format!("-I{}", d.display())),
-    );
-    a.extend(config.defines.iter().map(|(k, v)| format!("-D{k}={v}")));
-    a.extend(config.sources.iter().map(|p| p.display().to_string()));
-    a.push(file.display().to_string());
-    a.extend(config.verilator_args.iter().cloned());
+    let sources = config
+        .sources
+        .iter()
+        .cloned()
+        .chain([file.to_path_buf()])
+        .collect();
+    a.extend(config.design(module, sources, false).design_args());
     a
 }
 

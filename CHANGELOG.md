@@ -19,10 +19,12 @@ the public API, the generated code or simulation semantics.
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.
 - The shim is stored content-addressed in the cache (`inputs/<hash>/<prefix>_shim.cpp`)
-  and compiled from there; it is no longer written to `OUT_DIR/simjig/<name>/`. A model
-  archive's key has the shim's path, so crates and target directories that build the same
-  configuration now share one model archive (each compiled its own). Every model archive
-  is compiled again once.
+  and compiled from there; it is no longer written to `OUT_DIR/simjig/`, which holds only
+  the generated Rust. A model archive's key has the shim's path, so crates and target
+  directories that build the same configuration now share one model archive (each
+  compiled its own), and it no longer lists the files in `OUT_DIR/simjig/` or in the
+  cache, so a rerun of the build script compiles only the models whose DUT changed (it
+  compiled every model after any DUT changed). Every model archive is compiled again once.
 - `create` refuses a probe of a `real`, a `string` or another variable that is not a
   packed vector by its type, with the build-time check's words ("`r` is a `real`
   (Verilator stores it as VLVT_REAL) ..."), before comparing widths: a 1-bit probe of a
@@ -39,12 +41,6 @@ the public API, the generated code or simulation semantics.
   key and hit on every later build. Verilation manifests now record digests and file
   status like the archive ones: every model is verilated again once
   (`simjig-verilate-deps-v2`).
-- Each DUT's shim is written to `OUT_DIR/simjig/<name>/<prefix>_shim.cpp` (it was
-  `OUT_DIR/simjig/<prefix>_shim.cpp`), and the shim of an earlier configuration is removed.
-  A model archive's key no longer lists the files in `OUT_DIR/simjig/` or in the cache, so
-  a rerun of the build script compiles only the models whose DUT changed (it compiled
-  every model after any DUT changed, and most of them on the first rerun after a cold
-  build). Every model archive is compiled again once.
 - The build script reruns when the C++ compiler changes in place: it emits
   `cargo::rerun-if-changed` for the path `CXX` (or `cc`'s default) is found at, the
   executable that resolves to, and the same for a compiler wrapper (`CXX="ccache c++"`).

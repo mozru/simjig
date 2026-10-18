@@ -11,6 +11,7 @@ extern crate simjig as sj;
 
 mod concurrency;
 mod macros;
+mod readme;
 mod reports;
 mod repro;
 mod runner;

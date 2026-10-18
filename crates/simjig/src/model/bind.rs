@@ -69,7 +69,7 @@ impl ModelBinder {
             meta.name,
             meta.access
         );
-        RawSig::new(self.sim_gen, meta.slot)
+        RawSig::in_model(self.sim_gen, 0, meta.slot)
     }
 }
 
@@ -135,7 +135,7 @@ pub fn create<D>(
     let mut sim_gen = None;
     for s in meta.signals {
         match sim.signal(s.name) {
-            Some(raw) if raw.slot() == s.slot => sim_gen = Some(raw.sim_gen()),
+            Some(raw) if raw.local_slot() == s.slot => sim_gen = Some(raw.sim_gen()),
             _ => {
                 let error = LoadError::SignalTable {
                     prefix: meta.prefix,

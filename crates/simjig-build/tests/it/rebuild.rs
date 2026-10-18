@@ -229,3 +229,59 @@ fn s3c6r_fixing_a_handled_failed_duts_source_reruns_the_script() {
         "fixing the failed DUT's source must rerun the build script"
     );
 }
+
+/// s3c7m: a handled failed DUT whose sources come from a `-f` file list (the usual
+/// Verilator flow) or a `-y` library directory must rerun when a listed source is fixed.
+fn s3c7m_failed_dut_reruns_via(args: &str, extra: &dyn Fn(&Path)) {
+    let (krate, target, _lock) = fixture();
+    let envs = [
+        (
+            "SIMJIG_CACHE_DIR",
+            krate.parent().unwrap().join("cache").into_os_string(),
+        ),
+        ("SIMJIG_CCACHE", "0".into()),
+    ];
+    let opt = krate.join("duts/opt");
+    std::fs::create_dir_all(&opt).unwrap();
+    let source = opt.join("opt.sv");
+    std::fs::write(
+        &source,
+        "module opt(input logic a, output logic y);\n  assign y = ;\nendmodule\n",
+    )
+    .unwrap();
+    extra(&opt);
+    let script = krate.join("build.rs");
+    let text = std::fs::read_to_string(&script).unwrap().replace(
+        r#"Dut::new("optional").top("optional").build()"#,
+        &format!(r#"Dut::new("opt"){args}.top("opt").build()"#),
+    );
+    std::fs::write(&script, text).unwrap();
+    assert!(build(&krate, &target, &envs), "the edited script runs");
+    assert!(!build(&krate, &target, &envs), "no change: no rerun");
+    std::fs::write(
+        &source,
+        "module opt(input logic a, output logic y);\n  assign y = ~a;\nendmodule\n",
+    )
+    .unwrap();
+    assert!(
+        build(&krate, &target, &envs),
+        "fixing the failed DUT's source ({args}) must rerun the build script"
+    );
+}
+
+#[test]
+fn s3c7m_a_failed_dut_from_a_file_list_reruns_when_fixed() {
+    s3c7m_failed_dut_reruns_via(r#".verilator_args(["-f", "duts/opt/files.f"])"#, &|opt| {
+        std::fs::write(opt.join("files.f"), "duts/opt/opt.sv\n").unwrap();
+    });
+}
+
+#[test]
+fn s3c7m_a_failed_dut_from_a_library_dir_reruns_when_fixed() {
+    s3c7m_failed_dut_reruns_via(
+        r#".sources(["duts/opt/top_stub.sv"]).verilator_args(["-y", "duts/opt"])"#,
+        &|opt| {
+            std::fs::write(opt.join("top_stub.sv"), "module stub; endmodule\n").unwrap();
+        },
+    );
+}

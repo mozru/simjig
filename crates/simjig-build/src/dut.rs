@@ -717,7 +717,8 @@ impl Dut {
     ///
     /// On failure it returns the error, and prints only `rerun-if-changed` and
     /// `rerun-if-env-changed` lines for the inputs the configuration names (sources,
-    /// include directories, `-f`/`-F` option files, the recipe's files) and the variables
+    /// include directories, `-f`/`-F` option files and the sources, `-v` files, `-y` and
+    /// include directories they or the extra arguments name, the recipe's files) and the variables
     /// that locate Verilator, and the `rustc-check-cfg` line (no `rustc-cfg`): the script
     /// decides. Returned from `main` with `?` (or unwrapped), the error is printed on
     /// stderr, which Cargo shows last, after its dump of the script's stdout. A script
@@ -972,7 +973,8 @@ fn is_c_ident(name: &str) -> bool {
 }
 
 /// The reruns of a failed build: every input the configuration names (sources,
-/// `` `include `` directories, option files, the recipe's files) and the tracked
+/// `` `include `` directories, option files and the paths in them and in the extra
+/// arguments (`optfile::inputs`, which says what it misses), the recipe's files) and the tracked
 /// variables (which locate Verilator); then the `rustc-check-cfg` of the DUT's gate, so
 /// `#[cfg(simjig_dut_<name>)]` compiles without an `unexpected_cfgs` warning.
 ///
@@ -981,12 +983,12 @@ fn is_c_ident(name: &str) -> bool {
 /// not exist reruns the script on every build until it does, which a failed DUT is
 /// waiting for anyway.
 fn failed_reruns(config: &DutConfig, recipe: &CppRecipe) -> Vec<String> {
-    let option_files = crate::optfile::files(&config.verilator_args);
+    let option_inputs = crate::optfile::inputs(&config.verilator_args);
     let files = config
         .sources
         .iter()
         .chain(&config.include_dirs)
-        .chain(option_files.iter())
+        .chain(option_inputs.iter())
         .chain(&recipe.global_sources)
         .chain(&recipe.model_sources)
         .chain(&recipe.include_dirs);

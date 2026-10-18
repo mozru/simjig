@@ -24,15 +24,64 @@ pub(crate) fn find(args: &[String], refused: fn(&str) -> bool) -> Option<(PathBu
     })
 }
 
-/// Every option file `args` name, nested ones too, readable or not (a missing one may be
-/// created later).
-pub(crate) fn files(args: &[String]) -> Vec<PathBuf> {
+/// Every input `args` name, for the reruns of a failed build, readable or not (a missing
+/// one may be created later): each option file (nested ones too), and, in `args` and in
+/// those files, what Verilator reads by path (`V3Options::parseOpts`):
+/// - a positional word with a source suffix (`.v`, `.sv`, `.vh`, `.svh`, `.vlt`, and the
+///   C++ ones Verilator compiles);
+/// - the value of `-v` (a library file) and `-y` (a library directory);
+/// - the directories of `-I<dir>` and `+incdir+<dir>[+<dir>..]`.
+///
+/// Relative paths resolve as Verilator's `parseFileArg` does them: in an `-F` file
+/// against its directory, elsewhere against the working directory. A positional word
+/// is recognised by its suffix because only Verilator's option table knows which options
+/// take a value (`--timescale 1ns/1ps`); a word it misses is not tracked.
+pub(crate) fn inputs(args: &[String]) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    walk(args, None, 0, &mut |path, _| {
-        out.push(path.to_path_buf());
-        None::<()>
-    });
+    collect(args, None, 0, &mut out);
     out
+}
+
+/// The suffixes of the positional files Verilator reads (`V3Options::parseOptsList`: C++
+/// sources, `.vlt` control files, and the rest as Verilog; Verilog by its usual suffixes).
+const SOURCE_SUFFIXES: [&str; 10] = [
+    ".v", ".sv", ".vh", ".svh", ".vlt", ".cpp", ".cxx", ".cc", ".c", ".sp",
+];
+
+/// [`inputs`] of `args` with relative paths joined to `base` (an `-F` file's directory).
+fn collect(args: &[String], base: Option<&Path>, depth: u32, out: &mut Vec<PathBuf>) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let resolve = |word: &str| base.map_or_else(|| PathBuf::from(word), |dir| dir.join(word));
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let flag = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'));
+        match flag {
+            Some(f @ ("f" | "F")) => {
+                let Some(named) = it.next() else { return };
+                let path = resolve(named);
+                out.push(path.clone());
+                let words =
+                    std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words(&t));
+                let dir = if f == "F" { path.parent() } else { base };
+                collect(&words, dir, depth + 1, out);
+            }
+            Some("v" | "y") => out.extend(it.next().map(|v| resolve(v))),
+            _ => {
+                if let Some(dir) = arg.strip_prefix("-I").filter(|d| !d.is_empty()) {
+                    out.push(resolve(dir));
+                } else if let Some(dirs) = arg.strip_prefix("+incdir+") {
+                    out.extend(dirs.split('+').filter(|d| !d.is_empty()).map(resolve));
+                } else if flag.is_none()
+                    && !arg.starts_with('+')
+                    && SOURCE_SUFFIXES.iter().any(|s| arg.ends_with(s))
+                {
+                    out.push(resolve(arg));
+                }
+            }
+        }
+    }
 }
 
 /// Calls `visit` on each option file `args` name, depth first in order, with its words
@@ -111,6 +160,51 @@ fn words(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// What a failed build reruns on: sources, library files and directories and include
+    /// directories, from the arguments and from option files, resolved like Verilator;
+    /// option values without a source suffix are not paths.
+    #[test]
+    fn inputs_are_the_paths_verilator_reads() {
+        let t = tempfile::tempdir().unwrap();
+        let sub = t.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("list.F"),
+            "a.sv -y lib -v cells.v +incdir+inc1+inc2 -Iinc3 --top-module top\n",
+        )
+        .unwrap();
+        std::fs::write(t.path().join("list.f"), "b.sv // c.sv\n").unwrap();
+        let args: Vec<String> = [
+            "--timescale",
+            "1ns/1ps",
+            "-F",
+            &sub.join("list.F").display().to_string(),
+            "-f",
+            &t.path().join("list.f").display().to_string(),
+            "d.svh",
+            "-y",
+            "ylib",
+            "-Wno-fatal",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let want: Vec<PathBuf> = vec![
+            sub.join("list.F"),
+            sub.join("a.sv"),
+            sub.join("lib"),
+            sub.join("cells.v"),
+            sub.join("inc1"),
+            sub.join("inc2"),
+            sub.join("inc3"),
+            t.path().join("list.f"),
+            // `-f`: relative to the working directory.
+            PathBuf::from("b.sv"),
+            PathBuf::from("d.svh"),
+            PathBuf::from("ylib"),
+        ];
+        assert_eq!(inputs(&args), want);
+    }
+
     #[test]
     fn comments_are_not_words() {
         let text = "-Wall // -GA=1\n# -GB=1\n  # -GC=1\n-x /* -GD=1\n -GE=1 */ -y\n\
@@ -133,7 +227,7 @@ mod tests {
             Some((sub.join("inner.f"), "-GX=1".to_owned()))
         );
         assert_eq!(
-            files(&[
+            inputs(&[
                 "-F".to_owned(),
                 outer.clone(),
                 "-f".to_owned(),
@@ -157,7 +251,7 @@ mod tests {
             None
         );
         assert_eq!(
-            files(&["-F".to_owned(), me.display().to_string()]).len(),
+            inputs(&["-F".to_owned(), me.display().to_string()]).len(),
             usize::try_from(MAX_DEPTH + 1).unwrap(),
             "a self-including file is listed once per level, up to the depth limit"
         );

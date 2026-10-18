@@ -213,6 +213,10 @@ async fn big_works(dut: fast_model::Dut) { /* ... */ }
 An ungated `include_dut!` of a DUT that failed is a compile error naming the DUT and
 its error: a failed build replaces its generated module with a `compile_error!` stub,
 so a module left by an earlier build cannot compile against a model that is not linked.
+A failed DUT's build script reruns when an input its configuration names changes: the
+sources, include directories, `-f`/`-F` files and the sources, `-v` files, `-y` and
+`+incdir+`/`-I` directories in them or in `verilator_args`. Not tracked: a positional
+source without a `.v`/`.sv`/`.vh`/`.svh`/`.vlt` (or C++) suffix, and `$VAR` in paths.
 
 If any source declares a `timeunit` (or `` `timescale ``), every module, interface and
 package must, a package included: Verilator stops on a mix with `%Warning-TIMESCALEMOD`

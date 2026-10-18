@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A failed `Dut::build` also reruns on the paths inside its `-f`/`-F` files and in its
+  `verilator_args`: sources, `-v` files, `-y`, `-I` and `+incdir+` directories, resolved
+  as Verilator does (an `-F` file's relative to its directory). A handled DUT whose
+  sources came from a file list or library directory never rebuilt after a fix.
 - A failed `Dut::build` (or `build_in`) replaces `OUT_DIR/simjig/<name>.rs` with a stub
   whose expansion is `compile_error!("DUT `<name>` failed to build ...")`: a module left
   by an earlier good build (or written before a later step failed) compiled, and the

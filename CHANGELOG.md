@@ -44,6 +44,8 @@ the public API, the generated code or simulation semantics.
 - The cache drops a model's object files once they are archived, rebuilds an entry
   directory that lost its archive, and removes work directories under `tmp/` that are
   more than an hour old.
+- An interface port whose declaration cannot be read no longer hides the friendly
+  unbound-port message for the other ports; it gets a line of its own.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

@@ -32,13 +32,18 @@ pub(crate) fn unbound_iface_ports(config: &DutConfig, e: &svtypes::error::Error)
     let top = config.top.as_deref().unwrap_or_default();
     let mut decls: Vec<(String, &str)> = Vec::new(); // (port, declaration loc) from PINMISSING
     let mut pending: Option<String> = None;
-    let mut ports: Vec<(String, Option<String>)> = Vec::new();
+    // (port, `interface.modport`); the port is `Err(location)` when its declaration could
+    // not be read, which still leaves the other ports' lines worth showing.
+    let mut ports: Vec<(Result<String, &str>, Option<String>)> = Vec::new();
     for diag in stderr.lines() {
         if let Some(loc) = diag
             .strip_prefix("%Error-UNSUPPORTED: ")
             .and_then(|d| d.strip_suffix(IFACE_PORT_ON_TOP))
         {
-            ports.push(iface_port_at(loc)?);
+            ports.push(match iface_port_at(loc) {
+                Some((port, spec)) => (Ok(port), spec),
+                None => (Err(loc), None),
+            });
         } else if let Some((_, rest)) = diag.split_once(MISSING_PIN) {
             pending = rest.strip_suffix('\'').map(str::to_owned);
         } else if let Some(loc) = diag.trim_start().strip_suffix(PORT_DECL)
@@ -52,11 +57,21 @@ pub(crate) fn unbound_iface_ports(config: &DutConfig, e: &svtypes::error::Error)
             let spec = decl
                 .and_then(|(_, loc)| iface_port_at(loc))
                 .and_then(|(_, s)| s);
-            ports.push((port.to_owned(), spec));
+            ports.push((Ok(port.to_owned()), spec));
         }
     }
     let mut lines: Vec<String> = Vec::new();
     for (port, spec) in ports {
+        let port = match port {
+            Ok(port) => port,
+            Err(loc) => {
+                lines.push(format!(
+                    "an interface port of `{top}` (declared at {loc}) is not bound; add \
+                     `.bind_iface(\"<port>\", \"<interface>.<modport>\")`"
+                ));
+                continue;
+            }
+        };
         if config.ifaces.iter().any(|b| b.port == port) {
             return None; // bound, yet reported: not the mistake this explains
         }
@@ -107,4 +122,45 @@ fn iface_port_at(loc: &str) -> Option<(String, Option<String>)> {
         })
         .map(str::to_owned);
     Some((port, spec))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_error(stderr: String) -> svtypes::error::Error {
+        svtypes::error::Error::Tool {
+            command: "verilator".into(),
+            status: Some(1),
+            stderr,
+        }
+    }
+
+    /// A declaration that cannot be read (a vanished or generated file) still leaves the
+    /// lines for the other ports, and a line for itself.
+    #[test]
+    fn an_unreadable_declaration_keeps_the_other_ports() {
+        let t = tempfile::tempdir().unwrap();
+        let sv = t.path().join("top.sv");
+        std::fs::write(&sv, "module top(\n  bus_if.src out_bus\n);\nendmodule\n").unwrap();
+        let stderr = format!(
+            "%Error-UNSUPPORTED: /gone/top.sv:3:14{IFACE_PORT_ON_TOP}\n\
+             %Error-UNSUPPORTED: {}:2:14{IFACE_PORT_ON_TOP}\n",
+            sv.display()
+        );
+        let config = DutConfig {
+            name: "d".into(),
+            top: Some("top".into()),
+            ..DutConfig::default()
+        };
+        let err = unbound_iface_ports(&config, &tool_error(stderr)).unwrap();
+        assert_eq!(
+            err.to_string(),
+            "invalid DUT `d` configuration: an interface port of `top` (declared at \
+             /gone/top.sv:3:14) is not bound; add `.bind_iface(\"<port>\", \
+             \"<interface>.<modport>\")`\n\
+             port `out_bus` of `top` is an interface port (`bus_if.src`); add \
+             `.bind_iface(\"out_bus\", \"bus_if.src\")`"
+        );
+    }
 }

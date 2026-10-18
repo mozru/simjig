@@ -14,8 +14,10 @@ constexpr uint8_t kReadWrite = SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE;
 struct Traits {
     using Model = Vtop;
     static constexpr const char* kPrefix = "Vtop";
-    static constexpr uint64_t kIrHash = 0xbc3d315a4947b864ull;
+    static constexpr uint64_t kIrHash = 0xfffea0df0917aa94ull;
     static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
     static void bind(Vtop& m, simjig::SignalTable& t) {
         SIMJIG_SIGNAL(t, m.i_impl, "top.i_impl", 3, SIMJIG_DIR_IN, kReadWrite);
         SIMJIG_SIGNAL(t, m.i_expl, "top.i_expl", 8, SIMJIG_DIR_IN, kReadWrite);

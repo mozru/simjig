@@ -80,6 +80,6 @@ fn rejects_unknown_versions() {
     .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "no svtypes front end for `Verilator 5.070`; supported: Verilator 5.050 to 5.059"
+        "no svtypes front end for `Verilator 5.070`; supported Verilator versions: 5.052"
     );
 }

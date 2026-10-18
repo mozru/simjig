@@ -5,9 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use svtypes::version::{VerilatorVersion, supported_list};
+
 use super::facts::{DEFAULT_CXX, Facts, Probe};
 use super::{Check, Finding};
-use crate::verilator::{SUPPORTED, VerilatorVersion};
 
 /// The fix for anything the pinned pixi environment provides.
 const PIXI_FIX: &str = "pixi install --locked && pixi shell";
@@ -33,11 +34,6 @@ pub(super) fn run_all(facts: &Facts, exists: &dyn Fn(&Path) -> bool) -> Vec<Find
         paths(facts),
         environment(facts),
     ]
-}
-
-fn supported_list() -> String {
-    let names: Vec<String> = SUPPORTED.iter().map(ToString::to_string).collect();
-    names.join(", ")
 }
 
 fn verilator(facts: &Facts) -> Finding {

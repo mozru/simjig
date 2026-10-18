@@ -1,5 +1,6 @@
 //! `svtypes dump <sv files> --top X [-G NAME=VALUE] [-D NAME[=VALUE]] [-I DIR] [-- ARGS]`:
 //! runs the Verilator JSON pass and prints the design's type IR as JSON.
+#![forbid(unsafe_code)]
 
 use std::io::Write as _;
 use std::process::ExitCode;

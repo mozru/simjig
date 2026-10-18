@@ -8,6 +8,7 @@ use std::io;
 
 /// Anything that can go wrong while producing a [`Design`](crate::ir::Design).
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The producer's output contains something this front end does not understand, or
     /// violates an invariant (a width mismatch, a dangling reference).
@@ -64,7 +65,8 @@ impl fmt::Display for Error {
             }
             Error::UnsupportedVersion { version } => write!(
                 f,
-                "no svtypes front end for `{version}`; supported: Verilator 5.050 to 5.059"
+                "no svtypes front end for `{version}`; supported Verilator versions: {}",
+                crate::version::supported_list()
             ),
             Error::Tool {
                 command,

@@ -8,6 +8,12 @@ pub struct CodegenConfig {
     pub probes: Vec<Probe>,
     /// Set when the DUT has interface ports and the model top is the generated wrapper.
     pub iface_top: Option<IfaceTop>,
+    /// The extra Verilator arguments of the model build, in order. Read only to reject
+    /// flags that break probes (see `lower`); they do not shape the generated code.
+    pub verilator_args: Vec<String>,
+    /// The contents of the Verilator control files (`.vlt`) the build passes, read for the
+    /// same reason.
+    pub control_files: Vec<String>,
 }
 
 /// An internal signal the testbench reads or writes through `public_flat_rd`/`_rw`.

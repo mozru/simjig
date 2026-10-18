@@ -24,9 +24,9 @@ use crate::error::{Error, Result};
 use crate::ir::{
     Design, Direction, Field, IfacePort, Modport, ModportMember, Module, ModuleId, ModuleKind,
     Package, Param, ParamValue, Port, Producer, Range, SCHEMA, Storage, TimeExp, Type, TypeId,
-    TypeKind, Variant,
+    TypeKind, Unrepresentable, Variant,
 };
-use crate::literal::Literal;
+use crate::literal::{self, Literal};
 use crate::width;
 
 /// Decodes one `.tree.json` / `.tree.meta.json` pair. `version` is `major.minor`.
@@ -167,11 +167,15 @@ impl<'a> Decoder<'a> {
     fn package(&mut self, node: &Node<'a>) -> Result<Package> {
         let name = decode_name(self.ix.str(node, "origName")?);
         let mut params = Vec::new();
+        let mut unrepresentable = Vec::new();
         let mut typedefs = Vec::new();
         for stmt in self.ix.children(node, "stmtsp")? {
             match Index::kind(&stmt) {
                 "VAR" if matches!(self.ix.str(&stmt, "varType")?, "LPARAM" | "GPARAM") => {
-                    params.push(self.param(&stmt)?);
+                    match self.param(&stmt)? {
+                        Ok(p) => params.push(p),
+                        Err(u) => unrepresentable.push(u),
+                    }
                 }
                 "TYPEDEF" if !is_synthetic(self.ix.str(&stmt, "name")?) => {
                     self.ix.check_fields(&stmt, &["attrsp"])?;
@@ -185,6 +189,7 @@ impl<'a> Decoder<'a> {
         Ok(Package {
             name,
             params,
+            unrepresentable,
             typedefs,
         })
     }
@@ -201,6 +206,7 @@ impl<'a> Decoder<'a> {
             orig_name: decode_name(self.ix.str(&unit.node, "origName")?),
             kind,
             params: Vec::new(),
+            unrepresentable: Vec::new(),
             ports: Vec::new(),
             iface_ports: Vec::new(),
             modports: Vec::new(),
@@ -210,7 +216,10 @@ impl<'a> Decoder<'a> {
                 // A port is any non-interface VAR with a direction: `inout wire` ports
                 // have varType WIRE, not PORT.
                 "VAR" => match self.ix.str(&stmt, "varType")? {
-                    "GPARAM" => m.params.push(self.param(&stmt)?),
+                    "GPARAM" => match self.param(&stmt)? {
+                        Ok(p) => m.params.push(p),
+                        Err(u) => m.unrepresentable.push(u),
+                    },
                     "IFACEREF" => {
                         if let Some(p) = self.iface_port(&stmt)? {
                             m.iface_ports.push(p);
@@ -228,7 +237,9 @@ impl<'a> Decoder<'a> {
         Ok(m)
     }
 
-    fn param(&mut self, var: &Node<'a>) -> Result<Param> {
+    /// Decodes a parameter; `Ok(Err(..))` for one whose value the IR cannot hold (an X or
+    /// Z constant), which the caller records instead of failing the design.
+    fn param(&mut self, var: &Node<'a>) -> Result<Result<Param, Unrepresentable>> {
         let ix = &self.ix;
         let name = ix.str(var, "name")?.to_owned();
         let value = ix.only_child(var, "valuep")?;
@@ -251,29 +262,36 @@ impl<'a> Decoder<'a> {
                         self.ix
                             .err(&value, format!("malformed string constant `{text}`"))
                     })?;
-                    return Ok(Param {
+                    return Ok(Ok(Param {
                         name,
                         value: ParamValue::String(s),
                         ty: None,
-                    });
+                    }));
                 }
                 "real" | "realtime" | "shortreal" => {
-                    return Ok(Param {
+                    return Ok(Ok(Param {
                         name,
                         value: ParamValue::Real(text.to_owned()),
                         ty: None,
-                    });
+                    }));
                 }
                 _ => {}
             }
         }
         let ty = self.ty(&dtype)?;
+        if literal::is_four_state(text) {
+            return Ok(Err(Unrepresentable {
+                name,
+                value: text.to_owned(),
+                reason: "the value has X or Z bits, and IR values are two-state".to_owned(),
+            }));
+        }
         let lit = self.typed_literal(&value, ty)?;
-        Ok(Param {
+        Ok(Ok(Param {
             name,
             value: ParamValue::Bits(lit),
             ty: Some(ty),
-        })
+        }))
     }
 
     /// Parses the `CONST` node `value` as a value of type `ty`, whose width it must have.
@@ -281,7 +299,7 @@ impl<'a> Decoder<'a> {
         let text = self.ix.str(value, "name")?;
         let lit: Literal = text
             .parse()
-            .map_err(|e: crate::literal::LiteralError| self.ix.err(value, e.to_string()))?;
+            .map_err(|e: literal::LiteralError| self.ix.err(value, e.to_string()))?;
         let t = &self.types[ty.index()];
         let width = t
             .width

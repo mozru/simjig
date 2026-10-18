@@ -62,8 +62,8 @@ impl Case {
             top: case.top,
             defines: case.defines,
             params: case.params,
-            include_dirs: Vec::new(),
             extra_args: case.extra_args,
+            ..JsonPassOpts::default()
         }
     }
 

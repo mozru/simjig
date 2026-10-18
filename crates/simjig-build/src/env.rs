@@ -61,11 +61,15 @@ pub struct BuildEnv {
 impl BuildEnv {
     /// Variables whose change must rerun the build script.
     ///
-    /// `PATH` is among them because `verilator` and `ccache` are looked up on it. The
-    /// cost is a rerun whenever a shell changes `PATH`; the alternative, missing a switch
-    /// to a different Verilator, would silently keep a stale model.
+    /// `PATH` is deliberately not among them, although `verilator` and `ccache` are
+    /// looked up on it: the build script instead reruns when the *resolved* Verilator
+    /// executable changes (`rerun-if-changed` on its path), so a shell whose `PATH`
+    /// differs but resolves to the same Verilator (for example running a test outside
+    /// `pixi run`) does not rerun and fail. A `PATH` change that resolves to a different
+    /// Verilator is not noticed until something else reruns the script; select a
+    /// Verilator with `SIMJIG_VERILATOR` or `VERILATOR_ROOT` (both tracked) instead.
+    /// ccache does not change the output, and the `cc` crate does not track `PATH` either.
     pub const TRACKED_VARS: &'static [&'static str] = &[
-        "PATH",
         "VERILATOR_ROOT",
         "SIMJIG_VERILATOR",
         "SIMJIG_CACHE_DIR",
@@ -232,10 +236,17 @@ mod tests {
     }
 
     #[test]
-    fn path_and_cxx_opt_are_tracked() {
-        for var in ["PATH", "SIMJIG_CXX_OPT", "CONDA_PREFIX", "LDFLAGS"] {
+    fn explicit_vars_are_tracked_but_path_is_not() {
+        for var in [
+            "SIMJIG_VERILATOR",
+            "VERILATOR_ROOT",
+            "SIMJIG_CXX_OPT",
+            "CONDA_PREFIX",
+            "LDFLAGS",
+        ] {
             assert!(BuildEnv::TRACKED_VARS.contains(&var), "{var}");
         }
+        assert!(!BuildEnv::TRACKED_VARS.contains(&"PATH"));
     }
 
     #[test]

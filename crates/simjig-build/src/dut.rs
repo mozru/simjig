@@ -5,13 +5,15 @@
 //! 1. locate and version-check Verilator;
 //! 2. claim the prefix (see `pipeline::claim`): two configurations must never share one;
 //! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
-//!    `-G` and extra arguments, always `--no-timing`, giving the type IR. A DUT with
+//!    `-G`, extra arguments and `--timing` setting (one builder, `DutConfig::design`),
+//!    giving the type IR. A DUT with
 //!    interface ports takes two passes through generated tops (`pipeline::design_ir`);
 //! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
 //!    is linted;
 //! 5. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
-//! 6. cross-check the header's ports against the IR's (or the emitter's);
+//! 6. cross-check the header's ports against the IR's (or the emitter's), and check that
+//!    no other DUT of this build script exports the same DPI names (`script`);
 //! 7. compile and link the C++ (see `compile`), and collect the `cargo::` directives.
 //!
 //! The IR comes before verilation because the emitters' outputs are Verilator inputs.
@@ -27,7 +29,7 @@ use crate::emit::{self, Emitter};
 use crate::hash::KeyHasher;
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error, cache, pipeline};
+use crate::{BuildEnv, Error, cache, pipeline, script};
 
 /// A file generated before verilation (a `.vlt` control file or a wrapper module). It is
 /// stored content-addressed in the shared cache, so its path is the same in every crate.
@@ -122,40 +124,53 @@ impl DutConfig {
         let mut a: Vec<String> = ["--cc", "--MMD", "--prefix", prefix]
             .map(str::to_owned)
             .into();
-        a.push(
-            if self.timing {
-                "--timing"
-            } else {
-                "--no-timing"
-            }
-            .to_owned(),
-        );
         if self.trace_fst {
             a.push("--trace-fst".to_owned());
         }
         if self.coverage {
             a.push("--coverage".to_owned());
         }
-        a.extend(["--top-module".to_owned(), top.to_owned()]);
+        let sources = generated.iter().chain(&self.sources).cloned().collect();
         a.extend(
-            self.include_dirs
-                .iter()
-                .map(|d| format!("-I{}", d.display())),
+            self.design(top, sources, self.ifaces.is_empty())
+                .design_args(),
         );
-        a.extend(self.defines.iter().map(|(k, v)| format!("-D{k}={v}")));
-        // With interface ports the wrapper is the top, so `-G` would reach the wrapper:
-        // the DUT's parameters go into the wrapper instead (`IfaceTop::params`).
-        if self.ifaces.is_empty() {
-            a.extend(self.params.iter().map(|(k, v)| format!("-G{k}={v}")));
-        }
-        a.extend(
-            generated
-                .iter()
-                .chain(&self.sources)
-                .map(|p| p.display().to_string()),
-        );
-        a.extend(self.verilator_args.iter().cloned());
         a
+    }
+
+    /// The design as every Verilator run sees it (the JSON pass, the model build, the
+    /// layout check): one [`svtypes::verilator::JsonPassOpts`], so the three spell
+    /// `--timing`, the defines, `-I`, `-G` and extra arguments with one builder
+    /// ([`JsonPassOpts::design_args`](svtypes::verilator::JsonPassOpts::design_args)).
+    ///
+    /// `params` says whether the DUT's parameters go on the command line (`-G`). They do
+    /// not with interface ports: the wrapper is the top there, so the parameters go into
+    /// the wrapper (`IfaceTop::params`), nor for the layout check, whose types are
+    /// spelled with elaborated widths.
+    pub(crate) fn design(
+        &self,
+        top: &str,
+        sources: Vec<PathBuf>,
+        params: bool,
+    ) -> svtypes::verilator::JsonPassOpts {
+        svtypes::verilator::JsonPassOpts {
+            sources,
+            top: top.to_owned(),
+            timing: self.timing,
+            defines: self
+                .defines
+                .iter()
+                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                .collect(),
+            params: if params {
+                self.params.clone()
+            } else {
+                Vec::new()
+            },
+            include_dirs: self.include_dirs.clone(),
+            extra_args: self.verilator_args.clone(),
+            ..svtypes::verilator::JsonPassOpts::default()
+        }
     }
 
     /// What [`crate::codegen::lower`] needs besides the IR.
@@ -163,6 +178,17 @@ impl DutConfig {
         CodegenConfig {
             probes: self.probes.clone(),
             iface_top: self.iface_top(),
+            verilator_args: self.verilator_args.clone(),
+            control_files: self
+                .generated
+                .iter()
+                .filter(|g| {
+                    Path::new(&g.file_name)
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("vlt"))
+                })
+                .map(|g| g.contents.clone())
+                .collect(),
         }
     }
 
@@ -175,29 +201,20 @@ impl DutConfig {
         })
     }
 
-    /// The JSON pass inputs: the same design as the model build sees. `extra` sources
-    /// (generated tops) come after the user's; `-G` is passed only without a wrapper.
+    /// The JSON pass inputs: the same design as the model build sees ([`Self::design`]),
+    /// run by the Verilator that builds the model. `extra` sources (generated tops) come
+    /// after the user's.
     pub(crate) fn json_pass_opts(
         &self,
         top: &str,
         extra: &[PathBuf],
+        verilator: &Verilator,
     ) -> svtypes::verilator::JsonPassOpts {
-        let params = if self.ifaces.is_empty() {
-            self.params.clone()
-        } else {
-            Vec::new()
-        };
+        let sources = self.sources.iter().chain(extra).cloned().collect();
         svtypes::verilator::JsonPassOpts {
-            sources: self.sources.iter().chain(extra).cloned().collect(),
-            top: top.to_owned(),
-            defines: self
-                .defines
-                .iter()
-                .map(|(k, v)| (k.clone(), Some(v.clone())))
-                .collect(),
-            params,
-            include_dirs: self.include_dirs.clone(),
-            extra_args: self.verilator_args.clone(),
+            exe: verilator.exe.clone(),
+            env: verilator.child_env(),
+            ..self.design(top, sources, self.ifaces.is_empty())
         }
     }
 
@@ -482,8 +499,16 @@ impl Dut {
         let header_ports =
             header::read_header_ports(&verilator::output_file(&model.obj_dir, &prefix, ".h"))?;
         header::check_ports(&header_ports, &placed.ports)?;
+        let dpi_header = verilator::output_file(&model.obj_dir, &prefix, "__Dpi.h");
+        script::claim_dpi_exports(
+            env,
+            &self.config,
+            &prefix,
+            header::read_dpi_exports(&dpi_header)?,
+        )?;
         let mut directives = compile::compile(&compile::Inputs {
             env,
+            config: &self.config,
             cache: &cache,
             verilator: &verilator,
             prefix: &prefix,
@@ -491,7 +516,7 @@ impl Dut {
             recipe: &self.recipe,
             model_sources: &placed.model_sources,
         })?;
-        directives.extend(rerun_directives(&model.deps, &self.recipe));
+        directives.extend(rerun_directives(&verilator, &model.deps, &self.recipe));
         Ok(Built {
             prefix,
             obj_dir: model.obj_dir,
@@ -511,9 +536,12 @@ fn absolute(p: impl AsRef<Path>) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-fn rerun_directives(deps: &[PathBuf], recipe: &CppRecipe) -> Vec<String> {
-    let files = deps
-        .iter()
+/// Reruns on every file Verilator read, the recipe's files, the Verilator executable
+/// (replaced in place by an upgrade, while `PATH` stays the same) and the tracked
+/// variables.
+fn rerun_directives(verilator: &Verilator, deps: &[PathBuf], recipe: &CppRecipe) -> Vec<String> {
+    let files = std::iter::once(&verilator.exe)
+        .chain(deps)
         .chain(&recipe.global_sources)
         .chain(&recipe.model_sources)
         .chain(&recipe.include_dirs);
@@ -543,6 +571,24 @@ mod tests {
     }
 
     #[test]
+    fn reruns_track_the_resolved_verilator_not_path() {
+        let verilator = Verilator {
+            exe: PathBuf::from("/opt/v/bin/verilator"),
+            version: svtypes::version::VerilatorVersion::new(5, 52),
+            version_line: "Verilator 5.052".into(),
+            include_dir: PathBuf::from("/opt/v/share/verilator/include"),
+            verilator_root: None,
+        };
+        let reruns = rerun_directives(&verilator, &[], &CppRecipe::default());
+        assert!(reruns.contains(&"cargo::rerun-if-changed=/opt/v/bin/verilator".to_owned()));
+        assert!(reruns.contains(&"cargo::rerun-if-env-changed=SIMJIG_VERILATOR".to_owned()));
+        assert!(
+            !reruns.contains(&"cargo::rerun-if-env-changed=PATH".to_owned()),
+            "{reruns:?}"
+        );
+    }
+
+    #[test]
     fn verilator_args_follow_the_config() {
         let c = Dut {
             config: cfg(),
@@ -554,7 +600,7 @@ mod tests {
         let args = c.verilator_args("Vfifo_1234abcd", "fifo", &[PathBuf::from("/c/p.vlt")]);
         assert_eq!(
             args.join(" "),
-            "--cc --MMD --prefix Vfifo_1234abcd --no-timing --trace-fst --top-module fifo \
+            "--cc --MMD --prefix Vfifo_1234abcd --trace-fst --no-timing --top-module fifo \
              -I/r/inc -DK=V -GDEPTH=16 /c/p.vlt /r/fifo.sv -Wno-WIDTH"
         );
         let timing = DutConfig {

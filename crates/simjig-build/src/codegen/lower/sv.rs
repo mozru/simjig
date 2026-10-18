@@ -8,10 +8,17 @@
 //! be named is spelled as its base type in the layout check (same layout, and no second
 //! declaration of its constants); the wrapper rejects it ([`Mode::Wrapper`]), because a
 //! base vector is not assignment compatible with the enum (§6.19.3).
+//!
+//! In the layout check every spelled-out aggregate becomes a local typedef
+//! ([`LayoutSpeller`]), nested ones first, and is referred to by name. Verilator 5.052
+//! cannot take an aggregate type written inline in an expression such as `$bits(..)` when
+//! it nests another one (`V3LinkParse`: "Implicit enum/struct type created under unexpected
+//! node type"); a typedef is always accepted. The wrapper keeps inline spellings, which
+//! only appear in port declarations.
 
 use svtypes::ir::{Design, TypeId, TypeKind};
 
-use super::super::Error;
+use super::super::{Error, LayoutTypedef};
 
 /// Who the spelling is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,12 +55,18 @@ pub(crate) fn spell(design: &Design, id: TypeId, mode: Mode) -> Result<(String, 
         unpacked.push_str(&range.to_string());
         id = *elem;
     }
-    Ok((spell_packed(design, id, mode)?, unpacked))
+    // Wrapper ports declare their aggregates inline, so no typedefs are collected.
+    Ok((spell_packed(design, id, mode, &mut Vec::new())?, unpacked))
 }
 
 /// The spelling of a packed type (or a nameable unpacked one).
-pub(crate) fn spell_packed(design: &Design, id: TypeId, mode: Mode) -> Result<String, Error> {
-    let (base, dims) = base_and_dims(design, id, mode)?;
+fn spell_packed(
+    design: &Design,
+    id: TypeId,
+    mode: Mode,
+    defs: &mut Vec<(TypeId, LayoutTypedef)>,
+) -> Result<String, Error> {
+    let (base, dims) = base_and_dims(design, id, mode, defs)?;
     Ok(if dims.is_empty() {
         base
     } else {
@@ -61,9 +74,33 @@ pub(crate) fn spell_packed(design: &Design, id: TypeId, mode: Mode) -> Result<St
     })
 }
 
+/// Spells types for the layout check, collecting a typedef per spelled-out aggregate.
+#[derive(Debug, Default)]
+pub(crate) struct LayoutSpeller {
+    /// Each typedef with the IR type it names, dependencies first.
+    defs: Vec<(TypeId, LayoutTypedef)>,
+}
+
+impl LayoutSpeller {
+    /// The layout-check spelling of packed type `id`: a name wherever an aggregate occurs.
+    pub(crate) fn spell(&mut self, design: &Design, id: TypeId) -> Result<String, Error> {
+        spell_packed(design, id, Mode::Layout, &mut self.defs)
+    }
+
+    /// The typedefs, in declaration order.
+    pub(crate) fn into_typedefs(self) -> Vec<LayoutTypedef> {
+        self.defs.into_iter().map(|(_, d)| d).collect()
+    }
+}
+
 /// Splits a packed type into its element spelling and packed dimensions, outermost first:
 /// `logic [3:0][2:0]` is `("logic", ["[3:0]", "[2:0]"])`.
-fn base_and_dims(design: &Design, id: TypeId, mode: Mode) -> Result<(String, Vec<String>), Error> {
+fn base_and_dims(
+    design: &Design,
+    id: TypeId,
+    mode: Mode,
+    defs: &mut Vec<(TypeId, LayoutTypedef)>,
+) -> Result<(String, Vec<String>), Error> {
     let ty = design.ty(id);
     if let Some(name) = ty.name.as_deref().filter(|n| nameable(design, n)) {
         return Ok((name.to_owned(), Vec::new()));
@@ -83,7 +120,7 @@ fn base_and_dims(design: &Design, id: TypeId, mode: Mode) -> Result<(String, Vec
             range,
             signed,
         } => {
-            let (mut base, inner) = base_and_dims(design, *elem, mode)?;
+            let (mut base, inner) = base_and_dims(design, *elem, mode, defs)?;
             if *signed && (base == "logic" || base == "bit") {
                 base.push_str(" signed");
             }
@@ -106,10 +143,8 @@ fn base_and_dims(design: &Design, id: TypeId, mode: Mode) -> Result<(String, Vec
             } else {
                 "union"
             };
-            (
-                spell_aggregate(design, word, *signed, fields, mode)?,
-                Vec::new(),
-            )
+            let decl = spell_aggregate(design, word, *signed, fields, mode, defs)?;
+            (name_aggregate(id, decl, mode, defs), Vec::new())
         }
         TypeKind::Enum { base, .. } => {
             if mode == Mode::Wrapper {
@@ -122,7 +157,7 @@ fn base_and_dims(design: &Design, id: TypeId, mode: Mode) -> Result<(String, Vec
             }
             // An enum is stored as its base type. Spelling the enum itself would declare
             // its constants again in the checking scope.
-            return base_and_dims(design, *base, mode);
+            return base_and_dims(design, *base, mode, defs);
         }
         TypeKind::Struct { packed: false, .. }
         | TypeKind::Union { packed: false, .. }
@@ -142,13 +177,43 @@ fn spell_aggregate(
     signed: bool,
     fields: &[svtypes::ir::Field],
     mode: Mode,
+    defs: &mut Vec<(TypeId, LayoutTypedef)>,
 ) -> Result<String, Error> {
     let sign = if signed { " signed" } else { "" };
     let members = fields
         .iter()
-        .map(|f| Ok(format!("{} {};", spell_packed(design, f.ty, mode)?, f.name)))
+        .map(|f| {
+            let ty = spell_packed(design, f.ty, mode, defs)?;
+            Ok(format!("{ty} {};", f.name))
+        })
         .collect::<Result<Vec<_>, Error>>()?;
     Ok(format!("{word} packed{sign} {{ {} }}", members.join(" ")))
+}
+
+/// In the layout check, the typedef name standing for aggregate `id` spelled as `decl`
+/// (declared once per IR type); in the wrapper, `decl` itself.
+fn name_aggregate(
+    id: TypeId,
+    decl: String,
+    mode: Mode,
+    defs: &mut Vec<(TypeId, LayoutTypedef)>,
+) -> String {
+    if mode == Mode::Wrapper {
+        return decl;
+    }
+    if let Some((_, def)) = defs.iter().find(|(t, _)| *t == id) {
+        return def.name.clone();
+    }
+    // Type ids are unique, and the prefix keeps the name clear of the design's own.
+    let name = format!("simjig_t{}", id.0);
+    defs.push((
+        id,
+        LayoutTypedef {
+            name: name.clone(),
+            decl,
+        },
+    ));
+    name
 }
 
 /// A short description of a type for error messages.

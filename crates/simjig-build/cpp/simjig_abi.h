@@ -14,7 +14,9 @@
  *     changes meaning once released.
  *
  * Threading: a handle belongs to one thread. No entry point may run concurrently with another
- * on the same handle. Distinct handles are independent (each owns its VerilatedContext).
+ * on the same handle. Distinct handles are independent: each owns its VerilatedContext (with
+ * threads(1), so no Verilator thread pool) and its own `$urandom` state, and every entry point
+ * that runs model code first makes them the thread's current ones.
  *
  * Exceptions: no entry point ever lets a C++ exception escape. Every entry point that can run
  * model code returns a status (or a sentinel documented on the entry).
@@ -56,6 +58,9 @@ typedef int32_t simjig_status;
 /* The entry point is reserved but not implemented by this model build (e.g. tracing without
  * --trace-fst). Nothing ran; the model state is unchanged. */
 #define SIMJIG_UNSUPPORTED 6
+/* A file named by the call could not be opened (or would clobber the trace being detached).
+ * A WARNING message names the file and the reason. Nothing ran; the model state is unchanged. */
+#define SIMJIG_IO_ERROR 7
 
 /* `next_time_slot` returns this when the model has no pending timed events. */
 #define SIMJIG_TIME_NONE UINT64_MAX
@@ -127,6 +132,11 @@ typedef struct simjig_create_opts {
     const char* const* argv; /* argc entries; may be NULL when argc is 0 */
 } simjig_create_opts;
 
+/* Bits of `simjig_model_vtable.features`: how the model was verilated. */
+#define SIMJIG_FEATURE_TIMING 1u    /* --timing */
+#define SIMJIG_FEATURE_TRACE_FST 2u /* --trace-fst: the trace_* entries work */
+#define SIMJIG_FEATURE_COVERAGE 4u  /* --coverage (any of its kinds): the cov_* entries work */
+
 typedef struct simjig_model_vtable {
     uint32_t abi_version;          /* SIMJIG_ABI_VERSION the model was built against */
     uint32_t size;                 /* sizeof(simjig_model_vtable) as the model was built */
@@ -157,12 +167,53 @@ typedef struct simjig_model_vtable {
      * records stay valid until the next call of any entry point on `h`. */
     size_t (*drain_msgs)(simjig_handle* h, simjig_msg* out, size_t cap);
 
-    /* FST tracing. UNSUPPORTED unless the model was built with tracing. */
+    /* FST tracing (docs/notes/tracecov.md). Every trace_* entry returns UNSUPPORTED, and does
+     * nothing, unless the model was verilated with --trace-fst (SIMJIG_FEATURE_TRACE_FST).
+     * At most one trace is open per handle; destroy closes it. */
+    /* trace_open_ex(h, path, 0, 0). */
     simjig_status (*trace_open)(simjig_handle* h, const char* path);
+    /* Writes one sample at `time` (ticks of the time precision; non-decreasing across calls).
+     * No-op (OK) when no trace is open or `time` is before the trace's start time. */
     simjig_status (*trace_dump)(simjig_handle* h, uint64_t time);
+    /* Writes the trace's header and closes it. No-op (OK) when no trace is open. */
     simjig_status (*trace_close)(simjig_handle* h);
-    /* Coverage counters (`--coverage`): pointer to *count uint32_t counters, or NULL. */
+    /* Coverage counters (--coverage): a live pointer to the model's *count uint32_t counters,
+     * valid until destroy, or NULL with *count = 0 (no --coverage, no points, or points outside
+     * the top module object; see docs/notes/tracecov.md for the index-to-point mapping). */
     uint32_t* (*cov_counters)(simjig_handle* h, size_t* count);
+
+    /* ---- Appended after size 136 (SIMJIG_ABI_VERSION 1). ---- */
+
+    /* SIMJIG_FEATURE_* bits. */
+    uint64_t features;
+    /* Opens an FST trace at `path` (closing an open one first). `depth` limits the trace to
+     * signals at most that many scope levels below the model's top scope (1 = the top's own
+     * signals); 0 traces everything. Samples are written only for trace_dump times >=
+     * `start_time`, so a replay can run untraced up to the interesting time. IO_ERROR if the
+     * file cannot be created. */
+    simjig_status (*trace_open_ex)(simjig_handle* h, const char* path, uint32_t depth,
+                                   uint64_t start_time);
+    /* Writes buffered samples to the file. Call before fork() so no sample is pending in both
+     * processes. No-op (OK) when no trace is open. */
+    simjig_status (*trace_flush)(simjig_handle* h);
+    /* Detach and reopen, for a fork() child that inherited an open trace: points every file
+     * descriptor on the inherited trace file at /dev/null, closes the inherited writer (its
+     * output goes to /dev/null, so the parent's file is untouched), then opens `path` with the
+     * same depth and start time. With no trace open it is trace_open_ex(h, path, 0, 0).
+     * IO_ERROR, with the old trace still attached, if `path` is the inherited file itself or
+     * cannot be created. The child must never close, flush or destroy an inherited trace
+     * before this call. */
+    simjig_status (*trace_reopen)(simjig_handle* h, const char* path);
+    /* Sets every coverage counter of the model to 0. UNSUPPORTED without --coverage. */
+    simjig_status (*cov_zero)(simjig_handle* h);
+    /* Writes Verilator's coverage.dat for this model (VerilatedCovContext::write) to `path`;
+     * NULL means Verilator's default (`coverage.dat`, or +verilator+coverage+file+). IO_ERROR
+     * if the file cannot be created. UNSUPPORTED without --coverage. */
+    simjig_status (*cov_write)(simjig_handle* h, const char* path);
+    /* Replaces the model's private `$urandom`/`$random` state with one seeded from `seed`
+     * (VlRNG(seed)). Each handle starts with VlRNG(seed from +verilator+seed+, default 1),
+     * which is Verilator's own single-model stream. */
+    simjig_status (*rng_seed)(simjig_handle* h, uint64_t seed);
     /* Append new entries here. */
 } simjig_model_vtable;
 

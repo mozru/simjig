@@ -80,7 +80,7 @@ impl fmt::Display for Status {
 /// Which check produced a finding. Variants are listed in report order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Check {
-    /// Verilator is on `PATH` and its version is in [`crate::verilator::SUPPORTED`].
+    /// Verilator is on `PATH` and its version is in [`svtypes::version::SUPPORTED`].
     Verilator,
     /// `VERILATOR_ROOT` is unset or names the root the `verilator` binary uses.
     VerilatorRoot,

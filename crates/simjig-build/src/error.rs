@@ -11,6 +11,7 @@ use crate::header::PortMismatch;
 
 /// Errors from configuring, verilating or compiling a DUT.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// The `Dut` configuration is invalid (for example an empty source list).
     #[error("invalid DUT `{dut}` configuration: {msg}")]

@@ -8,6 +8,7 @@ use std::io;
 
 /// Anything that can go wrong while producing a [`Design`](crate::ir::Design).
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The producer's output contains something this front end does not understand, or
     /// violates an invariant (a width mismatch, a dangling reference).

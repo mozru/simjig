@@ -304,6 +304,13 @@ mod with_models {
             ("counter.half_out", 16, 1, S, Out),
             ("counter.quad_out", 40, 2, Q, Out),
             ("counter.wide_out", 100, 4, W, Out),
+            ("counter.tiny_in", 5, 1, C, In),
+            ("counter.mid_in", 12, 1, S, In),
+            ("counter.quad_in", 40, 2, Q, In),
+            ("counter.tiny_ext", 8, 1, C, Out),
+            ("counter.mid_ext", 16, 1, S, Out),
+            ("counter.quad_ext", 64, 2, Q, Out),
+            ("counter.all_ones", 1, 1, C, Out),
         ]
         .map(|(n, w, words, st, d)| (n.to_owned(), w, words, st, d));
         assert_eq!(rows, want);
@@ -322,11 +329,9 @@ mod with_models {
         assert_eq!(m.get("counter.count"), 5);
         assert_eq!(m.get("counter.quad_out"), 0xA5_0000_0005);
 
-        // Writes are masked to the width: 0x1_ffff into 16 bits stores 0xffff.
-        m.set("counter.half_in", 0x1_ffff);
-        assert_eq!(m.get("counter.half_in"), 0xffff);
+        m.set("counter.half_in", 0xffff);
         assert_eq!(m.eval(), Status::Ok);
-        assert_eq!(m.get("counter.half_out"), 0);
+        assert_eq!(m.get("counter.half_out"), 0, "16-bit wrap-around");
 
         let wide = |name: &str| match m.sig(name).cell {
             Cell::Wide(p) => p,
@@ -349,6 +354,27 @@ mod with_models {
         assert_eq!(out, [!0x1234_5678, 0xffff_ffff, 0, 0]);
     }
 
+    /// Writing all ones to ports narrower than their storage leaves the unused upper bits
+    /// zero, as Verilator assumes: the DUT's zero-extended copies hold exactly the port's
+    /// width of ones, and so does the read-back.
+    #[test]
+    fn narrow_writes_leave_unused_storage_bits_clean() {
+        let (mut m, _) = Model::new(counter(), 0);
+        for port in ["counter.tiny_in", "counter.mid_in", "counter.quad_in"] {
+            m.set(port, u64::MAX);
+        }
+        assert_eq!(m.eval(), Status::Ok);
+        let ext = ["counter.tiny_ext", "counter.mid_ext", "counter.quad_ext"].map(|p| m.get(p));
+        assert_eq!(
+            ext,
+            [0x1f, 0xfff, 0xff_ffff_ffff],
+            "DUT saw dirty upper bits"
+        );
+        assert_eq!(m.get("counter.all_ones"), 1);
+        let back = ["counter.tiny_in", "counter.mid_in", "counter.quad_in"].map(|p| m.get(p));
+        assert_eq!(back, [0x1f, 0xfff, 0xff_ffff_ffff]);
+    }
+
     #[test]
     fn fatal_returns_status_and_message_and_poisons() {
         let (mut m, _) = Model::new(counter(), 0);
@@ -360,7 +386,7 @@ mod with_models {
         assert_eq!(msgs[0].kind, Ok(MsgKind::Fatal));
         assert!(msgs[0].msg.contains("counter fatal at count=1"), "{msgs:?}");
         assert!(msgs[0].file.ends_with("counter.sv"), "{msgs:?}");
-        assert_eq!(msgs[0].line, 22);
+        assert_eq!(msgs[0].line, 36);
         assert_eq!(msgs[0].time, 3);
         // Unwinding abandoned the eval before the NBA region: the increment never landed.
         assert_eq!(m.get("counter.count"), 1);
@@ -405,7 +431,7 @@ mod with_models {
         m.set("counter.cmd", 5);
         assert_eq!(m.cycle(0), Status::Stop);
         let msgs = m.drain();
-        assert_eq!((msgs[0].kind, msgs[0].line), (Ok(MsgKind::Stop), 26));
+        assert_eq!((msgs[0].kind, msgs[0].line), (Ok(MsgKind::Stop), 40));
     }
 
     #[test]

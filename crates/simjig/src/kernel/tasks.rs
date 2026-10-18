@@ -650,21 +650,16 @@ pub(crate) fn settle_unrun_drops(k: &Kernel, key: Option<Key>) {
             )
         })
         .collect();
-    let (handles, were) = if drops.len() == 1 {
-        ("the Task handle of", "was")
+    let (handles, were, tasks, it) = if drops.len() == 1 {
+        ("the Task handle of", "was", "the task", "it was")
     } else {
-        ("the Task handles of", "were")
+        ("the Task handles of", "were", "the tasks", "they were")
     };
     let message = format!(
-        "{handles} {} {were} dropped before {} ran, so it was cancelled: by `let _ = \
+        "{handles} {} {were} dropped before {tasks} ran, so {it} cancelled: by `let _ = \
          spawn(..)`, or by leaving the handle's scope early (`?`, `return`, `break`); the \
          location is the `spawn` call of `{}`",
         names.join(", "),
-        if drops.len() == 1 {
-            "the task"
-        } else {
-            "the tasks"
-        },
         first.name,
     );
     k.fail_named(

@@ -310,6 +310,7 @@ fn handles_dropped_unrun_together_are_all_named_in_one_failure() {
     for part in [
         "`main.a`",
         "`main.b`",
+        "were dropped before the tasks ran, so they were cancelled",
         "let _ = spawn(..)",
         "leaving the handle's scope early",
     ] {

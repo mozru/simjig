@@ -36,7 +36,7 @@ fn writes_are_deposits_visible_only_after_application() {
 }
 
 #[test]
-fn edge_waiters_wake_in_registration_order_across_signals() {
+fn edge_waiters_wake_in_priming_order_across_signals() {
     // Two clocks with coincident edges at 0, 20, 40...: the group primed first fires first,
     // whatever the clock declaration order (golden two_clocks).
     let mut m = FakeModel::new(Precision::NS);
@@ -442,6 +442,26 @@ fn a_cancelled_nested_combinator_finishes_its_helpers_before_the_caller_resumes(
         *trace.borrow(),
         ["f", "z1", "z2", "z3", "caller", "z4", "z5"]
     );
+}
+
+#[test]
+fn edges_of_a_multi_bit_signal_are_rejected_as_in_cocotb() {
+    // cocotb 2.1 raises TypeError for `RisingEdge` on a multi-bit signal
+    // (`LogicArrayObject.rising_edge`); edge detection compares bit 0, the whole value of
+    // a 1-bit signal.
+    for make in [rising as fn(RawSig) -> simjig::Edge, falling] {
+        let mut m = FakeModel::new(Precision::NS);
+        m.signal("bus", 8);
+        let mut sim = Sim::from_fake(m);
+        let bus = sim.signal("bus").unwrap();
+        let f = sim.run(async move { make(bus).await }).unwrap_err();
+        assert!(matches!(f.kind, FailureKind::TaskPanic { .. }), "{f}");
+        assert!(
+            f.message
+                .contains("edges are defined on 1-bit signals and this one is 8 bits"),
+            "{f}"
+        );
+    }
 }
 
 #[test]

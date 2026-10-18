@@ -41,11 +41,9 @@ the quickstart's `.config/nextest.toml` sets a wall-clock `slow-timeout` with
 
 The recommended layout, the quickstart's: a build script builds the models, a library
 target includes them and holds what the tests share, and each test file starts with one
-`use` line. `Cargo.toml` depends on `simjig` (its `simjig::bits` has the value types) and
-builds with `simjig-build`, and its lint table is the repository's with `unwrap_used`,
-`expect_used` and `missing_docs` allowed, so tests may unwrap and need no doc comments.
-Cargo cannot add local entries to `[lints] workspace = true`, so the table lists every
-lint it keeps:
+`use` line. `Cargo.toml` needs only the two dependencies: `simjig` (its `simjig::bits`
+has the value types) and, to build the models, `simjig-build` (outside this repository,
+as paths into a checkout; see the quickstart's README):
 
 ```toml
 # Cargo.toml ([package] omitted)
@@ -54,7 +52,15 @@ simjig.workspace = true
 
 [build-dependencies]
 simjig-build.workspace = true
+```
 
+The quickstart also lists a lint table, which is optional: the repository's lints with
+`unwrap_used`, `expect_used` and `missing_docs` allowed, so tests may unwrap and need no
+doc comments. Cargo cannot add local entries to `[lints] workspace = true`, so the table
+lists every lint it keeps:
+
+```toml
+# Cargo.toml (optional, after the dependencies)
 # A testbench's lints: the repository's, except that tests may unwrap and need no docs.
 # Cargo cannot extend `workspace = true` with local entries, so the table lists them all.
 [lints.rust]

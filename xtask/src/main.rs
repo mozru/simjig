@@ -261,7 +261,14 @@ mod tests {
         }
         assert_eq!(
             files,
-            ["Cargo.toml", "build.rs", "src/lib.rs", "tests/flop.rs"],
+            // The minimal `Cargo.toml`, then its optional lint table.
+            [
+                "Cargo.toml",
+                "Cargo.toml",
+                "build.rs",
+                "src/lib.rs",
+                "tests/flop.rs"
+            ],
             "{section}"
         );
     }

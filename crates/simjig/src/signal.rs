@@ -141,23 +141,45 @@ impl<const W: usize> RawWords for [u32; W] {
 ///
 /// It names the bounds a generic test body needs, so the body of a parameter sweep
 /// (`async fn t<D: fifo::Ports>(dut: D)`) needs no `where` clause: an associated type of a
-/// sweep's `Ports` trait is bounded by `Value` (or by [`Vector`]). Implemented for every
-/// type that has the bounds.
-pub trait Value: Packed<Raw: RawWords> + Eq + fmt::Debug + Default {}
-
-impl<T: Packed<Raw: RawWords> + Eq + fmt::Debug + Default> Value for T {}
-
-/// A bit vector: a [`Value`] that converts from a `u128` literal and compares with one
-/// (`Bit`, `Bits<N>` and `WideBits`, not the generated structs and enums).
+/// sweep's `Ports` trait is bounded by `Value` (or by [`Vector`], or by a generated
+/// `<Struct>Fields` trait, which extends it). Implemented for every type that has the
+/// bounds; [`from_u128`](Self::from_u128) and [`to_u128`](Self::to_u128) are provided,
+/// an escape hatch to a value's packed bits when its type is opaque (an associated type).
 ///
-/// In a generic body, `dut.data().set(0x5a)`, `dut.data().get() == 3` and
-/// `dut.count().get().to_u128()` work for every width. Implemented for every type that
-/// has the bounds; [`to_u128`](Self::to_u128) is provided.
-pub trait Vector: Value + From<u128> + PartialEq<u128> {
-    /// The value as an integer (`Bit` is 0 or 1).
+/// ```
+/// use simjig::Value;
+/// use simjig::bits::Bits;
+///
+/// fn round_trip<T: Value>(bits: u128) -> u128 {
+///     T::from_u128(bits).to_u128()
+/// }
+/// assert_eq!(round_trip::<Bits<12>>(0xabc), 0xabc);
+/// ```
+pub trait Value: Packed<Raw: RawWords> + Eq + fmt::Debug + Default {
+    /// The value whose packed bits are `bits` (`$bits(Self)` wide, the first struct field
+    /// most significant, as Verilator stores it).
     ///
     /// # Panics
-    /// If the value does not fit 128 bits (a `WideBits` with a bit set above bit 127).
+    /// If `bits` has a bit set at [`Packed::WIDTH`] or above.
+    #[track_caller]
+    #[must_use]
+    fn from_u128(bits: u128) -> Self {
+        assert!(
+            Self::WIDTH >= 128 || bits >> Self::WIDTH == 0,
+            "{bits:#x} does not fit {} bits",
+            Self::WIDTH
+        );
+        let mut buf = <Self::Raw as sealed::Buffer>::zeroed();
+        for (i, word) in buf.as_mut().iter_mut().take(4).enumerate() {
+            *word = u32::try_from(bits >> (32 * i) & 0xffff_ffff).unwrap_or(u32::MAX);
+        }
+        Self::from_raw(Self::Raw::from_words(buf.as_ref()))
+    }
+
+    /// The value's packed bits as an integer (`Bit` is 0 or 1).
+    ///
+    /// # Panics
+    /// If the value does not fit 128 bits (a bit set above bit 127).
     #[track_caller]
     #[must_use]
     fn to_u128(self) -> u128 {
@@ -176,6 +198,16 @@ pub trait Vector: Value + From<u128> + PartialEq<u128> {
             .fold(0, |acc, &w| acc << 32 | u128::from(w))
     }
 }
+
+impl<T: Packed<Raw: RawWords> + Eq + fmt::Debug + Default> Value for T {}
+
+/// A bit vector: a [`Value`] that converts from a `u128` literal and compares with one
+/// (`Bit`, `Bits<N>` and `WideBits`, not the generated structs and enums).
+///
+/// In a generic body, `dut.data().set(0x5a)`, `dut.data().get() == 3` and
+/// `dut.count().get().to_u128()` ([`Value::to_u128`]) work for every width. Implemented
+/// for every type that has the bounds.
+pub trait Vector: Value + From<u128> + PartialEq<u128> {}
 
 impl<T: Value + From<u128> + PartialEq<u128>> Vector for T {}
 
@@ -444,29 +476,49 @@ mod tests {
     use crate::kernel::time::{Precision, SimDuration};
     use crate::kernel::trigger::{changed, cycles, falling, now, rising};
 
-    /// `Vector::to_u128` reads every vector type, `Bit` as 0 or 1, and refuses a wide
+    /// `Value::to_u128` reads every vector type, `Bit` as 0 or 1, and refuses a wide
     /// value above 128 bits rather than cutting it.
     #[test]
     fn vectors_read_as_integers() {
         use simjig_bits::{Bits, WideBits};
-        assert_eq!(Vector::to_u128(Bit::ONE), 1);
-        assert_eq!(Vector::to_u128(Bit::ZERO), 0);
-        assert_eq!(Vector::to_u128(Bits::<7>::new(0x5a)), 0x5a);
+        assert_eq!(Value::to_u128(Bit::ONE), 1);
+        assert_eq!(Value::to_u128(Bit::ZERO), 0);
+        assert_eq!(Value::to_u128(Bits::<7>::new(0x5a)), 0x5a);
         assert_eq!(
-            Vector::to_u128(Bits::<64>::new(u128::from(u64::MAX))),
+            Value::to_u128(Bits::<64>::new(u128::from(u64::MAX))),
             u128::from(u64::MAX)
         );
-        assert_eq!(Vector::to_u128(Bits::<128>::new(u128::MAX)), u128::MAX);
+        assert_eq!(Value::to_u128(Bits::<128>::new(u128::MAX)), u128::MAX);
         assert_eq!(
-            Vector::to_u128(WideBits::<200, 7>::from(u128::MAX)),
+            Value::to_u128(WideBits::<200, 7>::from(u128::MAX)),
             u128::MAX
         );
         let wide = std::panic::catch_unwind(|| {
             let mut v = WideBits::<200, 7>::default();
             v.set_bit(128, true);
-            Vector::to_u128(v)
+            Value::to_u128(v)
         });
         assert!(wide.is_err());
+    }
+
+    /// `Value::from_u128` is `to_u128`'s inverse at every storage size, and refuses bits
+    /// above the width rather than dropping them.
+    #[test]
+    fn values_are_made_from_their_packed_bits() {
+        use simjig_bits::{Bits, WideBits};
+        fn round<T: Value>(bits: u128) -> u128 {
+            T::from_u128(bits).to_u128()
+        }
+        assert_eq!(<Bit as Value>::from_u128(1), Bit::ONE);
+        assert_eq!(round::<Bits<12>>(0xabc), 0xabc);
+        assert_eq!(round::<Bits<40>>(0xab_1234_5678), 0xab_1234_5678);
+        assert_eq!(
+            round::<Bits<100>>(1 << 99 | 0x1234_5678_9abc),
+            1 << 99 | 0x1234_5678_9abc
+        );
+        assert_eq!(round::<Bits<128>>(u128::MAX), u128::MAX);
+        assert_eq!(round::<WideBits<200, 7>>(u128::MAX - 5), u128::MAX - 5);
+        assert!(std::panic::catch_unwind(|| <Bits<12> as Value>::from_u128(0x1000)).is_err());
     }
 
     #[test]

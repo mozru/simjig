@@ -40,9 +40,10 @@ the public API, the generated code or simulation semantics.
   makes one test per listed type (`t::a`, `t::b`), each running the body as written, so a
   failure points into it. The messages for a generic test and an unknown argument now
   mention `duts`.
-- `simjig::Value` (a value a handle gets and sets, compares and prints) and
-  `simjig::Vector` (a bit vector: from and `==` a `u128`, `to_u128()`), implemented for
-  every type with their bounds.
+- `simjig::Value` (a value a handle gets and sets, compares and prints; `from_u128` and
+  `to_u128` reach its packed bits, an escape hatch for an opaque associated type) and
+  `simjig::Vector` (a bit vector: from and `==` a `u128`), implemented for every type
+  with their bounds.
 - A DUT may not be named like a sweep of the same build script (both name
   `OUT_DIR/simjig/<name>.rs`), and a DUT may be in one sweep only.
 - `examples/lib` builds `sync_fifo` as the sweep of `fifo_8x4` and `fifo_32x16`; its raw

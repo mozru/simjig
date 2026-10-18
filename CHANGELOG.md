@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `Error::Command` has a new field, `hints`: what the configuration suggests about the
+  failure, printed first, one `hint:` line each (breaking for a pattern or literal that
+  names every field).
 - `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
   `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
   refused; `--threads 2147483648` is negative and left to Verilator's own error.

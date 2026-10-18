@@ -241,9 +241,9 @@ async fn hold_keeps_the_grant_with_its_owner(dut: Dut) {
 
 /// A reset in the middle of random traffic, with the pointer away from 0 (Verilator
 /// starts it at 0, so only a reset from elsewhere shows the reset clears it): with every
-/// requester requesting through the reset edge, the first grant after it goes to
-/// requester 0, and random traffic then matches the model, which the monitor restarts at
-/// the reset edge.
+/// requester requesting and `hold` high through the reset edge, the first grant after it
+/// goes to requester 0, and random traffic then matches the model, which the monitor
+/// restarts at the reset edge.
 #[simjig::test(timeout = "100us")]
 async fn a_reset_during_traffic_points_the_priority_at_0(ctx: &TestCtx, dut: Dut) {
     let mut rng = ctx.rng("stim");
@@ -254,7 +254,9 @@ async fn a_reset_during_traffic_points_the_priority_at_0(ctx: &TestCtx, dut: Dut
     }
     drive(dut, 0b00100, false).await; // 2 wins: the pointer moves to 3
     dut.rst_n.set(0);
-    let before = drive(dut, ALL, false).await; // the reset edge
+    // The reset edge, with every input active: all requesting and `hold` high, so a
+    // pointer update that beat the reset would leave the pointer at 3.
+    let before = drive(dut, ALL, true).await;
     assert_eq!(before, 1 << 3, "the pointer was at 3 when reset came");
     dut.rst_n.set(1);
     let after = drive(dut, ALL, false).await;

@@ -203,8 +203,8 @@ async fn random_valid_and_ready_lose_nothing(ctx: &TestCtx, dut: Dut) {
 }
 
 /// Resets the buffer with both registers full, in the middle of traffic: the edge
-/// empties it (`down.valid` low, `up.ready` high) even with `up` offering a beat, and
-/// random traffic then flows as before. Without a reset from this state, Verilator's
+/// empties it (`down.valid` low, `up.ready` high) even with `up.valid` and `down.ready`
+/// both high across it, and random traffic then flows as before. Without a reset from this state, Verilator's
 /// all-zero start would hide a `skid_valid` or `out_valid` that reset does not clear.
 #[simjig::test(timeout = "200us")]
 async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: Dut) {
@@ -227,8 +227,11 @@ async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: D
     }
     assert_eq!(board.borrow().in_flight.len(), 2, "both registers full");
     assert_eq!(dut.up.ready.get(), Bit::ZERO);
+    // The reset edge, with every input active: `up` still offers 0xc3 and `down` is
+    // ready, so a load or a skid write that beat the reset would show after it.
     dut.clk.falling().await;
-    dut.rst.set(1); // `up` still offers 0xc3
+    dut.rst.set(1);
+    dut.down.ready.set(1);
     dut.clk.rising().await;
     ReadOnly::new().await;
     assert_eq!(dut.down.valid.get(), Bit::ZERO, "down.valid after reset");

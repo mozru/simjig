@@ -128,7 +128,7 @@ an `In<Bit>` the testbench writes, `dut.up.ready` an `Out<Bit>` it reads.
 | `random_valid_and_ready_lose_nothing` | 1000 beats with random `valid` (held until taken) and bursty random `ready`: no loss, no duplicate, order kept, `down` stable while stalled, at most two beats inside, and both sides saw backpressure |
 | `full_throughput_while_ready_is_high` | with `ready` high and a beat every cycle, `up.ready` never drops and the beats leave on consecutive edges |
 | `a_stall_fills_the_skid_then_drains_in_order` | `up.ready` drops only once both registers hold a beat, and returns two edges after the release |
-| `a_reset_with_the_skid_full_empties_both_registers` | after random traffic, both registers full and `up` offering a third beat: one `rst` edge leaves `down.valid` low and `up.ready` high; the board restarts empty and random traffic flows again |
+| `a_reset_with_the_skid_full_empties_both_registers` | after random traffic, both registers full and `up` offering a third beat: one `rst` edge, with `up.valid` and `down.ready` both high across it, leaves `down.valid` low and `up.ready` high; the board restarts empty and random traffic flows again |
 | `outputs_do_not_follow_inputs_within_a_cycle` | with the skid empty and full, toggling `down.ready`, `up.valid` and `up.data` mid-cycle leaves `up.ready`, `down.valid` and `down.data` unchanged (read in `ReadOnly`): no combinational path |
 | `parameters_are_checked_at_elaboration` | `$fatal` on a WIDTH below 1, or one that differs from the `stream_if` instances' own `WIDTH` |
 
@@ -153,7 +153,7 @@ of the pointer (`PointerModel`). The tests add:
 | `all_requesting_grants_each_once_per_n_cycles` | fairness: every window of `N` cycles grants each requester once |
 | `a_held_request_is_granted_within_n_cycles` | starvation bound under random arrivals, and the bound is reached |
 | `hold_keeps_the_grant_with_its_owner` | directed lock and release |
-| `a_reset_during_traffic_points_the_priority_at_0` | `rst_n` for one edge mid-traffic with the pointer at 3 and every requester requesting: the next grant goes to 0, and random traffic then matches the restarted model |
+| `a_reset_during_traffic_points_the_priority_at_0` | `rst_n` for one edge mid-traffic with the pointer at 3, every requester requesting and `hold` high across the edge: the next grant goes to 0, and random traffic then matches the restarted model |
 | `parameters_are_checked_at_elaboration` | `$fatal` on N below 2 |
 
 ## async_fifo

@@ -27,6 +27,7 @@ mod env;
 mod error;
 mod hash;
 mod header;
+mod iface_diag;
 mod pipeline;
 mod runtime;
 mod script;

@@ -175,12 +175,14 @@ impl DutConfig {
         })
     }
 
-    /// The JSON pass inputs: the same design as the model build sees. `extra` sources
-    /// (generated tops) come after the user's; `-G` is passed only without a wrapper.
+    /// The JSON pass inputs: the same design as the model build sees, run by the
+    /// Verilator that builds the model. `extra` sources (generated tops) come after the
+    /// user's; `-G` is passed only without a wrapper.
     pub(crate) fn json_pass_opts(
         &self,
         top: &str,
         extra: &[PathBuf],
+        verilator: &Verilator,
     ) -> svtypes::verilator::JsonPassOpts {
         let params = if self.ifaces.is_empty() {
             self.params.clone()
@@ -188,6 +190,8 @@ impl DutConfig {
             Vec::new()
         };
         svtypes::verilator::JsonPassOpts {
+            exe: verilator.exe.clone(),
+            env: verilator.child_env(),
             sources: self.sources.iter().chain(extra).cloned().collect(),
             top: top.to_owned(),
             defines: self

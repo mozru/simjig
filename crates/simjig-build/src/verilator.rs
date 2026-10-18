@@ -4,6 +4,7 @@
 //! `cargo simjig doctor`) exists because simjig decodes Verilator's output and links
 //! against its runtime, whose formats change between releases.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -23,6 +24,9 @@ pub struct Verilator {
     pub version_line: String,
     /// `$VERILATOR_ROOT/include`, holding `verilated.cpp` and its headers.
     pub include_dir: PathBuf,
+    /// `VERILATOR_ROOT` from the [`BuildEnv`], set for every Verilator run, so the
+    /// executable finds the same installation whether or not the process has it.
+    pub verilator_root: Option<PathBuf>,
 }
 
 impl Verilator {
@@ -30,7 +34,14 @@ impl Verilator {
     /// `PATH`), checks its version and asks it for its include directory.
     pub fn locate(env: &BuildEnv) -> Result<Self, Error> {
         let exe = find_exe(env)?;
-        let out = run(Command::new(&exe).arg("--version"))?;
+        let mut found = Self {
+            exe,
+            version: VerilatorVersion::new(0, 0),
+            version_line: String::new(),
+            include_dir: PathBuf::new(),
+            verilator_root: env.verilator_root.clone(),
+        };
+        let out = run(found.command().arg("--version"))?;
         let version_line = String::from_utf8_lossy(&out.stdout)
             .lines()
             .next()
@@ -40,17 +51,30 @@ impl Verilator {
         let version = VerilatorVersion::from_banner(&version_line)
             .filter(|v| v.is_supported())
             .ok_or_else(|| Error::UnsupportedVerilator {
-                path: exe.clone(),
+                path: found.exe.clone(),
                 found: version_line.clone(),
             })?;
-        let root = run(Command::new(&exe).args(["--getenv", "VERILATOR_ROOT"]))?;
+        let root = run(found.command().args(["--getenv", "VERILATOR_ROOT"]))?;
         let root = PathBuf::from(String::from_utf8_lossy(&root.stdout).trim());
-        Ok(Self {
-            exe,
-            version,
-            version_line,
-            include_dir: root.join("include"),
-        })
+        found.version = version;
+        found.version_line = version_line;
+        found.include_dir = root.join("include");
+        Ok(found)
+    }
+
+    /// A command running this Verilator in its environment ([`Self::child_env`]).
+    pub(crate) fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.exe);
+        cmd.envs(self.child_env());
+        cmd
+    }
+
+    /// The variables every Verilator run gets on top of the inherited environment.
+    pub(crate) fn child_env(&self) -> Vec<(OsString, OsString)> {
+        self.verilator_root
+            .iter()
+            .map(|r| (OsString::from("VERILATOR_ROOT"), r.clone().into_os_string()))
+            .collect()
     }
 }
 

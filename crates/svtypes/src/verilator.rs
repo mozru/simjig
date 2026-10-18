@@ -3,8 +3,11 @@
 //! The pass always adds `--no-timing` (`--json-only` turns `--timing` on otherwise, which
 //! changes elaboration and needs coroutine support the model build may not have) and
 //! `-Wno-fatal` (lint policy belongs to the model build, which sees the same warnings;
-//! the JSON pass only reads types). `verilator` is taken from `PATH`.
+//! the JSON pass only reads types). It runs [`JsonPassOpts::exe`], which defaults to the
+//! `verilator` on `PATH`; a build that located its own Verilator passes that one, so the
+//! IR and the model come from the same tool.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -15,8 +18,13 @@ use crate::frontend;
 use crate::ir::Design;
 
 /// Inputs of one JSON pass.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct JsonPassOpts {
+    /// The `verilator` executable to run (default: `verilator`, looked up on `PATH`).
+    pub exe: PathBuf,
+    /// Environment variables set for the Verilator process (for example
+    /// `VERILATOR_ROOT`), on top of the inherited environment.
+    pub env: Vec<(OsString, OsString)>,
     /// SystemVerilog source files.
     pub sources: Vec<PathBuf>,
     /// Top module name (`--top-module`).
@@ -30,6 +38,21 @@ pub struct JsonPassOpts {
     pub include_dirs: Vec<PathBuf>,
     /// Further arguments, passed through before the sources.
     pub extra_args: Vec<String>,
+}
+
+impl Default for JsonPassOpts {
+    fn default() -> Self {
+        Self {
+            exe: PathBuf::from("verilator"),
+            env: Vec::new(),
+            sources: Vec::new(),
+            top: String::new(),
+            defines: Vec::new(),
+            params: Vec::new(),
+            include_dirs: Vec::new(),
+            extra_args: Vec::new(),
+        }
+    }
 }
 
 /// Where a JSON pass wrote its output.
@@ -83,7 +106,7 @@ pub fn json_pass(opts: &JsonPassOpts) -> Result<Design> {
 /// # Errors
 /// As [`json_pass`].
 pub fn write_json_files(opts: &JsonPassOpts, out_dir: &Path) -> Result<JsonFiles> {
-    let version = run(Command::new("verilator").arg("--version"))?;
+    let version = run(verilator(opts).arg("--version"))?;
     let version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
     let tree = out_dir.join("design.tree.json");
     let meta = out_dir.join("design.tree.meta.json");
@@ -95,8 +118,15 @@ pub fn write_json_files(opts: &JsonPassOpts, out_dir: &Path) -> Result<JsonFiles
     })
 }
 
+/// A command running `opts.exe` in `opts.env`.
+fn verilator(opts: &JsonPassOpts) -> Command {
+    let mut cmd = Command::new(&opts.exe);
+    cmd.envs(opts.env.iter().map(|(k, v)| (k, v)));
+    cmd
+}
+
 fn command(opts: &JsonPassOpts, out_dir: &Path, tree: &Path, meta: &Path) -> Command {
-    let mut cmd = Command::new("verilator");
+    let mut cmd = verilator(opts);
     cmd.args([
         "--json-only",
         "--no-timing",
@@ -130,7 +160,10 @@ fn run(cmd: &mut Command) -> Result<Output> {
     let out = cmd.output().map_err(|e| Error::Tool {
         command: line.clone(),
         status: None,
-        stderr: format!("could not start verilator: {e} (is it on PATH? try `pixi run`)"),
+        stderr: format!(
+            "could not start `{}`: {e} (is it installed? try `pixi run`)",
+            cmd.get_program().to_string_lossy()
+        ),
     })?;
     if out.status.success() {
         return Ok(out);
@@ -231,6 +264,8 @@ mod tests {
     #[test]
     fn command_has_the_required_flags() {
         let opts = JsonPassOpts {
+            exe: "/opt/v/bin/verilator".into(),
+            env: vec![("VERILATOR_ROOT".into(), "/opt/v".into())],
             sources: vec!["a.sv".into()],
             top: "t".into(),
             defines: vec![("X".into(), None), ("Y".into(), Some("2".into()))],
@@ -238,15 +273,23 @@ mod tests {
             include_dirs: vec!["inc".into()],
             extra_args: vec!["--x-assign".into(), "0".into()],
         };
-        let line = command_line(&command(
+        let cmd = command(
             &opts,
             Path::new("o"),
             Path::new("o/t.json"),
             Path::new("o/m.json"),
-        ));
+        );
+        let env: Vec<_> = cmd.get_envs().collect();
         assert_eq!(
-            line,
-            "verilator --json-only --no-timing -Wno-fatal --top-module t -Mdir o \
+            env,
+            [(
+                std::ffi::OsStr::new("VERILATOR_ROOT"),
+                Some(std::ffi::OsStr::new("/opt/v"))
+            )]
+        );
+        assert_eq!(
+            command_line(&cmd),
+            "/opt/v/bin/verilator --json-only --no-timing -Wno-fatal --top-module t -Mdir o \
              --json-only-output o/t.json --json-only-meta-output o/m.json -Iinc +define+X \
              +define+Y=2 '-GP=4'\\''hc' --x-assign 0 a.sv"
         );

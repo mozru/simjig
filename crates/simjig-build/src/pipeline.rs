@@ -3,7 +3,6 @@
 //! linting the layout check.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 use svtypes::ir::Design;
@@ -139,30 +138,16 @@ pub(crate) fn design_ir(
     })
 }
 
-/// Runs one JSON pass. `svtypes` runs the `verilator` on the process `PATH`, which must
-/// be the same release as the located one: the IR and the model must come from the same
-/// elaboration rules.
+/// Runs one JSON pass with the located Verilator, the one that builds the model: the IR
+/// and the model must come from the same elaboration rules.
 fn json_pass(
     config: &DutConfig,
     top: &str,
     extra: &[PathBuf],
     verilator: &Verilator,
 ) -> Result<Design, Error> {
-    let design = svtypes::verilator::json_pass(&config.json_pass_opts(top, extra))
-        .map_err(|e| Error::json_pass(&config.name, e))?;
-    let model = verilator.version.to_string();
-    if design.producer.version != model {
-        return Err(Error::Config {
-            dut: config.name.clone(),
-            msg: format!(
-                "the JSON pass ran Verilator {} (the `verilator` on PATH) but the model build \
-                 uses Verilator {model} ({}); put that one first on PATH",
-                design.producer.version,
-                verilator.exe.display()
-            ),
-        });
-    }
-    Ok(design)
+    svtypes::verilator::json_pass(&config.json_pass_opts(top, extra, verilator))
+        .map_err(|e| Error::json_pass(&config.name, e))
 }
 
 /// Lints the layout check with the model's flags, without `-G` (docs/notes/codegen.md).
@@ -180,7 +165,7 @@ pub(crate) fn layout_check(
         file_name: format!("{}.sv", check.module),
         contents: check.contents.clone(),
     })?;
-    let mut cmd = Command::new(&verilator.exe);
+    let mut cmd = verilator.command();
     cmd.args(layout_check_args(config, &check.module, &file));
     verilator::run(&mut cmd).map(|_| ())
 }

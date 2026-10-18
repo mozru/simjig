@@ -1,6 +1,7 @@
 //! The whole pipeline in a simulated build-script environment.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use simjig_build::svtypes::ir::{Design, Storage};
 use simjig_build::svtypes::width::packed_storage;
@@ -143,4 +144,38 @@ fn expected_ports_are_checked_against_the_header() {
         msg.contains("not expected: header declares In clk[0:0] as CData"),
         "{msg}"
     );
+}
+
+/// The JSON pass runs the Verilator the build located (`SIMJIG_VERILATOR` here), not
+/// whatever `verilator` is first on `PATH`: the IR and the model must come from one tool.
+#[test]
+fn the_json_pass_runs_the_located_verilator() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let mut env = s.env();
+    env.path = Some(s.fake_verilator_first_on_path());
+    counter(&rtl).build_in(&env).unwrap();
+    assert!(
+        s.verilator_calls().contains("--json-only"),
+        "{}",
+        s.verilator_calls()
+    );
+}
+
+/// Likewise with `VERILATOR_ROOT`: `$VERILATOR_ROOT/bin/verilator` runs every pass.
+#[test]
+fn the_json_pass_follows_verilator_root() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let root = Command::new(crate::support::real_verilator())
+        .args(["--getenv", "VERILATOR_ROOT"])
+        .output()
+        .unwrap();
+    let root = PathBuf::from(String::from_utf8(root.stdout).unwrap().trim());
+    let mut env = s.env();
+    env.path = Some(s.fake_verilator_first_on_path());
+    env.simjig_verilator = None;
+    env.verilator_root = Some(root.clone());
+    let built = counter(&rtl).build_in(&env).unwrap();
+    assert_eq!(built.verilator.exe, root.join("bin/verilator"));
 }

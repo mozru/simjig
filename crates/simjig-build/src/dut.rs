@@ -912,6 +912,7 @@ impl Dut {
             &model.deps,
             &cache.root().join("inputs"),
             &self.recipe,
+            &env.out_dir,
         ));
         directives.extend(warnings);
         directives.extend(untested_warning(&verilator));
@@ -1014,7 +1015,9 @@ fn absolute(p: impl AsRef<Path>) -> PathBuf {
 
 /// Reruns on every file Verilator read, the recipe's files, the Verilator executable
 /// (replaced in place by an upgrade, while `PATH` stays the same) and the tracked
-/// variables.
+/// variables. Every path goes through [`tracked_files`], like a failed build's: a recipe
+/// include directory of `.` is the package directory, and Cargo would scan it whole,
+/// `target/` included, rerunning the script on every build.
 ///
 /// The `deps` under `generated` (the cache's `inputs/`: the `.vlt`, the wrapper, stored
 /// `verilator_input`s) are left out: they derive from the configuration and the sources,
@@ -1025,13 +1028,22 @@ fn rerun_directives(
     deps: &[PathBuf],
     generated: &Path,
     recipe: &CppRecipe,
+    out_dir: &Path,
 ) -> Vec<String> {
     let files = std::iter::once(&verilator.exe)
         .chain(deps.iter().filter(|d| !d.starts_with(generated)))
         .chain(&recipe.global_sources)
         .chain(&recipe.model_sources)
         .chain(&recipe.include_dirs);
-    let mut out: Vec<String> = files
+    reruns(files, Some(out_dir))
+}
+
+/// The `rerun-if-changed` lines for `named` ([`tracked_files`]), then a
+/// `rerun-if-env-changed` per tracked variable: the one rule for which paths a DUT tracks,
+/// built or failed.
+fn reruns<'a>(named: impl Iterator<Item = &'a PathBuf>, out_dir: Option<&Path>) -> Vec<String> {
+    let mut out: Vec<String> = tracked_files(named, out_dir)
+        .iter()
         .map(|p| format!("cargo::rerun-if-changed={}", p.display()))
         .collect();
     out.extend(
@@ -1070,15 +1082,7 @@ fn failed_reruns(config: &DutConfig, recipe: &CppRecipe, out_dir: Option<&Path>)
         .chain(&recipe.global_sources)
         .chain(&recipe.model_sources)
         .chain(&recipe.include_dirs);
-    let mut out: Vec<String> = tracked_files(named, out_dir)
-        .iter()
-        .map(|p| format!("cargo::rerun-if-changed={}", p.display()))
-        .collect();
-    out.extend(
-        BuildEnv::TRACKED_VARS
-            .iter()
-            .map(|v| format!("cargo::rerun-if-env-changed={v}")),
-    );
+    let mut out = reruns(named, out_dir);
     if is_c_ident(&config.name) {
         out.extend(emit::cfg_directives(&config.name, false));
     }
@@ -1198,22 +1202,53 @@ mod tests {
         );
     }
 
+    /// A built DUT tracks a recipe's include directory like a failed one: by its direct
+    /// files, never as a directory holding `OUT_DIR`.
     #[test]
-    fn reruns_track_the_resolved_verilator_not_path() {
-        let verilator = Verilator {
+    fn a_built_dut_tracks_a_recipe_include_dir_by_its_files() {
+        let t = tempfile::tempdir().unwrap();
+        let pkg = t.path().join("pkg");
+        let out_dir = pkg.join("target/debug/build/x/out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::write(pkg.join("glue.h"), "").unwrap();
+        let recipe = CppRecipe {
+            include_dirs: vec![pkg.clone()],
+            ..CppRecipe::default()
+        };
+        let reruns = rerun_directives(&verilator(), &[], Path::new("/c/inputs"), &recipe, &out_dir);
+        let tracked: Vec<&str> = reruns
+            .iter()
+            .filter_map(|l| l.strip_prefix("cargo::rerun-if-changed="))
+            .collect();
+        let glue = pkg.join("glue.h").display().to_string();
+        assert_eq!(
+            tracked,
+            ["/opt/v/bin/verilator", glue.as_str()],
+            "{reruns:?}"
+        );
+    }
+
+    fn verilator() -> Verilator {
+        Verilator {
             exe: PathBuf::from("/opt/v/bin/verilator"),
             version: svtypes::version::VerilatorVersion::new(5, 52),
             version_line: "Verilator 5.052".into(),
             include_dir: PathBuf::from("/opt/v/share/verilator/include"),
             verilator_root: None,
             untested: false,
-        };
+        }
+    }
+
+    #[test]
+    fn reruns_track_the_resolved_verilator_not_path() {
+        let verilator = verilator();
         let stored = PathBuf::from("/c/inputs/ab/V.vlt");
         let reruns = rerun_directives(
             &verilator,
             &[stored.clone(), PathBuf::from("/r/a.sv")],
             Path::new("/c/inputs"),
             &CppRecipe::default(),
+            Path::new("/o/out"),
         );
         assert!(reruns.contains(&"cargo::rerun-if-changed=/r/a.sv".to_owned()));
         assert!(

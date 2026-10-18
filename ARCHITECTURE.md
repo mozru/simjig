@@ -55,6 +55,7 @@ listed here with what keeps the copies equal.
 | What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`); the path `OUT_DIR/simjig/<name>.rs` is read back by `simjig::include_dut!` and by `cargo-simjig`'s `show` (which may not depend on `simjig-build`), kept equal by their docs naming `emit.rs`; after a failed build that file is a `compile_error!` stub (`emit::stub_failed`) |
 | The optional-DUT gate `cfg(simjig_dut_<name>)` | `emit::cfg_directives` |
 | Environment variables that rerun the build script | `BuildEnv::TRACKED_VARS` |
+| Which paths a DUT's `rerun-if-changed` lines track (built or failed) | `dut::reruns` over `dut::tracked_files` |
 | Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |
 | Rendering a failure | `Display` of `kernel::failure::Failure` and of `BlockedTask` (one blocked task); the harness's report (`harness::report::FailureReport`) builds on them |
 | Seeds and random streams | `harness::seed`: `Seed` (root seed, test-name seed, Verilator seed), `Seed::rng` (named streams), `Rng` (xoshiro256**) |

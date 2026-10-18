@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A successful `Dut::build` tracks a `CppRecipe::include_dirs` entry by the files
+  directly in it, never an ancestor of `OUT_DIR`, as a failed build does: an include
+  directory of `.` is the package directory, which Cargo scanned whole, `target/`
+  included, so the build script reran on every build.
 - README: "A parameter sweep", writing each test once against a user trait
   implemented for each configuration's `Dut`.
 - `simjig::now_display()` prints the current time in physical units without the

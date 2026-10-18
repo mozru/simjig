@@ -318,3 +318,29 @@ fn a_failed_dut_tracking_the_package_dir_settles() {
     assert!(build(&krate, &target, &envs), "the edited script runs");
     assert!(!build(&krate, &target, &envs), "no change: no rerun");
 }
+
+/// s3c9 repro: a *successful* DUT whose C++ recipe names the package directory as an
+/// include directory (`include_dirs: [\".\"]`, a header next to `build.rs`) with Cargo's
+/// default `target/` inside the package: the success path tracks the directory whole, so
+/// every build reruns the script.
+#[test]
+fn s3c9_a_built_dut_with_the_package_as_a_cpp_include_dir_settles() {
+    let (krate, _, _lock) = fixture();
+    let target = krate.join("target");
+    let envs = [
+        (
+            "SIMJIG_CACHE_DIR",
+            krate.parent().unwrap().join("cache").into_os_string(),
+        ),
+        ("SIMJIG_CCACHE", "0".into()),
+    ];
+    let script = krate.join("build.rs");
+    let text = std::fs::read_to_string(&script).unwrap().replace(
+        r#"dut("inv").build()?;"#,
+        r#"dut("inv").recipe(simjig_build::CppRecipe { include_dirs: vec![".".into()], ..Default::default() }).build()?;"#,
+    );
+    assert!(text.contains("CppRecipe"));
+    std::fs::write(&script, text).unwrap();
+    assert!(build(&krate, &target, &envs), "the edited script runs");
+    assert!(!build(&krate, &target, &envs), "no change: no rerun");
+}

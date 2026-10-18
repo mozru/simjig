@@ -123,20 +123,6 @@ fn a_rerun_compiles_only_the_edited_model() {
     touch(&inv);
     assert!(build(&krate, &target, &envs));
     assert_eq!(model_archives(&cache), 4, "no change compiles nothing");
-    let shims: Vec<_> = out_dirs(&target)
-        .into_iter()
-        .map(|d| d.join("simjig/counter"))
-        .flat_map(|d| {
-            std::fs::read_dir(d)
-                .unwrap()
-                .map(|e| e.unwrap().file_name())
-        })
-        .collect();
-    assert_eq!(
-        shims.len(),
-        1,
-        "the old counter's shim is removed: {shims:?}"
-    );
 }
 /// An upgrade of the compiler in place (same `CXX`, same `PATH`) reruns the build script:
 /// it reruns on the executable `CXX` resolves to, here a script behind a symlink found on

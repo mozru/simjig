@@ -41,6 +41,9 @@ fn second_build_hits_the_cache_without_running_verilator() {
     other_crate.out_dir = s.path().join("other-out");
     let third = counter(&rtl, 8).build_in(&other_crate).unwrap();
     assert_eq!((third.cache, s.verilations()), (CacheStatus::Hit, 1));
+    // And links the same model archive: the shim it compiles is content-addressed.
+    assert_eq!(model_entry(&third), model_entry(&first));
+    assert_eq!(count_entries(&s.path().join("cache/archives")), 1);
 
     // A different parameter is a different model, but reuses the same libverilated.
     // (Another crate: one build script may not reuse a DUT name for another config.)
@@ -197,4 +200,32 @@ fn stale_work_dirs_are_removed() {
     counter(&s.rtl(), 8).build_in(&s.env()).unwrap();
     assert!(!old.exists(), "the stale work dir is gone");
     assert!(young.exists(), "a recent work dir is kept");
+}
+
+/// Verilator 5.052's `.d` lists the option files it read (`-f`, `-F`), nested ones too, so
+/// an option file no argument names is part of the key: editing it verilates again.
+#[test]
+fn editing_a_nested_option_file_misses() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let (outer, inner) = (s.path().join("outer.f"), s.path().join("inner.f"));
+    std::fs::write(&outer, format!("-f {}\n", inner.display())).unwrap();
+    std::fs::write(&inner, "-Wno-WIDTH\n").unwrap();
+    let build = || {
+        counter(&rtl, 8)
+            .verilator_args(["-f".to_owned(), outer.display().to_string()])
+            .build_in(&s.env())
+            .unwrap()
+    };
+    let first = build();
+    assert!(
+        first
+            .directives
+            .contains(&format!("cargo::rerun-if-changed={}", inner.display())),
+        "{:?}",
+        first.directives
+    );
+    assert_eq!((build().cache, s.verilations()), (CacheStatus::Hit, 1));
+    std::fs::write(&inner, "-Wno-UNUSED\n").unwrap();
+    assert_eq!((build().cache, s.verilations()), (CacheStatus::Miss, 2));
 }

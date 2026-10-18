@@ -1,7 +1,8 @@
 //! What a build script does not do again: a second DUT, or a rerun that changes nothing,
 //! reuses what the first one found.
 
-use simjig_build::Dut;
+use simjig_build::svtypes::ir::Design;
+use simjig_build::{Dut, DutConfig, Emitted, Emitter, Error, codegen_emitter};
 
 use crate::recipe::compiles;
 use crate::support::{Sandbox, dut, logging_ccache, write_script};
@@ -130,6 +131,50 @@ fn a_rerun_reuses_the_ir_and_the_layout_check() {
         (2, 2),
         "the include changed"
     );
+    // A new file in an include directory could shadow an include.
+    std::fs::write(rtl.join("new.svh"), "").unwrap();
+    build_in("out4");
+    assert_eq!(
+        runs_with(&s, "--json-only"),
+        3,
+        "a new file in an include dir"
+    );
+}
+
+/// The default code generator with a layout check of other text (same module).
+fn other_check(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
+    let mut e = codegen_emitter(design, config)?;
+    if let Some(check) = &mut e.layout_check {
+        check.contents.push_str("// another check\n");
+    }
+    Ok(e)
+}
+
+/// The layout check's verdict is keyed on the check's text as well as the IR: an emitter
+/// whose check differs runs it again, though the IR comes from the cache.
+#[test]
+fn another_layout_check_runs_again() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let build_in = |out: &str, emitter: Emitter| {
+        let mut env = s.env();
+        env.out_dir = s.path().join(out);
+        Dut::new("counter")
+            .sources([rtl.join("counter.sv")])
+            .include_dirs([&rtl])
+            .top("counter")
+            .emitter(emitter)
+            .build_in(&env)
+            .unwrap()
+    };
+    build_in("out1", codegen_emitter);
+    build_in("out2", other_check);
+    assert_eq!(
+        (runs_with(&s, "--json-only"), runs_with(&s, "--lint-only")),
+        (1, 2)
+    );
+    build_in("out3", other_check);
+    assert_eq!(runs_with(&s, "--lint-only"), 2, "then it is known");
 }
 
 /// The cached IR of a DUT with interface ports brings its generated wrapper back, also

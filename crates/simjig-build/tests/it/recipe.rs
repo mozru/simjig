@@ -311,7 +311,6 @@ fn a_new_compiler_version_recompiles_every_archive() {
     let (first, _) = build_inv(&s, &env_in("out1"), &log, CppRecipe::default());
     assert!(first.contains(&"verilated.cpp".to_owned()), "{first:?}");
     let (same, _) = build_inv(&s, &env_in("out2"), &log, CppRecipe::default());
-    // The model's key has the shim's path, which is under OUT_DIR; the runtime's has not.
     assert!(
         !same.contains(&"verilated.cpp".to_owned()),
         "the same compiler: {same:?}"

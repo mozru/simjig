@@ -75,7 +75,18 @@ per side of a boundary that cannot share code:
 - `simjig::model::abi::Storage::for_width` (run time: the C ABI mirror, which may not
   depend on a build-time crate);
 - `simjig::storage_for_width` in `cpp/simjig_rt.h` (C++), from which `storage_bytes` (the
-  shim's `static_assert`s in `SIMJIG_SIGNAL`) and `vltype_for_width` (`find_probe`) derive.
+  shim's `static_assert`s in `SIMJIG_SIGNAL`) and `vltype_for_width` (`find_probe`) derive;
+- `simjig_bits::Packed::Raw` (the Rust value types: `u8`/`u16`/`u32`/`u64`/`[u32; W]` per
+  width, in `simjig-bits`, which depends on nothing), pinned by
+  `simjig-bits/tests/it/vectors.rs` `raw_types_match_verilator`; a signal-table row's storage
+  is checked against `Storage::for_width` when the table is decoded (`Signal::decode`).
+
+### The C ABI
+`cpp/simjig_abi.h` is the C ABI; `simjig::model::abi` mirrors it in Rust (`#[repr(C)]`).
+The copies are kept equal by the compile-time size and offset asserts in `abi.rs` and by
+`crates/simjig/tests/abi_counter.rs`, which compares every mirrored field's offset and
+size with the C++ compiler's (`simjig_rt_abi_fields`, `simjig_rt_abi_layout` in
+`cpp/simjig_rt.cpp`); `cpp/tests/main.cpp` checks that that table covers every field.
 
 They are kept equal by checks on both sides: `SIMJIG_SIGNAL` asserts the model's member
 types, `Signal::decode` rejects a table row whose storage disagrees with its width, and

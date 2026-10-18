@@ -11,12 +11,23 @@
 //!    [`compiler_identity`]), the target, optimisation and debug settings, the defines,
 //!    every source (path and contents), the include paths, and the file names in every
 //!    directory a quoted include may be found in ([`search_dirs`]), so a new file that
-//!    would shadow a header changes the key; directories simjig generates are not listed
-//!    (`Toolchain::is_generated`);
+//!    would shadow a header changes the key (a source's directory in the cache holds
+//!    that source alone, and its listing never changes);
 //! 2. every compile runs with `-MD`, and the manifest `manifests/<pre key>` lists every
 //!    file the compiler read (system headers included); the *full key* adds their current
 //!    contents (read again only for files whose status changed, see `manifest`). The
 //!    entry for the full key is a hit.
+//!
+//! The model's sources are Verilator's output, in the verilation's entry
+//! (`models/<full key>/obj/`), whose path is in the pre key. So any edit to a file
+//! Verilator read compiles the model again, even one that leaves the output the same (a
+//! comment in an included `.svh`). Accepted: keying on the output's contents instead would
+//! hash every generated source on every build, and ccache (when present) makes such a
+//! compile cheap. The shim is content-addressed (`emit`), so crates and target
+//! directories that build the same configuration share one model archive.
+//!
+//! An input edited while the compiler reads it leaves the archive out of the cache (see
+//! `manifest`): it is linked from `OUT_DIR/simjig-unpublished/` by that build alone.
 //!
 //! A Verilator runtime is looked up once per build script ([`RUNTIMES`]): every model of
 //! the script links the same one, and its sources do not change while the script runs.
@@ -31,7 +42,7 @@ use std::sync::{Mutex, PoisonError};
 use crate::cache::{self, Cache};
 use crate::compile::Inputs;
 use crate::hash::KeyHasher;
-use crate::manifest::Manifest;
+use crate::manifest::{Digests, Manifest, Recorded, Snapshot};
 use crate::{ABI_VERSION, BuildEnv, Error, depfile};
 
 /// A static library, compiled or found in the cache.
@@ -41,6 +52,9 @@ pub(crate) struct Archive {
     pub(crate) name: String,
     /// Every file the compiler read for it.
     pub(crate) deps: Vec<PathBuf>,
+    /// A dependency that changed while the compiler read it: this archive serves this
+    /// build only and is not in the cache (see `manifest`).
+    pub(crate) changed: Option<PathBuf>,
 }
 
 /// What every archive of one build shares: the inputs, the configured base build and the
@@ -99,6 +113,10 @@ impl Toolchain<'_> {
             return Ok(a);
         }
         let a = self.cached_archive_keyed(spec, &memo.2)?;
+        if a.changed.is_some() {
+            // The next DUT of this script compiles it again, from the edited input.
+            return Ok(a);
+        }
         RUNTIMES
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -109,11 +127,12 @@ impl Toolchain<'_> {
     fn cached_archive_keyed(&self, spec: &Spec<'_>, pre: &str) -> Result<Archive, Error> {
         let cache = self.i.cache;
         let manifest = cache.root().join("manifests").join(pre);
-        if let Some(hit) = lookup(cache, spec, pre, &manifest) {
-            return Ok(hit);
-        }
-        let started = std::time::SystemTime::now();
+        let known = match lookup(cache, spec, pre, &manifest) {
+            Ok(hit) => return Ok(hit),
+            Err(known) => known,
+        };
         let work = cache.work_dir()?;
+        let snapshot = Snapshot::start(&work, known);
         let compiled = self.compile_in(&work, spec);
         let (lib, deps) = match compiled {
             Ok(c) => c,
@@ -122,11 +141,19 @@ impl Toolchain<'_> {
                 return Err(e);
             }
         };
-        let recorded = Manifest::record(&deps, started).ok_or_else(|| Error::Parse {
-            path: work.clone(),
-            line: 0,
-            msg: "a file the compiler read vanished before it could be hashed".to_owned(),
-        })?;
+        let recorded = match Manifest::record(&deps, &snapshot) {
+            Recorded::Stable(m) => m,
+            Recorded::Changed(path) => {
+                let label = format!("{}-{}", spec.kind, spec.what);
+                let dir = cache::keep_unpublished(&work, &self.i.env.out_dir, &label)?;
+                return Ok(Archive {
+                    dir,
+                    name: provisional_name(spec.what),
+                    deps,
+                    changed: Some(path),
+                });
+            }
+        };
         let full = recorded.recorded_key(DEPS_DOMAIN, pre);
         let name = archive_name(spec.what, &full);
         // Publish the archive alone: its objects are inside it.
@@ -144,6 +171,7 @@ impl Toolchain<'_> {
             dir: entry,
             name,
             deps,
+            changed: None,
         })
     }
 
@@ -177,21 +205,9 @@ impl Toolchain<'_> {
             h.str(f);
         }
         for d in search_dirs(i, spec) {
-            if !self.is_generated(&d) {
-                hash_listing(&mut h, &d);
-            }
+            hash_listing(&mut h, &d);
         }
         Ok(h.finish())
-    }
-
-    /// Whether simjig generates the files in `dir`: the cache, whose entries never change
-    /// once published, and `OUT_DIR/simjig/`, whose files are named after the DUT and the
-    /// prefix, which the key has already. Nothing else writes there, so no new file in
-    /// them can shadow a header; and listing `OUT_DIR/simjig/`, which holds every DUT's
-    /// files, made every model's key change with every other DUT.
-    fn is_generated(&self, dir: &Path) -> bool {
-        dir.starts_with(self.i.cache.root())
-            || dir.starts_with(crate::emit::generated_dir(&self.i.env.out_dir))
     }
 
     /// Compiles `spec` in `work` with `-MD`; returns the archive and every file read.
@@ -206,7 +222,7 @@ impl Toolchain<'_> {
         for (k, v) in spec.defines {
             b.define(k, v.as_deref());
         }
-        let provisional = format!("simjig_{what}");
+        let provisional = provisional_name(what);
         if let Err(source) = b.try_compile(&provisional) {
             let what = match what.strip_prefix("model_") {
                 Some(prefix) => format!("the `{prefix}` model"),
@@ -299,17 +315,33 @@ fn version_output(exe: &Path) -> String {
     }
 }
 
-/// The cached archive for `pre`, if the manifest's dependencies still hash to an entry.
-fn lookup(cache: &Cache, spec: &Spec<'_>, pre: &str, manifest: &Path) -> Option<Archive> {
-    let m = Manifest::read(manifest)?;
-    let full = m.current_key(DEPS_DOMAIN, pre)?;
+/// The cached archive for `pre`, if the manifest's dependencies still hash to an entry;
+/// else their current digests, if there is a manifest, for the compile's snapshot.
+fn lookup(
+    cache: &Cache,
+    spec: &Spec<'_>,
+    pre: &str,
+    manifest: &Path,
+) -> Result<Archive, Option<Digests>> {
+    let m = Manifest::read(manifest).ok_or(None)?;
+    let current = m.current().ok_or(None)?;
+    let full = current.key(DEPS_DOMAIN, pre);
     let name = archive_name(spec.what, &full);
     let dir = cache.root().join(spec.kind).join(&full);
-    dir.join(format!("lib{name}.a")).is_file().then(|| Archive {
+    if !dir.join(format!("lib{name}.a")).is_file() {
+        return Err(Some(current));
+    }
+    Ok(Archive {
         dir,
         name,
         deps: m.paths(),
+        changed: None,
     })
+}
+
+/// The name of an archive before its full key is known.
+fn provisional_name(what: &str) -> String {
+    format!("simjig_{what}")
 }
 
 fn archive_name(what: &str, full: &str) -> String {

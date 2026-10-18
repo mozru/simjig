@@ -309,6 +309,12 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     d.extend(stdlib.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
     d.extend(link_args(&archives, &natives, stdlib.as_deref()));
     d.extend(rerun_on_deps(i, &archives));
+    for a in &archives {
+        if let Some(path) = &a.changed {
+            let run = format!("compiling `{}`", a.name);
+            d.push(crate::manifest::changed_warning(&i.config.name, &run, path));
+        }
+    }
     d.extend(
         archive::compiler_files(i.env, &compiler)
             .into_iter()

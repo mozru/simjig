@@ -32,7 +32,7 @@ use crate::front::Front;
 use crate::hash::KeyHasher;
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error, cache, pipeline, script};
+use crate::{BuildEnv, Error, cache, manifest, pipeline, script};
 
 /// A file generated before verilation (a `.vlt` control file or a wrapper module). It is
 /// stored content-addressed in the shared cache, so its path is the same in every crate.
@@ -91,17 +91,23 @@ fn coverage_after(builder: bool, args: &[String]) -> bool {
     kinds.contains(&true)
 }
 
+/// Why a parameter override (`-G`, `-pvalue+`) is refused, among the arguments or in an
+/// option file.
+const PARAM_HINT: &str = "pass parameters with `.param(name, value)`: a raw override \
+     reaches every Verilator run, and the layout check, whose top has no such parameter, \
+     fails (`Parameters from the command line were not found in the design`)";
+
+fn is_param_override(arg: &str) -> bool {
+    option_name(arg).is_some_and(|name| name.starts_with('G') || name.starts_with("pvalue+"))
+}
+
 /// Why a raw Verilator argument is refused, if it is: each has a builder switch (or a
 /// fixed value) that every Verilator run and the generated code must agree on, or is set
 /// by the pipeline itself.
 fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
     let name = option_name(arg)?;
-    if name.starts_with('G') || name.starts_with("pvalue+") {
-        return Some(
-            "pass parameters with `.param(name, value)`: a raw override reaches every \
-             Verilator run, and the layout check, whose top has no such parameter, fails \
-             (`Parameters from the command line were not found in the design`)",
-        );
+    if is_param_override(arg) {
+        return Some(PARAM_HINT);
     }
     // `--prefix=Vx` is `--prefix Vx`.
     let name = name.split_once('=').map_or(name, |(n, _)| n);
@@ -376,6 +382,12 @@ impl DutConfig {
                 return fail(format!("Verilator argument `{arg}`: {why}"));
             }
         }
+        if let Some((file, word)) = crate::optfile::find(args, is_param_override) {
+            return fail(format!(
+                "Verilator option file `{}` has `{word}`: {PARAM_HINT}",
+                file.display()
+            ));
+        }
         if self
             .sources
             .iter()
@@ -396,7 +408,9 @@ impl DutConfig {
 pub struct Built {
     /// The Verilator `--prefix`; the model class is `<prefix>` in `<prefix>.h`.
     pub prefix: String,
-    /// The Verilator output directory, inside the shared cache. Read-only.
+    /// The Verilator output directory, inside the shared cache. Read-only. When an input
+    /// changed while Verilator read it, the output is not cached and this is
+    /// `OUT_DIR/simjig-unpublished/verilated-<prefix>/obj` (the build warns).
     pub obj_dir: PathBuf,
     /// The ports declared in `<prefix>.h`.
     pub header_ports: Vec<HeaderPort>,
@@ -628,36 +642,33 @@ impl Dut {
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
         pipeline::claim(env, &cache, &self.config, &prefix)?;
-        let sv_inputs = self
-            .config
-            .sv_inputs()
-            .map(|g| cache.store_input(g))
-            .collect::<Result<Vec<_>, _>>()?;
-        let (front, cached) = Front::lookup(&cache, &self.config, top, &sv_inputs, &verilator)?;
-        let ir = match cached {
-            Some(ir) => ir,
-            None => pipeline::design_ir(&self.config, top, &sv_inputs, &verilator, &cache)?,
-        };
-        let emitted = (self.emitter)(&ir.design, &self.config)?;
-        let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
-        if let Some(check) = &placed.layout_check
-            && !front.checked(&cache, check)
-        {
-            pipeline::layout_check(&self.config, &sv_inputs, &verilator, &cache, check)?;
-        }
+        let (front, ir, placed) = self.front_end(env, &cache, &verilator, top)?;
         let mut generated = ir.wrapper.iter().cloned().collect::<Vec<_>>();
         for g in placed.inputs.iter().chain(&self.config.generated) {
             generated.push(cache.store_input(g)?);
         }
         let args = self.config.verilator_args(&prefix, &ir.top, &generated);
+        let name = &self.config.name;
         let model = cache.verilate(
-            &self.config.name,
+            name,
             &verilator,
             &args,
             &self.config.include_dirs,
+            &env.out_dir,
         )?;
-        front.record(&cache, &ir, placed.layout_check.as_ref(), &model.deps)?;
+        let mut warnings = Vec::new();
+        warnings.extend(
+            model
+                .changed
+                .as_ref()
+                .map(|p| manifest::changed_warning(name, "verilating", p)),
+        );
         let header_ports = check_model(env, &self.config, &prefix, &model.obj_dir, &placed)?;
+        // After the checks: an IR the model contradicts is not recorded.
+        let front_changed = front.record(&cache, &ir, placed.layout_check.as_ref(), &model.deps)?;
+        warnings.extend(
+            front_changed.map(|p| manifest::changed_warning(name, "the front end ran", &p)),
+        );
         let mut directives = compile::compile(&compile::Inputs {
             env,
             config: &self.config,
@@ -674,6 +685,7 @@ impl Dut {
             &cache.root().join("inputs"),
             &self.recipe,
         ));
+        directives.extend(warnings);
         if verilator.untested {
             directives.push(format!(
                 "cargo::warning=simjig: {} is not a supported Verilator (supported: {}); \
@@ -692,6 +704,37 @@ impl Dut {
             rust_file: placed.rust,
             directives,
         })
+    }
+}
+
+impl Dut {
+    /// The IR (cached or from the JSON pass), the emitted files placed, and the layout
+    /// check run unless it passed for this IR before.
+    fn front_end(
+        &self,
+        env: &BuildEnv,
+        cache: &cache::Cache,
+        verilator: &Verilator,
+        top: &str,
+    ) -> Result<(Front, pipeline::Ir, emit::Placed), Error> {
+        let sv_inputs = self
+            .config
+            .sv_inputs()
+            .map(|g| cache.store_input(g))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (front, cached) = Front::lookup(cache, &self.config, top, &sv_inputs, verilator)?;
+        let ir = match cached {
+            Some(ir) => ir,
+            None => pipeline::design_ir(&self.config, top, &sv_inputs, verilator, cache)?,
+        };
+        let emitted = (self.emitter)(&ir.design, &self.config)?;
+        let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir, cache)?;
+        if let Some(check) = &placed.layout_check
+            && !front.checked(cache, check)
+        {
+            pipeline::layout_check(&self.config, &sv_inputs, verilator, cache, check)?;
+        }
+        Ok((front, ir, placed))
     }
 }
 
@@ -1081,6 +1124,32 @@ mod tests {
         ] {
             assert!(with_args(ok).validate().is_ok(), "{ok:?}");
         }
+    }
+
+    /// A parameter override inside an option file reaches every Verilator run like one
+    /// among the arguments, so it is refused the same way.
+    #[test]
+    fn parameter_overrides_in_option_files_are_rejected() {
+        let t = tempfile::tempdir().unwrap();
+        let opts = t.path().join("opts.f");
+        let path = opts.display().to_string();
+        for (text, word) in [
+            ("-Wall\n-GDEPTH=4\n", "-GDEPTH=4"),
+            ("-pvalue+W=2", "-pvalue+W=2"),
+        ] {
+            std::fs::write(&opts, text).unwrap();
+            let m = with_args(&["-f", &path])
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                m.contains(&format!("option file `{path}` has `{word}`"))
+                    && m.contains("`.param(name, value)`"),
+                "{m}"
+            );
+        }
+        std::fs::write(&opts, "// -GDEPTH=4\n-Wall\n").unwrap();
+        assert!(with_args(&["-f", &path]).validate().is_ok());
     }
 
     #[test]

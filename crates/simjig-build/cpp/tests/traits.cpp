@@ -131,6 +131,20 @@ struct ReadOnlyWriteTraits {
     }
 };
 
+// tc_sub.rv is a `real`: Verilator records it as 1 bit wide, so only its type refuses it.
+struct RealProbeTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c0000000000000bull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "rv", "tc.u.rv", 1, kRead);
+    }
+};
+
 struct HierTraits {
     using Model = Vtc_hier;
     static constexpr const char* kPrefix = "Vtc_hier";
@@ -179,6 +193,7 @@ SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rw, ParamWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_rd_as_rw, ReadOnlyWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_no_scope, NoScopeTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_no_var, NoVarTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_real, RealProbeTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_hier, HierTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_cg, CgTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_timing, TimingTraits)

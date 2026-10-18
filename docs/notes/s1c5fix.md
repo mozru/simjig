@@ -75,8 +75,11 @@ Remaining cost on a full hit: the first DUT's Verilator lookup, compiler setup a
 version into `svtypes::verilator::json_pass`, which runs `verilator --version` once per
 pass on a miss.
 
-Hole shared with the verilation cache: an option file (`-f`) among the extra arguments is
-hashed by path only when it is absolute, and Verilator's `.d` does not list it.
+Correction (s1c6fix): there is no option-file hole. Verilator 5.052's `.d` lists every
+option file it read (`-f`, `-F`, nested ones too; checked on the pixi build), so their
+contents are in the full key of the verilation and front caches even when the pre key
+does not hash them (a relative path). Tested by
+`cache::editing_a_nested_option_file_misses`.
 
 ## VLVT types in the scope table (risk)
 `syms.rs` now reads the `VLVT_*` field (`table_row` `f[2]`, `insert_call` `f[3]`):

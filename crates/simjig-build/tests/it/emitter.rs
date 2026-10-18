@@ -62,9 +62,13 @@ fn generated_files_reach_out_dir_verilator_and_the_compiler() {
         rust.contains("pub struct Beat"),
         "the package struct: {rust}"
     );
-    let shim = env
-        .out_dir
-        .join(format!("simjig/struct_pipe/{}_shim.cpp", built.prefix));
+    // The shim is content-addressed in the cache's `inputs/<hash>/`.
+    let shim_name = format!("{}_shim.cpp", built.prefix);
+    let shim = std::fs::read_dir(env.cache_dir().join("inputs"))
+        .unwrap()
+        .map(|e| e.unwrap().path().join(&shim_name))
+        .find(|p| p.is_file())
+        .expect("the shim in the cache");
     let shim = std::fs::read_to_string(shim).unwrap();
     // The probe is found at create in the scope table that the `.vlt` fills.
     assert!(

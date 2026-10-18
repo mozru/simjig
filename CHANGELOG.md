@@ -4,6 +4,30 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
+  outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
+  TimeError}`.
+- The shim is stored content-addressed in the cache (`inputs/<hash>/<prefix>_shim.cpp`)
+  and compiled from there; it is no longer written to `OUT_DIR/simjig/<name>/`. A model
+  archive's key has the shim's path, so crates and target directories that build the same
+  configuration now share one model archive (each compiled its own). Every model archive
+  is compiled again once.
+- `create` refuses a probe of a `real`, a `string` or another variable that is not a
+  packed vector by its type, with the build-time check's words ("`r` is a `real`
+  (Verilator stores it as VLVT_REAL) ..."), before comparing widths: a 1-bit probe of a
+  `real` (which Verilator records as 1 bit wide) got "not stored as a packed vector".
+- A parameter override (`-G`, `-pvalue+`) inside an option file (`-f`, `-F`, nested ones
+  too) among the extra Verilator arguments is refused like one among the arguments, with
+  the `.param(name, value)` hint. It failed later, in the layout check.
+- An input edited while Verilator, the JSON pass or the C++ compiler read it no longer
+  poisons the cache. Each run snapshots its start (and the digests of the inputs a
+  previous run listed); when a file it read has a modification or change time not
+  before the start, or another digest, its output serves that build only (from
+  `OUT_DIR/simjig-unpublished/`), the build warns (`cargo::warning`), and the next build
+  runs again. Before, the output of the old contents was cached under the new contents'
+  key and hit on every later build. Verilation manifests now record digests and file
+  status like the archive ones: every model is verilated again once
+  (`simjig-verilate-deps-v2`).
 - Each DUT's shim is written to `OUT_DIR/simjig/<name>/<prefix>_shim.cpp` (it was
   `OUT_DIR/simjig/<prefix>_shim.cpp`), and the shim of an earlier configuration is removed.
   A model archive's key no longer lists the files in `OUT_DIR/simjig/` or in the cache, so

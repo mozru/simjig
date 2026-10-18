@@ -30,6 +30,7 @@ mod hash;
 mod header;
 mod iface_diag;
 mod manifest;
+mod optfile;
 mod pipeline;
 mod runtime;
 mod script;

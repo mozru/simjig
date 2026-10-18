@@ -20,16 +20,17 @@
 //! the emitter may change without changing the IR.
 //!
 //! A front entry is recorded only after the model has been verilated, the first time
-//! the deps are known; until then, every build runs the JSON pass.
+//! the deps are known; until then, every build runs the JSON pass. Nor is it recorded
+//! when a dependency changed between the lookup and the end of the verilation (see
+//! `manifest`): the IR may be of the old contents.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::cache::Cache;
 use crate::dut::{DutConfig, GeneratedInput};
 use crate::emit::SvModule;
 use crate::hash::{self, KeyHasher};
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, Recorded, Snapshot};
 use crate::pipeline::Ir;
 use crate::verilator::Verilator;
 use crate::{ABI_VERSION, Error, codegen};
@@ -39,7 +40,8 @@ const DEPS_DOMAIN: &str = "simjig-front-deps-v1";
 /// One DUT's front-end lookup.
 pub(crate) struct Front {
     pre: String,
-    started: SystemTime,
+    /// Taken before the JSON pass and the layout check ran.
+    snapshot: Snapshot,
     /// The full key of the entry found, if any.
     full: Option<String>,
 }
@@ -53,16 +55,21 @@ impl Front {
         generated: &[PathBuf],
         verilator: &Verilator,
     ) -> Result<(Self, Option<Ir>), Error> {
+        let pre = pre_key(config, top, generated, verilator)?;
+        let manifest = cache.root().join("manifests").join(&pre);
+        let current = Manifest::read(&manifest).and_then(|m| m.current());
+        let full = current.as_ref().map(|c| c.key(DEPS_DOMAIN, &pre));
+        let entry = full.as_ref().and_then(|full| read_entry(cache, full));
+        // The filesystem's clock: a work directory created now (see `manifest`).
+        let work = cache.work_dir()?;
+        let snapshot = Snapshot::start(&work, current);
+        crate::cache::remove_best_effort(&work);
         let mut front = Self {
-            pre: pre_key(config, top, generated, verilator)?,
-            started: SystemTime::now(),
+            pre,
+            snapshot,
             full: None,
         };
-        let manifest = cache.root().join("manifests").join(&front.pre);
-        let found = Manifest::read(&manifest)
-            .and_then(|m| m.current_key(DEPS_DOMAIN, &front.pre))
-            .and_then(|full| Some((read_entry(cache, &full)?, full)));
-        let Some((entry, full)) = found else {
+        let Some(entry) = entry else {
             return Ok((front, None));
         };
         let wrapper = entry
@@ -70,7 +77,7 @@ impl Front {
             .as_ref()
             .map(|w| cache.store_input(w))
             .transpose()?;
-        front.full = Some(full);
+        front.full = full;
         let ir = Ir {
             design: entry.design,
             wrapper,
@@ -87,27 +94,33 @@ impl Front {
     }
 
     /// Records the IR (on a miss) and that `check` passed, once the model's verilation
-    /// has read `deps`. A dependency that vanished meanwhile records nothing: the next
-    /// build runs the JSON pass again.
+    /// has read `deps`. Records nothing, and returns the dependency, when one changed
+    /// since the lookup or vanished (see `manifest`): the next build runs the JSON pass
+    /// (or the layout check) again.
     pub(crate) fn record(
         self,
         cache: &Cache,
         ir: &Ir,
         check: Option<&SvModule>,
         deps: &[PathBuf],
-    ) -> Result<(), Error> {
+    ) -> Result<Option<PathBuf>, Error> {
+        let check = check.filter(|c| !self.checked(cache, c));
+        if self.full.is_some() && check.is_none() {
+            return Ok(None);
+        }
         let inputs = cache.root().join("inputs");
+        let deps: Vec<PathBuf> = deps
+            .iter()
+            .filter(|d| !d.starts_with(&inputs) && !crate::cache::is_verilator_binary(d))
+            .cloned()
+            .collect();
+        let m = match Manifest::record(&deps, &self.snapshot) {
+            Recorded::Stable(m) => m,
+            Recorded::Changed(path) => return Ok(Some(path)),
+        };
         let full = if let Some(full) = self.full {
             full
         } else {
-            let deps: Vec<PathBuf> = deps
-                .iter()
-                .filter(|d| !d.starts_with(&inputs) && !crate::cache::is_verilator_binary(d))
-                .cloned()
-                .collect();
-            let Some(m) = Manifest::record(&deps, self.started) else {
-                return Ok(());
-            };
             let full = m.recorded_key(DEPS_DOMAIN, &self.pre);
             write_entry(cache, &full, ir)?;
             let manifest = cache.root().join("manifests").join(&self.pre);
@@ -117,7 +130,7 @@ impl Front {
         if let Some(check) = check {
             cache.write_atomic(&check_marker(cache, &full, check), "")?;
         }
-        Ok(())
+        Ok(None)
     }
 }
 

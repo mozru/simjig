@@ -47,6 +47,10 @@ SUITES = [
      ["changed_join", "written_join"]),
     ("counter", "counter", ["counter.sv"], {"WIDTH": 8}, "test_wake_order",
      ["edge_kinds", "combinator_hop"]),
+    ("counter", "counter", ["counter.sv"], {"WIDTH": 8}, "test_callback_order",
+     ["loser_scheduled", "nested_combinators", "timeout_combinators", "cycles_join",
+      "rise_changed", "many_kinds", "primed_walk", "spawned_combinators", "sync_losers",
+      "cancelled_nest"]),
 ]  # fmt: skip
 
 

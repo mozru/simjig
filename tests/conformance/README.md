@@ -54,6 +54,16 @@ python tests/conformance/show.py golden/timer.jsonl # print a log as a table
 | `written_join` | comb_chain | the same for two inputs written in one delta |
 | `edge_kinds` | counter | `ValueChange(clk)`, `RisingEdge(clk)` and `ClockCycles` on one signal are separate callbacks |
 | `combinator_hop` | counter | `First`, `Combine` and `with_timeout` resume their caller after the tasks the same callback woke |
+| `loser_scheduled` | counter | a `First` operand woken by a task the edge woke loses to one the edge woke, even when it is the left operand |
+| `nested_combinators` | counter | `First` of a `Combine`, `Combine` of a `First`, `First` of a `First` |
+| `timeout_combinators` | counter | `with_timeout` around a `First` and around a `Combine` |
+| `cycles_join` | counter | `ClockCycles` awaited from a `ValueChange(clk)` wake joins the `RisingEdge(clk)` callback |
+| `rise_changed` | counter | one task alternating `RisingEdge`, `ValueChange` and `FallingEdge` of `clk` among others looping on one kind |
+| `many_kinds` | counter | 24 tasks cycling through the three edge kinds of `clk`, with an `Event` set in between |
+| `primed_walk` | counter | callbacks registered during a walk (`ValueChange(count)` from a `clk` wake) and joined later |
+| `spawned_combinators` | counter | `First`, `Combine`, `with_timeout` and a plain wait in spawned tasks, decided by an `Event` set in the edge callback |
+| `sync_losers` | counter | `First` losers waiting on an `Event`, a `Lock` and a `Queue`: cancelled while waiting, they take nothing from later waiters |
+| `cancelled_nest` | counter | a `First` whose losing operand is a waiting `Combine`: the caller resumes three hops after the edge |
 
 ## Log format
 JSON Lines: one compact JSON object per line (`json.dumps(..., separators=(",", ":"))`),

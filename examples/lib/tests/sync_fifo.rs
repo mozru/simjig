@@ -43,9 +43,12 @@ const PHASE: u32 = 24;
 /// Rates (percent of cycles) a producer or consumer picks from for each phase.
 const RATES: [u64; 3] = [10, 50, 90];
 
-/// A value the generated handles can read and write.
-trait Payload: Packed<Raw: RawWords> + PartialEq + Debug {}
-impl<T: Packed<Raw: RawWords> + PartialEq + Debug> Payload for T {}
+/// A value the generated handles can read and write (`In::set` and `Out::get` need
+/// `RawWords` storage). Its `Default` is the all-zero value
+/// (`Bits::ZERO`; every field zero for a generated struct): a registered `rd`'s reset
+/// value.
+trait Payload: Packed<Raw: RawWords> + PartialEq + Debug + Default {}
+impl<T: Packed<Raw: RawWords> + PartialEq + Debug + Default> Payload for T {}
 
 /// One FIFO's handles, whichever model they come from.
 ///
@@ -171,7 +174,7 @@ impl<T: Payload> Model<T> {
             depth: fifo.depth,
             fwft: fifo.fwft,
             entries: entries.iter().copied().collect(),
-            shown: zero(),
+            shown: T::default(),
             stats: Stats::default(),
         }
     }
@@ -195,7 +198,7 @@ impl<T: Payload> Model<T> {
             self.stats.resets += 1;
             self.stats.flushed += u32::try_from(len).unwrap();
             self.entries.clear();
-            self.shown = zero();
+            self.shown = T::default();
             return;
         }
         let pop = s.pop && len > 0;
@@ -265,12 +268,6 @@ async fn cycle<T: Payload>(fifo: Fifo<T>, push: Option<T>, pop: bool) -> Sample<
     fifo.clk.rising().await;
     ReadOnly::new().await;
     fifo.sample()
-}
-
-/// The all-zero value of a payload: a registered `rd`'s reset value.
-fn zero<T: Payload>() -> T {
-    // Four words cover any payload up to 128 bits; `from_words` reads only its own.
-    T::from_raw(T::Raw::from_words(&[0; 4]))
 }
 
 fn pick(rng: &mut Rng, rates: &[u64]) -> u64 {
@@ -360,7 +357,7 @@ async fn reset_during_traffic<T: Payload>(ctx: &TestCtx, fifo: Fifo<T>, item: fn
         "{after:?}"
     );
     if !fifo.fwft {
-        assert_eq!(after.rd, zero(), "rd after reset");
+        assert_eq!(after.rd, T::default(), "rd after reset");
     }
     let model = board.borrow();
     let st = model.stats;
@@ -429,7 +426,11 @@ async fn reset_beats_push_and_pop<T: Payload>(fifo: Fifo<T>, entries: [T; 4]) {
         "reset beats push and pop: {after:?}"
     );
     if !fifo.fwft {
-        assert_eq!(after.rd, zero(), "rd after reset, not the popped {b:?}");
+        assert_eq!(
+            after.rd,
+            T::default(),
+            "rd after reset, not the popped {b:?}"
+        );
     }
     fifo.clk.falling().await;
     fifo.rst.set(0);

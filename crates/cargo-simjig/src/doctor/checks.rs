@@ -10,7 +10,7 @@ use super::{Check, Finding};
 use crate::verilator::{SUPPORTED, VerilatorVersion};
 
 /// The fix for anything the pinned pixi environment provides.
-const PIXI_FIX: &str = "pixi install --locked && pixi run cargo simjig doctor";
+const PIXI_FIX: &str = "pixi install --locked && pixi shell";
 
 /// FST tracing sources, relative to the Verilator include directory. Verilator 5.052
 /// compiles these into every model built with `--trace-fst`.

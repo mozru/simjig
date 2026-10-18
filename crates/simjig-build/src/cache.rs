@@ -174,7 +174,7 @@ impl Cache {
         let entry = self.root.join("models").join(current.key(DEPS_DOMAIN, pre));
         // The entry's own list has the Verilator binary too, which the key leaves out.
         let listed = std::fs::read_to_string(entry.join("deps")).ok();
-        let deps = listed.and_then(|text| text.lines().map(unescape_path).collect());
+        let deps = listed.as_deref().and_then(parse_deps_listing);
         match deps {
             Some(deps) if entry.join("obj").is_dir() => Ok(Verilated {
                 obj_dir: entry.join("obj"),
@@ -319,6 +319,8 @@ fn prefix_of(args: &[String]) -> &str {
         .map_or("", String::as_str)
 }
 
+/// An entry's `deps` file: one escaped path per line (see [`escape_path`]), since a
+/// file name may hold a line break.
 fn deps_listing(deps: &[PathBuf]) -> String {
     let mut out = String::new();
     for d in deps {
@@ -326,6 +328,11 @@ fn deps_listing(deps: &[PathBuf]) -> String {
         out.push('\n');
     }
     out
+}
+
+/// The paths [`deps_listing`] wrote; `None` when a line is not one it writes.
+fn parse_deps_listing(text: &str) -> Option<Vec<PathBuf>> {
+    text.lines().map(unescape_path).collect()
 }
 
 /// Moves `work`, the output of a run whose input changed while it ran, to
@@ -418,6 +425,24 @@ mod tests {
             std::fs::read_to_string(&b).unwrap(),
             "`verilator_config\n// x\n"
         );
+    }
+
+    #[test]
+    fn deps_listings_round_trip_paths_with_escapes_and_line_breaks() {
+        let deps = [
+            "/r/a\\b.svh",
+            "/r/two\nlines.svh",
+            "/r/ends-in-cr\r",
+            "/r/plain.sv",
+        ]
+        .map(PathBuf::from);
+        let text = deps_listing(&deps);
+        assert_eq!(
+            text.lines().count(),
+            deps.len(),
+            "one line per path: {text:?}"
+        );
+        assert_eq!(parse_deps_listing(&text).as_deref(), Some(&deps[..]));
     }
 
     #[test]

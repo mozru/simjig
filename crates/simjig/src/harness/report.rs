@@ -8,7 +8,7 @@
 //!   message:  <one line, continuation lines indented>
 //!   <kind-specific detail lines>
 //!   help:     <what to try>
-//!   repro:    SIMJIG_SEED=<seed> cargo nextest run -p <package> -E 'test(=<test>)'
+//!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package> -E 'test(=<test>)'
 //!   waves:    <the same command with SIMJIG_WAVES=1>
 //!   run dir:  <target>/simjig/runs/<test>/<seed>/
 //! ```
@@ -98,7 +98,10 @@ fn sv_literal_end(chars: &[char], at: usize) -> Option<usize> {
     if matches!(chars.get(i), Some('s' | 'S')) {
         i += 1;
     }
-    if !matches!(chars.get(i), Some('d' | 'b' | 'h' | 'o' | 'D' | 'B' | 'H' | 'O')) {
+    if !matches!(
+        chars.get(i),
+        Some('d' | 'b' | 'h' | 'o' | 'D' | 'B' | 'H' | 'O')
+    ) {
         return None;
     }
     i += 1;
@@ -120,6 +123,9 @@ pub struct RunIdentity {
     pub seed: Seed,
     /// Whether the test is `#[ignore]`d, so the repro must ask nextest to run it.
     pub ignored: bool,
+    /// What the repro runs `cargo` through (`pixi run`), when the test ran inside an
+    /// environment that a plain shell lacks; see `RunEnv::from_process`.
+    pub launcher: Option<String>,
 }
 
 impl RunIdentity {
@@ -130,8 +136,12 @@ impl RunIdentity {
         } else {
             ""
         };
+        let launcher = self
+            .launcher
+            .as_deref()
+            .map_or_else(String::new, |l| format!("{l} "));
         format!(
-            "cargo nextest run -p {}{ignored} -E 'test(={})'",
+            "{launcher}cargo nextest run -p {}{ignored} -E 'test(={})'",
             self.package, self.test
         )
     }

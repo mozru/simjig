@@ -145,6 +145,8 @@ pub(crate) fn default_root() -> Option<PathBuf> {
 pub(crate) struct Summary<'a> {
     pub(crate) test: &'a str,
     pub(crate) package: &'a str,
+    /// What the repro command runs `cargo` through, if anything (`pixi run`).
+    pub(crate) launcher: Option<&'a str>,
     pub(crate) seed: Seed,
     pub(crate) verilator_seed: u32,
     /// `None` if the model could not be built.
@@ -183,6 +185,7 @@ impl Summary<'_> {
             ("schema", Json::str("simjig.run/1")),
             ("test", Json::str(self.test)),
             ("package", Json::str(self.package)),
+            ("launcher", Json::opt_str(self.launcher)),
             (
                 "status",
                 Json::str(if self.failure.is_some() {

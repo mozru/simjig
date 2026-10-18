@@ -14,6 +14,8 @@
 //! # Environment
 //! - `SIMJIG_SEED`: the root seed (`0x`-hex or decimal), as printed by a failure report.
 //! - `SIMJIG_RUNS_DIR`: where run directories go, instead of `<target>/simjig/runs`.
+//! - `PIXI_WORKSPACE_ROOT`, `PIXI_PROJECT_ROOT`, `CONDA_PREFIX`: when set, the repro line
+//!   runs `cargo` through `pixi run` (or `conda run`), as `RunEnv::from_process` says.
 
 pub(crate) mod ctx;
 pub(crate) mod dut;

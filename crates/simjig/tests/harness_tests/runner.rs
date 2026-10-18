@@ -30,6 +30,7 @@ fn env(seed: Option<u64>, dir: &str) -> RunEnv {
                 .join("harness")
                 .join(dir),
         ),
+        launcher: None,
     }
 }
 

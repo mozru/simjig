@@ -401,6 +401,63 @@ async fn reset_when_busy<T: Payload>(fifo: Fifo<T>, board: Rc<RefCell<Model<T>>>
     after
 }
 
+/// Directed: a reset beats a push and a pop at the same edge. Three pushes and a pop
+/// leave two entries with both pointers away from zero; then `push` and `pop` are held
+/// high across the reset edge. After it the FIFO is empty (`count` 0, `empty` set,
+/// `full` clear) and a registered `rd` is zero, not the entry the pop would have read;
+/// one push and pop then show it working again. Random traffic reaches this edge only on
+/// a lucky seed.
+async fn reset_beats_push_and_pop<T: Payload>(fifo: Fifo<T>, entries: [T; 4]) {
+    let board = start(fifo).await;
+    let [a, b, c, d] = entries;
+    for entry in [a, b, c] {
+        cycle(fifo, Some(entry), false).await;
+    }
+    let before = cycle(fifo, None, true).await;
+    assert_eq!(before.count, 2, "two entries before the reset");
+    fifo.clk.falling().await;
+    fifo.rst.set(1);
+    fifo.push.set(1);
+    fifo.wr.set(d);
+    fifo.pop.set(1);
+    fifo.clk.rising().await;
+    ReadOnly::new().await;
+    let after = fifo.sample();
+    assert_eq!(
+        (after.count, after.empty, after.full),
+        (0, true, false),
+        "reset beats push and pop: {after:?}"
+    );
+    if !fifo.fwft {
+        assert_eq!(after.rd, zero(), "rd after reset, not the popped {b:?}");
+    }
+    fifo.clk.falling().await;
+    fifo.rst.set(0);
+    fifo.push.set(0);
+    fifo.pop.set(0);
+    cycle(fifo, Some(d), false).await;
+    let last = cycle(fifo, None, true).await;
+    assert!(last.empty, "the push after the reset was popped: {last:?}");
+    if !fifo.fwft {
+        assert_eq!(last.rd, d, "the only entry after the reset");
+    }
+    cycle(fifo, None, false).await; // the monitor checks the edge after the pop
+    let st = board.borrow().stats;
+    assert_eq!((st.resets, st.flushed), (1, 2), "{st:?}");
+}
+
+#[simjig::test(timeout = "2us")]
+async fn a_reset_beats_push_and_pop(dut: sync_fifo::Dut) {
+    let entries = [0x11, 0x22, 0x33, 0x44].map(Bits::new);
+    reset_beats_push_and_pop(Fifo::raw(dut), entries).await;
+}
+
+#[simjig::test(timeout = "2us")]
+async fn a_reset_beats_item_push_and_pop(dut: item_fifo::Dut) {
+    let entries = [1, 2, 3, 4].map(|i| item(Kind::DATA, i, 0x1111 * i));
+    reset_beats_push_and_pop(Fifo::items(dut), entries).await;
+}
+
 #[simjig::test(timeout = "100us")]
 async fn a_reset_during_traffic_empties_the_fifo(ctx: &TestCtx, dut: sync_fifo::Dut) {
     reset_during_traffic(ctx, Fifo::raw(dut), random_bits).await;

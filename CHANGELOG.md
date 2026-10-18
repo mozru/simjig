@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `fork::run_from_checkpoint` inside an operand of a `join!`, `first!` or `with_timeout`
+  of the main task returns the new `ForkError::InCombinator`. It forked: the other
+  operands ran on inside every branch, and an operand that won a `first!` in the child
+  cancelled the branch body, so the child ran the rest of the test as if it were the
+  parent.
 - Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.

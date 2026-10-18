@@ -34,8 +34,10 @@
 //!   `cargo test` there are more, and the call returns [`ForkError::Threads`], naming
 //!   nextest. The same check catches a Verilator thread pool: simjig's runtime builds every
 //!   `VerilatedContext` with `threads(1)`, and a model built otherwise would show up here.
-//! - **A quiet point.** The caller is the main task and no other task is unfinished
-//!   ([`ForkError::OtherTasks`]), so a branch is exactly "the checkpoint, then this body".
+//! - **A quiet point.** The caller is the main task, outside every `join!`, `first!` and
+//!   `with_timeout` ([`ForkError::InCombinator`]: their operands are helpers polled inside
+//!   `main`, not tasks), and no other task is unfinished ([`ForkError::OtherTasks`]), so a
+//!   branch is exactly "the checkpoint, then this body".
 //! - **The child never returns into the harness.** It ends with `_exit` after writing its
 //!   report: on success from inside the branch's poll, and on any failure (a panic, a
 //!   `TimeLimit`, a model `$fatal`, ...) from the `Drop` of a sentinel task, which the
@@ -158,6 +160,13 @@ pub enum ForkError {
         /// The calling task.
         task: String,
     },
+    /// Called inside an operand of a `join!`, `first!` or `with_timeout` of the main task:
+    /// the other operands run beside the call, so the checkpoint is not a quiet point.
+    InCombinator {
+        /// How many operands the main task's unfinished combinators have, the caller's
+        /// own included.
+        operands: usize,
+    },
     /// Other tasks are still running, so the checkpoint is not a quiet point.
     OtherTasks {
         /// Their hierarchical names.
@@ -196,6 +205,13 @@ impl fmt::Display for ForkError {
             Self::NotMainTask { task } => write!(
                 f,
                 "run_from_checkpoint was called from task `{task}`; call it from the main task"
+            ),
+            Self::InCombinator { operands } => write!(
+                f,
+                "run_from_checkpoint was called inside a `join!`, `first!` or `with_timeout` \
+                 of the main task ({operands} combinator operands are unfinished), so the \
+                 other operands would run on inside every branch, and one could end it; \
+                 call it from the main task directly, outside every combinator"
             ),
             Self::OtherTasks { tasks } => write!(
                 f,
@@ -571,6 +587,12 @@ fn check_quiet() -> Result<Precision, ForkError> {
             let task = current.map_or_else(|| "<kernel>".to_owned(), |key| k.task_name(key));
             return Err(ForkError::NotMainTask { task });
         }
+        // A combinator operand of `main` runs as a helper inside `main`'s poll (`current`
+        // is `main`), and helpers are not tasks: they are checked here, not below.
+        let operands = main.map_or(0, |m| k.tasks.borrow().helpers_of(m));
+        if operands > 0 || k.context.get() != main {
+            return Err(ForkError::InCombinator { operands });
+        }
         let others: Vec<String> = k
             .tasks
             .borrow()
@@ -899,6 +921,7 @@ mod tests {
         for error in [
             ForkError::NoSimulation,
             ForkError::Threads { count: 9 },
+            ForkError::InCombinator { operands: 2 },
             ForkError::OtherTasks {
                 tasks: vec!["main.driver".to_owned()],
             },

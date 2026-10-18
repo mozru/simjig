@@ -25,3 +25,5 @@ mod cost;
 mod failures;
 #[cfg(all(unix, simjig_test_models))]
 mod rules;
+#[cfg(all(unix, simjig_test_models))]
+mod s3c4m;

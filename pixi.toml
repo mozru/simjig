@@ -16,6 +16,15 @@ make = ">=4.4.1,<5"
 lz4-c = ">=1.10.0,<2"
 zlib = ">=1.3.2,<2"
 
+# conda-forge's Linux compilers (gxx) install `c++` without activation scripts, so CXX is
+# unset there, unlike macOS, where clangxx's activation sets it. Name the pinned compiler
+# so that builds and `cargo simjig doctor` see the same one on every platform.
+[target.linux-64.activation.env]
+CXX = "$CONDA_PREFIX/bin/c++"
+
+[target.linux-aarch64.activation.env]
+CXX = "$CONDA_PREFIX/bin/c++"
+
 [tasks]
 duts-lint = { cmd = "bash tests/duts/lint.sh", description = "Lint every design in tests/duts with Verilator -Wall" }
 cpp-tests = { cmd = "bash crates/simjig-build/cpp/tests/run.sh", description = "C-level tests of FST tracing, coverage and per-model isolation (docs/notes/tracecov.md)" }

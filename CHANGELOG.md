@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A Verilator failure on `TIMESCALEMOD` hints at the units missing a `timeunit`
+  (`` `file:line` ``) and `.verilator_args(["--timescale", "1ns/1ps"])`, instead of the
+  generic lint waiver.
 - `Elapsed`'s `Debug` (what `.expect()` on a timeout prints) shows physical units,
   `Elapsed { after: 3 ns, at: 5 ns, precision: 1ns }`; it printed raw tick counts.
   `SimTime` and `SimDuration` keep their tick `Debug`: they carry no precision.

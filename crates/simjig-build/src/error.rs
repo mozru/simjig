@@ -282,7 +282,7 @@ fn display_paths(paths: &[PathBuf]) -> String {
 /// one. A DUT is verilated with `--no-timing` unless it asks for `--timing`, and Verilator
 /// then ignores a `#` delay (STMTDLY) or rejects an event control inside a procedure
 /// (NOTIMING), naming the flag, not the `simjig_build` option.
-fn hint(stderr: &str) -> Option<&'static str> {
+fn hint(stderr: &str) -> Option<String> {
     let timing = ["%Warning-STMTDLY", "%Error-STMTDLY", "%Error-NOTIMING"];
     if stderr
         .lines()
@@ -290,15 +290,49 @@ fn hint(stderr: &str) -> Option<&'static str> {
     {
         return Some(
             "the design has `#` delays or event controls that need `--timing`; add \
-             `.timing(true)` to its `simjig_build::Dut`",
+             `.timing(true)` to its `simjig_build::Dut`"
+                .to_owned(),
         );
     }
-    only_lint_warnings(stderr).then_some(
+    if let Some(units) = untimed_units(stderr) {
+        return Some(format!(
+            "some units declare a `timeunit` and these do not: {units}; add a `timeunit` \
+             to each, or give every unit a default with \
+             `.verilator_args([\"--timescale\", \"1ns/1ps\"])` on the `Dut`"
+        ));
+    }
+    only_lint_warnings(stderr).then(|| {
         "Verilator's lint warnings are fatal by default; fix them, waive one with a \
          `/* verilator lint_off <CODE> */` comment in the source or \
          `.verilator_args([\"-Wno-<CODE>\"])` (the code follows `%Warning-`), or make all \
-         warnings non-fatal with `.verilator_args([\"-Wno-fatal\"])` on the `Dut`",
-    )
+         warnings non-fatal with `.verilator_args([\"-Wno-fatal\"])` on the `Dut`"
+            .to_owned()
+    })
+}
+
+/// The units Verilator's `TIMESCALEMOD` names as missing a `timeunit` (IEEE 1800-2023
+/// §3.14.2.3), as `` `file:line` ``, in order and once each: Verilator 5.052 prints
+/// `%Warning-TIMESCALEMOD: <file>:<line>:<col>: Timescale missing on this module ...`.
+fn untimed_units(stderr: &str) -> Option<String> {
+    let mut units: Vec<String> = Vec::new();
+    for line in stderr.lines() {
+        let Some(rest) = line
+            .strip_prefix("%Warning-TIMESCALEMOD: ")
+            .or_else(|| line.strip_prefix("%Error-TIMESCALEMOD: "))
+        else {
+            continue;
+        };
+        let Some((location, _)) = rest.split_once(": ") else {
+            continue;
+        };
+        // Drop the column: `file:line:col`.
+        let unit = location.rsplit_once(':').map_or(location, |(l, _)| l);
+        let unit = format!("`{unit}`");
+        if !units.contains(&unit) {
+            units.push(unit);
+        }
+    }
+    (!units.is_empty()).then(|| units.join(", "))
 }
 
 /// Whether Verilator stopped only because of warnings: it printed `%Warning-` lines and no
@@ -334,7 +368,7 @@ fn display_command_failure(
     }
     if let Some(hint) = hint(stderr) {
         out.push_str("\nhint: ");
-        out.push_str(hint);
+        out.push_str(&hint);
     }
     out.push_str("\ncommand: ");
     out.push_str(command);
@@ -507,6 +541,36 @@ mod tests {
         ] {
             assert!(!failure(stderr).contains("-Wno-fatal"), "{stderr}");
         }
+    }
+
+    /// A design mixing units with and without a `timeunit` (Verilator 5.052's output,
+    /// paths shortened) gets the units to fix and the `--timescale` default, not the
+    /// generic lint waiver.
+    #[test]
+    fn timescalemod_names_the_units_without_a_timeunit() {
+        let stderr = "%Warning-TIMESCALEMOD: /r/pkg.sv:1:9: Timescale missing on this module \
+                      as other modules have it (IEEE 1800-2023 3.14.2.3)\n    1 | package p;\n\
+                      \x20                      /r/top.sv:1:8: ... Location of module with \
+                      timescale\n%Warning-TIMESCALEMOD: /r/leaf.sv:1:8: Timescale missing \
+                      on this module as other modules have it (IEEE 1800-2023 3.14.2.3)\n\
+                      %Error: Exiting due to 2 warning(s)\n";
+        let text = Error::Command {
+            what: "verilating DUT `d`".into(),
+            command: "verilator --cc d.sv".into(),
+            status: Some(1),
+            stderr: stderr.into(),
+            path: None,
+        }
+        .to_string();
+        assert!(
+            text.contains(
+                "hint: some units declare a `timeunit` and these do not: `/r/pkg.sv:1`, \
+                 `/r/leaf.sv:1`; add a `timeunit` to each, or give every unit a default \
+                 with `.verilator_args([\"--timescale\", \"1ns/1ps\"])` on the `Dut`"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("-Wno-fatal"), "{text}");
     }
 
     #[test]

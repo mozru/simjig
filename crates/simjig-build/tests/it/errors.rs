@@ -130,3 +130,36 @@ fn an_explicit_verilator_that_does_not_exist_is_an_error() {
         .unwrap_err();
     assert!(err.to_string().contains("empty-bin/verilator"), "{err}");
 }
+
+/// A design mixing units with and without a `timeunit` fails with a hint naming the unit
+/// that has none and the `--timescale` default (Verilator 5.052's `TIMESCALEMOD`).
+#[test]
+fn a_mixed_timeunit_design_names_the_unit_to_fix() {
+    let s = Sandbox::new();
+    let leaf = s.path().join("leaf.sv");
+    let top = s.path().join("top.sv");
+    std::fs::write(
+        &leaf,
+        "module leaf(input logic a, output logic y);\n  assign y = a;\nendmodule\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &top,
+        "module top(input logic a, output logic y);\n  timeunit 1ns; timeprecision 1ps;\n  \
+         leaf u(.a, .y);\nendmodule\n",
+    )
+    .unwrap();
+    let err = Dut::new("mixed")
+        .sources([&leaf, &top])
+        .top("top")
+        .build_in(&s.env())
+        .unwrap_err()
+        .to_string();
+    let hint = format!(
+        "hint: some units declare a `timeunit` and these do not: `{}:1`; add a `timeunit` to \
+         each, or give every unit a default with `.verilator_args([\"--timescale\", \
+         \"1ns/1ps\"])` on the `Dut`",
+        leaf.display()
+    );
+    assert!(err.contains(&hint), "{err}");
+}

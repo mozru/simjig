@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A failed `Dut::build` tracks a directory it names (`+incdir+`, `-I`, `-y`,
+  `.include_dirs`) by the files directly in it, and never an ancestor of `OUT_DIR`: Cargo
+  scans a tracked directory recursively, so a handled DUT naming the package directory
+  (`+incdir+.`) reran the build script on every build, through `target/`.
 - A failed `Dut::build` resolves the paths inside an `-f` file named in an `-F` file
   against the working directory, as Verilator 5.052 does; they were joined to the `-F`
   file's directory, so its reruns (and the `-G` check) looked at the wrong files.

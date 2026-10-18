@@ -729,7 +729,8 @@ impl Dut {
     /// [`Dut::build_in`]), so an ungated `include_dut!` fails to compile, naming the DUT.
     #[expect(clippy::print_stdout, reason = "build scripts talk to Cargo on stdout")]
     pub fn build(self) -> Result<Built, Error> {
-        let reruns = failed_reruns(&self.config, &self.recipe);
+        let out_dir = std::env::var_os("OUT_DIR").map(PathBuf::from);
+        let reruns = failed_reruns(&self.config, &self.recipe, out_dir.as_deref());
         let name = self.config.name.clone();
         let built = BuildEnv::from_cargo()
             .inspect_err(|e| {
@@ -974,17 +975,17 @@ fn is_c_ident(name: &str) -> bool {
 
 /// The reruns of a failed build: every input the configuration names (sources,
 /// `` `include `` directories, option files and the paths in them and in the extra
-/// arguments (`optfile::inputs`, which says what it misses), the recipe's files) and the tracked
-/// variables (which locate Verilator); then the `rustc-check-cfg` of the DUT's gate, so
-/// `#[cfg(simjig_dut_<name>)]` compiles without an `unexpected_cfgs` warning.
+/// arguments (`optfile::inputs`, which says what it misses), the recipe's files) and the
+/// tracked variables (which locate Verilator); then the `rustc-check-cfg` of the DUT's
+/// gate, so `#[cfg(simjig_dut_<name>)]` compiles without an `unexpected_cfgs` warning.
 ///
 /// Coarser than [`rerun_directives`], which lists what Verilator read: a failed build may
 /// not have run Verilator, so the configuration is all there is. A named file that does
 /// not exist reruns the script on every build until it does, which a failed DUT is
-/// waiting for anyway.
-fn failed_reruns(config: &DutConfig, recipe: &CppRecipe) -> Vec<String> {
+/// waiting for anyway. A directory is tracked by its files ([`tracked_files`]).
+fn failed_reruns(config: &DutConfig, recipe: &CppRecipe, out_dir: Option<&Path>) -> Vec<String> {
     let option_inputs = crate::optfile::inputs(&config.verilator_args);
-    let files = config
+    let named = config
         .sources
         .iter()
         .chain(&config.include_dirs)
@@ -992,8 +993,9 @@ fn failed_reruns(config: &DutConfig, recipe: &CppRecipe) -> Vec<String> {
         .chain(&recipe.global_sources)
         .chain(&recipe.model_sources)
         .chain(&recipe.include_dirs);
-    let mut out: Vec<String> = files
-        .map(|p| format!("cargo::rerun-if-changed={}", absolute(p).display()))
+    let mut out: Vec<String> = tracked_files(named, out_dir)
+        .iter()
+        .map(|p| format!("cargo::rerun-if-changed={}", p.display()))
         .collect();
     out.extend(
         BuildEnv::TRACKED_VARS
@@ -1003,6 +1005,38 @@ fn failed_reruns(config: &DutConfig, recipe: &CppRecipe) -> Vec<String> {
     if is_c_ident(&config.name) {
         out.extend(emit::cfg_directives(&config.name, false));
     }
+    out
+}
+
+/// The paths to track for `named` (made absolute): a file or a missing path as itself, a
+/// directory as the files directly in it, never an ancestor of `out_dir`.
+///
+/// Cargo scans a tracked directory recursively, and a package directory (`+incdir+.`,
+/// common in file lists) holds Cargo's own `target/`, so tracking it reran the script on
+/// every build. Verilator searches `-y`, `-I` and `+incdir+` directories one level deep
+/// (`V3Options::filePathCheckOneDir` joins the directory and the name), so their direct files are
+/// what it can read; a file added later, or one an `` `include "sub/x.svh" `` reaches in a
+/// subdirectory, is not tracked.
+fn tracked_files<'a>(
+    named: impl Iterator<Item = &'a PathBuf>,
+    out_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for p in named.map(absolute) {
+        match std::fs::read_dir(&p) {
+            Ok(entries) => {
+                let mut files: Vec<PathBuf> = entries
+                    .filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|f| f.is_file())
+                    .collect();
+                files.sort();
+                out.extend(files);
+            }
+            Err(_) => out.push(p),
+        }
+    }
+    out.retain(|p| !out_dir.is_some_and(|o| o.starts_with(p)));
     out
 }
 
@@ -1031,7 +1065,7 @@ mod tests {
             model_sources: vec![PathBuf::from("/r/glue.cpp")],
             ..CppRecipe::default()
         };
-        let reruns = failed_reruns(&config, &recipe);
+        let reruns = failed_reruns(&config, &recipe, None);
         for path in ["/r/fifo.sv", "/r/inc", "/r/opts.f", "/r/glue.cpp"] {
             assert!(
                 reruns.contains(&format!("cargo::rerun-if-changed={path}")),
@@ -1050,6 +1084,33 @@ mod tests {
         assert!(
             !reruns.iter().any(|l| l.starts_with("cargo::error")),
             "{reruns:?}"
+        );
+    }
+
+    /// A tracked directory is its direct files: Cargo would scan it recursively, and the
+    /// package directory holds `target/`, where every build writes.
+    #[test]
+    fn a_failed_build_tracks_a_directory_by_its_files_and_never_out_dir() {
+        let t = tempfile::tempdir().unwrap();
+        let pkg = t.path().join("pkg");
+        let out_dir = pkg.join("target/debug/build/x/out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::write(pkg.join("a.svh"), "").unwrap();
+        let config = Dut::new("fifo")
+            .sources([pkg.join("a.svh")])
+            .verilator_args([format!("+incdir+{}", pkg.display())])
+            .config;
+        let reruns = failed_reruns(&config, &CppRecipe::default(), Some(&out_dir));
+        let tracked: Vec<&str> = reruns
+            .iter()
+            .filter_map(|l| l.strip_prefix("cargo::rerun-if-changed="))
+            .collect();
+        let a = pkg.join("a.svh").display().to_string();
+        assert_eq!(tracked, [a.as_str(), a.as_str()], "{reruns:?}");
+        assert_eq!(
+            tracked_files([out_dir.clone(), pkg.join("gone")].iter(), Some(&out_dir)),
+            [pkg.join("gone")],
+            "a missing path is itself; `OUT_DIR` holds no files and is never tracked"
         );
     }
 

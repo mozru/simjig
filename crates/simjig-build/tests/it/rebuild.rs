@@ -285,3 +285,36 @@ fn s3c7m_a_failed_dut_from_a_library_dir_reruns_when_fixed() {
         },
     );
 }
+
+/// A handled failed DUT whose arguments name the package directory (`+incdir+.`,
+/// common in file lists) with Cargo's default `target/` inside the package: the tracked
+/// directory holds the build's own outputs, so every build reruns the script and
+/// recompiles the package, though nothing the DUT reads changed.
+#[test]
+fn a_failed_dut_tracking_the_package_dir_settles() {
+    let (krate, _, _lock) = fixture();
+    // The default layout: the target directory inside the package.
+    let target = krate.join("target");
+    let envs = [
+        (
+            "SIMJIG_CACHE_DIR",
+            krate.parent().unwrap().join("cache").into_os_string(),
+        ),
+        ("SIMJIG_CCACHE", "0".into()),
+    ];
+    let opt = krate.join("duts/opt");
+    std::fs::create_dir_all(&opt).unwrap();
+    std::fs::write(
+        opt.join("opt.sv"),
+        "module opt(input logic a, output logic y);\n  assign y = ;\nendmodule\n",
+    )
+    .unwrap();
+    let script = krate.join("build.rs");
+    let text = std::fs::read_to_string(&script).unwrap().replace(
+        r#"Dut::new("optional").top("optional").build()"#,
+        r#"Dut::new("opt").sources(["duts/opt/opt.sv"]).verilator_args(["+incdir+."]).top("opt").build()"#,
+    );
+    std::fs::write(&script, text).unwrap();
+    assert!(build(&krate, &target, &envs), "the edited script runs");
+    assert!(!build(&krate, &target, &envs), "no change: no rerun");
+}

@@ -224,8 +224,11 @@ its error: a failed build replaces its generated module with a `compile_error!` 
 so a module left by an earlier build cannot compile against a model that is not linked.
 A failed DUT's build script reruns when an input its configuration names changes: the
 sources, include directories, `-f`/`-F` files and the sources, `-v` files, `-y` and
-`+incdir+`/`-I` directories in them or in `verilator_args`. Not tracked: a positional
-source without a `.v`/`.sv`/`.vh`/`.svh`/`.vlt` (or C++) suffix, and `$VAR` in paths.
+`+incdir+`/`-I` directories in them or in `verilator_args`. A directory is tracked by
+the files directly in it (Verilator searches it one level deep; Cargo would scan it
+whole, `target/` included, and rerun on every build). Not tracked: a positional source
+without a `.v`/`.sv`/`.vh`/`.svh`/`.vlt` (or C++) suffix, `$VAR` in paths, a file added
+to a directory later, and a subdirectory an `` `include "sub/x.svh" `` reaches.
 
 If any source declares a `timeunit` (or `` `timescale ``), every module and package
 must: Verilator stops on a mix with `%Warning-TIMESCALEMOD` (IEEE 1800-2023 §3.14.2.3).

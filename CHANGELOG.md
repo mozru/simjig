@@ -41,3 +41,7 @@ the public API, the generated code or simulation semantics.
   dump.
 - `svtypes::error::Error::Tool::stderr` now holds the tool's whole stderr (it held the last
   40 lines); `Display` still shows the last 40.
+- Compiled model archives are cached in the shared cache (`<cache>/archives/<key>/`,
+  `libsimjig_model_<prefix>_<key16>.a`) instead of being compiled into `OUT_DIR` on every
+  build-script run: editing one DUT recompiles only that DUT's C++. Every archive key
+  (models and runtime) now also covers the files under `CppRecipe::include_dirs`.

@@ -7,6 +7,7 @@
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
 //! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
+//! - `archives/<key>/`: compiled models (see `compile`).
 //! - `tmp/`: work directories, renamed into place when complete.
 //!
 //! Keys. Verilator only reveals which files it read (`` `include ``s) after running, so
@@ -55,6 +56,7 @@ impl Cache {
             "runtime",
             "prefixes",
             "libverilated",
+            "archives",
             "tmp",
         ] {
             let dir = root.join(sub);

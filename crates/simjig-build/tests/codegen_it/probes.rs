@@ -19,7 +19,7 @@ use svtypes::verilator::{JsonPassOpts, json_pass};
 use crate::cases::{self, Case};
 
 /// A driver built for one case.
-pub struct Driver {
+pub(crate) struct Driver {
     pub exe: PathBuf,
     pub build: Output,
 }
@@ -27,7 +27,7 @@ pub struct Driver {
 impl Driver {
     /// Runs the driver with `ops` (see `probe_driver.cpp`); returns its stdout and whether
     /// it succeeded.
-    pub fn run(&self, ops: &[&str]) -> (bool, String) {
+    pub(crate) fn run(&self, ops: &[&str]) -> (bool, String) {
         assert!(
             self.build.status.success(),
             "model build failed:\n{}",
@@ -41,7 +41,7 @@ impl Driver {
     }
 
     /// Runs `ops` and expects success.
-    pub fn check(&self, ops: &[&str]) {
+    pub(crate) fn check(&self, ops: &[&str]) {
         let (ok, stdout) = self.run(ops);
         assert!(ok && stdout.ends_with("ok\n"), "driver failed:\n{stdout}");
     }
@@ -49,7 +49,12 @@ impl Driver {
 
 /// Emits the shim and `.vlt` of `lowered` and builds them with `case`'s sources, the
 /// generic driver and the extra Verilator `flags`.
-pub fn build_driver(case: &Case, lowered: &Lowered, opts: &ShimOptions, flags: &[&str]) -> Driver {
+pub(crate) fn build_driver(
+    case: &Case,
+    lowered: &Lowered,
+    opts: &ShimOptions,
+    flags: &[&str],
+) -> Driver {
     let dir = cases::scratch(&format!("driver_{}", case.name));
     let shim = dir.join(format!("{}_shim.cpp", opts.prefix));
     fs::write(&shim, emit_shim(lowered, opts).unwrap()).unwrap();
@@ -95,7 +100,7 @@ pub fn build_driver(case: &Case, lowered: &Lowered, opts: &ShimOptions, flags: &
     }
 }
 
-pub fn opts(prefix: &str) -> ShimOptions {
+pub(crate) fn opts(prefix: &str) -> ShimOptions {
     ShimOptions {
         prefix: prefix.into(),
         timing: false,

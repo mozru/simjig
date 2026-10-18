@@ -4,6 +4,8 @@
 //! - `cargo xtask doctor [--json]` runs the `cargo simjig doctor` checks.
 //! - `cargo xtask ci` runs the same gate locally and in GitHub Actions, so a green local
 //!   run means a green CI run.
+//! - `cargo xtask miri` runs the kernel and ABI tests under Miri (nightly). It is not part
+//!   of `ci`: it takes minutes.
 
 mod setup;
 
@@ -98,7 +100,42 @@ fn run(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<(), String>
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <ci | setup | doctor [--json]>";
+const USAGE: &str = "usage: cargo xtask <ci | miri | setup | doctor [--json]>";
+
+/// Miri's flags. Isolation is off because the test harness reads the environment and the
+/// clock. Leaks are ignored because some are deliberate: failure locations are interned for
+/// the life of the process, and the backend tests leak their fake vtables into
+/// thread-locals, which Miri (unlike a `static`) does not count as reachable. Strict
+/// provenance holds the pointer code (wakers, signal rows) to the strictest model.
+const MIRI_FLAGS: &str = "-Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-strict-provenance";
+
+/// Runs, under Miri, every test of the pure-Rust `unsafe` code: the library's unit tests
+/// (waker, slab, the signal-table validation and the backend over a fake vtable) and the
+/// kernel integration tests against `FakeModel`. Tests that link a Verilator model cannot
+/// run in Miri; `SIMJIG_TEST_MODELS=0` keeps `build.rs` from building them.
+///
+/// The toolchain is `nightly` unless `SIMJIG_MIRI_TOOLCHAIN` names another
+/// (`rustup toolchain install nightly --component miri`).
+fn miri() -> Result<(), String> {
+    let toolchain = env::var("SIMJIG_MIRI_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned());
+    let toolchain = format!("+{toolchain}");
+    run(
+        "cargo",
+        &[
+            &toolchain,
+            "miri",
+            "test",
+            "-p",
+            "simjig",
+            "--lib",
+            "--test",
+            "kernel_tests",
+        ],
+        &[("MIRIFLAGS", MIRI_FLAGS), ("SIMJIG_TEST_MODELS", "0")],
+    )?;
+    eprintln!("==> miri passed");
+    Ok(())
+}
 
 fn ci() -> Result<(), String> {
     for step in CI {
@@ -113,6 +150,7 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
         ["ci"] => ci(),
+        ["miri"] => miri(),
         ["setup"] => setup::setup(),
         ["doctor"] => return doctor::run(Format::Text),
         ["doctor", "--json"] => return doctor::run(Format::Json),

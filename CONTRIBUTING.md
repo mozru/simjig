@@ -42,6 +42,26 @@ This runs, in order:
 
 GitHub Actions runs exactly the same command, so a green local run means green CI.
 
+## Miri
+
+```sh
+rustup toolchain install nightly --component miri   # once
+cargo xtask miri
+```
+
+This runs the pure-Rust `unsafe` code under Miri: simjig's unit tests (the waker, the
+slab, signal-table validation, the Verilator backend over a fake vtable) and the kernel
+integration tests (`tests/kernel_tests`, against `FakeModel`). Tests that link a Verilator
+model cannot run under Miri, so it sets `SIMJIG_TEST_MODELS=0`. The flags are
+`-Zmiri-disable-isolation` (the test harness reads the environment and the clock),
+`-Zmiri-ignore-leaks` (interned failure locations and the backend tests' fake vtables are
+leaked on purpose; the kernel tests check separately that every table is empty after a
+run) and `-Zmiri-strict-provenance`. Set `SIMJIG_MIRI_TOOLCHAIN` to use a nightly other than
+`nightly`.
+
+It takes minutes, so it is not part of `cargo xtask ci`. Run it after changing `unsafe`
+code, the executor or the waker.
+
 ## Self-hosted runner
 
 CI runs on a self-hosted macOS arm64 runner (labels `self-hosted, macOS, ARM64`).

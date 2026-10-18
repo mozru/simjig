@@ -59,3 +59,4 @@ the public API, the generated code or simulation semantics.
   the simjig repo: `pixi install --locked`)" (and the same for the other tools) instead of
   assuming the simjig repository; the doctor's Verilator line says that builds keep the
   Verilator their build script found, so switching `PATH` alone does not rebuild.
+- `svtypes --help` (`-h`, `help`) prints the usage and succeeds.

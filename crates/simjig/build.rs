@@ -39,6 +39,15 @@ fn shared(name: &str, files: &[&str]) -> Dut {
         .verilator_args(TIMESCALE)
 }
 
+/// The shared design `design` built as the model `name`.
+fn shared_as(name: &str, design: &str) -> Dut {
+    let dir = format!("../../tests/duts/{design}");
+    Dut::new(name)
+        .sources([format!("{dir}/{design}.sv")])
+        .top(design)
+        .verilator_args(TIMESCALE)
+}
+
 /// Read-only probes of the internal variables `vars` of the top `module`.
 fn probes(dut: Dut, module: &str, width: u32, vars: &[&str]) -> Dut {
     vars.iter().fold(dut, |dut, var| {
@@ -94,6 +103,12 @@ fn duts() -> Vec<Dut> {
             &["wbin", "rgray_w2", "rbin", "wgray_r2"],
         ),
         shared("derived_clk", &["derived_clk.sv"]),
+        // FST-traced builds of two shared designs, for the waves tests (tests/waves_tests).
+        shared_as("counter_fst", "counter").trace_fst(true),
+        shared_as("fifo_fst", "fifo")
+            .param("WIDTH", 8)
+            .param("DEPTH", 4)
+            .trace_fst(true),
         shared("iface_top", &["iface_pkg.sv", "bus_if.sv", "iface_top.sv"])
             .bind_iface("in_bus", "bus_if.dst")
             .bind_iface("out_bus", "bus_if.src"),
@@ -139,7 +154,13 @@ fn build_models() -> Result<Vec<String>, String> {
     for dut in duts() {
         let config = dut.config().clone();
         let built = dut.build_in(&env).map_err(|e| e.to_string())?;
-        lines.extend(tests_only(&built.directives));
+        for line in tests_only(&built.directives) {
+            // FST models add `-rpath <dir>` for lz4 and for zlib, usually the same
+            // directory; ld64 warns about every repeat.
+            if !(line.contains("-rpath,") && lines.contains(&line)) {
+                lines.push(line);
+            }
+        }
         let lowered =
             codegen::lower(&built.design, &config.codegen_config()).map_err(|e| e.to_string())?;
         let upper = config.name.to_uppercase();

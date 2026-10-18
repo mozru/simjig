@@ -12,13 +12,16 @@ use std::future::Future;
 use std::panic;
 use std::path::{Path, PathBuf};
 
+use crate::model::trace::TraceOptions;
 use crate::{Failure, Precision, Sim, SimDuration, SimTime, TimeUnit};
 
 use super::ctx::TestCtx;
 use super::dut::{DutModel, ModelOptions};
+use super::replay::{self, Original, TRACE_FROM_VAR, TRACE_TO_VAR, TRACE_VAR};
 use super::report::{AppliedTimeout, FailureReport, RunIdentity};
 use super::rundir::{self, Json, Summary};
 use super::seed::{Seed, SeedSource, parse_seed};
+use super::waves::{RunEnd, WavesReplay, WavesRequest};
 
 /// A test's simulation-time budget, as written in `#[simjig::test(timeout = "2ms")]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,15 +96,22 @@ pub struct RunEnv {
     /// The test binary's name as nextest's `binary()` filter matches it
     /// (`harness_tests`), from the executable's name.
     pub binary: Option<String>,
+    /// Whether to replay the run with waves (`SIMJIG_WAVES`, `SIMJIG_WAVES_ON_FAIL`).
+    pub waves: Option<WavesRequest>,
+    /// Waves to record in this run itself (`SIMJIG_TRACE*`; how a replay is traced). They
+    /// are optional: a model that cannot trace runs untraced.
+    pub trace: Option<TraceOptions>,
 }
 
 impl RunEnv {
-    /// Reads `SIMJIG_SEED`, `SIMJIG_RUNS_DIR`, and the pixi/conda variables that decide
+    /// Reads `SIMJIG_SEED`, `SIMJIG_RUNS_DIR`, the waves variables (`SIMJIG_WAVES`,
+    /// `SIMJIG_WAVES_ON_FAIL`, `SIMJIG_TRACE*`), and the pixi/conda variables that decide
     /// the repro's launcher (`PIXI_WORKSPACE_ROOT`, `PIXI_PROJECT_ROOT`, `CONDA_PREFIX`,
     /// ...; see `runner::launcher`).
     ///
     /// # Panics
-    /// If `SIMJIG_SEED` is set but is not a seed (the message says what is accepted).
+    /// If `SIMJIG_SEED`, a waves variable or a `SIMJIG_TRACE_*` time is set to something
+    /// it does not accept (the message says what is accepted).
     #[must_use]
     pub fn from_process() -> Self {
         let seed = std::env::var("SIMJIG_SEED")
@@ -115,11 +125,37 @@ impl RunEnv {
         let binary = std::env::current_exe()
             .ok()
             .and_then(|exe| rundir::binary_name(&exe));
+        let var = |name: &str| std::env::var(name).ok();
+        let waves = WavesRequest::from_vars(
+            var("SIMJIG_WAVES").as_deref(),
+            var("SIMJIG_WAVES_ON_FAIL").as_deref(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let trace = std::env::var_os(TRACE_VAR).map(|path| {
+            let ticks = |name: &str| {
+                var(name).map(|text| {
+                    text.parse::<u64>().map_or_else(
+                        |_bad| panic!("{name}={text:?} is not a tick count"),
+                        SimTime,
+                    )
+                })
+            };
+            let mut trace = TraceOptions::new(path).if_supported();
+            if let Some(from) = ticks(TRACE_FROM_VAR) {
+                trace = trace.start(from);
+            }
+            if let Some(to) = ticks(TRACE_TO_VAR) {
+                trace = trace.end(to);
+            }
+            trace
+        });
         Self {
             seed,
             runs_root,
             launcher,
             binary,
+            waves,
+            trace,
         }
     }
 }
@@ -223,6 +259,8 @@ pub struct TestOutcome {
     pub seed: Seed,
     /// The kernel's trace hash; `None` if the model could not be built.
     pub trace_hash: Option<u64>,
+    /// The design's precision; `None` if the model could not be built.
+    pub precision: Option<Precision>,
     /// Simulation time at the end of the run; `None` if the model could not be built.
     pub end_time: Option<SimTime>,
     /// The failure, if the test failed.
@@ -257,7 +295,10 @@ where
         || Seed::from_test_name(meta.package, &test),
         |value| Seed::new(value, SeedSource::Env),
     );
-    let options = ModelOptions::new(seed);
+    let mut options = ModelOptions::new(seed);
+    if let Some(trace) = &env.trace {
+        options = options.with_trace(trace.clone());
+    }
     let ctx = TestCtx::new(test.clone(), seed, options.verilator_seed);
     let run = RunIdentity {
         test,
@@ -371,6 +412,7 @@ fn finish(
         test: run.test,
         seed: run.seed,
         trace_hash: sim.as_ref().map(Sim::trace_hash),
+        precision: sim.as_ref().map(Sim::precision),
         end_time: sim.as_ref().map(Sim::now),
         failure,
         run_dir,
@@ -432,11 +474,17 @@ where
     Fut: Future + 'static,
     Fut::Output: TestOutput,
 {
-    let outcome = run(meta, &RunEnv::from_process(), body);
+    let env = RunEnv::from_process();
+    let outcome = run(meta, &env, body);
     if let Some(error) = &outcome.run_dir_error {
         eprintln!("simjig: run directory not written: {error}");
     }
-    if let Some(report) = outcome.failure {
+    let waves = env
+        .waves
+        .filter(|w| w.applies(outcome.failure.is_some()))
+        .map(|request| replay_with_waves(meta, &env, &outcome, &request));
+    if let Some(mut report) = outcome.failure {
+        report.waves = waves;
         let text = report.to_string();
         if !meta.should_panic {
             eprintln!("{text}");
@@ -445,6 +493,66 @@ where
         // a misleading "panicked at <harness file>" line.
         panic::resume_unwind(Box::new(text));
     }
+    if let Some(waves) = &waves {
+        report_passing_replay(waves);
+    }
+}
+
+/// After a passing run with `SIMJIG_WAVES`: prints where the waves are, and fails the test
+/// if the replay did not reproduce the run.
+fn report_passing_replay(waves: &WavesReplay) {
+    eprintln!("simjig: waves of a passing run:\n{waves}");
+    assert!(
+        waves.reproduced(),
+        "the replay with waves did not reproduce this passing run (see above)"
+    );
+}
+
+/// Replays the run of `outcome` with waves (`harness::replay`), or says why it cannot.
+fn replay_with_waves(
+    meta: &TestMeta,
+    env: &RunEnv,
+    outcome: &TestOutcome,
+    request: &WavesRequest,
+) -> WavesReplay {
+    let not_run = |why: &str| WavesReplay {
+        fst: None,
+        gtkw: None,
+        from: SimTime::ZERO,
+        to: None,
+        precision: outcome.precision.unwrap_or(Precision::PS),
+        verdict: super::waves::Verdict::NotRun(why.to_owned()),
+    };
+    let (Some(run_dir), Some(precision), Some(end)) =
+        (&outcome.run_dir, outcome.precision, outcome.end_time)
+    else {
+        return not_run("this run has no run directory or no model to replay");
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return not_run("the test binary's path is unknown");
+    };
+    let failure = outcome.failure.as_ref();
+    let run = RunIdentity {
+        test: outcome.test.clone(),
+        package: meta.package.to_owned(),
+        seed: outcome.seed,
+        ignored: meta.ignored,
+        launcher: env.launcher.clone(),
+        binary: env.binary.clone(),
+    };
+    let original = Original {
+        run: &run,
+        run_dir,
+        end: RunEnd {
+            failure: failure.map(|f| (f.kind.to_owned(), f.signature.to_string(), f.time.ticks())),
+            end: Some(end.ticks()),
+            trace_hash: outcome.trace_hash.map(|h| format!("{h:#018x}")),
+        },
+        target: failure.map_or(end, |f| f.time),
+        precision,
+        signals: failure.map(|f| f.signals.clone()).unwrap_or_default(),
+    };
+    replay::replay(&exe, &original, request)
 }
 
 /// Compile-time check that a test's declared output type is a [`TestOutput`]; the macro

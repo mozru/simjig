@@ -202,6 +202,20 @@ pub enum LoadError {
         /// What the model reported.
         reason: String,
     },
+    /// Waves were asked for, but the model was not verilated with `--trace-fst`.
+    NoTrace {
+        /// The model's prefix.
+        prefix: &'static str,
+    },
+    /// The model's FST trace could not be opened.
+    TraceOpen {
+        /// The model's prefix.
+        prefix: &'static str,
+        /// The trace file.
+        path: std::path::PathBuf,
+        /// Why.
+        reason: String,
+    },
 }
 
 impl LoadError {
@@ -306,6 +320,20 @@ impl fmt::Display for LoadError {
             Self::Create { prefix, reason } => {
                 write!(f, "model `{prefix}` failed while being created: {reason}")
             }
+            Self::NoTrace { prefix } => write!(
+                f,
+                "model `{prefix}` was built without FST tracing, so it cannot write waves; \
+                 build it with `.trace_fst(true)` on its `simjig_build::Dut` in build.rs"
+            ),
+            Self::TraceOpen {
+                prefix,
+                path,
+                reason,
+            } => write!(
+                f,
+                "model `{prefix}` cannot open the trace file {}: {reason}",
+                path.display()
+            ),
         }
     }
 }

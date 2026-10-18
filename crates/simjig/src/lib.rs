@@ -37,6 +37,7 @@ pub use harness::dut::{DutModel, ModelOptions};
 pub use harness::report::{AppliedTimeout, FailureReport, RunIdentity, Signature};
 pub use harness::runner::TestOutput;
 pub use harness::seed::{Rng, Seed, SeedSource};
+pub use harness::waves::{Verdict, WavesReplay};
 pub use kernel::clock::{Clock, ClockError, ClockHandle, clock};
 pub use kernel::failure::{BlockedTask, Failure, FailureKind, SourceLocation};
 pub use kernel::fake::{FakeModel, FakeSig, FakeState};
@@ -56,6 +57,7 @@ pub use kernel::trigger::{
     now, rising, with_timeout, yield_now,
 };
 pub use model::meta::LoadError;
+pub use model::trace::TraceOptions;
 pub use model::values::{FieldDiff, InvalidEnum};
 pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
 
@@ -73,6 +75,7 @@ pub mod __private {
         DEFAULT_TIMEOUT_MS, RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, assert_test_output,
         run, run_test,
     };
+    pub use crate::harness::waves::{WavesRequest, WavesWhen, Window, WindowEnd};
     pub use crate::kernel::combinator::{MaybeDone, boxed};
 
     // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,

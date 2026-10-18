@@ -6,4 +6,4 @@ FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [ModelFatal sig=1bc
   message:  [1250] %Fatal: fifo.sv:88: top.u_fifo: overflow
   help:     the design reported the error; see its message
   repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'
-  waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'  (placeholder: wave recording is not implemented yet)
+  waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'

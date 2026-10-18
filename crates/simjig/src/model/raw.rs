@@ -21,7 +21,7 @@
     reason = "calls through the C vtable and the abi raw accessors (DECISION §2 row 12)"
 )]
 
-use std::ffi::{CString, c_char};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr::{self, NonNull};
 
 use super::abi::{
@@ -158,6 +158,37 @@ impl RawModel {
     pub(crate) fn next_time_slot(&self) -> u64 {
         // SAFETY: as in `events_pending`; the ABI version never aborts (unlike Verilator's).
         unsafe { (self.vt.next_time_slot)(self.handle.as_ptr()) }
+    }
+
+    /// The model's `SIMJIG_FEATURE_*` bits.
+    pub(crate) fn features(&self) -> u64 {
+        self.vt.features
+    }
+
+    /// Opens an FST trace at `path` (closing an open one first), limited to `depth` scope
+    /// levels below the top (0: all), skipping dumps before `start` ticks; the raw status.
+    pub(crate) fn trace_open(&mut self, path: &CStr, depth: u32, start: u64) -> i32 {
+        // SAFETY: as in `eval`; `path` is a NUL-terminated string valid for the call, which
+        // copies it.
+        unsafe { (self.vt.trace_open_ex)(self.handle.as_ptr(), path.as_ptr(), depth, start) }
+    }
+
+    /// Writes one trace sample at `ticks`; the raw status (OK if no trace is open).
+    pub(crate) fn trace_dump(&mut self, ticks: u64) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.trace_dump)(self.handle.as_ptr(), ticks) }
+    }
+
+    /// Writes the trace's buffered samples to its file; the raw status.
+    pub(crate) fn trace_flush(&mut self) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.trace_flush)(self.handle.as_ptr()) }
+    }
+
+    /// Closes the trace (writing its header); the raw status. `destroy` also closes it.
+    pub(crate) fn trace_close(&mut self) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.trace_close)(self.handle.as_ptr()) }
     }
 
     /// Moves every pending message into `out`, oldest first.
@@ -312,6 +343,10 @@ pub(crate) mod fake {
         pub(crate) destroys: u32,
         /// The two members, `a` and `y`.
         pub(crate) members: Box<[u8; 2]>,
+        /// Every eval, final, destroy and trace call of the traced vtable, in order.
+        pub(crate) calls: Vec<String>,
+        /// Statuses the next trace calls of the traced vtable return (then OK).
+        pub(crate) trace_statuses: VecDeque<Status>,
         rows: Vec<Signal>,
     }
 
@@ -349,19 +384,59 @@ pub(crate) mod fake {
     }
 
     extern "C" fn destroy(_h: *mut Handle) {
-        STATE.with_borrow_mut(|s| s.destroys += 1);
+        STATE.with_borrow_mut(|s| {
+            s.destroys += 1;
+            s.calls.push("destroy".to_owned());
+        });
     }
 
     extern "C" fn eval(_h: *mut Handle) -> i32 {
         STATE.with_borrow_mut(|s| {
             s.evals += 1;
+            s.calls.push("eval".to_owned());
             s.statuses.pop_front().unwrap_or(Status::Ok) as i32
         })
     }
 
     extern "C" fn final_blocks(_h: *mut Handle) -> i32 {
-        STATE.with_borrow_mut(|s| s.finals += 1);
+        STATE.with_borrow_mut(|s| {
+            s.finals += 1;
+            s.calls.push("final".to_owned());
+        });
         0
+    }
+
+    /// Records `call` and returns the next queued trace status.
+    fn traced(call: String) -> i32 {
+        STATE.with_borrow_mut(|s| {
+            s.calls.push(call);
+            s.trace_statuses.pop_front().unwrap_or(Status::Ok) as i32
+        })
+    }
+
+    extern "C" fn rec_open(
+        _h: *mut Handle,
+        path: *const std::ffi::c_char,
+        depth: u32,
+        start: u64,
+    ) -> i32 {
+        // SAFETY: the caller passes a NUL-terminated string valid for the call.
+        let path = unsafe { CStr::from_ptr(path) }
+            .to_string_lossy()
+            .into_owned();
+        traced(format!("open {path} depth={depth} start={start}"))
+    }
+
+    extern "C" fn rec_dump(_h: *mut Handle, t: u64) -> i32 {
+        traced(format!("dump {t}"))
+    }
+
+    extern "C" fn rec_flush(_h: *mut Handle) -> i32 {
+        traced("flush".to_owned())
+    }
+
+    extern "C" fn rec_close(_h: *mut Handle) -> i32 {
+        traced("close".to_owned())
     }
 
     extern "C" fn set_time(_h: *mut Handle, _t: u64) {}
@@ -465,6 +540,18 @@ pub(crate) mod fake {
             cov_zero: unsupported,
             cov_write: trace_open,
             rng_seed,
+        }
+    }
+
+    /// The fake's vtable with FST support: its trace entries record their calls.
+    pub(crate) fn traced_vtable() -> ModelVtable {
+        ModelVtable {
+            features: super::super::abi::FEATURE_TRACE_FST,
+            trace_open_ex: rec_open,
+            trace_dump: rec_dump,
+            trace_flush: rec_flush,
+            trace_close: rec_close,
+            ..vtable()
         }
     }
 

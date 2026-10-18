@@ -9,20 +9,28 @@
 //! 4. runs the body as the main task, with a [`TestCtx`](crate::TestCtx) for named random streams;
 //! 5. renders any [`Failure`](crate::Failure) as one [`FailureReport`](crate::FailureReport) block with a
 //!    triage signature and a one-line repro, and writes the run directory
-//!    (`<target>/simjig/runs/<package>/<binary>/<test>/<seed>/`, see `rundir`).
+//!    (`<target>/simjig/runs/<package>/<binary>/<test>/<seed>/`, see `rundir`);
+//! 6. if asked (`SIMJIG_WAVES`, `SIMJIG_WAVES_ON_FAIL`), replays the run in a child process
+//!    with FST tracing, writes `waves.fst` and `waves.gtkw` into the run directory, and
+//!    checks that the replay ended the same way (`waves`, `replay`).
 //!
 //! # Environment
 //! - `SIMJIG_SEED`: the root seed (`0x`-hex or decimal), as printed by a failure report.
 //! - `SIMJIG_RUNS_DIR`: where run directories go, instead of `<target>/simjig/runs`.
+//! - `SIMJIG_WAVES`, `SIMJIG_WAVES_ON_FAIL`: waves from a replay (`harness::waves`).
+//! - `SIMJIG_TRACE`, `SIMJIG_TRACE_FROM`, `SIMJIG_TRACE_TO`: trace this run itself into the
+//!   FST file `SIMJIG_TRACE`, from/to the given ticks (what a replay child is given).
 //! - `PIXI_WORKSPACE_ROOT`, `PIXI_PROJECT_ROOT`, `CONDA_PREFIX`: when set, the repro line
 //!   runs `cargo` through `pixi run` (or `conda run`), as `RunEnv::from_process` says.
 
 pub(crate) mod ctx;
 pub(crate) mod dut;
+pub(crate) mod replay;
 pub(crate) mod report;
 pub(crate) mod rundir;
 pub(crate) mod runner;
 pub(crate) mod seed;
+pub(crate) mod waves;
 
 /// What a `#[simjig::test]` body returns when it can fail: `Ok(())` or the
 /// [`Failure`](crate::Failure) that ends the test.

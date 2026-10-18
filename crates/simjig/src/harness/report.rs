@@ -10,7 +10,8 @@
 //!   help:     <what to try>
 //!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package>
 //!             -E 'binary(=<binary>) & test(=<test>)'   (on one line)
-//!   waves:    <the same command with SIMJIG_WAVES=1>
+//!   waves:    SIMJIG_WAVES=1 <the repro command>
+//!             (or, after a replay with waves, the waves file and the replay's verdict)
 //!   run dir:  <target>/simjig/runs/<package>/<binary>/<test>/<seed>/
 //! ```
 //! Lines without data (`task`, `at`, `run dir`) are left out.
@@ -25,6 +26,7 @@ use std::path::PathBuf;
 use crate::{BlockedTask, Failure, FailureKind, Precision, SimDuration, SimTime};
 
 use super::seed::{Fnv, Seed};
+use super::waves::{WavesReplay, failing_signals};
 
 /// A stable hash of a failure's kind, location and number-masked message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -161,15 +163,11 @@ impl RunIdentity {
         format!("SIMJIG_SEED={} {}", self.seed, self.nextest())
     }
 
-    /// The command that re-runs it with waves (recording is not implemented yet).
+    /// The command that re-runs it and then replays it with waves into its run directory
+    /// (`harness::waves`).
     #[must_use]
     pub fn waves(&self) -> String {
-        format!(
-            "SIMJIG_WAVES=1 SIMJIG_SEED={} {}  (placeholder: wave recording is not \
-             implemented yet)",
-            self.seed,
-            self.nextest()
-        )
+        format!("SIMJIG_WAVES=1 {}", self.repro())
     }
 }
 
@@ -208,6 +206,11 @@ pub struct FailureReport {
     pub signature: Signature,
     /// Where the run's `summary.json` and `events.jsonl` were written.
     pub run_dir: Option<PathBuf>,
+    /// The signals the failure names (a write conflict's, a delta limit's), for the waves
+    /// view.
+    pub signals: Vec<String>,
+    /// The replay with waves, if one ran (`SIMJIG_WAVES`, `SIMJIG_WAVES_ON_FAIL`).
+    pub waves: Option<WavesReplay>,
 }
 
 impl FailureReport {
@@ -236,6 +239,8 @@ impl FailureReport {
             details: details(&failure.kind, failure.precision, timeout),
             help: help(failure),
             run_dir: None,
+            signals: failing_signals(&failure.kind),
+            waves: None,
         }
     }
 }
@@ -346,7 +351,10 @@ impl fmt::Display for FailureReport {
             writeln!(f, "  help:     {help}")?;
         }
         writeln!(f, "  repro:    {}", self.run.repro())?;
-        write!(f, "  waves:    {}", self.run.waves())?;
+        match &self.waves {
+            Some(waves) => write!(f, "{waves}")?,
+            None => write!(f, "  waves:    {}", self.run.waves())?,
+        }
         if let Some(dir) = &self.run_dir {
             write!(f, "\n  run dir:  {}", dir.display())?;
         }

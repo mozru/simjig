@@ -6,6 +6,7 @@
 //! `Dut` types implement the trait on top of the model backend; tests of simjig itself
 //! implement it on [`FakeModel`].
 
+use crate::model::trace::TraceOptions;
 use crate::{Failure, FakeModel, Precision, Sim};
 
 use super::seed::Seed;
@@ -19,6 +20,9 @@ pub struct ModelOptions {
     /// The seed for Verilator's own random number generator (`$random`, `$urandom`,
     /// randomized initial values), in `1..=i32::MAX`; see [`Seed::verilator_seed`].
     pub verilator_seed: u32,
+    /// The FST waves a Verilator model records; `None` records none. Models that cannot
+    /// trace (a [`FakeModel`]) ignore it.
+    pub trace: Option<TraceOptions>,
 }
 
 impl ModelOptions {
@@ -28,7 +32,15 @@ impl ModelOptions {
         Self {
             seed,
             verilator_seed: seed.verilator_seed(),
+            trace: None,
         }
+    }
+
+    /// These options, with the model recording the waves `trace` describes.
+    #[must_use]
+    pub fn with_trace(mut self, trace: TraceOptions) -> Self {
+        self.trace = Some(trace);
+        self
     }
 
     /// The Verilator plusargs these options stand for, in order; a Verilator backend

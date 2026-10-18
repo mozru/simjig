@@ -5,6 +5,8 @@
 //!
 //! - [`doctor`] checks that Verilator, the C++ toolchain and the test runner are usable
 //!   and pinned, and says how to fix each problem.
+//! - [`waves`] runs one test with `SIMJIG_WAVES`, so its harness writes waves from a
+//!   deterministic replay.
 //!
 //! The supported Verilator versions are `svtypes::version::SUPPORTED`, the table every
 //! build-time crate shares.
@@ -13,3 +15,4 @@
 
 pub mod doctor;
 mod json;
+pub mod waves;

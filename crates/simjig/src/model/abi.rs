@@ -31,6 +31,9 @@ pub(crate) const TIME_NONE: u64 = u64::MAX;
 /// `SIMJIG_CREATE_ECHO`: also print captured messages to stdout.
 pub(crate) const CREATE_ECHO: u32 = 1;
 
+/// `SIMJIG_FEATURE_TRACE_FST`: verilated with `--trace-fst`, so the `trace_*` entries work.
+pub(crate) const FEATURE_TRACE_FST: u64 = 2;
+
 /// `SIMJIG_ACCESS_READ`.
 pub(crate) const ACCESS_READ: u8 = 1;
 /// `SIMJIG_ACCESS_WRITE`.

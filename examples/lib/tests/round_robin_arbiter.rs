@@ -271,6 +271,42 @@ async fn a_reset_during_traffic_points_the_priority_at_0(ctx: &TestCtx, dut: Dut
     assert_eq!(log.borrow().len(), 200 + 1 + 1 + 200);
 }
 
+/// Directed: `gnt` stays live through a reset held for several edges. The first reset
+/// edge sees the pointer where traffic left it (at 3); from then on `gnt` grants from
+/// requester 0, and the pointer does not move however the requests and grants go: with
+/// every requester requesting and `hold` low, a pointer that moved would rotate the
+/// grant. After release, the first grant is again from 0. The monitor skips reset edges,
+/// so this test reads `gnt` itself.
+#[simjig::test(timeout = "10us")]
+async fn gnt_grants_from_0_while_reset_is_held(dut: Dut) {
+    let log = spawn_monitor(dut);
+    reset(dut).await;
+    drive(dut, 0b00100, false).await; // 2 wins: the pointer moves to 3
+    dut.rst_n.set(0);
+    let mut in_reset = Vec::new();
+    for req in [ALL, ALL, ALL, 0b11010, ALL] {
+        in_reset.push(drive(dut, req, false).await);
+    }
+    // Edge 1 acts on the pointer at 3; edges 2 to 5 on the pointer reset to 0, which the
+    // grants at edges 1 to 4 did not move.
+    assert_eq!(
+        in_reset,
+        [1 << 3, 1, 1, 1 << 1, 1],
+        "gnt at each reset edge"
+    );
+    dut.rst_n.set(1);
+    assert_eq!(
+        drive(dut, ALL, false).await,
+        1,
+        "the first grant after release"
+    );
+    assert_eq!(
+        log.borrow().len(),
+        1 + 1,
+        "only the edges out of reset are logged"
+    );
+}
+
 /// The elaboration check: any N from 2 up elaborates (a power of 2 or not), and N below 2
 /// stops elaboration.
 #[test]

@@ -168,6 +168,7 @@ of the pointer (`PointerModel`). The tests add:
 | `a_held_request_is_granted_within_n_cycles` | starvation bound under random arrivals, and the bound is reached |
 | `hold_keeps_the_grant_with_its_owner` | directed lock and release |
 | `a_reset_during_traffic_points_the_priority_at_0` | `rst_n` for one edge mid-traffic with the pointer at 3, every requester requesting and `hold` high across the edge: the next grant goes to 0, and random traffic then matches the restarted model |
+| `gnt_grants_from_0_while_reset_is_held` | directed: `rst_n` held low for five edges, the pointer at 3 when it falls: `gnt` stays live, grants from 3 at the first reset edge and from 0 after it, and the pointer does not move while `rst_n` is low (every requester requesting, `hold` low) |
 | `parameters_are_checked_at_elaboration` | `$fatal` on N below 2 |
 
 ## async_fifo

@@ -35,6 +35,7 @@ use super::combinator::{Fork, MaybeDone};
 use super::panics;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
+use super::tasks;
 use super::time::{SimDuration, SimTime};
 use super::waits::{EdgeKind, Registration, WaitOn};
 
@@ -308,8 +309,15 @@ pub const fn yield_now() -> YieldNow {
 impl Future for YieldNow {
     type Output = ();
 
+    // One hop (cocotb's `NullTrigger`, or any trigger that fires as it is primed): the
+    // first poll queues the task at the back; the hop ends in the next run of the task (or
+    // helper) that awaits it. A hand-written combinator in the task's future may poll it
+    // again in a run routed to one of the task's combinator helpers (`combinator`); that
+    // is not the task's own run and must not end the hop early. Waking again there is a
+    // no-op while the task is queued, and requeues it if it already ran.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.yielded {
+        let own_run = state::try_current("yield_now()", tasks::runs_owner).unwrap_or(true);
+        if self.yielded && own_run {
             return Poll::Ready(());
         }
         self.yielded = true;

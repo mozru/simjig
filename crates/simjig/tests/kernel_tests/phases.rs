@@ -696,3 +696,35 @@ fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
         assert_clean(&d.sim);
     }
 }
+
+/// A hop ends in the awaiting task's own run. A hand-written join in the task's future
+/// polls it again when the task's combinator helpers run (they poll the task's future,
+/// routed to them); those polls come before `other` and must not end it.
+#[test]
+fn a_hop_ends_in_its_own_run_not_in_a_combinator_helper_run_of_its_task() {
+    let mut d = dut();
+    let trace: Trace = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let t2 = Rc::clone(&t);
+            let other = spawn("other", async move { push(&t2, "other") });
+            let mut hop = std::pin::pin!(yield_now());
+            let mut fork = std::pin::pin!(async {
+                first!(Timer::new(ticks(5)), Timer::new(ticks(5)));
+            });
+            let mut hopped = false;
+            std::future::poll_fn(|cx| {
+                if !hopped && hop.as_mut().poll(cx).is_ready() {
+                    hopped = true;
+                    push(&t, "hop");
+                }
+                fork.as_mut().poll(cx)
+            })
+            .await;
+            other.await;
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["other", "hop"]);
+    assert_clean(&d.sim);
+}

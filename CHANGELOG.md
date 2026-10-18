@@ -39,6 +39,9 @@ the public API, the generated code or simulation semantics.
   yielded once or twice afterwards. The cost is one helper entry and two or three extra
   polls of the caller's task per combinator. Trace hashes of runs with combinators
   change. `__private::{hop, boxed}` are gone (macro internals).
+- `yield_now()` ends only in a run of the task (or combinator helper) that awaits it. A
+  hand-written join in a task's future that also awaits `first!`/`join!` used to see it
+  end early, when the combinator's helpers ran.
 - Performance: value-change groups are kept in a map keyed by priming order, so a walk
   over G groups costs O(G log G) instead of O(G^2); cancelling one of many waiters of an
   edge or a timer deadline, and firing one of many timers due together, is O(1) instead

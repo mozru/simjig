@@ -10,7 +10,7 @@
 //!   help:     <what to try>
 //!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package> -E 'test(=<test>)'
 //!   waves:    <the same command with SIMJIG_WAVES=1>
-//!   run dir:  <target>/simjig/runs/<test>/<seed>/
+//!   run dir:  <target>/simjig/runs/<package>/<binary>/<test>/<seed>/
 //! ```
 //! Lines without data (`task`, `at`, `run dir`) are left out.
 //!
@@ -126,6 +126,8 @@ pub struct RunIdentity {
     /// What the repro runs `cargo` through (`pixi run`), when the test ran inside an
     /// environment that a plain shell lacks; see `RunEnv::from_process`.
     pub launcher: Option<String>,
+    /// The test binary (`harness_tests`), if known.
+    pub binary: Option<String>,
 }
 
 impl RunIdentity {

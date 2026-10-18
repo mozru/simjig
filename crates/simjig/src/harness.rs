@@ -9,7 +9,7 @@
 //! 4. runs the body as the main task, with a [`TestCtx`](crate::TestCtx) for named random streams;
 //! 5. renders any [`Failure`](crate::Failure) as one [`FailureReport`](crate::FailureReport) block with a
 //!    triage signature and a one-line repro, and writes the run directory
-//!    (`<target>/simjig/runs/<test>/<seed>/`, see `rundir`).
+//!    (`<target>/simjig/runs/<package>/<binary>/<test>/<seed>/`, see `rundir`).
 //!
 //! # Environment
 //! - `SIMJIG_SEED`: the root seed (`0x`-hex or decimal), as printed by a failure report.

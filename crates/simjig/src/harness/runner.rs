@@ -65,6 +65,9 @@ pub struct RunEnv {
     pub runs_root: Option<PathBuf>,
     /// The command prefix the repro line needs (`pixi run`), detected by `RunEnv::from_process`.
     pub launcher: Option<String>,
+    /// The test binary's name as nextest's `binary()` filter matches it
+    /// (`harness_tests`), from the executable's name.
+    pub binary: Option<String>,
 }
 
 impl RunEnv {
@@ -84,10 +87,14 @@ impl RunEnv {
             .or_else(rundir::default_root);
         let cwd = std::env::current_dir().ok();
         let launcher = launcher(|name| std::env::var(name).ok(), cwd.as_deref());
+        let binary = std::env::current_exe()
+            .ok()
+            .and_then(|exe| rundir::binary_name(&exe));
         Self {
             seed,
             runs_root,
             launcher,
+            binary,
         }
     }
 }
@@ -233,6 +240,7 @@ where
         seed,
         ignored: meta.ignored,
         launcher: env.launcher.clone(),
+        binary: env.binary.clone(),
     };
     let executed = execute(meta, &options, ctx, body);
     finish(run, env, &options, executed)
@@ -290,10 +298,11 @@ fn finish(
         timeout,
         result,
     } = executed;
-    let dir = env
-        .runs_root
-        .as_ref()
-        .map(|root| rundir::run_dir(root, &run.test, run.seed));
+    let dir = env.runs_root.as_ref().map(|root| {
+        // `_`: only a harness test driving `run` directly has no binary name.
+        let binary = run.binary.as_deref().unwrap_or("_");
+        rundir::run_dir(root, &run.package, binary, &run.test, run.seed)
+    });
     let mut failure = result.err().map(|failure| {
         let mut report = FailureReport::new(&failure, run.clone(), None, timeout);
         report.run_dir.clone_from(&dir);
@@ -351,11 +360,7 @@ fn summary<'a>(
     }
 }
 
-fn write_run_dir(
-    dir: &Path,
-    mut summary: Summary<'_>,
-    sim: Option<&Sim>,
-) -> std::io::Result<()> {
+fn write_run_dir(dir: &Path, mut summary: Summary<'_>, sim: Option<&Sim>) -> std::io::Result<()> {
     let events = sim.map(Sim::recent_trace);
     summary.events = sim
         .zip(events.as_ref())

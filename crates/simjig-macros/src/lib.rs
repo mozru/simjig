@@ -38,7 +38,7 @@ mod test_attr;
 /// with `D::instantiate` and the DUT with `D::create`, runs the body as the task `main`,
 /// and on any failure prints one report block (kind, time, task, location, message,
 /// triage signature, a one-line repro command) and fails. Every run writes
-/// `<target>/simjig/runs/<test>/<seed>/{summary.json,events.jsonl}`.
+/// `<target>/simjig/runs/<package>/<binary>/<test>/<seed>/{summary.json,events.jsonl}`.
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     test_attr::expand(attr.into(), item.into())

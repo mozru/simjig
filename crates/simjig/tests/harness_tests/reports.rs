@@ -14,6 +14,7 @@ fn run() -> RunIdentity {
         seed: Seed::new(0x9e37_79b9_7f4a_7c15, SeedSource::Env),
         ignored: false,
         launcher: None,
+        binary: None,
     }
 }
 

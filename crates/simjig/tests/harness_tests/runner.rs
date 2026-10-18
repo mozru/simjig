@@ -31,6 +31,7 @@ fn env(seed: Option<u64>, dir: &str) -> RunEnv {
                 .join(dir),
         ),
         launcher: None,
+        binary: Some("harness_tests".to_owned()),
     }
 }
 
@@ -251,7 +252,7 @@ fn the_run_dir_holds_the_summary_and_the_events() {
     let report = outcome.failure.expect("the body panics");
     let dir = outcome.run_dir.expect("written");
     assert!(
-        dir.ends_with("runner__dir/0000000000000abc"),
+        dir.ends_with("simjig/harness_tests/runner__dir/0000000000000abc"),
         "{}",
         dir.display()
     );

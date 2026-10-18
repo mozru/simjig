@@ -141,7 +141,9 @@ fn the_repro_line_runs_cargo_through_pixi_inside_a_pixi_environment() {
     let summary = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
             .join("harness/repro-pixi")
-            .join(format!("repro__seeded_failure/{odd:016x}/summary.json")),
+            .join(format!(
+                "simjig/harness_tests/repro__seeded_failure/{odd:016x}/summary.json"
+            )),
     );
     let summary: serde_json::Value =
         serde_json::from_str(&summary.expect("written")).expect("valid JSON");

@@ -1,0 +1,14 @@
+# Stage 3 de-risking spikes (see docs/notes/spikes.md). A standalone workspace on purpose:
+# it builds nine Verilator models in build.rs, so it stays out of the root workspace and
+# out of `cargo xtask ci`. Run it with `pixi run spikes`.
+[package]
+name = "simjig-spikes"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Throwaway experiments: fork checkpoints, multiple models, DPI, --timing, derived clocks."
+
+[workspace]
+
+[dependencies]

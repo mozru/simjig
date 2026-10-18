@@ -1,0 +1,4 @@
+# Overrides the root clippy.toml, which bans wall-clock time in testbench code. The spikes
+# exist to measure wall time (fork, copy-on-write, DPI call cost), so Instant is allowed.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

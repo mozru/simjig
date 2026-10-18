@@ -452,6 +452,45 @@ pub struct LoweredSweep {
     pub ports: PortsTrait,
     /// One trait per interface port whose bundle differs between members.
     pub bundle_traits: Vec<PortsTrait>,
+    /// One trait per packed struct that is an associated type, over its fields.
+    pub fields_traits: Vec<FieldsTrait>,
+    /// The runtime traits the sweep module re-exports (`Value`, `Vector`, `Packed`), so a
+    /// generic body's one `use <sweep>::*;` brings every bound's methods into scope; less
+    /// any a shared type of the sweep is named like.
+    pub runtime_traits: Vec<String>,
+}
+
+/// A trait over a packed struct whose field types differ between members (`BeatFields`
+/// for `beat_t`): a getter per field, a constructor `new` and a `with_<field>` per field,
+/// so a generic body can read and build the struct.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldsTrait {
+    /// Rust name.
+    pub name: String,
+    /// The struct's SystemVerilog name in the first member.
+    pub sv_name: String,
+    /// The struct in each member, as a path from the sweep module.
+    pub impls: Vec<String>,
+    /// Associated types: one per distinct list of per-member field types.
+    pub types: Vec<AssocType>,
+    /// The fields, in declaration order (most significant first).
+    pub fields: Vec<TraitField>,
+}
+
+/// A field of a [`FieldsTrait`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraitField {
+    /// Rust name, the struct field's.
+    pub name: String,
+    /// Its getter: the field's name, with `_` appended when the trait or a supertrait
+    /// has a method of that name (`new`, `eq`, `to_raw`, ..., or another field's setter).
+    pub getter: String,
+    /// Its setter, `with_<field>`.
+    pub setter: String,
+    /// SystemVerilog member name.
+    pub sv_name: String,
+    /// Its type.
+    pub ty: TraitType,
 }
 
 /// One configuration of a [`LoweredSweep`].
@@ -506,6 +545,10 @@ pub struct AssocType {
     pub per_impl: Vec<RustType>,
     /// The fields whose type it is, in declaration order.
     pub users: Vec<String>,
+    /// Associated types of the bound (a bundle trait) fixed to this trait's: the bound's
+    /// name for one, and the index of this trait's type it equals. So `up.beat` and
+    /// `down.beat`, in two bundle traits, are one type in a generic body.
+    pub equals: Vec<(String, usize)>,
 }
 
 /// The bound of an [`AssocType`].
@@ -518,15 +561,18 @@ pub enum AssocBound {
     Value,
     /// No bound: an unpacked array somewhere, which has no `get`/`set`.
     None,
-    /// A bundle trait of the sweep, by name.
+    /// A bundle trait or a [`FieldsTrait`] of the sweep, by name.
     Trait(String),
 }
 
 /// A method of a [`PortsTrait`]: returns a field of the implementing type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraitMethod {
-    /// Rust name, the field's.
+    /// Rust name: the field's, or the field's with `_` appended when a supertrait has a
+    /// method of that name (`clone_` for a port `clone`: `Clone::clone`).
     pub name: String,
+    /// The field it returns.
+    pub field: String,
     /// The signal's hierarchical name in the first implementation (`fifo.clk`), or the
     /// interface port's `interface.modport`.
     pub sv_name: String,

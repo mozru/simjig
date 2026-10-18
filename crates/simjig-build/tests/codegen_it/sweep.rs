@@ -100,7 +100,11 @@ fn a_sweep_shares_what_is_alike_and_abstracts_the_rest() {
         [
             ("A", &AssocBound::Vector, vec!["a", "b"]),
             ("Sum", &AssocBound::Vector, vec!["sum"]),
-            ("Word", &AssocBound::Value, vec!["word"]),
+            (
+                "Word",
+                &AssocBound::Trait("WordFields".into()),
+                vec!["word"]
+            ),
             ("Lanes", &AssocBound::None, vec!["lanes"]),
         ]
     );
@@ -153,6 +157,63 @@ fn an_interface_bundle_that_differs_gets_a_trait() {
     assert_eq!(concrete, ["clk"]);
 }
 
+/// A struct whose field widths follow the parameters, carried by two interface ports of
+/// two modports (`up.beat`, `down.beat`): one associated type `Beat` in `Ports`, named
+/// after the typedef, that both bundle traits' `Beat` are fixed to, bounded by a
+/// `BeatFields` trait over its fields.
+#[test]
+fn a_struct_that_differs_gets_one_type_and_a_fields_trait() {
+    let cases = [
+        cases::beat_sweep_member("bt_a", 8, 2),
+        cases::beat_sweep_member("bt_b", 16, 4),
+    ];
+    let (sweep, files) = files("bt", &cases);
+    check_generated("beat_sweep", &files);
+    let t = &sweep.ports;
+    let names: Vec<(&str, &AssocBound, Vec<&str>)> = t
+        .types
+        .iter()
+        .map(|a| {
+            let users = a.users.iter().map(String::as_str).collect();
+            (a.name.as_str(), &a.bound, users)
+        })
+        .collect();
+    let fields = AssocBound::Trait("BeatFields".into());
+    assert_eq!(
+        names,
+        [
+            ("PeekIn", &AssocBound::Vector, vec!["peek_in", "peek_out"]),
+            ("Beat", &fields, vec!["up.beat", "down.beat"]),
+            (
+                "Up",
+                &AssocBound::Trait("BeatIfSinkPorts".into()),
+                vec!["up"]
+            ),
+            (
+                "Down",
+                &AssocBound::Trait("BeatIfSourcePorts".into()),
+                vec!["down"]
+            ),
+        ]
+    );
+    assert_eq!(t.types[2].equals, [("Beat".to_owned(), 1)]);
+    assert_eq!(t.types[3].equals, [("Beat".to_owned(), 1)]);
+    let [beat] = sweep.fields_traits.as_slice() else {
+        panic!("{:?}", sweep.fields_traits)
+    };
+    assert_eq!(beat.impls, ["bt_a::Beat", "bt_b::Beat"]);
+    let fields: Vec<(&str, &str, &str)> = beat
+        .fields
+        .iter()
+        .map(|f| (f.name.as_str(), f.getter.as_str(), f.setter.as_str()))
+        .collect();
+    assert_eq!(
+        fields,
+        [("data", "data", "with_data"), ("tag", "tag", "with_tag")]
+    );
+    assert_eq!(sweep.runtime_traits, ["Value", "Vector", "Packed"]);
+}
+
 #[test]
 fn a_sweep_of_two_modules_is_refused() {
     let members = lowered(&[cases::sweep_member("a", 8, 2), cases::struct_pipe()]);
@@ -189,6 +250,39 @@ pub mod sw {
 /// The committed interface sweep.
 pub mod r_sweep {
     include!("generated/iface_sweep/r_sweep.rs");
+}
+
+/// The committed sweep over a struct whose field widths differ.
+pub mod bt {
+    include!("generated/beat_sweep/bt.rs");
+}
+
+/// A body generic over `bt` with one import: `up.beat` and `down.beat` are one type,
+/// `D::Beat`, built with `new` and `with_tag` from plain integers, read field by field,
+/// and handed to a handle's `set`-shaped `deposit` without naming its type.
+mod beat_body {
+    use super::bt::*;
+    use crate::__private::{In, Out};
+
+    /// The shape of `In::set`: `value: impl Into<T>`.
+    fn deposit<T>(_: In<T>, value: impl Into<T>) -> T {
+        value.into()
+    }
+
+    pub(super) fn body<D: Ports>(dut: D) -> (u128, u128, u128, u32) {
+        let up: In<D::Beat> = dut.up().beat();
+        let _: Out<D::Beat> = dut.down().beat();
+        let beat = D::Beat::new(0x5a, 1).with_tag(2);
+        let moved = deposit(up, beat);
+        assert_eq!(moved, beat);
+        assert_eq!(D::Beat::from_u128(beat.to_u128()), beat);
+        (
+            beat.data().to_u128(),
+            beat.tag().to_u128(),
+            beat.to_u128(),
+            <D::Beat as Packed>::WIDTH,
+        )
+    }
 }
 
 /// A body written once over every member, with no `where` clause: it names the handles
@@ -270,4 +364,57 @@ fn a_struct_reaching_an_unshared_type_through_another_is_not_shared() {
     let shared: Vec<&str> = sweep.items.iter().map(|i| i.name.as_str()).collect();
     // Each module-local struct is named `NxTop<Name>` with a `<Name>` alias.
     assert_eq!(shared, ["NxTopTag", "Tag", "NxTopWrap", "Wrap"]);
+}
+
+/// A trait method named like a supertrait's (`Clone::clone`; `PartialEq::eq` and another
+/// field's setter `with_x` for a fields trait) gets a `_` appended, and its docs say why.
+#[test]
+fn a_method_named_like_a_supertraits_gets_an_underscore() {
+    let members = [
+        cases::nested_sweep_member("nx_a", 8),
+        cases::nested_sweep_member("nx_b", 4),
+    ];
+    let (sweep, files) = files("nx", &members);
+    let clone = sweep
+        .ports
+        .methods
+        .iter()
+        .find(|m| m.field == "clone")
+        .unwrap();
+    assert_eq!(clone.name, "clone_");
+    let odd = sweep
+        .fields_traits
+        .iter()
+        .find(|t| t.name == "OddFields")
+        .unwrap();
+    let methods: Vec<(&str, &str)> = odd
+        .fields
+        .iter()
+        .map(|f| (f.getter.as_str(), f.setter.as_str()))
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            ("eq_", "with_eq"),
+            ("with_x_", "with_with_x"),
+            ("x", "with_x")
+        ]
+    );
+    let text = &files[0].1;
+    assert!(text.contains("{ self.clone }"), "{text}");
+    assert!(
+        text.contains("(`clone_` here: a supertrait has a method `clone`)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_fields_trait_reads_and_builds_each_members_struct() {
+    let a = bt::bt_a::Dut::__bind(&mut RecordingBinder::default());
+    let b = bt::bt_b::Dut::__bind(&mut RecordingBinder::default());
+    // `data` is the high field: `W` bits above `T` bits of `tag`.
+    assert_eq!(beat_body::body(a), (0x5a, 2, 0x5a << 2 | 2, 10));
+    assert_eq!(beat_body::body(b), (0x5a, 2, 0x5a << 4 | 2, 20));
+    let one: bt::bt_a::Beat = <bt::bt_a::Beat as bt::BeatFields>::new(1, 0);
+    assert_eq!(one.data, Bits::new(1));
 }

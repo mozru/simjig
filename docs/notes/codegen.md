@@ -65,16 +65,20 @@ Generated Rust names only `::core`, `::std::vec::Vec` and these runtime items. T
 - `fn pack_field<T: Packed>(dst: &mut [u32], lsb: u32, value: T) where T::Raw: RawWords`
   and `fn unpack_field<T: Packed>(src: &[u32], lsb: u32) -> T where T::Raw: RawWords`.
 
-- `trait Value` and `trait Vector` (the bounds of a sweep's associated types; see
-  `simjig::Value`), with blanket implementations for every type that has their bounds.
+- `trait Value` (with provided `from_u128`, `to_u128`) and `trait Vector` (the bounds of a
+  sweep's associated types; see `simjig::Value`), with blanket implementations for every
+  type that has their bounds; the sweep module re-exports them and `bits::Packed`.
 
 Generated per model: `Dut` (fields, `IR_HASH: u64`, `SIGNALS: &'static [SignalMeta]`,
 top-module params as consts, `#[doc(hidden)] fn __bind(&mut impl Binder) -> Self`) and per
 bundle `__bind(&mut impl Binder, &'static [SignalMeta])`.
 
-Generated per sweep (`lower_sweep`, `emit_sweep`): the shared items, `trait Ports` and any
-bundle traits, one `pub mod <member> { include!("<member>.rs"); }` per member, and the
-trait impls. A member's file starts with `pub use super::{..}` of the shared names.
+Generated per sweep (`lower_sweep`, `emit_sweep`): `pub use ::simjig::__private::{Value,
+Vector, bits::Packed};`, the shared items, `trait Ports`, any bundle traits (whose
+associated types `Ports` repeats and fixes: `type Up: BeatIfSinkPorts<Beat = Self::Beat>`)
+and fields traits (`trait BeatFields: Value`: getters, `new`, `with_<field>`), one
+`pub mod <member> { include!("<member>.rs"); }` per member, and the trait impls. A
+member's file starts with `pub use super::{..}` of the shared names.
 
 ## Decisions
 - **Names.** snake fields/modules, CamelCase types, SCREAMING consts; raw identifiers for

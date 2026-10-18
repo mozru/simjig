@@ -190,8 +190,28 @@ impl<const N: usize> RawWords for [u32; N] {
     }
 }
 
-/// A value a handle reads and writes (the runtime's `Value`).
-pub trait Value: Packed<Raw: RawWords> + Eq + fmt::Debug + Default {}
+/// A value a handle reads and writes (the runtime's `Value`, with its provided methods
+/// for values of up to 256 bits).
+pub trait Value: Packed<Raw: RawWords> + Eq + fmt::Debug + Default {
+    /// The value whose packed bits are `bits`.
+    fn from_u128(bits: u128) -> Self {
+        let mut words = [0u32; 8];
+        for (i, w) in words.iter_mut().take(4).enumerate() {
+            *w = u32::try_from(bits >> (32 * i) & 0xffff_ffff).unwrap();
+        }
+        Self::from_raw(RawWords::from_words(&words))
+    }
+
+    /// The value's packed bits.
+    fn to_u128(self) -> u128 {
+        let mut words = [0u32; 8];
+        self.to_raw().to_words(&mut words);
+        words[..4]
+            .iter()
+            .rev()
+            .fold(0, |acc, &w| acc << 32 | u128::from(w))
+    }
+}
 
 impl<T: Packed<Raw: RawWords> + Eq + fmt::Debug + Default> Value for T {}
 

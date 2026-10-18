@@ -4,6 +4,16 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Sweep modules (generated code, reviewed snapshots `codegen_it::sweep`): a generic body
+  needs one import, `use <sweep>::*;`, which now also brings `Value`, `Vector` and
+  `Packed` (re-exported unless a shared type has the name). A bundle trait's associated
+  types are `Ports`' too, fixed by the bound (`type Up: BeatIfSinkPorts<Beat =
+  Self::Beat>`), so the same type on two interface ports (`up.beat`, `down.beat`) is one
+  type, `D::Beat`. A packed struct that is an associated type gets a fields trait
+  (`BeatFields: Value`, the bound of `D::Beat`): getters, `new(data, tag)` and
+  `with_<field>`, taking anything that converts into the field (`D::Beat::new(0x5a, 1)`).
+  A trait method named like a supertrait's (`clone`, `fmt`; for a fields trait also
+  `eq`, `to_raw`, `new`, ...) gets `_` appended, with a note in its docs.
 - Generated code: a struct typedef'd inside an interface (`beat_if`'s `beat_t`) is named
   after its typedef (`Beat`) instead of the first wrapper port that carries it
   (`UpBeat`). The wrapper spells such a type out, so it reached the IR anonymous. No

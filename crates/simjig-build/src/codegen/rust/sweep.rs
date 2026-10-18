@@ -1,5 +1,7 @@
-//! The sweep module: what a [`LoweredSweep`]'s members share, its traits, and each member
-//! as a submodule with its trait implementations.
+//! The sweep module: the runtime traits a generic body needs (re-exported, so one
+//! `use <sweep>::*;` is the body's only import), what a [`LoweredSweep`]'s members share,
+//! its traits (`Ports`, bundle traits, fields traits), and each member as a submodule
+//! with its trait implementations.
 //!
 //! The file sits next to its members' files in `OUT_DIR/simjig/` and includes each one
 //! with a relative `include!("<member>.rs")`, which Rust resolves against the including
@@ -7,7 +9,8 @@
 
 use super::super::writer::Writer;
 use super::super::{
-    Access, AssocBound, ConstValue, LoweredSweep, MethodKind, PortsTrait, RustType, TraitType,
+    Access, AssocBound, AssocType, ConstValue, FieldsTrait, LoweredSweep, MethodKind, PortsTrait,
+    RustType, TraitType,
 };
 use super::{RT, const_parts, emit_bundle, emit_package, handle, items, render};
 
@@ -26,6 +29,7 @@ pub fn emit_sweep(sweep: &LoweredSweep) -> String {
         sweep.dut,
         names.join(", ")
     ));
+    emit_runtime_traits(&mut w, sweep);
     for item in &sweep.items {
         w.line("");
         items::emit_item(&mut w, item);
@@ -50,6 +54,10 @@ pub fn emit_sweep(sweep: &LoweredSweep) -> String {
         emit_trait_docs_tail(&mut w, t);
         emit_trait(&mut w, t);
     }
+    for t in &sweep.fields_traits {
+        w.line("");
+        emit_fields_trait(&mut w, t);
+    }
     for (i, member) in sweep.members.iter().enumerate() {
         w.line("");
         let params: Vec<String> = member
@@ -73,8 +81,39 @@ pub fn emit_sweep(sweep: &LoweredSweep) -> String {
             w.line("");
             emit_impl(&mut w, t, i);
         }
+        for t in &sweep.fields_traits {
+            w.line("");
+            emit_fields_impl(&mut w, t, i);
+        }
     }
     w.finish()
+}
+
+/// The runtime traits a generic body needs in scope, re-exported so that one
+/// `use <sweep>::*;` brings them with the sweep's own traits.
+fn emit_runtime_traits(w: &mut Writer, sweep: &LoweredSweep) {
+    let paths: Vec<&str> = sweep
+        .runtime_traits
+        .iter()
+        .map(|n| {
+            if n == "Packed" {
+                "bits::Packed"
+            } else {
+                n.as_str()
+            }
+        })
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    w.line("");
+    w.line("/// The runtime traits a test body generic over this sweep calls methods of, so that");
+    w.line(format!(
+        "/// one `use {}::*;` brings them into scope with the sweep's own traits.",
+        sweep.name
+    ));
+    w.line("#[doc(no_inline)]");
+    w.line(format!("pub use {RT}::{{{}}};", paths.join(", ")));
 }
 
 /// A parameter value as the member docs show it, for the plain kinds.
@@ -130,28 +169,19 @@ fn emit_trait(w: &mut Writer, t: &PortsTrait) {
         w.line(format!("const {}: {ty};", c.name));
     }
     for a in &t.types {
-        let users: Vec<String> = a.users.iter().map(|u| format!("`{u}`")).collect();
-        let per: Vec<String> = a
-            .per_impl
-            .iter()
-            .zip(&t.impls)
-            .map(|(ty, path)| format!("`{}` in `{}`", short(ty), member_of(path)))
-            .collect();
-        w.line(format!(
-            "/// The type of {}: {}.",
-            users.join(", "),
-            per.join(", ")
-        ));
-        let bound = match &a.bound {
-            AssocBound::Vector => format!(": {RT}::Vector"),
-            AssocBound::Value => format!(": {RT}::Value"),
-            AssocBound::Trait(name) => format!(": {name}"),
-            AssocBound::None => String::new(),
-        };
-        w.line(format!("type {}{bound};", a.name));
+        w.line(assoc_doc(a, &t.impls));
+        w.line(format!("type {}{};", a.name, bound(a, &t.types)));
     }
     for m in &t.methods {
-        w.line(format!("/// `{}`{}.", m.sv_name, what(&m.kind)));
+        let renamed = if m.name == m.field {
+            String::new()
+        } else {
+            format!(
+                " (`{}` here: a supertrait has a method `{}`)",
+                m.name, m.field
+            )
+        };
+        w.line(format!("/// `{}`{}{renamed}.", m.sv_name, what(&m.kind)));
         w.line(format!(
             "fn {}(self) -> {};",
             m.name,
@@ -159,6 +189,135 @@ fn emit_trait(w: &mut Writer, t: &PortsTrait) {
         ));
     }
     w.close("}");
+}
+
+/// The bound of `a` as written after its name (`: Vector`, `: BeatIfSinkPorts<Beat =
+/// Self::Beat>`), `types` being its trait's.
+fn bound(a: &AssocType, types: &[AssocType]) -> String {
+    match &a.bound {
+        AssocBound::Vector => format!(": {RT}::Vector"),
+        AssocBound::Value => format!(": {RT}::Value"),
+        AssocBound::Trait(name) if a.equals.is_empty() => format!(": {name}"),
+        AssocBound::Trait(name) => {
+            let fixed: Vec<String> = a
+                .equals
+                .iter()
+                .map(|(inner, i)| format!("{inner} = Self::{}", types[*i].name))
+                .collect();
+            format!(": {name}<{}>", fixed.join(", "))
+        }
+        AssocBound::None => String::new(),
+    }
+}
+
+/// The doc line of an associated type: who uses it, and what it is in each member.
+fn assoc_doc(a: &AssocType, impls: &[String]) -> String {
+    let users: Vec<String> = a.users.iter().map(|u| format!("`{u}`")).collect();
+    let per: Vec<String> = a
+        .per_impl
+        .iter()
+        .zip(impls)
+        .map(|(ty, path)| format!("`{}` in `{}`", short(ty), member_of(path)))
+        .collect();
+    format!("/// The type of {}: {}.", users.join(", "), per.join(", "))
+}
+
+/// A [`FieldsTrait`]: a getter per field, `new` and a setter per field.
+fn emit_fields_trait(w: &mut Writer, t: &FieldsTrait) {
+    w.line(format!(
+        "/// The fields of SystemVerilog `{}`, a packed struct whose field types differ between",
+        t.sv_name
+    ));
+    w.line(
+        "/// configurations: a getter per field, `new` from every field and `with_<field>`, for a",
+    );
+    w.line("/// test body generic over the sweep. Each configuration's struct implements it.");
+    w.open(format!("pub trait {}: {RT}::Value {{", t.name));
+    for a in &t.types {
+        w.line(assoc_doc(a, &t.impls));
+        w.line(format!("type {}{};", a.name, bound(a, &t.types)));
+    }
+    for f in &t.fields {
+        w.line(format!("/// Field `{}`.", f.sv_name));
+        w.line(format!(
+            "fn {}(self) -> {};",
+            f.getter,
+            field_type(t, &f.ty)
+        ));
+    }
+    w.line("/// The value with these fields, in declaration order (the first most significant).");
+    w.line("#[must_use]");
+    w.line(format!("fn new({}) -> Self;", new_params(t)));
+    for f in &t.fields {
+        w.line(format!("/// `self` with field `{}` replaced.", f.sv_name));
+        w.line("#[must_use]");
+        w.line(format!(
+            "fn {}(self, {}: impl ::core::convert::Into<{}>) -> Self;",
+            f.setter,
+            f.name,
+            field_type(t, &f.ty)
+        ));
+    }
+    w.close("}");
+}
+
+/// The impl of `t` for member `i`'s struct.
+fn emit_fields_impl(w: &mut Writer, t: &FieldsTrait, i: usize) {
+    w.open(format!("impl {} for {} {{", t.name, t.impls[i]));
+    for a in &t.types {
+        w.line(format!("type {} = {};", a.name, render(&a.per_impl[i])));
+    }
+    for f in &t.fields {
+        w.line(format!(
+            "fn {}(self) -> {} {{ self.{} }}",
+            f.getter,
+            field_type(t, &f.ty),
+            f.name
+        ));
+    }
+    let inits: Vec<String> = t
+        .fields
+        .iter()
+        .map(|f| format!("{0}: {0}.into()", f.name))
+        .collect();
+    w.line(format!(
+        "fn new({}) -> Self {{ Self {{ {} }} }}",
+        new_params(t),
+        inits.join(", ")
+    ));
+    for f in &t.fields {
+        w.line(format!(
+            "fn {}(mut self, {1}: impl ::core::convert::Into<{2}>) -> Self {{ self.{1} = {1}.into(); self }}",
+            f.setter,
+            f.name,
+            field_type(t, &f.ty)
+        ));
+    }
+    w.close("}");
+}
+
+/// `new`'s parameters: one per field, taking anything that converts into it.
+fn new_params(t: &FieldsTrait) -> String {
+    let params: Vec<String> = t
+        .fields
+        .iter()
+        .map(|f| {
+            format!(
+                "{}: impl ::core::convert::Into<{}>",
+                f.name,
+                field_type(t, &f.ty)
+            )
+        })
+        .collect();
+    params.join(", ")
+}
+
+/// A field's type in a [`FieldsTrait`]'s signatures.
+fn field_type(t: &FieldsTrait, ty: &TraitType) -> String {
+    match ty {
+        TraitType::Concrete(ty) => render(ty),
+        TraitType::Assoc(i) => format!("Self::{}", t.types[*i].name),
+    }
 }
 
 /// `: input` and the like, for a method's doc.
@@ -208,7 +367,7 @@ fn emit_impl(w: &mut Writer, t: &PortsTrait, i: usize) {
             "fn {}(self) -> {} {{ self.{} }}",
             m.name,
             return_type(t, &m.kind),
-            m.name
+            m.field
         ));
     }
     w.close("}");

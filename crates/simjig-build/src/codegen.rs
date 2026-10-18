@@ -44,9 +44,10 @@ pub use lower::{
 };
 pub use lowered::{
     Access, AssocBound, AssocType, Bundle, BundleMember, Const, ConstGroup, ConstValue, DutField,
-    EnumVariant, Item, ItemKind, Layout, LayoutCheck, LayoutMember, LayoutTypedef, LayoutValue,
-    Lowered, LoweredSweep, MethodKind, PortsTrait, RustType, Signal, SignalTarget, StructField,
-    SweepMember, TraitConst, TraitMethod, TraitType, UnionView, Wrapper, WrapperIface, WrapperPort,
+    EnumVariant, FieldsTrait, Item, ItemKind, Layout, LayoutCheck, LayoutMember, LayoutTypedef,
+    LayoutValue, Lowered, LoweredSweep, MethodKind, PortsTrait, RustType, Signal, SignalTarget,
+    StructField, SweepMember, TraitConst, TraitField, TraitMethod, TraitType, UnionView, Wrapper,
+    WrapperIface, WrapperPort,
 };
 pub use rust::{RustOptions, emit_rust, emit_sweep, emit_sweep_member};
 pub use shim::{ShimOptions, emit_shim};

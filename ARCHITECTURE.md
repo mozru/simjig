@@ -50,7 +50,7 @@ listed here with what keeps the copies equal.
 | Reading Verilator option files (`-f`/`-F`, nested; as bytes) and resolving their paths | `simjig_build::optfile::traverse` (visited by `find`, `inputs` and `untracked`); `Dut::file_list` passes through `DutConfig::option_args` |
 | Defaulting a bound interface's parameters to the DUT's same-named `.param` (a binding value wins), and warning when the two stay apart | `simjig_build::pipeline::elaborate`; `pipeline::IfaceParamMismatch` (its warning, and its hint on a width error) |
 | Naming, slot, storage and access decisions | `codegen::lower` |
-| What a sweep's members share, and its `Ports` and bundle traits (associated types, bounds, names) | `codegen::lower_sweep` (`codegen/lower/sweep.rs`) |
+| What a sweep's members share, and its `Ports`, bundle and fields traits and runtime re-exports (associated types, bounds, names) | `codegen::lower_sweep` (`codegen/lower/sweep.rs`) |
 | Which DUTs a sweep has, and that its name is no DUT's | `simjig_build::script::claim_sweep` (and `claim_name`, its other side) |
 | The "did you mean" hint | `codegen::names::did_you_mean` |
 | Two-step cache keys | `cache.rs` (Verilator output), `front.rs` (IR), `archive.rs` (archives), over the manifests of `manifest.rs` |

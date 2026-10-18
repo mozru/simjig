@@ -120,7 +120,8 @@ fn roots(
             Root {
                 ty: p.ty,
                 site: Use {
-                    path: format!("{}.{}", top.orig_name, p.name),
+                    path: typedef
+                        .map_or_else(|| format!("{}.{}", top.orig_name, p.name), str::to_owned),
                     candidates,
                 },
                 required: true,

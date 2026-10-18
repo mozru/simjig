@@ -34,14 +34,14 @@ the file restored with `git checkout`, with the tests of commit `bdbbd4c` (defau
 | `round_robin_arbiter`: `if (!rst_n) ptr <= ptr;` | survived (every old test) | killed | new reset test: monitor `gnt` 8 vs 1 right after reset |
 | `skid_buffer`: `up.ready = !skid_valid \|\| down.ready` (N2) | n/a | killed | `outputs_do_not_follow_inputs_within_a_cycle` (and 3 other tests) |
 | `skid_buffer`: `down.valid = out_valid \|\| up.valid` (N2) | n/a | killed | 5 tests, including the N2 test |
-| `async_fifo`: `wrst_n` leaves `{wq2_rgray, wq1_rgray}` | n/a | **survives** | see below |
+| `async_fifo`: `wrst_n` leaves `{wq2_rgray, wq1_rgray}` | n/a | survived; killed since the final review | `resets_clear_both_flags_without_a_clock_edge` (see "Final review nits") |
 
 The surviving write-side mutant: after reset, the stale `wq2_rgray` can only make `wfull`
 read high (never low) for the two `wclk` edges before the synchronizer refills, and only
 when the old read pointer is exactly `DEPTH` ahead of the new write pointer at that edge.
 The effect is pessimistic (a refused write, no loss), so the scoreboard cannot see it; the
 new test's "`wfull` low for two edges after release" check catches it only in that phase.
-A directed test could pin it (reset with the read pointer at `DEPTH`, writer idle); not done.
+A directed test now pins it (reset with the read pointer at `DEPTH`, writer idle): see "Final review nits".
 
 ### Randomized initial state: not done
 
@@ -164,3 +164,26 @@ writes a new mtime).
 - `build.rs`: every DUT has `.trace_fst(true)` (before: only the arbiter and the async
   FIFO, for no stated reason), so any failure can be replayed with waves; it costs build
   time only. Checked with `SIMJIG_WAVES=1` on a sync_fifo, item_fifo and skid_buffer test.
+
+## Final review nits
+
+1. **Write-side synchronizer reset, now killed.** `resets_clear_both_flags_without_a_clock_edge`
+   reads `DEPTH` words (not 2) before refilling, so the read pointer is `DEPTH` at reset,
+   and after release, with the writer idle, checks `wfull` low for two `wclk` edges. The
+   reviewer's reasoning holds: a stale `wq2_rgray = gray(8) = 4'b1100` equals
+   `gray(0) ^ FULL_FLIP` (`FULL_FLIP = 4'b1100` for `DEPTH = 8`), so the mutant's `wfull`
+   rises at the first edge (and the second: `wq1_rgray` is stale too) and falls at the
+   third. Mutant (delete `{wq2_rgray, wq1_rgray} <= '0;`), default seed: only this test
+   fails, "`async_fifo.wfull` at edge 1 after reset"; the other 8 pass. RTL restored with
+   `git checkout` and `touch`ed. The survivor row of the mutation table above is now
+   "killed by `resets_clear_both_flags_without_a_clock_edge`".
+2. `reset_when_busy`: its doc now says the `rempty` check is strict and the `wfull`
+   check weak (it fails only with the old read pointer exactly `DEPTH` ahead), and points
+   to the directed test. The check stays: free, and not wrong.
+3. Arbiter: new `gnt_grants_from_0_while_reset_is_held` holds `rst_n` low for five edges
+   with the pointer at 3 and reads `gnt` at each: `[8, 1, 1, 2, 1]`, then 1 after release.
+   Killed mutants: `if (!rst_n && !granted) ptr <= '0;` (grant beats reset; this test and
+   the mid-traffic reset test fail).
+4. Skid reset test: the board-side `in_flight.len() == 2` is replaced by a port check in
+   `ReadOnly` before the reset edge: `down.valid` 1, `down.data` 0xa1, `up.ready` 0, the
+   DUT's own evidence that both registers are full.

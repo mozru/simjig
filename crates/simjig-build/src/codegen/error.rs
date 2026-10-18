@@ -23,7 +23,7 @@ pub enum Error {
     },
     /// The configuration does not match the design.
     Config {
-        /// The configuration entry, e.g. `probe top.u.x` or `bind_iface(in_bus)`.
+        /// The configuration entry, e.g. `bind_iface(in_bus)` or `wrapper simjig_wrap_top`.
         item: String,
         /// What is wrong and how to fix it.
         reason: String,

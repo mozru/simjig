@@ -38,8 +38,8 @@ use super::{
 ///
 /// # Errors
 /// [`Error::Unsupported`] for IR constructs without a generated form (unpacked struct
-/// ports, enums above 128 bits, ...); [`Error::Config`] when probes or interface bindings
-/// do not match the design.
+/// ports, enums above 128 bits, ...); [`Error::Probe`] when a probe does not match the
+/// design (its path, module or access); [`Error::Config`] when interface bindings do not.
 pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> {
     let top = design.top_module();
     let wrapper = config

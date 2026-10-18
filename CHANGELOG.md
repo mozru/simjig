@@ -59,14 +59,13 @@ the public API, the generated code or simulation semantics.
   Every IR hash, and so every generated `IR_HASH`/`kIrHash`, changes once.
 - Probe paths may go through generate blocks (`top.g_x.u.x`, `top.genblk2.u.x`,
   `top.g[0].u.x`); naming a generate-for loop without an index, or an instance array, is
-  a `codegen::Error::Config` that names the fix.
+  a `codegen::Error::Probe` that names the fix.
 - A probe whose module is a typo names the closest module ("did you mean `core`?"), and a
   probe path that ends at an instance or generate block says that it must end at a
   variable.
 - `codegen::Error::Probe { path, reason }` (new variant) carries every probe mistake the
   lowering finds; `Dut::build` reports it as `Error::Config` ("probe `p` (declared in
-  build.rs): ..."), the same headline as the probe checks against the scope table, where
-  it used to be `Error::Codegen`.
+  build.rs): ..."), the same headline as the probe checks against the scope table.
 - Model and runtime archives are keyed in two steps, like the Verilator cache: every
   compile runs with `-MD`, and the key covers every file the compiler read (a header next
   to a recipe source, in an include directory or `-I` flag, or in the toolchain), plus
@@ -89,7 +88,7 @@ the public API, the generated code or simulation semantics.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are
-  `codegen::Error::Config` errors, so the build fails before verilating.
+  `codegen::Error::Probe` errors, so the build fails before verilating.
 - C ABI runtime: `create` refuses a probe bound for writing when its variable is a
   parameter (constant storage) or only `public_flat_rd` (`EXCEPTION`, model poisoned).
 - After verilating, the build checks each probe the shim binds against Verilator's scope

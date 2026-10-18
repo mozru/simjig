@@ -12,7 +12,7 @@
 
 use svtypes::ir::{Design, GenerateBlock, Instance, Module, Variable, VariableKind};
 
-use super::super::names::closest;
+use super::super::names::did_you_mean as hint;
 use super::super::{Probe, ProbeAccess, Wrapper};
 use super::DUT_INSTANCE;
 
@@ -70,13 +70,6 @@ impl<'a> Level<'a> {
         let instances = self.instances.iter().map(|i| i.name.as_str());
         instances.chain(self.blocks.iter().map(|b| b.name.as_str()))
     }
-}
-
-/// `"; did you mean `x`?"` for the closest candidate, or nothing.
-fn hint<'c>(name: &str, candidates: impl IntoIterator<Item = &'c str>) -> String {
-    closest(name, candidates)
-        .map(|c| format!("; did you mean `{c}`?"))
-        .unwrap_or_default()
 }
 
 /// A path segment: an identifier, or an identifier with one index (`g[0]`, a generate-for

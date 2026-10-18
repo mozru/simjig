@@ -154,10 +154,7 @@ impl Namespace {
 /// The candidate closest to `name` by edit distance, if one is close enough to be a likely
 /// typo (at most one edit per four characters, and at least one): for "did you mean"
 /// hints in configuration errors. Ties go to the first candidate.
-pub(crate) fn closest<'c>(
-    name: &str,
-    candidates: impl IntoIterator<Item = &'c str>,
-) -> Option<&'c str> {
+fn closest<'c>(name: &str, candidates: impl IntoIterator<Item = &'c str>) -> Option<&'c str> {
     let limit = 1 + name.chars().count() / 4;
     candidates
         .into_iter()
@@ -165,6 +162,17 @@ pub(crate) fn closest<'c>(
         .filter(|&(d, c)| d <= limit && c != name)
         .min_by_key(|&(d, _)| d)
         .map(|(_, c)| c)
+}
+
+/// `"; did you mean `x`?"` for the [`closest`] candidate, or nothing: the one spelling of
+/// the hint every configuration error appends.
+pub(crate) fn did_you_mean<'c>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'c str>,
+) -> String {
+    closest(name, candidates)
+        .map(|c| format!("; did you mean `{c}`?"))
+        .unwrap_or_default()
 }
 
 /// Levenshtein distance over chars.

@@ -32,7 +32,7 @@ use svtypes::ir::Storage;
 use svtypes::width::packed_storage;
 
 use crate::Error;
-use crate::codegen::closest;
+use crate::codegen::did_you_mean;
 use crate::emit::ProbeSite;
 
 /// The packed storage a `VerilatedVarType` (`verilated.h`) names: `VLVT_UINT8/16/32/64`
@@ -287,9 +287,7 @@ fn check(scopes: &Scopes, p: &ProbeSite) -> Result<(), String> {
         ));
     };
     let Some(v) = vars.iter().find(|v| v.name == p.var) else {
-        let hint = closest(&p.var, vars.iter().map(|v| v.name.as_str()))
-            .map(|c| format!("; did you mean `{c}`?"))
-            .unwrap_or_default();
+        let hint = did_you_mean(&p.var, vars.iter().map(|v| v.name.as_str()));
         return Err(format!(
             "Verilator did not make `{}` of `{}` public{hint}",
             p.var, p.module

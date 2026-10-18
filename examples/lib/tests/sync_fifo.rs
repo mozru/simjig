@@ -607,7 +607,7 @@ async fn count_climbs_to_the_depth<D: Ports>(dut: D) {
     let depth = u128::from(D::DEPTH.unsigned_abs());
     for n in 1..=depth {
         dut.wr_data().set(n); // a `u128` that fits every configuration's `WIDTH`
-        dut.clk().rising().read_only().await;
+        dut.clk().rising().read_write().await;
         assert_eq!(dut.count().get(), n, "after {n} pushes, DEPTH {depth}");
         assert_eq!(dut.full().get(), n == depth);
         dut.clk().falling().await;

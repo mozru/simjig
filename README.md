@@ -195,9 +195,11 @@ points of that timestep:
 | `dut.clk.rising().read_write().await` | what the edge produced: the flops' new values, with their combinational fan-out settled | allowed, but a later write in this timestep (by any task) may change combinational values again | Reactive region (a `program` block) | `await RisingEdge(clk)`, then `await ReadWrite()` |
 | `dut.clk.rising().read_only().await` | final values for the timestep | a failure (`WriteInReadOnly`) | Postponed region (`$strobe`) | `await RisingEdge(clk)`, then `await ReadOnly()` |
 
-So a monitor samples at `rising()`, a check of an edge's result uses `.read_write()`
-(and may then drive the next input), and `.read_only()` is for values nothing else may
-change. `.read_write()` and `.read_only()` also follow `falling()`, `changed()`,
+So a monitor of what the edge captures samples at `rising()`. To check an edge's result,
+`.read_write()` and `.read_only()` both see the updated values; `.read_only()` also
+guarantees that nothing changes later in that timestep, and forbids writes. A test that
+drives next uses `.read_write()`; a pure checker or monitor uses `.read_only()`.
+`.read_write()` and `.read_only()` also follow `falling()`, `changed()`,
 `cycles(..)` and `Timer::new(..)`, and always land in the timestep their trigger fired
 in. An edge of a signal the design drives fires after the eval that made it, so plain
 `rising()` already shows post-edge values there.
@@ -508,7 +510,7 @@ async fn count_climbs_to_the_depth<D: Ports>(dut: D) {
     let depth = u128::from(D::DEPTH.unsigned_abs());
     for n in 1..=depth {
         dut.wr_data().set(n); // a `u128` that fits every configuration's `WIDTH`
-        dut.clk().rising().read_only().await;
+        dut.clk().rising().read_write().await;
         assert_eq!(dut.count().get(), n, "after {n} pushes, DEPTH {depth}");
         assert_eq!(dut.full().get(), n == depth);
         dut.clk().falling().await;
@@ -564,7 +566,7 @@ async fn a_beat_hops_with_its_tag_incremented<D: Ports>(dut: D) {
         let beat = D::Beat::new(tag, data); // fields in declaration order
         dut.up().beat().set(beat);
         dut.up().valid().set(1);
-        dut.clk().rising().read_only().await;
+        dut.clk().rising().read_write().await;
         let hopped: D::Beat = dut.down().beat().get(); // one type on both ports
         assert_eq!(hopped, beat.with_tag((beat.tag().to_u128() + 1) % wrap));
         assert_eq!(hopped.data(), beat.data());

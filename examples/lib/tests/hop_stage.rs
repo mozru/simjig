@@ -25,7 +25,7 @@ async fn a_beat_hops_with_its_tag_incremented<D: Ports>(dut: D) {
         let beat = D::Beat::new(tag, data); // fields in declaration order
         dut.up().beat().set(beat);
         dut.up().valid().set(1);
-        dut.clk().rising().read_only().await;
+        dut.clk().rising().read_write().await;
         let hopped: D::Beat = dut.down().beat().get(); // one type on both ports
         assert_eq!(hopped, beat.with_tag((beat.tag().to_u128() + 1) % wrap));
         assert_eq!(hopped.data(), beat.data());

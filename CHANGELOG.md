@@ -31,8 +31,9 @@ the public API, the generated code or simulation semantics.
   `the_readme_project_layout_is_the_quickstart` checks against `examples/quickstart`;
   "The three moments at a clock edge" (`rising()`, `.read_write()`, `.read_only()`, with
   their SystemVerilog regions and cocotb spellings); the "Coming from cocotb" table gains
-  `.read_write()` and uses the prelude's short names. The sweep and lockstep examples
-  (and `examples/lib`'s `sync_fifo` and `hop_stage` tests) use
+  `.read_write()` and uses the prelude's short names. The sweep examples (and
+  `examples/lib`'s `sync_fifo` and `hop_stage` tests), which drive the next input, use
+  `rising().read_write()`; the lockstep example, a pure checker, uses
   `rising().read_only()`.
 - `examples/lib` uses the lib-target layout too: `src/lib.rs` re-exports the prelude (and
   `In`, `Out`), includes every DUT and holds `assert_param_checks` (from

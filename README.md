@@ -169,6 +169,10 @@ What to keep in mind:
   visible from `ReadOnly`, where everything has settled. A write in `ReadOnly` fails the
   run (`WriteInReadOnly`; cocotb raises `RuntimeError`). Edges of design-driven signals
   see post-eval values.
+- **A combinational design advances with a `Timer` per vector**: `set` the inputs, then
+  `Timer::new(ns(1)).await` and `get` the outputs (the quickstart's `tests/inv.rs`).
+  `ReadOnly` is read-only: a `set` after it in the same timestep fails the run
+  (`WriteInReadOnly`), so the next vector needs the `Timer` anyway.
 - **A `Timer` due at an edge resumes first**, before the edge is applied: it sees the
   pre-edge state, and wins a tie against the edge in `first!` and `with_timeout` (a
   timeout due exactly at the edge times out).

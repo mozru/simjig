@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A `Starved` failure's help names the way out for a combinational design: ``start a
+  clock; for a combinational design, await a Timer after each set
+  (`Timer::new(ns(1)).await`); ..``.
 - `cargo simjig doctor --help` (and `-h`, `help doctor`) prints the doctor's own help
   and exits 0, like `waves` and `show`; `cargo simjig help <command>` prints one
   command's help. Help that was asked for now goes to stdout (it went to stderr); a

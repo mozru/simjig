@@ -253,7 +253,8 @@ impl FailureKind {
                  NextTimeStep before writing"
             }
             Self::Starved { .. } => {
-                "start a clock, await a Timer, or check that the awaited signal is driven"
+                "start a clock; for a combinational design, await a Timer after each set \
+                 (`Timer::new(ns(1)).await`); or check that the awaited signal is driven"
             }
             Self::Deadlock { .. } => {
                 "each listed task waits on another; check lock order and that events are set"

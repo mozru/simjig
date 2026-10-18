@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Build-script reruns (`archive::toolchain_from`): the parent of the compiler's
+  `-print-file-name=include` answer counts as a toolchain directory only when that
+  `include` is in the compiler's `-v` search list, and a search-list directory with a
+  `c++` component only when it is under the compiler's prefix or the SDK. A header in a
+  user's `CPLUS_INCLUDE_PATH` (`$HOME/libs/c++/..`) now reruns the build script when it
+  changes.
 - `Dut::sources` recognizes a file already added under another path (`rtl/../rtl/a.sv`,
   a symlink) by its canonical path, and keeps the path as first named, so the model's
   cache key is unchanged for unchanged input. Its docs say that a file named both in a

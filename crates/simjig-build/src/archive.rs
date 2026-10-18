@@ -344,13 +344,11 @@ pub(crate) fn toolchain_dirs(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
     };
     let report = ask(&found, &args, &["-E", "-x", "c++", "-v", "-"]).1;
     // Clang answers both; GCC only the second, with its own `include` directory.
-    let printed = [
-        ask(&found, &args, &["-print-resource-dir"]).0,
-        ask(&found, &args, &["-print-file-name=include"]).0,
-    ];
+    let resource_dir = ask(&found, &args, &["-print-resource-dir"]).0;
+    let include_dir = ask(&found, &args, &["-print-file-name=include"]).0;
     let sdk =
         cfg!(target_os = "macos").then(|| ask(Path::new("xcrun"), &[], &["--show-sdk-path"]).0);
-    let mut dirs = toolchain_from(&report, &printed, sdk.as_deref());
+    let mut dirs = toolchain_from(&report, &resource_dir, &include_dir, sdk.as_deref());
     let canonical: Vec<PathBuf> = dirs
         .iter()
         .filter_map(|d| std::fs::canonicalize(d).ok())
@@ -364,45 +362,74 @@ pub(crate) fn toolchain_dirs(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
 }
 
 /// The toolchain's header directories in the compiler's answers: `report`, the stderr of
-/// `-E -v`; `printed`, the stdout of `-print-resource-dir` and `-print-file-name=include`;
-/// and `sdk`, that of `xcrun --show-sdk-path` on macOS. They are
-/// - the resource directory (Clang's `lib/clang/<ver>`, GCC's `lib/gcc/<triple>/<ver>`,
-///   the parent of its `include` and `include-fixed`), from `printed`;
+/// `-E -v`; `resource_dir` and `include_dir`, the stdout of `-print-resource-dir` and
+/// `-print-file-name=include`; and `sdk`, that of `xcrun --show-sdk-path` on macOS. They
+/// are
+/// - the resource directory (Clang's `lib/clang/<ver>`, GCC's `lib/gcc/<triple>/<ver>`):
+///   `resource_dir`, and the parent of `include_dir` when the search list has that
+///   `include` (GCC's `include` and `include-fixed` are both under it), so that an answer
+///   outside the search list cannot make a whole prefix the toolchain's;
 /// - the C++ standard library's headers: the search list's directories with a `c++`
-///   component (`include/c++/v1`, `include/c++/13`, `<triple>/c++/13`);
+///   component (`include/c++/v1`, `include/c++/13`, `<triple>/c++/13`) under the
+///   compiler's prefix (the directory above the resource directory's `lib/clang` or
+///   `lib/gcc`, or above Clang's `InstalledDir`) or under the SDK, so a user's
+///   `CPLUS_INCLUDE_PATH=$HOME/libs/c++` is not one;
 /// - the SDK: `sdk`, and the `-isysroot` the report's compiler command line passes.
 ///
 /// A relative answer (GCC prints `include` when it has none) is not a directory.
-fn toolchain_from(report: &str, printed: &[String], sdk: Option<&str>) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = system_search_list(report)
-        .into_iter()
-        .filter(|d| {
-            let mut parts = d.components().map(std::path::Component::as_os_str);
-            parts.any(|c| c == "c++") && parts.next().is_some()
-        })
-        .collect();
-    for p in printed {
-        let p = Path::new(p.trim());
-        if p.is_absolute() {
-            let resource = if p.ends_with("include") {
-                p.parent()
-            } else {
-                Some(p)
-            };
-            dirs.extend(resource.map(Path::to_path_buf));
-        }
-    }
+fn toolchain_from(
+    report: &str,
+    resource_dir: &str,
+    include_dir: &str,
+    sdk: Option<&str>,
+) -> Vec<PathBuf> {
+    let search = system_search_list(report);
+    let absolute = |p: &str| Some(PathBuf::from(p.trim())).filter(|p| p.is_absolute());
+    let included = absolute(include_dir)
+        .filter(|d| d.ends_with("include") && search.iter().any(|s| lexical(s) == lexical(d)));
+    let mut resources: Vec<PathBuf> = absolute(resource_dir).into_iter().collect();
+    resources.extend(included.and_then(|d| d.parent().map(Path::to_path_buf)));
     let unquote = |t: &str| t.trim_matches(|c| c == '"' || c == '\'').to_owned();
     let words: Vec<&str> = report.split_whitespace().collect();
     let sysroots = words
         .windows(2)
         .filter(|w| unquote(w[0]) == "-isysroot")
         .map(|w| unquote(w[1]));
-    let sdks = sysroots.chain(sdk.map(|s| s.trim().to_owned()));
-    dirs.extend(sdks.map(PathBuf::from).filter(|p| p.is_absolute()));
+    let sdks: Vec<PathBuf> = sysroots
+        .chain(sdk.map(|s| s.trim().to_owned()))
+        .filter_map(|s| absolute(&s))
+        .collect();
+    let mut owned: Vec<PathBuf> = resources.iter().filter_map(|r| prefix_of(r)).collect();
+    owned.extend(
+        report
+            .lines()
+            .filter_map(|l| l.strip_prefix("InstalledDir: "))
+            .filter_map(|d| absolute(d)?.parent().map(lexical)),
+    );
+    owned.extend(sdks.iter().map(|s| lexical(s)));
+    let mut dirs: Vec<PathBuf> = search
+        .into_iter()
+        .filter(|d| {
+            let mut parts = d.components().map(std::path::Component::as_os_str);
+            parts.any(|c| c == "c++") && parts.next().is_some() && under_any(d, &owned)
+        })
+        .collect();
+    dirs.extend(resources);
+    dirs.extend(sdks);
     dirs.sort();
     dirs.dedup();
     dirs
+}
+
+/// The installation prefix above a resource directory: what precedes its `lib/clang` or
+/// `lib/gcc` (`/usr` for `/usr/lib/gcc/x86_64-linux-gnu/13`), compared lexically.
+fn prefix_of(resource: &Path) -> Option<PathBuf> {
+    let resource = lexical(resource);
+    let parts: Vec<_> = resource.components().collect();
+    let at = parts.windows(2).rposition(|w| {
+        w[0].as_os_str() == "lib" && (w[1].as_os_str() == "clang" || w[1].as_os_str() == "gcc")
+    })?;
+    Some(parts[..at].iter().collect())
 }
 
 /// Whether `path` is under one of `dirs` ([`toolchain_dirs`]), compared with `.` and
@@ -651,9 +678,13 @@ mod tests {
                      /p/bin/../include/c++/v1\n /p/lib/clang/21/include\n \
                      /sdk/MacOSX.sdk/usr/include\n /sdk/MacOSX.sdk/System/Library/Frameworks \
                      (framework directory)\nEnd of search list.\n";
-        let printed = ["/p/lib/clang/21\n", "/p/lib/clang/21/include\n"].map(str::to_owned);
         assert_eq!(
-            toolchain_from(clang, &printed, Some("/sdk/MacOSX.sdk\n")),
+            toolchain_from(
+                clang,
+                "/p/lib/clang/21\n",
+                "/p/lib/clang/21/include\n",
+                Some("/sdk/MacOSX.sdk\n")
+            ),
             [
                 "/p/bin/../include/c++/v1",
                 "/p/lib/clang/21",
@@ -678,12 +709,9 @@ mod tests {
                    /usr/lib/gcc/x86_64-linux-gnu/13/include\n /usr/local/include\n \
                    /usr/include/x86_64-linux-gnu\n /usr/include\nEnd of search list.\n\
                    COLLECT_GCC_OPTIONS='-E' '-v' '-shared-libgcc' '-mtune=generic'\n";
-        let printed = [
-            String::new(),
-            "/usr/lib/gcc/x86_64-linux-gnu/13/include\n".into(),
-        ];
+        let include = "/usr/lib/gcc/x86_64-linux-gnu/13/include\n";
         assert_eq!(
-            toolchain_from(gcc, &printed, None),
+            toolchain_from(gcc, "", include, None),
             [
                 "/usr/include/c++/13",
                 "/usr/include/c++/13/backward",
@@ -697,10 +725,40 @@ mod tests {
         assert_eq!(
             toolchain_from(
                 "COLLECT_GCC_OPTIONS='-E' '-isysroot' '/sr'",
-                &["include".into()],
+                "",
+                "include",
                 None
             ),
             [PathBuf::from("/sr")]
+        );
+    }
+
+    /// A `c++` directory of the search list is the toolchain's only under the compiler's
+    /// prefix or the SDK: one from the user's `CPLUS_INCLUDE_PATH` is not. An
+    /// `-print-file-name=include` answer counts only when the search list has it, so a
+    /// compiler printing `/opt/include` does not make all of `/opt` the toolchain's.
+    #[test]
+    fn user_cxx_dirs_and_unsearched_include_answers_are_not_the_toolchains() {
+        let clang = "clang version 21\nInstalledDir: /p/bin\n\
+                     #include <...> search starts here:\n /home/u/libs/c++/include\n \
+                     /p/bin/../include/c++/v1\n /p/lib/clang/21/include\n \
+                     /sdk/usr/include/c++/v1\n /sdk/usr/include\nEnd of search list.\n";
+        assert_eq!(
+            toolchain_from(clang, "", "/p/lib/clang/21/include\n", Some("/sdk\n")),
+            [
+                "/p/bin/../include/c++/v1",
+                "/p/lib/clang/21",
+                "/sdk",
+                "/sdk/usr/include/c++/v1"
+            ]
+            .map(PathBuf::from)
+        );
+        let gcc = "#include <...> search starts here:\n /usr/include/c++/13\n \
+                   /usr/include\nEnd of search list.\n";
+        assert_eq!(
+            toolchain_from(gcc, "", "/opt/include\n", None),
+            Vec::<PathBuf>::new(),
+            "neither /opt nor, without a prefix, /usr/include/c++/13"
         );
     }
 

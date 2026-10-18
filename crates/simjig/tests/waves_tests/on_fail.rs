@@ -342,6 +342,25 @@ fn every_model_of_a_failed_multi_dut_test_gets_its_waves() {
     }
 }
 
+/// The report of a test failed by a fork branch: its header gives the branch's failure
+/// time and labels the checkpoint's, and the help is said once (the branch's, in the
+/// message), not again for the parent's panic.
+#[test]
+fn a_failing_fork_branch_is_reported_at_its_own_time() {
+    let test = "on_fail::a_branch_overflows";
+    let (output, _) = run_child(test, "branch-report", &[]);
+    let err = stderr(&output);
+    let report = &err[err
+        .find("FAIL on_fail::")
+        .unwrap_or_else(|| panic!("{err}"))..];
+    let header = report.lines().next().expect("a header");
+    assert!(
+        header.contains("  t=1500 ns in fork branch 1 (checkpoint t=1 us)  [TaskPanic"),
+        "{header}"
+    );
+    assert_eq!(report.matches("help:").count(), 1, "{report}");
+}
+
 #[test]
 fn a_failing_fork_branch_gets_the_waves_of_its_own_span() {
     let test = "on_fail::a_branch_overflows";

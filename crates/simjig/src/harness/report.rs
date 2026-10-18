@@ -15,7 +15,10 @@
 //!             or `none` when no model of the test can trace)
 //!   run dir:  <target>/simjig/runs/<package>/<binary>/<test>/<seed>/
 //! ```
-//! Lines without data (`task`, `at`, `run dir`) are left out.
+//! Lines without data (`task`, `at`, `run dir`) are left out. When a failed fork branch
+//! failed the test (`Branches::into_values`), the header reads
+//! `t=<branch failure time> in fork branch <i> (checkpoint t=<time>)`, and the `help:`
+//! line is left out: each branch's own help is in the message.
 //!
 //! The **signature** hashes the kind, the location and the message with every number
 //! masked, so the same bug found with 400 seeds forms one bucket. It deliberately leaves
@@ -24,6 +27,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::fork::FailedBranch;
 use crate::kernel::recorder::Fnv;
 use crate::{BlockedTask, Failure, FailureKind, Precision, SimDuration, SimTime};
 
@@ -216,6 +220,10 @@ pub struct FailureReport {
     /// Whether a model of the run can write waves; without one, the report offers no
     /// waves command.
     pub can_trace: bool,
+    /// The fork branch whose failure failed the test (`Branches::into_values`), if one did:
+    /// the header then gives the branch's failure time, the checkpoint's being the
+    /// failure's own.
+    pub(crate) failed_branch: Option<FailedBranch>,
 }
 
 impl FailureReport {
@@ -247,6 +255,7 @@ impl FailureReport {
             signals: failing_signals(&failure.kind),
             waves: None,
             can_trace: true,
+            failed_branch: None,
         }
     }
 }
@@ -325,14 +334,24 @@ fn blocked_lines(blocked: &[BlockedTask]) -> Vec<String> {
 
 impl fmt::Display for FailureReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let time = self.time.display(self.precision);
+        let when = match self.failed_branch {
+            Some(FailedBranch {
+                index,
+                time: Some(failed),
+            }) => format!(
+                "t={} in fork branch {index} (checkpoint t={time})",
+                failed.display(self.precision)
+            ),
+            Some(FailedBranch { index, time: None }) => {
+                format!("t={time} (checkpoint; fork branch {index} died)")
+            }
+            None => format!("t={time}"),
+        };
         writeln!(
             f,
-            "FAIL {}  seed={}  t={}  [{} sig={}]",
-            self.run.test,
-            self.run.seed,
-            self.time.display(self.precision),
-            self.kind,
-            self.signature
+            "FAIL {}  seed={}  {when}  [{} sig={}]",
+            self.run.test, self.run.seed, self.kind, self.signature
         )?;
         if let Some(task) = &self.task {
             writeln!(f, "  task:     {task}")?;

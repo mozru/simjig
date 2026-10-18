@@ -402,6 +402,12 @@ fn finish(
         let mut report = FailureReport::new(&failure, run.clone(), None, timeout);
         report.run_dir.clone_from(&dir);
         report.can_trace = sim.as_ref().is_some_and(Sim::can_trace);
+        report.failed_branch = crate::fork::take_failed_branch();
+        if report.failed_branch.is_some() {
+            // The message lists every failed branch with its own help; the parent's
+            // (a panic's) would only repeat or contradict them.
+            report.help = None;
+        }
         report
     });
     let run_dir_error = match &dir {
@@ -570,7 +576,7 @@ fn replay_with_waves(
         target: failure.map_or(end, |f| f.time),
         precision,
         signals: failure.map(|f| f.signals.clone()).unwrap_or_default(),
-        failed_branch: failure.and_then(|_| crate::fork::take_failed_branch()),
+        failed_branch: failure.and_then(|f| f.failed_branch),
     };
     replay::replay(&exe, &original, request)
 }

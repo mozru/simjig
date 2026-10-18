@@ -404,7 +404,7 @@ thread_local! {
 }
 
 /// The branch recorded by the last failing [`Branches::into_values`] on this thread, which
-/// is then forgotten.
+/// is then forgotten (the harness takes it once, into the test's failure report).
 pub(crate) fn take_failed_branch() -> Option<FailedBranch> {
     FAILED_BRANCH.take()
 }

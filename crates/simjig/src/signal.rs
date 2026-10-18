@@ -290,12 +290,43 @@ macro_rules! settable {
                 set(self.raw, value);
             }
         }
+
+        /// The untyped handle, so kernel APIs that drive a signal take a writable handle
+        /// as is: `simjig::clock(dut.clk, ns(10))`. Read-only handles have no such
+        /// conversion (a clock on an output cannot compile); use their `raw()`.
+        impl<T> From<$name<T>> for RawSig {
+            fn from(handle: $name<T>) -> Self {
+                handle.raw
+            }
+        }
     };
 }
 
 handle! {
     /// A top-level input of the model: the testbench drives it with [`set`](Self::set) and
     /// can read it back with [`get`](Self::get).
+    ///
+    /// A writable handle converts into a [`RawSig`], so a kernel clock takes it directly:
+    ///
+    /// ```
+    /// use simjig::{In, clock, ns};
+    /// use simjig_bits::Bit;
+    ///
+    /// fn start(clk: In<Bit>) {
+    ///     clock(clk, ns(10)).start();
+    /// }
+    /// ```
+    ///
+    /// An output has no such conversion, so a clock on it does not compile:
+    ///
+    /// ```compile_fail
+    /// use simjig::{Out, clock, ns};
+    /// use simjig_bits::Bit;
+    ///
+    /// fn start(q: Out<Bit>) {
+    ///     clock(q, ns(10)).start();
+    /// }
+    /// ```
     In
 }
 settable!(In);

@@ -12,10 +12,12 @@ const LINT: [&str; 1] = ["-Wall"];
 fn main() -> Result<(), Error> {
     sync_fifo()?;
     skid_buffer()?;
+    round_robin_arbiter()?;
+    async_fifo()?;
     Ok(())
 }
 
-// ---- sync_fifo (rtl/sync_fifo.sv, rtl/item_fifo.sv, rtl/fifo_pkg.sv) -------------------
+// ---- sync_fifo (rtl/sync_fifo.sv, rtl/item_fifo.sv, rtl/fifo_pkg.sv) --------------------
 
 /// `sync_fifo` twice: a raw 8-bit, 4-deep FIFO with a registered read (`sync_fifo`), and
 /// `item_fifo`, the same FIFO over the packed struct `fifo_pkg::item_t` in
@@ -61,6 +63,36 @@ fn skid_buffer() -> Result<(), Error> {
         .param("WIDTH", SKID_WIDTH)
         .bind_iface_with(stream("up", "sink"))
         .bind_iface_with(stream("down", "source"))
+        .verilator_args(LINT)
+        .build()?;
+    Ok(())
+}
+
+// ---- round_robin_arbiter (rtl/round_robin_arbiter.sv) -----------------------------------
+
+/// The arbiter with five requesters: a count that is not a power of 2, so the pointer's
+/// wrap from 4 to 0 is exercised.
+fn round_robin_arbiter() -> Result<(), Error> {
+    Dut::new("round_robin_arbiter")
+        .sources(["rtl/round_robin_arbiter.sv"])
+        .top("round_robin_arbiter")
+        .param("N", 5)
+        .trace_fst(true)
+        .verilator_args(LINT)
+        .build()?;
+    Ok(())
+}
+
+// ---- async_fifo (rtl/async_fifo.sv) -----------------------------------------------------
+
+/// The dual-clock FIFO, 8 entries of 8 bits: shallow, so random traffic reaches full often.
+fn async_fifo() -> Result<(), Error> {
+    Dut::new("async_fifo")
+        .sources(["rtl/async_fifo.sv"])
+        .top("async_fifo")
+        .param("WIDTH", 8)
+        .param("DEPTH", 8)
+        .trace_fst(true)
         .verilator_args(LINT)
         .build()?;
     Ok(())

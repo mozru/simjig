@@ -1,0 +1,12 @@
+---
+source: crates/simjig/tests/harness_tests/reports.rs
+assertion_line: 129
+expression: "render(&f, None)"
+---
+FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [Starved sig=8027a4ca43ad175c]
+  message:  nothing is scheduled, and 2 tasks are blocked
+  blocked:  `main` awaits rising(clk)
+  blocked:  `main.sink` awaits a future the kernel cannot see
+  help:     start a clock, await a Timer, or check that the awaited signal is driven
+  repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'
+  waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'

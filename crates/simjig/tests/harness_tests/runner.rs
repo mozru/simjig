@@ -33,6 +33,7 @@ fn env(seed: Option<u64>, dir: &str) -> RunEnv {
         ),
         launcher: None,
         binary: Some("harness_tests".to_owned()),
+        ..RunEnv::default()
     }
 }
 

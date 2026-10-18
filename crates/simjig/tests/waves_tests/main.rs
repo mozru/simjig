@@ -21,4 +21,6 @@ simjig::include_dut!(fifo_fst);
 
 mod fst;
 #[cfg(simjig_test_models)]
+mod on_fail;
+#[cfg(simjig_test_models)]
 mod tracing;

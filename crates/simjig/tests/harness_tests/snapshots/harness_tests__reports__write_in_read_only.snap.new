@@ -1,0 +1,12 @@
+---
+source: crates/simjig/tests/harness_tests/reports.rs
+assertion_line: 108
+expression: "render(&f, None)"
+---
+FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [WriteInReadOnly sig=9c04dd955eefbd40]
+  task:     main.monitor
+  message:  `top.data` written in ReadOnly
+  signal:   top.data
+  help:     ReadOnly is for sampling settled values; await a Timer, an edge or NextTimeStep before writing
+  repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'
+  waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'

@@ -10,6 +10,7 @@ use super::backend::ModelBackend;
 use super::clock::{Clock, ClockError, ClockState};
 use super::failure::Failure;
 use super::fake::FakeModel;
+use super::panics;
 use super::recorder::TraceRecord;
 use super::sched;
 use super::signal::RawSig;
@@ -144,6 +145,7 @@ impl Sim {
         self.ran = true;
         let k = Rc::clone(&self.kernel);
         let guard = state::install(Rc::clone(&k));
+        let capture = panics::capture();
         let mut main = tasks::spawn_in(&k, None, "main", main);
         k.main.set(main.key());
         sched::run_loop(&k, &mut self.clocks, self.time_limit);
@@ -151,6 +153,7 @@ impl Sim {
         k.phase.set(Phase::Ended);
         drop(main);
         tasks::drop_all(&k);
+        drop(capture);
         drop(guard);
         match (k.failure.borrow_mut().take(), result) {
             (Some(failure), _) => Err(failure),

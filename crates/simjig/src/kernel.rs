@@ -8,7 +8,8 @@
 //! - `signal`: `RawSig` handles and the write log;
 //! - `clock`: kernel-owned clocks; `time`: ticks and checked durations;
 //! - `sync`: `Event`, `Lock`, `Queue`; `combinator`: `join!`, `first!`;
-//! - `failure`, `recorder`: failures as data and the flight recorder;
+//! - `failure`, `recorder`: failures as data and the flight recorder; `panics`: where a
+//!   task panicked;
 //! - `state`: the kernel struct and the thread-local current kernel;
 //! - `waker`: the only `unsafe` in the kernel;
 //! - `backend`, `fake`: the model interface and its pure-Rust implementation.
@@ -21,6 +22,7 @@ pub(crate) mod clock;
 pub(crate) mod combinator;
 pub(crate) mod failure;
 pub(crate) mod fake;
+mod panics;
 pub(crate) mod recorder;
 pub(crate) mod sched;
 pub(crate) mod signal;

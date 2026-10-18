@@ -329,7 +329,7 @@ pub(crate) fn write(
                     signal: name.to_string(),
                 },
                 task,
-                location,
+                location.map(Into::into),
                 format!("signal `{name}` written during the ReadOnly phase"),
             );
             return;
@@ -346,7 +346,7 @@ pub(crate) fn write(
                 second: second.clone(),
             },
             task,
-            location,
+            location.map(Into::into),
             format!(
                 "signal `{name}` written with different values by {first} and by {second} \
                  in the same delta"

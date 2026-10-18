@@ -12,14 +12,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::panic::Location;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread::{self, ThreadId};
 
 use super::backend::ModelBackend;
-use super::failure::{Failure, FailureKind};
+use super::failure::{Failure, FailureKind, SourceLocation};
 use super::recorder::{Recorder, TraceKind, TraceRecord};
 use super::signal::WriteLog;
 use super::slab::Key;
@@ -162,7 +161,7 @@ impl Kernel {
         &self,
         kind: FailureKind,
         task: Option<Key>,
-        location: Option<&'static Location<'static>>,
+        location: Option<&'static SourceLocation>,
         message: String,
     ) {
         if self.failed() || self.phase.get() == Phase::Ended {

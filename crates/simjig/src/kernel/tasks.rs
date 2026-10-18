@@ -27,6 +27,7 @@ use std::task::{Context, Poll};
 
 use super::OrInvariant;
 use super::failure::FailureKind;
+use super::panics;
 use super::recorder::TraceKind;
 use super::slab::{Key, Slab};
 use super::state::{self, Kernel};
@@ -385,16 +386,18 @@ fn free_task(k: &Kernel, key: Key) {
 /// Drops `value` (a future or a result) as task `key`, turning a panic into a failure.
 fn drop_guarded<V>(k: &Kernel, key: Key, value: V) {
     let previous = k.current.replace(Some(key));
+    panics::forget();
     let outcome = panic::catch_unwind(AssertUnwindSafe(move || drop(value)));
     k.current.set(previous);
     if let Err(payload) = outcome {
+        let location = panics::take();
         let message = format!("panicked while being dropped: {}", panic_message(&*payload));
         k.fail(
             FailureKind::TaskPanic {
                 message: message.clone(),
             },
             Some(key),
-            None,
+            location,
             message,
         );
     }
@@ -483,6 +486,7 @@ fn poll_task(k: &Kernel, key: Key) {
     let waker = waker::task_waker(k.sim_gen, key.index, gen16(key.gen_));
     let mut cx = Context::from_waker(&waker);
     let previous = k.current.replace(Some(key));
+    panics::forget();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
     k.current.set(previous);
     match outcome {
@@ -503,6 +507,7 @@ fn poll_task(k: &Kernel, key: Key) {
             }
         }
         Err(payload) => {
+            let location = panics::take();
             // Keep the future: it is dropped with the rest when the run ends.
             if let Some(entry) = k.tasks.borrow_mut().slab.get_mut(key) {
                 entry.future = Some(future);
@@ -514,7 +519,7 @@ fn poll_task(k: &Kernel, key: Key) {
                     message: message.clone(),
                 },
                 Some(key),
-                None,
+                location,
                 format!("panicked: {message}"),
             );
         }

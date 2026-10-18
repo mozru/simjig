@@ -2,3 +2,5 @@
 //!
 //! Called from a user crate's `build.rs`.
 #![forbid(unsafe_code)]
+
+pub mod codegen;

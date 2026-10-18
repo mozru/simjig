@@ -414,6 +414,13 @@ dependencies = [
 [[package]]
 name = "simjig-build"
 version = "0.0.0"
+dependencies = [
+ "insta",
+ "proptest",
+ "serde_json",
+ "simjig-bits",
+ "svtypes",
+]
 
 [[package]]
 name = "simjig-macros"

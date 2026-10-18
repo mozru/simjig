@@ -9,3 +9,12 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+serde_json.workspace = true
+svtypes.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+simjig-bits.workspace = true

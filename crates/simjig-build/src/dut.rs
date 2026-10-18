@@ -625,7 +625,14 @@ impl Dut {
             recipe: &self.recipe,
             model_sources: &placed.model_sources,
         })?;
-        directives.extend(rerun_directives(&verilator, &model.deps, &self.recipe));
+        let generated_inputs = cache.root().join("inputs");
+        let deps: Vec<PathBuf> = model
+            .deps
+            .iter()
+            .filter(|d| !d.starts_with(&generated_inputs))
+            .cloned()
+            .collect();
+        directives.extend(rerun_directives(&verilator, &deps, &self.recipe));
         if verilator.untested {
             directives.push(format!(
                 "cargo::warning=simjig: {} is not a supported Verilator (supported: {}); \
@@ -656,6 +663,11 @@ fn absolute(p: impl AsRef<Path>) -> PathBuf {
 /// Reruns on every file Verilator read, the recipe's files, the Verilator executable
 /// (replaced in place by an upgrade, while `PATH` stays the same) and the tracked
 /// variables.
+///
+/// `deps` must not list the generated inputs in the cache's `inputs/` (the `.vlt`, the
+/// wrapper, stored `verilator_input`s): they derive from the configuration and the
+/// sources, which are tracked already, and this run may have just written them, after
+/// the build script started, which Cargo would take as a change on the next build.
 fn rerun_directives(verilator: &Verilator, deps: &[PathBuf], recipe: &CppRecipe) -> Vec<String> {
     let files = std::iter::once(&verilator.exe)
         .chain(deps)

@@ -33,3 +33,6 @@ the public API, the generated code or simulation semantics.
 - C ABI: `cov_runs` is documented to cover code coverage counters only; covergroup bins
   (allocated when `new` runs) are in no run, while `cov_write` and `cov_zero` include them.
   The runtime stops noting coverage counters once create has built the runs.
+- The build no longer emits `cargo::rerun-if-changed` for the generated inputs it stores in
+  the cache (`inputs/<hash>/`: the `.vlt`, the interface wrapper, `verilator_input`s), so
+  the first no-op build after a new DUT configuration no longer reruns the build script.

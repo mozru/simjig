@@ -151,6 +151,15 @@ fn generate_and_instance_array_mistakes_fail_the_build() {
             "gen_pipe.arr[0].acc",
             "`arr` is an instance array; instance arrays are not supported in probe paths",
         ),
+        (
+            "gen_pipe.g[0]",
+            "`gen_pipe.g[0]` is a generate block, not a variable; a probe path ends at a \
+             variable, e.g. `gen_pipe.g[0].<variable>`",
+        ),
+        (
+            "gen_pipe.arr[1]",
+            "`arr` is an instance array; instance arrays are not supported in probe paths",
+        ),
     ] {
         let s = Sandbox::new();
         let msg = gen_probe(&s, path, "gen_leaf", 8).unwrap_err();

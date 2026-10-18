@@ -143,7 +143,8 @@ fn check_spelling(
             "`{bad}` is not a plain identifier or a generate-for iteration (`g[0]`)"
         ));
     }
-    if !is_simple_ident(var) {
+    // An indexed last segment names a scope (checked at the end of the walk).
+    if !is_path_segment(var) {
         return Err(format!("`{var}` is not a plain identifier"));
     }
     if !design.modules.iter().any(|m| m.orig_name == probe.module) {
@@ -165,12 +166,8 @@ fn step<'a>(
     name: &str,
     here: &str,
 ) -> Result<Level<'a>, String> {
-    let base = name.split_once('[').map_or(name, |(b, _)| b);
-    if let Some(inst) = level.instance(base).filter(|i| i.array) {
-        return Err(format!(
-            "`{}` is an instance array; instance arrays are not supported in probe paths",
-            inst.name
-        ));
+    if let Some(why) = instance_array(level, name) {
+        return Err(why);
     }
     if let Some(inst) = level.instance(name) {
         return Ok(Level::module(design.module(inst.module)));
@@ -206,6 +203,11 @@ fn check_variable(probe: &Probe, level: &Level<'_>, var: &str, scope: &str) -> R
     {
         return Err(why);
     }
+    if !is_simple_ident(var) {
+        return Err(format!(
+            "`{var}` is not a plain identifier; a probe path ends at a variable"
+        ));
+    }
     if module.orig_name != probe.module {
         return Err(format!(
             "`{scope}` is an instance of `{}`, not of `{}` as the probe declares; pass `\"{}\"` \
@@ -232,8 +234,22 @@ fn check_variable(probe: &Probe, level: &Level<'_>, var: &str, scope: &str) -> R
     Ok(())
 }
 
-/// When the path stops one level short, at an instance or generate block `var`: why.
+/// Why `name` (`arr` or `arr[0]`) cannot be walked into, if it names an instance array.
+fn instance_array(level: &Level<'_>, name: &str) -> Option<String> {
+    let base = name.split_once('[').map_or(name, |(b, _)| b);
+    let inst = level.instance(base).filter(|i| i.array)?;
+    Some(format!(
+        "`{}` is an instance array; instance arrays are not supported in probe paths",
+        inst.name
+    ))
+}
+
+/// When the path stops one level short, at an instance, an instance array or a generate
+/// block `var`: why.
 fn names_a_scope(level: &Level<'_>, var: &str, scope: &str) -> Option<String> {
+    if let Some(why) = instance_array(level, var) {
+        return Some(why);
+    }
     let kind = if level.instance(var).is_some() {
         "an instance"
     } else if level.block_named(var).is_some() || level.loop_iteration(var).is_some() {

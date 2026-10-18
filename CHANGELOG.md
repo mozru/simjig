@@ -32,6 +32,9 @@ the public API, the generated code or simulation semantics.
   RustType, ConstValue, DutField}`, `simjig_build::PortProblem` and
   `cargo_simjig::doctor::{Check, Status, Format}`. The lowering reports an IR kind it
   does not know as `codegen::Error::Unsupported`.
+- A probe path that ends at a generate-for iteration or an instance array element
+  (`top.g[0]`, `top.arr[1]`) says that it names a generate block or an instance array,
+  instead of "not a plain identifier".
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

@@ -372,8 +372,9 @@ impl fmt::Display for WavesReplay {
             }
             None => write!(
                 f,
-                "  waves:    none written: the DUT's model cannot trace (a FakeModel, or a \
-                 Verilator model built without `.trace_fst(true)`)"
+                "  waves:    none written: no model of this test can trace (a FakeModel, or \
+                 a Verilator model built without `.trace_fst(true)` on its \
+                 `simjig_build::Dut`)"
             )?,
         }
         for file in files {

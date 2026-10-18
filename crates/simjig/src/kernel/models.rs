@@ -107,6 +107,11 @@ impl Models {
         self.backends.get(model)?.coverage()
     }
 
+    /// Whether any model can write FST waves (`ModelBackend::can_trace`).
+    pub(crate) fn can_trace(&self) -> bool {
+        self.backends.iter().any(|b| b.can_trace())
+    }
+
     /// Model `model`'s backend, for the coverage operations of `Sim`.
     pub(crate) fn backend_mut(&mut self, model: usize) -> Option<&mut dyn ModelBackend> {
         Some(&mut **self.backends.get_mut(model)?)

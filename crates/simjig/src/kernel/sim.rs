@@ -144,6 +144,11 @@ impl Sim {
         self.kernel.models.borrow().coverage(model)
     }
 
+    /// Whether any model of the simulation can write FST waves, for the harness's report.
+    pub(crate) fn can_trace(&self) -> bool {
+        self.kernel.models.borrow().can_trace()
+    }
+
     /// Sets every coverage counter of model `model` to zero (Verilator's
     /// `VerilatedCovContext::zero`, the ABI's `cov_zero`), to count only what follows.
     ///

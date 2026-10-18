@@ -60,7 +60,8 @@ the public API, the generated code or simulation semantics.
 - `FailureReport` gains `signals` and `waves` (`simjig::{WavesReplay, Verdict}`); the
   report's `waves:` line is now the working command `SIMJIG_WAVES=1 <repro>` (report
   snapshots changed in that line only). `TestOutcome` gains `precision`, `RunEnv` gains
-  `waves` and `trace`.
+  `waves` and `trace`. When no model of the test can trace, the line says so instead
+  (`FailureReport::can_trace`).
 - A replay keeps every trace file it wrote: one per model (`waves.fst`,
   `waves.model-<i>.fst`) and per fork branch (`waves[.model-<i>].branch-<j>.fst`), each
   with its own `.gtkw`. `WavesReplay::files: Vec<WavesFile>` (model, branch path, marker,

@@ -11,7 +11,8 @@
 //!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package>
 //!             -E 'binary(=<binary>) & test(=<test>)'   (on one line)
 //!   waves:    SIMJIG_WAVES=1 <the repro command>
-//!             (or, after a replay with waves, the waves file and the replay's verdict)
+//!             (or, after a replay with waves, the waves files and the replay's verdict;
+//!             or `none` when no model of the test can trace)
 //!   run dir:  <target>/simjig/runs/<package>/<binary>/<test>/<seed>/
 //! ```
 //! Lines without data (`task`, `at`, `run dir`) are left out.
@@ -211,6 +212,9 @@ pub struct FailureReport {
     pub signals: Vec<String>,
     /// The replay with waves, if one ran (`SIMJIG_WAVES`, `SIMJIG_WAVES_ON_FAIL`).
     pub waves: Option<WavesReplay>,
+    /// Whether a model of the run can write waves; without one, the report offers no
+    /// waves command.
+    pub can_trace: bool,
 }
 
 impl FailureReport {
@@ -241,9 +245,14 @@ impl FailureReport {
             run_dir: None,
             signals: failing_signals(&failure.kind),
             waves: None,
+            can_trace: true,
         }
     }
 }
+
+/// The `waves:` line of a run none of whose models can trace.
+const NO_TRACE: &str = "none: no model of this test can trace (a FakeModel, or a Verilator \
+                        model built without `.trace_fst(true)` on its `simjig_build::Dut`)";
 
 /// The kernel's advice for the failure: the `help:` line its `Display` ends with.
 fn help(failure: &Failure) -> Option<String> {
@@ -354,7 +363,8 @@ impl fmt::Display for FailureReport {
         writeln!(f, "  repro:    {}", self.run.repro())?;
         match &self.waves {
             Some(waves) => write!(f, "{waves}")?,
-            None => write!(f, "  waves:    {}", self.run.waves())?,
+            None if self.can_trace => write!(f, "  waves:    {}", self.run.waves())?,
+            None => write!(f, "  waves:    {NO_TRACE}")?,
         }
         if let Some(dir) = &self.run_dir {
             write!(f, "\n  run dir:  {}", dir.display())?;

@@ -28,7 +28,9 @@
 use std::ffi::CString;
 use std::path::Path;
 
-use super::abi::{ACCESS_WRITE, Dir, FEATURE_COVERAGE, MsgKind, OwnedMsg, Status};
+use super::abi::{
+    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_TRACE_FST, MsgKind, OwnedMsg, Status,
+};
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
 use super::trace::{TraceOptions, Tracer};
@@ -313,6 +315,10 @@ impl ModelBackend for VerilatorModel {
     // no model code.
     fn coverage(&self) -> Option<Vec<u32>> {
         self.raw.coverage()
+    }
+
+    fn can_trace(&self) -> bool {
+        self.raw.features() & FEATURE_TRACE_FST != 0
     }
 
     fn zero_coverage(&mut self) -> Result<(), CoverageFault> {

@@ -421,3 +421,18 @@ fn reusing_a_stream_path_fails_at_the_second_call() {
         report.message
     );
 }
+
+#[test]
+fn a_test_whose_models_cannot_trace_offers_no_waves_command() {
+    let outcome = run::<(), _, _>(&meta("panics"), &env(None, "no-trace"), |_, ()| panics());
+    let text = outcome.failure.expect("the body panics").to_string();
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("  waves:"))
+        .unwrap_or_else(|| panic!("no waves line:\n{text}"));
+    assert_eq!(
+        line,
+        "  waves:    none: no model of this test can trace (a FakeModel, or a Verilator model \
+         built without `.trace_fst(true)` on its `simjig_build::Dut`)"
+    );
+}

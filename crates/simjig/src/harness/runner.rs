@@ -395,6 +395,7 @@ fn finish(
     let mut failure = result.err().map(|failure| {
         let mut report = FailureReport::new(&failure, run.clone(), None, timeout);
         report.run_dir.clone_from(&dir);
+        report.can_trace = sim.as_ref().is_some_and(Sim::can_trace);
         report
     });
     let run_dir_error = match &dir {

@@ -149,6 +149,11 @@ pub(crate) trait ModelBackend {
     fn coverage(&self) -> Option<Vec<u32>> {
         None
     }
+    /// Whether the model can write FST waves (a Verilator model built with `--trace-fst`);
+    /// `false` by default.
+    fn can_trace(&self) -> bool {
+        false
+    }
     /// Sets every coverage counter to zero.
     fn zero_coverage(&mut self) -> Result<(), CoverageFault> {
         Err(CoverageFault::NotBuilt)

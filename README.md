@@ -82,11 +82,24 @@ branch gets its own file (`waves.model-1.fst`, `waves.branch-0.fst`), listed in 
 SIMJIG_WAVES_ON_FAIL=1 pixi run cargo nextest run          # every failure gets waves (CI)
 SIMJIG_WAVES=1 SIMJIG_SEED=0x... pixi run cargo nextest run -E 'test(=m::t)'   # one run
 SIMJIG_WAVES=window:2us..3us ...                            # a chosen span
-pixi run cargo simjig waves m::t --seed 0x... [--window 1.5us..]   # the same, one command
+pixi run cargo simjig waves m::t --seed 0x... [-p <package>] [--window 1.5us..]   # one command
 ```
 
 The report's `waves:` line is the command to run (or, after a replay, the files). The
-model must be built with `.trace_fst(true)`; otherwise the line says so.
+model must be built with `.trace_fst(true)`; otherwise the line says so, and
+`SIMJIG_WAVES_ON_FAIL` does not replay the failure (`SIMJIG_WAVES` still does, as a
+determinism check).
+
+`cargo simjig` is the `cargo-simjig` binary, installed once (from this repository's root,
+or with `--path` pointing at it from your own crate):
+
+```sh
+pixi run cargo install --locked --path crates/cargo-simjig   # puts cargo-simjig in ~/.cargo/bin
+```
+
+`cargo simjig waves <test>` runs `cargo nextest run` in the current directory, so run it
+in your crate or workspace; `-p <package>` picks the package in a workspace, and
+arguments after `--` go to nextest.
 
 ### DPI-C imports in Rust
 For `import "DPI-C" function int dpi_add(input int x, input int y)`, the generated module
@@ -141,21 +154,26 @@ async fn rev2_matches_rev1(old: counter::Dut, new: counter_rev2::Dut) {
 
 `simjig::fork::run_from_checkpoint` runs several branches of a test from one state (after
 a long reset, say), each in a forked copy of the process with its own seed (Unix, under
-nextest):
+nextest). The test takes a `&simjig::TestCtx` for the root seed:
 
 ```rust
-let branches = fork::run_from_checkpoint(ctx.seed(), 8, |branch| async move {
-    let mut rng = branch.rng("stim");
-    drive(dut, &mut rng).await;
-    Ok(dut.count.get())
-})
-.await
-.expect("a quiet point under nextest");
-let counts = branches.into_values(); // fails the test, naming every failed branch
+#[simjig::test]
+async fn after_reset(ctx: &simjig::TestCtx, dut: counter::Dut) {
+    reset(dut).await; // the checkpoint
+    let branches = fork::run_from_checkpoint(ctx.seed(), 8, |branch| async move {
+        let mut rng = branch.rng("stim");
+        drive(dut, &mut rng).await;
+        Ok(dut.count.get())
+    })
+    .await
+    .expect("a quiet point under nextest");
+    let counts = branches.into_values(); // fails the test, naming every failed branch
+}
 ```
 
 ### Coverage
 A model built with `.coverage(true)` exposes its counters: `Sim::coverage(model)` (or
 `TestCtx::coverage` inside a test) reads them, `zero_coverage` clears them, and
 `write_coverage(model, "coverage.dat")` writes Verilator's file with every point's name,
-for `verilator_coverage`.
+for `verilator_coverage`. `model` is the model index: 0 for the first DUT, then the
+test's DUT parameters in order.

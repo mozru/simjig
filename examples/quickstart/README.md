@@ -17,6 +17,11 @@ directives go to the library when there is one, and an integration test that nev
 that library does not link it, so the model would be missing (see the glue notes,
 `docs/notes/glue.md`). Verilator 5.052 must be on `PATH` (in this repository: `pixi run`).
 
+`[lints] workspace = true` inherits the repository's lints, including `missing_docs`
+(warn), which is why every test file opens with a `//!` comment. A copy outside this
+workspace has nothing to inherit: give each `.workspace = true` key (the `[lints]` table
+included) its own value.
+
 ```sh
 pixi run cargo nextest run -p quickstart
 ```
@@ -55,8 +60,18 @@ GTKWave `waves.gtkw` (marker at the failure) into the run directory:
 
 ```sh
 SIMJIG_WAVES_ON_FAIL=1 pixi run cargo nextest run -p quickstart   # waves for every failure
-pixi run cargo simjig waves q_follows_d --window 10ns..           # one test, passing or not
+pixi run cargo simjig waves q_follows_d -p quickstart --window 10ns..   # one test, passing or not
 ```
+
+`cargo simjig` is a separate binary; install it once, from the simjig repository's root
+(from a copy of this directory, point `--path` at your simjig checkout):
+
+```sh
+pixi run cargo install --locked --path crates/cargo-simjig
+```
+
+`-p` names the package (needed inside a workspace such as this repository), `--window`
+the span to trace, and arguments after `--` go to `cargo nextest run`.
 
 The report's `waves:` line gives the command (or the files, after a replay). A model built
 without `.trace_fst(true)`, like the inverter here, has none, and the line says so.

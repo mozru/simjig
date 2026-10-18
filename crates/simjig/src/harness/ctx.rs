@@ -147,8 +147,9 @@ impl TestCtx {
         state::with_current("TestCtx::precision", |k| k.precision)
     }
 
-    /// The coverage counters of model `model` of the running simulation (0 for the first
-    /// DUT): [`Sim::coverage`](crate::Sim::coverage), while the test runs.
+    /// The coverage counters of model `model` of the running simulation (the model index: 0
+    /// for the first DUT, then the test's DUT parameters in order):
+    /// [`Sim::coverage`](crate::Sim::coverage), while the test runs.
     ///
     /// # Panics
     /// Outside the test's run (or inside a DPI-C call).
@@ -158,7 +159,7 @@ impl TestCtx {
         state::with_current("TestCtx::coverage", |k| k.models.borrow().coverage(model))
     }
 
-    /// Sets every coverage counter of model `model` to zero:
+    /// Sets every coverage counter of model `model` (0 for the first DUT) to zero:
     /// [`Sim::zero_coverage`](crate::Sim::zero_coverage), while the test runs.
     ///
     /// # Errors
@@ -173,7 +174,8 @@ impl TestCtx {
         })
     }
 
-    /// Writes model `model`'s `coverage.dat` (every point's name and count) to `path`:
+    /// Writes model `model`'s (0 for the first DUT) `coverage.dat`, every point's name and
+    /// count, to `path`:
     /// [`Sim::write_coverage`](crate::Sim::write_coverage), while the test runs.
     ///
     /// # Errors

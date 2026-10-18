@@ -22,8 +22,9 @@
 //! - **Waves**: [`TraceOptions`] traces a run; under `#[simjig::test]`,
 //!   `SIMJIG_WAVES_ON_FAIL=1` (every failure), `SIMJIG_WAVES=1` or
 //!   `SIMJIG_WAVES=window:<t0>..<t1>` replay the test with tracing and list the FST files
-//!   in the report ([`WavesReplay`]); `cargo simjig waves <test> --seed <seed>` does the
-//!   same in one command.
+//!   in the report ([`WavesReplay`]); `cargo simjig waves <test> --seed <seed> [-p <pkg>]`
+//!   does the same in one command (install it once with `cargo install --locked --path
+//!   crates/cargo-simjig` from the simjig repository).
 //! - **DPI-C imports in Rust**: the generated module has a `Dpi` trait; register an
 //!   implementation with `dut.set_dpi(..)` before the first eval. An implementation runs
 //!   inside the model's eval, so it cannot read or write signals, await, spawn, or drive
@@ -51,7 +52,8 @@
 //! - **Checkpoints**: [`fork::run_from_checkpoint`] runs several branches of a test from
 //!   one state, each in a forked process (Unix, under nextest).
 //! - **Coverage**: [`Sim::coverage`], [`Sim::zero_coverage`] and [`Sim::write_coverage`]
-//!   (Verilator's `coverage.dat`), or the [`TestCtx`] methods of the same names in a test.
+//!   (Verilator's `coverage.dat`), or the [`TestCtx`] methods of the same names in a test;
+//!   each takes the model index (0 for the first DUT, then the test's DUTs in order).
 //!
 //! Signal values are the bit-vector types of the `simjig-bits` crate, re-exported as
 //! [`simjig::bits`](bits), so a testbench needs no direct dependency on it:

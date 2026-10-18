@@ -687,3 +687,40 @@ fn s3c9_a_file_list_cannot_override_the_top() {
         ),
     }
 }
+
+/// Verilator reads option files as bytes: a Latin-1 comment (`J\xf6rg`) in a vendor list
+/// must not hide the list's `--top-module` from the refusal check (it made the whole file
+/// unreadable to the check, which then saw no words).
+#[test]
+fn s3c10_a_non_utf8_file_list_cannot_override_the_top() {
+    let s = Sandbox::new();
+    let rtl = s.path().join("lt");
+    std::fs::create_dir_all(&rtl).unwrap();
+    std::fs::write(
+        rtl.join("lt.sv"),
+        "module lt_a(input logic a, output logic y);\n  assign y = a;\nendmodule\n\
+         module lt_b(input logic [3:0] b, output logic [3:0] z);\n  assign z = b;\nendmodule\n",
+    )
+    .unwrap();
+    let list = rtl.join("files.F");
+    std::fs::write(&list, b"// Author: J\xf6rg\nlt.sv\n--top-module lt_b\n").unwrap();
+    let r = Dut::new("lt")
+        .file_list_relative(&list)
+        .top("lt_a")
+        .build_in(&s.env());
+    match r {
+        Err(e) => assert!(
+            e.to_string().contains("has `--top-module` on line 3"),
+            "{e}"
+        ),
+        Ok(b) => panic!(
+            "built with the list's top silently; IR top ports: {:?}",
+            b.design
+                .top_module()
+                .ports
+                .iter()
+                .map(|p| &p.name)
+                .collect::<Vec<_>>()
+        ),
+    }
+}

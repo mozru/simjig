@@ -4,6 +4,13 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Option files (`-f`, `-F`, file lists) are read as bytes, as Verilator 5.052 reads
+  them: a file that is not UTF-8 (a Latin-1 `// Author: J\xf6rg`) was skipped whole by
+  the configuration checks, so its `--top-module` silently built another top. A CRLF
+  line keeps its `\r` after a `\` or inside quotes, and whitespace is C's ASCII
+  `isspace` (`\v` and `\f` split words; a no-break space does not). A path in an option
+  file that is not UTF-8 is refused, naming the line: Cargo's `rerun-if-changed` cannot
+  name it.
 - A DUT claims its name before its configuration is checked, so one that fails
   `validate` (or locating Verilator) still owns `OUT_DIR/simjig/<name>.rs`: a later DUT
   whose name differs only in case (`Counter` after `counter`) is refused instead of

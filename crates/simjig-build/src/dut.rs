@@ -469,6 +469,41 @@ impl DutConfig {
         })
     }
 
+    /// What is wrong with the option files and file lists, if anything: a refused option,
+    /// which Verilator would read after simjig's own and so override them as silently as
+    /// one among the arguments, or a path Cargo cannot track.
+    fn option_file_problem(&self) -> Option<String> {
+        let kind = |file: &Path| {
+            if self.file_lists.iter().any(|l| l.path == file) {
+                "file list"
+            } else {
+                "Verilator option file"
+            }
+        };
+        let args = self.option_args();
+        if let Some(found) = crate::optfile::find(&args, refused_arg) {
+            return Some(format!(
+                "{} `{}` has `{}` on line {}: {}",
+                kind(&found.file),
+                found.file.display(),
+                found.word,
+                found.line,
+                found.why
+            ));
+        }
+        crate::optfile::untracked(&args).map(|found| {
+            format!(
+                "{} `{}` names `{}` on line {}, a path that is not UTF-8: Cargo's \
+                 `rerun-if-changed` cannot name it, so an edit to it would not rebuild \
+                 the DUT; rename it to UTF-8",
+                kind(&found.file),
+                found.file.display(),
+                found.word,
+                found.line
+            )
+        })
+    }
+
     /// Checks the configuration and returns the top module.
     fn validate(&self) -> Result<&str, Error> {
         let fail = |msg: String| {
@@ -495,21 +530,8 @@ impl DutConfig {
                 return fail(format!("Verilator argument `{arg}`: {why}"));
             }
         }
-        // A file list is read after simjig's own options, so a refused option in one
-        // would override them as silently as one among the arguments.
-        if let Some(found) = crate::optfile::find(&self.option_args(), refused_arg) {
-            let kind = if self.file_lists.iter().any(|l| l.path == found.file) {
-                "file list"
-            } else {
-                "Verilator option file"
-            };
-            return fail(format!(
-                "{kind} `{}` has `{}` on line {}: {}",
-                found.file.display(),
-                found.word,
-                found.line,
-                found.why
-            ));
+        if let Some(msg) = self.option_file_problem() {
+            return fail(msg);
         }
         if self
             .sources
@@ -1718,6 +1740,34 @@ mod tests {
         }
         std::fs::write(&opts, "a.sv\n--threads 1\n-Wno-WIDTH\n// --timing\n").unwrap();
         assert!(with_args(&["-f", &path]).validate().is_ok());
+    }
+
+    /// A source in a file list whose name is not UTF-8 could be read by Verilator, but a
+    /// Cargo directive cannot name it, so an edit to it would never rebuild the DUT: it
+    /// is refused, naming the line. Non-UTF-8 bytes elsewhere (a comment) are fine.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_path_in_a_file_list_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let list = t.path().join("files.f");
+        let listed = DutConfig {
+            file_lists: vec![FileList {
+                path: list.clone(),
+                relative: true,
+            }],
+            ..cfg()
+        };
+        std::fs::write(&list, b"// J\xf6rg\na.sv\nj\xf6rg.sv\n").unwrap();
+        let m = listed.validate().unwrap_err().to_string();
+        assert!(
+            m.contains(&format!(
+                "file list `{}` names `j\u{fffd}rg.sv` on line 3, a path that is not UTF-8",
+                list.display()
+            )),
+            "{m}"
+        );
+        std::fs::write(&list, b"// J\xf6rg\na.sv\n").unwrap();
+        assert!(listed.validate().is_ok());
     }
 
     #[test]

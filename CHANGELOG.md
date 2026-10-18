@@ -66,7 +66,10 @@ the public API, the generated code or simulation semantics.
   with its own `.gtkw`. `WavesReplay::files: Vec<WavesFile>` (model, branch path, marker,
   save file) replaces `WavesReplay::{fst, gtkw}`. When a fork branch fails the test, its
   files come first in the report, with the marker at the branch's own failure.
-- `cargo simjig waves <test> --seed <seed> [--window ..]`.
+- `cargo simjig waves <test> --seed <seed> [--window ..]`. It checks `--window` itself
+  (decimals such as `1.5us` become `1500ns`; a bad window is a usage error naming the
+  forms), has `--help`, and after a failing test prints a note, not an error, keeping
+  nextest's exit code.
 - A traced model in a `fork` branch child continues its waves in
   `<stem>.branch-<i>.fst`; a child never writes the parent's file.
 - In a simulation of several models, model `i > 0` traces into `<stem>.model-<i>.fst`

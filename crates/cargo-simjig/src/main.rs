@@ -27,10 +27,14 @@ fn main() -> ExitCode {
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     if let ["waves", rest @ ..] = args.as_slice() {
+        if WavesArgs::wants_help(rest) {
+            eprintln!("{}", waves::USAGE);
+            return ExitCode::SUCCESS;
+        }
         return match WavesArgs::parse(rest) {
             Ok(waves_args) => waves::run(&waves_args),
             Err(error) => {
-                eprintln!("error: {error}\n\n{USAGE}\n{}", waves::USAGE);
+                eprintln!("error: {error}\n\n{}", waves::USAGE);
                 ExitCode::from(2)
             }
         };

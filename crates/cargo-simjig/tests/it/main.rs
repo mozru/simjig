@@ -119,3 +119,25 @@ fn waves_writes_the_waves_of_a_test_in_one_command() {
     assert!(dir.join("waves.gtkw").is_file(), "{stderr}");
     assert!(stderr.contains("replay:   reproduced"), "{stderr}");
 }
+
+#[test]
+fn waves_help_prints_its_usage_and_a_bad_window_is_a_usage_error() {
+    let binary = env!("CARGO_BIN_EXE_cargo-simjig");
+    let help = Command::new(binary)
+        .args(["simjig", "waves", "--help"])
+        .output()
+        .expect("runs");
+    let text = String::from_utf8_lossy(&help.stderr);
+    assert!(help.status.success(), "{text}");
+    assert!(text.starts_with("  waves     replay one test"), "{text}");
+    let bad = Command::new(binary)
+        .args(["simjig", "waves", "m::t", "--window", "1.5"])
+        .output()
+        .expect("runs");
+    let text = String::from_utf8_lossy(&bad.stderr);
+    assert_eq!(bad.status.code(), Some(2), "{text}");
+    assert!(
+        text.starts_with("error: --window \"1.5\": a window is"),
+        "{text}"
+    );
+}

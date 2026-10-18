@@ -306,17 +306,18 @@ pub(crate) fn compiler_files(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
     files
 }
 
-/// The directories of the toolchain's own headers: the compiler's `#include <...>` search
-/// list (its C++ library, its resource directory, the SDK or sysroot), asked of the
-/// compiler with its arguments but without their include-path flags, and the `include/`
-/// of the prefix it is installed in (`<prefix>/bin/c++`: a conda environment's
-/// `include/`, which its activation adds with `-isystem`). Each as named and canonical.
+/// The directories of the toolchain's own headers, as the compiler (asked with its
+/// arguments but without their include-path flags) and the SDK report them
+/// ([`toolchain_from`]): the compiler's resource directory, its C++ library, the SDK.
+/// Each as named and canonical.
 ///
 /// A file under them changes only with the toolchain, which [`compiler_identity`] and
 /// [`compiler_files`] already track, so the build script need not rerun on each (they
-/// are most of a model's dependencies); the archive keys still hash them. Asked once per
-/// build script (`OUT_DIR`) and compiler; a compiler that cannot answer (no `-v`) gives
-/// the prefix alone.
+/// are most of a model's dependencies); the archive keys still hash them. Other
+/// directories of the search list are not the compiler's own (a conda or Homebrew
+/// prefix's `include/`, `/usr/local/include`, `/usr/include` on Linux): a library header
+/// there may be upgraded on its own, and must rerun the script. Asked once per build
+/// script (`OUT_DIR`) and compiler; a compiler that cannot answer gives what it could.
 pub(crate) fn toolchain_dirs(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
     static DIRS: Mutex<Vec<(PathBuf, PathBuf, Vec<PathBuf>)>> = Mutex::new(Vec::new());
     let (found, exe) = resolve(env, tool.path());
@@ -329,20 +330,27 @@ pub(crate) fn toolchain_dirs(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
         return dirs.clone();
     }
     let args: Vec<&std::ffi::OsStr> = without_include_flags(tool.args());
-    let mut dirs = std::process::Command::new(&found)
-        .args(args)
-        .args(["-E", "-x", "c++", "-v", "-"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map(|o| system_search_list(&String::from_utf8_lossy(&o.stderr)))
-        .unwrap_or_default();
-    for bin in [&found, &exe] {
-        dirs.extend(
-            bin.parent()
-                .and_then(Path::parent)
-                .map(|p| p.join("include")),
-        );
-    }
+    let ask = |program: &Path, args: &[&std::ffi::OsStr], extra: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .args(extra)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map(|o| {
+                let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+                (text(&o.stdout), text(&o.stderr))
+            })
+            .unwrap_or_default()
+    };
+    let report = ask(&found, &args, &["-E", "-x", "c++", "-v", "-"]).1;
+    // Clang answers both; GCC only the second, with its own `include` directory.
+    let printed = [
+        ask(&found, &args, &["-print-resource-dir"]).0,
+        ask(&found, &args, &["-print-file-name=include"]).0,
+    ];
+    let sdk =
+        cfg!(target_os = "macos").then(|| ask(Path::new("xcrun"), &[], &["--show-sdk-path"]).0);
+    let mut dirs = toolchain_from(&report, &printed, sdk.as_deref());
     let canonical: Vec<PathBuf> = dirs
         .iter()
         .filter_map(|d| std::fs::canonicalize(d).ok())
@@ -352,6 +360,48 @@ pub(crate) fn toolchain_dirs(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
     dirs.sort();
     dirs.dedup();
     known.push((env.out_dir.clone(), exe, dirs.clone()));
+    dirs
+}
+
+/// The toolchain's header directories in the compiler's answers: `report`, the stderr of
+/// `-E -v`; `printed`, the stdout of `-print-resource-dir` and `-print-file-name=include`;
+/// and `sdk`, that of `xcrun --show-sdk-path` on macOS. They are
+/// - the resource directory (Clang's `lib/clang/<ver>`, GCC's `lib/gcc/<triple>/<ver>`,
+///   the parent of its `include` and `include-fixed`), from `printed`;
+/// - the C++ standard library's headers: the search list's directories with a `c++`
+///   component (`include/c++/v1`, `include/c++/13`, `<triple>/c++/13`);
+/// - the SDK: `sdk`, and the `-isysroot` the report's compiler command line passes.
+///
+/// A relative answer (GCC prints `include` when it has none) is not a directory.
+fn toolchain_from(report: &str, printed: &[String], sdk: Option<&str>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = system_search_list(report)
+        .into_iter()
+        .filter(|d| {
+            let mut parts = d.components().map(std::path::Component::as_os_str);
+            parts.any(|c| c == "c++") && parts.next().is_some()
+        })
+        .collect();
+    for p in printed {
+        let p = Path::new(p.trim());
+        if p.is_absolute() {
+            let resource = if p.ends_with("include") {
+                p.parent()
+            } else {
+                Some(p)
+            };
+            dirs.extend(resource.map(Path::to_path_buf));
+        }
+    }
+    let unquote = |t: &str| t.trim_matches(|c| c == '"' || c == '\'').to_owned();
+    let words: Vec<&str> = report.split_whitespace().collect();
+    let sysroots = words
+        .windows(2)
+        .filter(|w| unquote(w[0]) == "-isysroot")
+        .map(|w| unquote(w[1]));
+    let sdks = sysroots.chain(sdk.map(|s| s.trim().to_owned()));
+    dirs.extend(sdks.map(PathBuf::from).filter(|p| p.is_absolute()));
+    dirs.sort();
+    dirs.dedup();
     dirs
 }
 
@@ -587,6 +637,71 @@ mod tests {
             .map(PathBuf::from)
         );
         assert_eq!(system_search_list("no -v here"), Vec::<PathBuf>::new());
+    }
+
+    /// Clang in a conda prefix on macOS: the prefix's `include/` (other packages'
+    /// headers, which the conda clang's configuration adds with `-isystem`) is not the
+    /// toolchain's, and an upgrade of a header there must rerun the build script.
+    #[test]
+    fn the_toolchain_is_the_resource_dir_the_cxx_library_and_the_sdk() {
+        let clang = "clang version 21\n \"/p/bin/clang-21\" -cc1 -triple arm64 \
+                     -resource-dir /p/lib/clang/21 -isystem /p/bin/../include -isysroot \
+                     /sdk/MacOSX.sdk -internal-isystem /p/bin/../include/c++/v1 -x c++ -\n\
+                     #include <...> search starts here:\n /p/bin/../include\n \
+                     /p/bin/../include/c++/v1\n /p/lib/clang/21/include\n \
+                     /sdk/MacOSX.sdk/usr/include\n /sdk/MacOSX.sdk/System/Library/Frameworks \
+                     (framework directory)\nEnd of search list.\n";
+        let printed = ["/p/lib/clang/21\n", "/p/lib/clang/21/include\n"].map(str::to_owned);
+        assert_eq!(
+            toolchain_from(clang, &printed, Some("/sdk/MacOSX.sdk\n")),
+            [
+                "/p/bin/../include/c++/v1",
+                "/p/lib/clang/21",
+                "/sdk/MacOSX.sdk"
+            ]
+            .map(PathBuf::from)
+        );
+    }
+
+    /// GCC on Linux: `/usr/local/include` and `/usr/include` (libc and every `-dev`
+    /// package's headers) are in the search list but not the toolchain's; GCC has no
+    /// `-print-resource-dir` (an error, so no stdout).
+    #[test]
+    fn gccs_report_gives_its_own_dirs_and_not_usr_include() {
+        let gcc = "Using built-in specs.\nCOLLECT_GCC=g++\n \
+                   /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -E -quiet -v -imultiarch \
+                   x86_64-linux-gnu -D_GNU_SOURCE - -mtune=generic -march=x86-64\n\
+                   ignoring nonexistent directory \"/usr/local/include/x86_64-linux-gnu\"\n\
+                   #include \"...\" search starts here:\n\
+                   #include <...> search starts here:\n /usr/include/c++/13\n \
+                   /usr/include/x86_64-linux-gnu/c++/13\n /usr/include/c++/13/backward\n \
+                   /usr/lib/gcc/x86_64-linux-gnu/13/include\n /usr/local/include\n \
+                   /usr/include/x86_64-linux-gnu\n /usr/include\nEnd of search list.\n\
+                   COLLECT_GCC_OPTIONS='-E' '-v' '-shared-libgcc' '-mtune=generic'\n";
+        let printed = [
+            String::new(),
+            "/usr/lib/gcc/x86_64-linux-gnu/13/include\n".into(),
+        ];
+        assert_eq!(
+            toolchain_from(gcc, &printed, None),
+            [
+                "/usr/include/c++/13",
+                "/usr/include/c++/13/backward",
+                "/usr/include/x86_64-linux-gnu/c++/13",
+                "/usr/lib/gcc/x86_64-linux-gnu/13",
+            ]
+            .map(PathBuf::from)
+        );
+        // A GCC without its own headers prints the name back; a cross GCC's `-isysroot`
+        // (quoted in `COLLECT_GCC_OPTIONS`) is its SDK.
+        assert_eq!(
+            toolchain_from(
+                "COLLECT_GCC_OPTIONS='-E' '-isysroot' '/sr'",
+                &["include".into()],
+                None
+            ),
+            [PathBuf::from("/sr")]
+        );
     }
 
     #[test]

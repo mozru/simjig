@@ -41,12 +41,15 @@ the public API, the generated code or simulation semantics.
   line now starts with the DUT (``DUT `gb`: the width error may come from ...``), so a
   sweep member's hint says which member.
 - A model's build script no longer prints `cargo::rerun-if-changed` for the toolchain's
-  own headers: the compiler's `#include <...>` search list (its C++ library, resource
-  directory, SDK or sysroot) and the `include/` of the prefix the compiler is installed
-  in (a conda environment's). They change only with the compiler, whose identity keys
-  the archives and whose executable the script reruns on; the archive keys still hash
-  them. This was most of a failed build's `--- stdout` (`simjig`'s own test build
-  script: 1,268 distinct paths before, 66 after).
+  own headers: the compiler's resource directory (`-print-resource-dir`, GCC's
+  `-print-file-name=include`), its C++ library (the search list's `c++/v1`, `c++/<ver>`)
+  and the SDK (`xcrun --show-sdk-path`, `-isysroot`). They change only with the
+  compiler, whose identity keys the archives and whose executable the script reruns on;
+  the archive keys still hash them. Other headers of the search list (a conda or
+  Homebrew prefix's `include/`, `/usr/local/include`, `/usr/include` on Linux) still
+  rerun it, so a library upgrade does. This was most of a failed build's `--- stdout`
+  (`simjig`'s own test build script on macOS: 1,268 distinct paths before, 69 after,
+  three of them the conda prefix's `zlib.h`, `zconf.h` and `lz4.h`).
 - `Dut::param` set twice for one parameter keeps the last value (in the first call's
   place) instead of passing Verilator two `-G` options ("Duplicate parameter
   connection"), so a sweep member can override a base configuration. A second

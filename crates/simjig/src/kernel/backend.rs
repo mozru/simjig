@@ -25,6 +25,7 @@
 
 use std::fmt;
 
+use super::failure::SourceLocation;
 use super::time::{Precision, SimTime};
 
 /// What an `eval` reported, when it did not fail.
@@ -43,13 +44,6 @@ pub(crate) enum ModelErrorKind {
     /// error).
     Fatal,
     /// A DPI-C import implemented in Rust panicked during the eval.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the dpi module (branch w3/dpi) makes it once merged"
-        )
-    )]
     DpiPanic,
 }
 
@@ -60,6 +54,8 @@ pub(crate) struct ModelError {
     pub(crate) kind: ModelErrorKind,
     /// What the model reported, including the HDL file, line and scope when known.
     pub(crate) message: String,
+    /// The Rust line that panicked, for a [`ModelErrorKind::DpiPanic`].
+    pub(crate) location: Option<&'static SourceLocation>,
 }
 
 impl ModelError {
@@ -68,21 +64,20 @@ impl ModelError {
         Self {
             kind: ModelErrorKind::Fatal,
             message,
+            location: None,
         }
     }
 
-    /// A panic in a DPI-C import implemented in Rust.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the dpi module (branch w3/dpi) calls it once merged"
-        )
-    )]
-    pub(crate) const fn dpi_panic(message: String) -> Self {
+    /// A panic in a DPI-C import implemented in Rust, at `location` if the panic hook saw
+    /// it.
+    pub(crate) const fn dpi_panic(
+        message: String,
+        location: Option<&'static SourceLocation>,
+    ) -> Self {
         Self {
             kind: ModelErrorKind::DpiPanic,
             message,
+            location,
         }
     }
 }

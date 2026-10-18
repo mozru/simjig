@@ -59,7 +59,7 @@ fn a_panic_becomes_a_failure_and_later_calls_return_zero() {
         (0, 0),
         "zero after the panic, implementation not run again"
     );
-    let failure = failure.unwrap();
+    let failure = failure.unwrap().message;
     assert!(
         failure.starts_with("DPI-C import `add` of model `Vpanic` panicked: negative input -1."),
         "{failure}"
@@ -73,7 +73,7 @@ fn a_call_without_an_implementation_says_how_to_register_one() {
     let mut a = bound::<dyn Adder>("Vnone", None);
     let (value, failure) = a.scope(|| add("Vnone", 1, 2));
     assert_eq!(value, 0);
-    let failure = failure.unwrap();
+    let failure = failure.unwrap().message;
     assert!(
         failure.contains("model `Vnone` has no DPI implementation"),
         "{failure}"
@@ -86,7 +86,7 @@ fn a_call_into_another_models_trampoline_names_both() {
     let mut b = bound("Vb", Some(plus(0)));
     let (value, failure) = b.scope(|| add("Va", 1, 2));
     assert_eq!(value, 0);
-    let failure = failure.unwrap();
+    let failure = failure.unwrap().message;
     assert!(
         failure.starts_with(
             "model `Vb` called DPI-C import `add`, but the `add` linked into this binary is \
@@ -119,25 +119,27 @@ fn a_reentrant_call_returns_zero_and_leaves_the_outer_call_intact() {
 }
 
 #[test]
-fn signal_access_inside_a_call_panics_with_the_rule() {
-    struct Touch;
-    impl Adder for Touch {
+fn the_kernel_knows_a_call_is_running_only_during_it() {
+    struct Probe;
+    impl Adder for Probe {
         fn add(&mut self, _x: i32, _y: i32) -> i32 {
-            forbid_in_call("read signal `top.a`");
+            assert_eq!(state::in_dpi_call(), Some("add"));
             1
         }
     }
-    let mut a = bound("Vtouch", Some(Box::new(Touch) as Box<dyn Adder>));
-    let (_, failure) = a.scope(|| add("Vtouch", 1, 0));
-    let failure = failure.unwrap();
-    assert!(
-        failure.contains(
-            "panicked: DPI-C import `add` read signal `top.a`: DPI functions run inside eval; \
-             they can't access signals or await"
-        ),
-        "{failure}"
-    );
-    forbid_in_call("is outside a call, so this is allowed");
+    let mut a = bound("Vprobe", Some(Box::new(Probe) as Box<dyn Adder>));
+    assert_eq!(a.scope(|| add("Vprobe", 1, 0)), (1, None));
+    assert_eq!(state::in_dpi_call(), None);
+}
+
+#[test]
+fn a_panic_is_marked_as_one_and_other_failures_are_not() {
+    let mut a = bound("Vkind", Some(plus(0)));
+    let (_, failure) = a.scope(|| add("Vkind", -1, 0));
+    assert!(failure.unwrap().panicked);
+    let mut b = bound::<dyn Adder>("Vkind_none", None);
+    let (_, failure) = b.scope(|| add("Vkind_none", 1, 0));
+    assert!(!failure.unwrap().panicked);
 }
 
 #[test]
@@ -169,6 +171,7 @@ fn a_second_model_with_the_same_slot_fails_only_when_it_calls() {
     assert!(
         failure
             .unwrap()
+            .message
             .contains("two models with prefix `Vtwin` run in one simulation"),
     );
     drop(twin);

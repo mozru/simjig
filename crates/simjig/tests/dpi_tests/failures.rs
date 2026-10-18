@@ -4,9 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use simjig::__private::Out;
 use simjig::{Failure, FailureKind, Timer};
-use simjig_bits::Bits;
 
 use super::{TICK, cycles, dpi, sim};
 
@@ -29,6 +27,13 @@ impl dpi::Dpi for Picky {
     fn dpi_tick(&mut self) -> i32 {
         self.calls.set(self.calls.get() + 1);
         0
+    }
+}
+
+fn dpi_panic(failure: &Failure) -> &str {
+    match &failure.kind {
+        FailureKind::DpiPanic { message } => message,
+        other => panic!("expected DpiPanic, got {other:?}"),
     }
 }
 
@@ -55,13 +60,20 @@ fn a_panic_fails_the_run_and_poisons_the_model() {
             cycles(dut.clk, 3).await;
         })
         .unwrap_err();
-    let message = model_fatal(&failure);
+    let message = dpi_panic(&failure);
     assert!(
         message.starts_with("DPI-C import `dpi_add` of model `Vdpi_"),
         "{message}"
     );
+    let location = failure.location.expect("the panicking line");
     assert!(
-        message.contains("panicked: seven is not allowed. The design received zero"),
+        location.to_string().starts_with("crates/simjig/tests/dpi_tests/failures.rs:"),
+        "{location}"
+    );
+    assert!(
+        message.contains(&format!(
+            "panicked at {location}: seven is not allowed. The design received zero"
+        )),
         "{message}"
     );
     assert_eq!(failure.time.ticks(), 1, "the eval that applied a = 7");
@@ -72,7 +84,7 @@ fn a_panic_fails_the_run_and_poisons_the_model() {
 }
 
 #[simjig::test]
-#[should_panic(expected = "panicked: seven is not allowed")]
+#[should_panic(expected = "seven is not allowed")]
 async fn a_panic_in_a_harness_test_is_the_failure_report(dut: dpi::Dut) {
     dut.set_dpi(Picky {
         calls: Rc::new(Cell::new(0)),
@@ -94,64 +106,93 @@ fn a_call_without_an_implementation_says_how_to_register_one() {
     assert_eq!(failure.time.ticks(), 0, "the initial eval computes sum");
 }
 
-/// Reads a signal from inside `dpi_tick`.
-struct Peek {
-    sum: Out<Bits<32>>,
-}
+/// Runs `misuse` inside every `dpi_tick` call.
+struct Misuse(Box<dyn FnMut()>);
 
-impl dpi::Dpi for Peek {
+impl dpi::Dpi for Misuse {
     fn dpi_add(&mut self, x: i32, y: i32) -> i32 {
         x + y
     }
 
     fn dpi_tick(&mut self) -> i32 {
-        i32::try_from(self.sum.get().to_u128()).unwrap()
-    }
-}
-
-#[test]
-fn reading_a_signal_inside_a_dpi_call_fails_with_the_rule() {
-    let (mut sim, dut) = sim::<dpi::Dut>();
-    dut.set_dpi(Peek { sum: dut.sum });
-    let failure = sim
-        .run(async move { cycles(dut.clk, 1).await })
-        .unwrap_err();
-    let message = model_fatal(&failure);
-    assert!(
-        message.contains(
-            "panicked: DPI-C import `dpi_tick` read a signal: DPI functions run inside eval; \
-             they can't access signals or await"
-        ),
-        "{message}"
-    );
-}
-
-/// Arms a trigger (the first step of an await) from inside `dpi_tick`.
-struct Wait {
-    clk: simjig::__private::In<simjig_bits::Bit>,
-}
-
-impl dpi::Dpi for Wait {
-    fn dpi_add(&mut self, x: i32, y: i32) -> i32 {
-        x + y
-    }
-
-    fn dpi_tick(&mut self) -> i32 {
-        drop(self.clk.rising());
+        (self.0)();
         0
     }
 }
 
-#[test]
-fn awaiting_inside_a_dpi_call_fails_with_the_rule() {
+/// Runs one clock cycle with `misuse` inside `dpi_tick`; returns the `DpiPanic` message.
+fn misuse(misuse: impl FnOnce(dpi::Dut) -> Box<dyn FnMut()>) -> String {
     let (mut sim, dut) = sim::<dpi::Dut>();
-    dut.set_dpi(Wait { clk: dut.clk });
+    dut.set_dpi(Misuse(misuse(dut)));
     let failure = sim
         .run(async move { cycles(dut.clk, 1).await })
         .unwrap_err();
+    dpi_panic(&failure).to_owned()
+}
+
+/// The rule's message for `what`, as the kernel words it.
+fn rule(what: &str) -> String {
+    format!(
+        "DPI-C import `dpi_tick` used {what}: DPI functions run inside eval; they can't \
+         access signals or await"
+    )
+}
+
+#[test]
+fn reading_a_signal_inside_a_dpi_call_fails_with_the_rule() {
+    let message = misuse(|dut| {
+        Box::new(move || {
+            let _value = dut.sum.get();
+        })
+    });
+    assert!(message.contains(&rule("a signal")), "{message}");
+}
+
+#[test]
+fn writing_a_signal_inside_a_dpi_call_fails_with_the_rule() {
+    let message = misuse(|dut| Box::new(move || dut.a.set(3)));
+    assert!(message.contains(&rule("a signal")), "{message}");
+}
+
+#[test]
+fn arming_a_trigger_inside_a_dpi_call_fails_with_the_rule() {
+    let message = misuse(|dut| Box::new(move || drop(dut.clk.rising())));
+    assert!(message.contains("`dpi_tick` used "), "{message}");
     assert!(
-        model_fatal(&failure)
-            .contains("`dpi_tick` awaited a signal: DPI functions run inside eval"),
-        "{failure}"
+        message.contains("DPI functions run inside eval; they can't access signals or await"),
+        "{message}"
+    );
+}
+
+#[test]
+fn spawning_inside_a_dpi_call_fails_with_the_rule() {
+    let message = misuse(|_| Box::new(|| simjig::spawn("late", async {}).detach()));
+    assert!(message.contains(&rule("spawn")), "{message}");
+}
+
+#[test]
+fn reading_the_time_inside_a_dpi_call_fails_with_the_rule() {
+    let message = misuse(|_| {
+        Box::new(|| {
+            let _now = simjig::now();
+        })
+    });
+    assert!(message.contains(&rule("now()")), "{message}");
+}
+
+#[test]
+fn awaiting_a_timer_inside_a_dpi_call_fails_with_the_rule() {
+    let message = misuse(|_| {
+        Box::new(|| {
+            // What an `.await` does first: poll the timer once.
+            let mut timer = std::pin::pin!(Timer::new(TICK));
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            let _poll = timer.as_mut().poll(&mut cx);
+        })
+    });
+    assert!(message.contains("`dpi_tick` used "), "{message}");
+    assert!(
+        message.contains("DPI functions run inside eval; they can't access signals or await"),
+        "{message}"
     );
 }

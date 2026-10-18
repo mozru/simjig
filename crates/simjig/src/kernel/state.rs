@@ -110,13 +110,6 @@ thread_local! {
 
 /// Marks a DPI-C call to `import` in progress on this thread until dropped; see the
 /// module docs.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the dpi module (branch w3/dpi) makes it once merged"
-    )
-)]
 #[derive(Debug)]
 pub(crate) struct DpiCallGuard {
     previous: Option<&'static str>,
@@ -124,13 +117,6 @@ pub(crate) struct DpiCallGuard {
 
 /// Starts a DPI-C call to `import`: kernel entry points refuse to run until the guard
 /// drops (it restores the previous state, so nesting is harmless).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the dpi module (branch w3/dpi) calls it once merged"
-    )
-)]
 #[must_use = "the call ends when the guard drops"]
 pub(crate) fn enter_dpi_call(import: &'static str) -> DpiCallGuard {
     DpiCallGuard {

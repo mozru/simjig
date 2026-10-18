@@ -278,9 +278,9 @@ impl ModelBackend for VerilatorModel {
         }
         match dpi_failure {
             // The DPI failure happened first: the design went on with a wrong value.
-            Some(message) => {
-                self.poisoned = Some(message.clone());
-                Err(ModelError::fatal(message))
+            Some(failure) => {
+                self.poisoned = Some(failure.message.clone());
+                Err(failure.into_model_error())
             }
             None => result,
         }
@@ -306,8 +306,8 @@ impl Drop for VerilatorModel {
             if let Err(e) = self.outcome(status) {
                 print_line(&format!("simjig: in final blocks: {}", e.message));
             }
-            if let Some(message) = dpi_failure {
-                print_line(&format!("simjig: in final blocks: {message}"));
+            if let Some(failure) = dpi_failure {
+                print_line(&format!("simjig: in final blocks: {}", failure.message));
             }
         }
         // A poisoned model refuses trace calls; `destroy` closes its trace instead.

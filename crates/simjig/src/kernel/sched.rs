@@ -253,7 +253,7 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
                     message: message.clone(),
                 },
             };
-            k.fail(kind, None, None, message);
+            k.fail(kind, None, e.location, message);
         }
     }
     false
@@ -417,6 +417,7 @@ mod tests {
         fn eval(&mut self) -> Result<EvalStatus, ModelError> {
             Err(ModelError::dpi_panic(
                 "DPI-C import `dpi_add` panicked: seven".into(),
+                None,
             ))
         }
         fn events_pending(&self) -> bool {

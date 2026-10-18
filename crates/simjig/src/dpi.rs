@@ -28,12 +28,14 @@
 //! and the trampoline returns zero (the type's default) to the design. Later calls in the
 //! same eval return zero without running the implementation. After the eval the backend
 //! takes the failure, poisons the model (the design already consumed a wrong value, so
-//! continuing would report garbage) and fails the run with the message.
+//! continuing would report garbage) and fails the run: a panic as `DpiPanic` with the
+//! panicking line (from `kernel::panics`), anything else as `ModelFatal`.
 //!
-//! While an implementation runs, typed signal handles panic with "DPI functions run inside
-//! eval; they can't access signals or await" ([`forbid_in_call`]): the model is in the
-//! middle of an eval, so there is no consistent value to read and no time at which a write
-//! could apply.
+//! While an implementation runs, the kernel refuses every entry point (signal access,
+//! triggers, `spawn`, `now()`, timers) with "DPI functions run inside eval; they can't
+//! access signals or await" (`kernel::state::enter_dpi_call`): the model is in the middle
+//! of an eval, so there is no consistent value to read and no time at which a write could
+//! apply.
 //!
 //! # Duplicate names
 //! Two models in one binary that import the same C name share one symbol: the linker keeps
@@ -63,8 +65,10 @@ pub use abi::{
     Ret, SvLogicVecVal, U8, U16, U32, U64,
 };
 
+use crate::kernel::backend::ModelError;
+use crate::kernel::failure::SourceLocation;
 use crate::kernel::signal::RawSig;
-use crate::kernel::state;
+use crate::kernel::{panics, state};
 
 /// An SV `chandle` (C `void*`): an opaque pointer the design stores and hands back.
 ///
@@ -116,7 +120,7 @@ struct Slot {
     /// trait, so [`call`] can downcast without knowing the trait.
     imp: RefCell<Option<Box<dyn Any>>>,
     /// The first failure since the backend last asked.
-    failure: RefCell<Option<String>>,
+    failure: RefCell<Option<DpiFailure>>,
     /// Whether `failure` is set; checked on every call, so kept apart from it.
     failed: Cell<bool>,
     /// Whether a model backend uses this slot (at most one may).
@@ -138,16 +142,47 @@ impl Slot {
         })
     }
 
-    /// Records `message` unless an earlier failure is pending.
+    /// Records a failure that is not a panic, unless an earlier failure is pending.
     fn fail(&self, message: String) {
-        self.failure.borrow_mut().get_or_insert(message);
+        self.record(DpiFailure {
+            message,
+            panicked: false,
+            location: None,
+        });
+    }
+
+    /// Records `failure` unless an earlier failure is pending.
+    fn record(&self, failure: DpiFailure) {
+        self.failure.borrow_mut().get_or_insert(failure);
         self.failed.set(true);
     }
 
     /// The pending failure, clearing it.
-    fn take_failure(&self) -> Option<String> {
+    fn take_failure(&self) -> Option<DpiFailure> {
         self.failed.set(false);
         self.failure.take()
+    }
+}
+
+/// What went wrong in the DPI calls of one eval.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DpiFailure {
+    /// The whole message, naming the import and the model.
+    pub(crate) message: String,
+    /// Whether an implementation panicked (otherwise none was registered, or names clash).
+    pub(crate) panicked: bool,
+    /// The panicking line, if the kernel's panic hook saw it.
+    pub(crate) location: Option<&'static SourceLocation>,
+}
+
+impl DpiFailure {
+    /// The eval's error: `DpiPanic` for a panic, a model fatal for the rest.
+    pub(crate) fn into_model_error(self) -> ModelError {
+        if self.panicked {
+            ModelError::dpi_panic(self.message, self.location)
+        } else {
+            ModelError::fatal(self.message)
+        }
     }
 }
 
@@ -155,15 +190,12 @@ impl Slot {
 struct Thread {
     /// The slot of the model being evaluated; taken out while a call runs.
     current: Cell<Option<Rc<Slot>>>,
-    /// The C name of the import whose implementation is running.
-    in_call: Cell<Option<&'static str>>,
 }
 
 thread_local! {
     static THREAD: Thread = const {
         Thread {
             current: Cell::new(None),
-            in_call: Cell::new(None),
         }
     };
     /// Slots by (simulation id, model prefix).
@@ -198,7 +230,12 @@ pub fn install<T: ?Sized + 'static>(
     sig: RawSig,
     imp: Box<T>,
 ) {
-    forbid_in_call("registered a DPI implementation");
+    if let Some(running) = state::in_dpi_call() {
+        panic!(
+            "DPI-C import `{running}` registered a DPI implementation: DPI functions run \
+             inside eval; they can't access signals or await"
+        );
+    }
     claim(prefix, imports);
     let slot = registered(sig.sim_gen(), prefix);
     *slot.imp.borrow_mut() = Some(Box::new(imp));
@@ -235,7 +272,7 @@ pub fn call<T: ?Sized + 'static, R>(
     let mut f = Some(f);
     let result = THREAD.try_with(|t| {
         let slot = t.current.take()?;
-        let result = dispatch(t, &slot, prefix, name, default.take()?, f.take()?);
+        let result = dispatch(&slot, prefix, name, default.take()?, f.take()?);
         t.current.set(Some(slot));
         Some(result)
     });
@@ -251,7 +288,6 @@ pub fn call<T: ?Sized + 'static, R>(
 }
 
 fn dispatch<T: ?Sized + 'static, R>(
-    thread: &Thread,
     slot: &Slot,
     prefix: &'static str,
     name: &'static str,
@@ -287,17 +323,25 @@ fn dispatch<T: ?Sized + 'static, R>(
         ));
         return default;
     };
-    thread.in_call.set(Some(name));
+    let call = state::enter_dpi_call(name);
+    panics::forget();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| f(&mut **imp)));
-    thread.in_call.set(None);
+    let location = panics::take();
+    drop(call);
     match outcome {
         Ok(value) => value,
         Err(payload) => {
-            slot.fail(format!(
-                "DPI-C import `{name}` of model `{prefix}` panicked: {}. The design received \
-                 zero as its result, so the model is poisoned and is not evaluated again",
-                panic_message(&*payload)
-            ));
+            let at = location.map(|l| format!(" at {l}")).unwrap_or_default();
+            slot.record(DpiFailure {
+                message: format!(
+                    "DPI-C import `{name}` of model `{prefix}` panicked{at}: {}. The design \
+                     received zero as its result, so the model is poisoned and is not \
+                     evaluated again",
+                    panic_message(&*payload)
+                ),
+                panicked: true,
+                location,
+            });
             drop_payload(payload);
             default
         }
@@ -336,21 +380,6 @@ fn drop_payload(payload: Box<dyn Any + Send>) {
     }
 }
 
-/// Panics if a DPI implementation is running on this thread: it runs inside eval, where
-/// signal handles and triggers have no meaning. `what` says what it tried.
-///
-/// # Panics
-/// Inside a DPI call.
-#[track_caller]
-pub(crate) fn forbid_in_call(what: &str) {
-    if let Some(name) = THREAD.try_with(|t| t.in_call.get()).ok().flatten() {
-        panic!(
-            "DPI-C import `{name}` {what}: DPI functions run inside eval; they can't access \
-             signals or await"
-        );
-    }
-}
-
 /// The DPI state of one model instance, owned by its backend.
 #[derive(Debug)]
 pub(crate) struct ModelDpi {
@@ -380,7 +409,7 @@ impl ModelDpi {
 
     /// Runs `f` (an eval or the final blocks) with this model as the current DPI context.
     /// Returns its result and the DPI failure it raised, if any.
-    pub(crate) fn scope<R>(&mut self, f: impl FnOnce() -> R) -> (R, Option<String>) {
+    pub(crate) fn scope<R>(&mut self, f: impl FnOnce() -> R) -> (R, Option<DpiFailure>) {
         let slot = self.slot();
         let previous = THREAD.with(|t| t.current.replace(Some(Rc::clone(&slot))));
         let restore = Restore(previous);

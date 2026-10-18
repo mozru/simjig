@@ -141,7 +141,6 @@ pub(crate) trait FromRaw {
 /// read the wrong bits) and copies the value out.
 #[track_caller]
 fn get<T: Packed<Raw: RawWords>>(raw: RawSig) -> T {
-    crate::dpi::forbid_in_call("read a signal");
     let mut buf = <T::Raw as sealed::Buffer>::zeroed();
     raw.with(|k, slot| {
         let width = k.widths[slot as usize];
@@ -158,7 +157,6 @@ fn get<T: Packed<Raw: RawWords>>(raw: RawSig) -> T {
 
 #[track_caller]
 fn set<T: Packed<Raw: RawWords>, V: Into<T> + 'static>(raw: RawSig, value: V) {
-    crate::dpi::forbid_in_call("wrote a signal");
     // Monomorphised per `V`, so the type test folds away and other conversions pay nothing.
     if let Some(&literal) = (&value as &dyn Any).downcast_ref::<u128>() {
         check_literal::<T>(raw, literal);
@@ -236,7 +234,6 @@ macro_rules! handle {
             /// Outside the handle's running simulation.
             #[track_caller]
             pub fn changed(self) -> Edge {
-                crate::dpi::forbid_in_call("awaited a signal");
                 trigger::changed(self.raw)
             }
 
@@ -249,7 +246,6 @@ macro_rules! handle {
             #[track_caller]
             pub fn rising(self) -> Edge {
                 const { assert!(T::WIDTH == 1, "rising() needs a 1-bit signal; use changed()") };
-                crate::dpi::forbid_in_call("awaited a signal");
                 trigger::rising(self.raw)
             }
 
@@ -261,7 +257,6 @@ macro_rules! handle {
             #[track_caller]
             pub fn falling(self) -> Edge {
                 const { assert!(T::WIDTH == 1, "falling() needs a 1-bit signal; use changed()") };
-                crate::dpi::forbid_in_call("awaited a signal");
                 trigger::falling(self.raw)
             }
         }

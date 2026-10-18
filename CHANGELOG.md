@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
+  outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
+  TimeError}`.
 - The shim is stored content-addressed in the cache (`inputs/<hash>/<prefix>_shim.cpp`)
   and compiled from there; it is no longer written to `OUT_DIR/simjig/<name>/`. A model
   archive's key has the shim's path, so crates and target directories that build the same

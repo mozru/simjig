@@ -54,7 +54,21 @@ impl Clock {
 }
 
 /// Why a clock was rejected.
+///
+/// It may grow: a `match` outside this crate needs a wildcard arm.
+///
+/// ```compile_fail,E0004
+/// fn code(e: &simjig::ClockError) -> u8 {
+///     match e {
+///         simjig::ClockError::NotOneBit { .. } => 0,
+///         simjig::ClockError::AlreadyClocked { .. } => 0,
+///         simjig::ClockError::BadHighTime { .. } => 0,
+///         simjig::ClockError::OddPeriod { .. } => 0,
+///     }
+/// }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ClockError {
     /// Clocks drive 1-bit signals only.
     NotOneBit {

@@ -20,7 +20,26 @@ pub struct BlockedTask {
 }
 
 /// The kind of failure, with the data specific to it.
+///
+/// It may grow: a `match` outside this crate needs a wildcard arm.
+///
+/// ```compile_fail,E0004
+/// fn code(e: &simjig::FailureKind) -> u8 {
+///     match e {
+///         simjig::FailureKind::TaskPanic { .. } => 0,
+///         simjig::FailureKind::DeltaLimit { .. } => 0,
+///         simjig::FailureKind::WriteConflict { .. } => 0,
+///         simjig::FailureKind::WriteInReadOnly { .. } => 0,
+///         simjig::FailureKind::Starved { .. } => 0,
+///         simjig::FailureKind::Deadlock { .. } => 0,
+///         simjig::FailureKind::ModelFatal { .. } => 0,
+///         simjig::FailureKind::DesignFinished { .. } => 0,
+///         simjig::FailureKind::TimeLimit { .. } => 0,
+///     }
+/// }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FailureKind {
     /// A task panicked.
     TaskPanic {

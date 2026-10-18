@@ -218,9 +218,9 @@ sources, include directories, `-f`/`-F` files and the sources, `-v` files, `-y` 
 `+incdir+`/`-I` directories in them or in `verilator_args`. Not tracked: a positional
 source without a `.v`/`.sv`/`.vh`/`.svh`/`.vlt` (or C++) suffix, and `$VAR` in paths.
 
-If any source declares a `timeunit` (or `` `timescale ``), every module, interface and
-package must, a package included: Verilator stops on a mix with `%Warning-TIMESCALEMOD`
-(IEEE 1800-2023 §3.14.2.3). Add the `timeunit`, or give the rest a default with
+If any source declares a `timeunit` (or `` `timescale ``), every module and package
+must: Verilator stops on a mix with `%Warning-TIMESCALEMOD` (IEEE 1800-2023 §3.14.2.3).
+Verilator 5.052 does not check interfaces. Add the `timeunit`, or give the rest a default with
 `.verilator_args(["--timescale", "1ns/1ps"])`. The wrapper simjig generates for a DUT
 with interface ports is exempt: it takes the design's unit.
 

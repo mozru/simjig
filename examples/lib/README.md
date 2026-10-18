@@ -94,7 +94,7 @@ While `empty`, an FWFT `rd_data` is stale and means nothing; a registered `rd_da
 | `registered_read_waits_for_a_pop`, `first_word_falls_through` | the two read modes |
 | `a_reset_during_traffic_empties_the_fifo`, `a_reset_during_item_traffic_empties_the_fifo` | `rst` for one edge mid-traffic, with entries inside and both pointers away from zero: right after it `count` is 0, `empty` set, `full` clear, a registered `rd` zero; the model restarts empty and traffic goes on, checked as before |
 | `a_reset_beats_push_and_pop`, `a_reset_beats_item_push_and_pop` | directed: two entries inside, both pointers away from zero, `push` and `pop` held high across the reset edge: after it `count` 0, `empty` set, `full` clear, a registered `rd` zero (not the entry the pop would have read); then one push and pop work |
-| `random_continuations_from_full` | fills once, then `fork::run_from_checkpoint` runs four random branches from that full state, each with its own seed (needs nextest) |
+| `random_continuations_from_full` | fills once, then `fork::run_from_checkpoint` runs four random branches from that full state, each with its own seed (under nextest; multi-threaded `cargo test` skips it, saying so) |
 | `parameters_are_checked_at_elaboration` | runs `verilator --lint-only -Wall` on other parameter sets, and on a DEPTH or WIDTH it must refuse (`$fatal`) |
 
 ## skid_buffer
@@ -128,9 +128,9 @@ Dut::new("skid_buffer")
     .build()?;
 ```
 
-Every RTL unit here declares `timeunit 1ns; timeprecision 1ps;`, but the wrapper simjig
-generates for the interface ports does not, so `build.rs` also passes
-`--timescale 1ns/1ps` to give it one (Verilator stops on a mix with `TIMESCALEMOD`).
+Every RTL unit here declares `timeunit 1ns; timeprecision 1ps;`. The wrapper simjig
+generates for the interface ports declares none and needs none: it takes the design's
+unit, so no `--timescale` is needed.
 
 For an interface without parameters, `.bind_iface("up", "stream_if.sink")` is enough. In
 the test, `dut.up` and `dut.down` are bundles typed from the modports: `dut.up.valid` is

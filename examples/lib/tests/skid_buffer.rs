@@ -225,8 +225,18 @@ async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: D
         dut.up.data.set(beat);
         dut.clk.rising().await;
     }
-    assert_eq!(board.borrow().in_flight.len(), 2, "both registers full");
-    assert_eq!(dut.up.ready.get(), Bit::ZERO);
+    // Both registers full, read from the ports: the output register shows the first beat
+    // (`down.valid`), and the skid holds the second (`up.ready` low).
+    ReadOnly::new().await;
+    assert_eq!(
+        (
+            dut.down.valid.get(),
+            dut.down.data.get(),
+            dut.up.ready.get()
+        ),
+        (Bit::ONE, Beat::new(0xa1), Bit::ZERO),
+        "both registers full"
+    );
     // The reset edge, with every input active: `up` still offers 0xc3 and `down` is
     // ready, so a load or a skid write that beat the reset would show after it.
     dut.clk.falling().await;

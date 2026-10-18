@@ -263,8 +263,13 @@ async fn traffic(ctx: &TestCtx, dut: Dut, clocks: Clocks, mid_run_reset: bool) -
 /// past it (so the read side's copy, which lags it by two `rclk` edges, is away from zero
 /// too). Then resets both sides together while the writer and reader keep going, and
 /// checks that both sides are empty at once, and stay so for the two edges of each clock
-/// after its release: no write can reach `rempty` sooner (two synchronizer flops, then the
-/// flag's). Empties the scoreboard, as the reset empties the FIFO.
+/// after its release. The `rempty` check is strict: no write can reach `rempty` sooner
+/// (two synchronizer flops, then the flag's), so a stale `{rq2_wgray, rq1_wgray}` fails
+/// it. The `wfull` check is weak: a stale `{wq2_rgray, wq1_rgray}` raises `wfull` only
+/// when the old read pointer is exactly `DEPTH` ahead of the new write pointer at that
+/// edge, which random traffic rarely sets up; the directed
+/// `resets_clear_both_flags_without_a_clock_edge` sets it up. Empties the scoreboard, as
+/// the reset empties the FIFO.
 async fn reset_when_busy(dut: Dut, scoreboard: Queue<Word>, coverage: Rc<Coverage>) {
     // The pointers count modulo 2 * DEPTH (one wrap bit above the address).
     let wrap = 2 * Dut::DEPTH;
@@ -409,21 +414,25 @@ fn directed_clocks() -> Clocks {
     }
 }
 
-/// Directed: each reset clears its side asynchronously, with no clock edge. Two words
-/// written and read move the read pointer off zero; `DEPTH` more fill the FIFO (`wfull`
-/// high) and reach the read side (`rempty` low). Then both resets fall together 1 ns
-/// after a falling edge of `wclk`, away from every edge of both clocks: in `ReadOnly` of
-/// that same instant, `wfull` is low and `rempty` high. Both are released and the FIFO
-/// works again: three words written are read back in order. Random traffic resets at a
-/// falling edge with the flags as they happen to be, which shows neither.
+/// Directed: each reset clears its side asynchronously, with no clock edge, and clears
+/// its synchronizer. `DEPTH` words written and read move the read pointer to `DEPTH`;
+/// `DEPTH` more fill the FIFO (`wfull` high) and reach the read side (`rempty` low). Then
+/// both resets fall together 1 ns after a falling edge of `wclk`, away from every edge of
+/// both clocks: in `ReadOnly` of that same instant, `wfull` is low and `rempty` high.
+/// After release, with the writer idle, `wfull` stays low for two `wclk` edges: a
+/// `wrst_n` that left `{wq2_rgray, wq1_rgray}` holding `gray(DEPTH)` would raise it,
+/// since `gray(DEPTH) ^ FULL_FLIP == gray(0)`, the reset write pointer (a read pointer
+/// `DEPTH` ahead of it reads as full). Then the FIFO works again: three words written are
+/// read back in order. Random traffic resets at a falling edge with the flags as they
+/// happen to be, which shows none of this.
 #[simjig::test(timeout = "10us")]
 async fn resets_clear_both_flags_without_a_clock_edge(dut: Dut) {
     start_clocks(dut, directed_clocks());
     reset(dut).await;
-    write_words(dut, 0..2).await;
+    write_words(dut, 0..DEPTH).await;
     edges_until_low(dut.rclk, dut.rempty).await;
-    read_words(dut, 0..2).await;
-    write_words(dut, 2..2 + DEPTH).await;
+    read_words(dut, 0..DEPTH).await;
+    write_words(dut, DEPTH..2 * DEPTH).await;
     edges_until_low(dut.rclk, dut.rempty).await; // returns in `ReadOnly`
     assert_eq!(
         (dut.wfull.get(), dut.rempty.get()),
@@ -442,7 +451,13 @@ async fn resets_clear_both_flags_without_a_clock_edge(dut: Dut) {
         (Bit::ZERO, Bit::ONE),
         "both flags as soon as both resets fall, before any clock edge"
     );
-    join!(release(dut.wclk, dut.wrst_n), release(dut.rclk, dut.rrst_n));
+    join!(
+        async {
+            release(dut.wclk, dut.wrst_n).await;
+            assert_flag_holds(dut.wclk, dut.wfull, Bit::ZERO).await;
+        },
+        release(dut.rclk, dut.rrst_n)
+    );
     write_words(dut, 100..103).await;
     edges_until_low(dut.rclk, dut.rempty).await;
     read_words(dut, 100..103).await;

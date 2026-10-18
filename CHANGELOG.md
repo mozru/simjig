@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `create` refuses a probe of a `real`, a `string` or another variable that is not a
+  packed vector by its type, with the build-time check's words ("`r` is a `real`
+  (Verilator stores it as VLVT_REAL) ..."), before comparing widths: a 1-bit probe of a
+  `real` (which Verilator records as 1 bit wide) got "not stored as a packed vector".
 - A parameter override (`-G`, `-pvalue+`) inside an option file (`-f`, `-F`, nested ones
   too) among the extra Verilator arguments is refused like one among the arguments, with
   the `.param(name, value)` hint. It failed later, in the layout check.

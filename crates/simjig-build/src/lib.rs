@@ -28,6 +28,7 @@ mod hash;
 mod header;
 mod pipeline;
 mod runtime;
+mod script;
 mod verilator;
 
 pub use codegen::{IfaceBinding, Probe, ProbeAccess, ProbeType};

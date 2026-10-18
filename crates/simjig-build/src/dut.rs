@@ -12,7 +12,8 @@
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
 //!    is linted;
 //! 5. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
-//! 6. cross-check the header's ports against the IR's (or the emitter's);
+//! 6. cross-check the header's ports against the IR's (or the emitter's), and check that
+//!    no other DUT of this build script exports the same DPI names (`script`);
 //! 7. compile and link the C++ (see `compile`), and collect the `cargo::` directives.
 //!
 //! The IR comes before verilation because the emitters' outputs are Verilator inputs.
@@ -28,7 +29,7 @@ use crate::emit::{self, Emitter};
 use crate::hash::KeyHasher;
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error, cache, pipeline};
+use crate::{BuildEnv, Error, cache, pipeline, script};
 
 /// A file generated before verilation (a `.vlt` control file or a wrapper module). It is
 /// stored content-addressed in the shared cache, so its path is the same in every crate.
@@ -487,6 +488,13 @@ impl Dut {
         let header_ports =
             header::read_header_ports(&verilator::output_file(&model.obj_dir, &prefix, ".h"))?;
         header::check_ports(&header_ports, &placed.ports)?;
+        let dpi_header = verilator::output_file(&model.obj_dir, &prefix, "__Dpi.h");
+        script::claim_dpi_exports(
+            env,
+            &self.config,
+            &prefix,
+            header::read_dpi_exports(&dpi_header)?,
+        )?;
         let mut directives = compile::compile(&compile::Inputs {
             env,
             cache: &cache,

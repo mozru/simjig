@@ -261,3 +261,24 @@ fn user_args_cannot_disable_the_layout_check() {
     );
     assert!(stderr.contains("layout mismatch"), "{stderr}");
 }
+
+/// DPI exports are global C symbols: a second DUT exporting the same name would bind to
+/// whichever archive the linker saw first, so the build script fails instead.
+#[test]
+fn duplicate_dpi_exports_across_duts_fail() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let dut = |name: &str| {
+        Dut::new(name)
+            .sources([rtl.join("dpi_export.sv")])
+            .top("dpi_export")
+    };
+    dut("first").build_in(&s.env()).unwrap();
+    // The same configuration again is the same model, not a second export.
+    dut("first").build_in(&s.env()).unwrap();
+    let err = dut("second").build_in(&s.env()).unwrap_err().to_string();
+    assert!(
+        err.contains("DPI export `dpi_export_get`") && err.contains("DUT `first`"),
+        "{err}"
+    );
+}

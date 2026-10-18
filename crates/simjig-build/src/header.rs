@@ -11,6 +11,9 @@
 //! Not covered: ports Verilator declares without a macro, i.e. unpacked arrays
 //! (`VlUnpacked<..> &name;`) and `real` ports (`double &name;`). The IR side must leave
 //! those out of the expected list.
+//!
+//! The DPI header `V<prefix>__Dpi.h` is read here too, for its exports
+//! ([`read_dpi_exports`]).
 
 use std::fmt;
 use std::path::Path;
@@ -136,6 +139,33 @@ fn parse_decl(line: &str) -> Result<HeaderPort, String> {
         lsb: num(2, "lsb")?,
         storage,
     })
+}
+
+/// The names of the DPI functions and tasks a model exports, from `V<prefix>__Dpi.h`.
+/// A model without DPI has no such file, and no exports.
+///
+/// Verilator 5.052 lists them as `extern <type> <name>(<args>);` lines between
+/// `// DPI EXPORTS` and `// DPI IMPORTS`.
+pub(crate) fn read_dpi_exports(path: &Path) -> Result<Vec<String>, Error> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(Error::io("reading", path)(e)),
+    };
+    Ok(parse_dpi_exports(&text))
+}
+
+fn parse_dpi_exports(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .skip_while(|l| *l != "// DPI EXPORTS")
+        .take_while(|l| *l != "// DPI IMPORTS")
+        .filter_map(|l| {
+            let decl = l.strip_prefix("extern ")?;
+            let name = decl.split_once('(')?.0.split_whitespace().last()?;
+            Some(name.trim_start_matches('*').to_owned())
+        })
+        .collect()
 }
 
 /// One disagreement between the header and the expected ports.
@@ -290,6 +320,21 @@ mod tests {
         assert_eq!(
             err("VL_IN8(a,0,0);"),
             "V.h:1: expected `&name` as the first argument in port declaration `VL_IN8(a,0,0);`"
+        );
+    }
+
+    #[test]
+    fn dpi_exports_are_the_externs_before_the_imports() {
+        // The shape of a 5.052 `__Dpi.h` with two exports and an import.
+        let text = "#include \"svdpi.h\"\n\n    // DPI EXPORTS\n    // DPI export at ex.sv:5:16\n\
+                    \n    extern int ex_get();\n    // DPI export at ex.sv:6:8\n\
+                    \n    extern void ex_task(int x, const svBitVecVal* v);\n\n    // DPI IMPORTS\n\
+                    \n    // DPI import at ex.sv:4:31\n    extern int imp_f(int x);\n";
+        assert_eq!(parse_dpi_exports(text), ["ex_get", "ex_task"]);
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            parse_dpi_exports("    // DPI IMPORTS\n    extern int f();\n"),
+            none
         );
     }
 

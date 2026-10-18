@@ -3,7 +3,6 @@
 //! linting the layout check.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use svtypes::ir::Design;
 
@@ -13,10 +12,7 @@ use crate::dut::{DutConfig, GeneratedInput};
 use crate::emit::SvModule;
 use crate::hash::KeyHasher;
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error};
-
-/// Every DUT built by this process (one build script): (`OUT_DIR`, name, identity).
-static BUILT: Mutex<Vec<(PathBuf, String, String)>> = Mutex::new(Vec::new());
+use crate::{BuildEnv, Error, script};
 
 /// Makes sure no two configurations share a model prefix.
 ///
@@ -24,7 +20,7 @@ static BUILT: Mutex<Vec<(PathBuf, String, String)>> = Mutex::new(Vec::new());
 /// link silently keeps one copy (88 of 88 strong symbols collide for the counter;
 /// docs/notes/spikes.md), so one model would run the other's code. Two checks:
 /// - in this build script, a DUT name may be built again only with the same
-///   configuration (the name also names `OUT_DIR/simjig/<name>.rs`);
+///   configuration ([`script::claim_name`]);
 /// - across crates sharing the cache, `prefixes/<prefix>` records the full identity of
 ///   the configuration that first used the prefix; a different one with the same prefix
 ///   (a collision of its 32-bit hash) is an error.
@@ -41,25 +37,7 @@ pub(crate) fn claim(
             msg,
         })
     };
-    {
-        let mut built = BUILT
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let same_name = built
-            .iter()
-            .find(|(out, name, _)| *out == env.out_dir && *name == config.name);
-        match same_name {
-            Some((_, _, id)) if *id != identity => {
-                return fail(
-                    "a DUT of this name was already built with a different configuration in \
-                     this build script; give each configuration its own name"
-                        .to_owned(),
-                );
-            }
-            Some(_) => {}
-            None => built.push((env.out_dir.clone(), config.name.clone(), identity.clone())),
-        }
-    }
+    script::claim_name(env, config, &identity, prefix)?;
     match cache.claim_prefix(prefix, &identity)? {
         None => Ok(()),
         Some(other) => fail(format!(

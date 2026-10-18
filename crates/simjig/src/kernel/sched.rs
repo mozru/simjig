@@ -138,8 +138,8 @@ fn step(k: &Kernel) {
 
     wake_from(k, WaitTable::fire_next_step);
     run_ready(k);
-    // The edges are logged before any Timer task runs, so a clock stopped or written in one
-    // still has its edge at `t`, after the deposit-order rules of the write log.
+    // The clock edges due at `t` are logged before any Timer task runs, so a Timer task
+    // that stops a clock or writes its signal at `t` comes after that edge in the log.
     let edges: Vec<(u32, u32)> = k
         .clocks
         .borrow_mut()

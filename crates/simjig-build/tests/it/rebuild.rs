@@ -189,3 +189,43 @@ fn a_compiler_changed_in_place_reruns_the_build_script() {
         "the compiler changed, but the build script did not rerun"
     );
 }
+
+/// s3c6r: a script that handles a failed `Dut::build` (an optional model) and exits 0
+/// must still rerun when that DUT's source is fixed. `Dut::build` prints nothing on
+/// `Err`, so only the other DUTs' `rerun-if-changed` lines reach Cargo.
+#[test]
+fn s3c6r_fixing_a_handled_failed_duts_source_reruns_the_script() {
+    let (krate, target, _lock) = fixture();
+    let envs = [
+        (
+            "SIMJIG_CACHE_DIR",
+            krate.parent().unwrap().join("cache").into_os_string(),
+        ),
+        ("SIMJIG_CCACHE", "0".into()),
+    ];
+    let opt = krate.join("duts/opt");
+    std::fs::create_dir_all(&opt).unwrap();
+    let source = opt.join("opt.sv");
+    std::fs::write(
+        &source,
+        "module opt(input logic a, output logic y);\n  assign y = ;\nendmodule\n",
+    )
+    .unwrap();
+    let script = krate.join("build.rs");
+    let text = std::fs::read_to_string(&script).unwrap().replace(
+        r#"Dut::new("optional").top("optional").build()"#,
+        r#"Dut::new("opt").sources(["duts/opt/opt.sv"]).top("opt").build()"#,
+    );
+    std::fs::write(&script, text).unwrap();
+    assert!(build(&krate, &target, &envs), "the edited script runs");
+    assert!(!build(&krate, &target, &envs), "no change: no rerun");
+    std::fs::write(
+        &source,
+        "module opt(input logic a, output logic y);\n  assign y = ~a;\nendmodule\n",
+    )
+    .unwrap();
+    assert!(
+        build(&krate, &target, &envs),
+        "fixing the failed DUT's source must rerun the build script"
+    );
+}

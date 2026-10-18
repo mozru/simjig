@@ -47,9 +47,12 @@ the public API, the generated code or simulation semantics.
 - A model that fails to verilate only because of lint warnings gets a `hint:` naming the
   waivers: a `lint_off` comment, `.verilator_args(["-Wno-<CODE>"])`, or
   `.verilator_args(["-Wno-fatal"])`.
-- A failed `Dut::build` prints nothing (none of that DUT's directives, and no
-  `cargo::error=`, which fails the build even when the script handles the `Err` and exits
-  0) and returns the error. With `?` from `main` or `unwrap`, the error is on stderr,
+- A failed `Dut::build` prints none of that DUT's build directives, and no
+  `cargo::error=` (which fails the build even when the script handles the `Err` and exits
+  0), and returns the error. It prints only `rerun-if-changed` for the inputs the
+  configuration names (sources, include directories, `-f`/`-F` option files, the C++
+  recipe's files) and `rerun-if-env-changed` for the tracked variables, so a script that
+  handles the error reruns when that DUT is fixed. With `?` from `main` or `unwrap`, the error is on stderr,
   which Cargo shows last, after its dump of the script's stdout.
 - Breaking: dropping a `Task` handle before its task ever ran, without awaiting it, fails
   the run (`FailureKind::Setup`, at the `spawn` call, naming the task and the fixes:

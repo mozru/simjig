@@ -718,15 +718,25 @@ impl Dut {
     /// Builds from a Cargo build script: reads the environment Cargo provides, runs
     /// [`Dut::build_in`], and prints the `cargo::` directives.
     ///
-    /// On failure it prints nothing and returns the error: the script decides. Returned
-    /// from `main` with `?` (or unwrapped), the error is printed on stderr, which Cargo
-    /// shows last, after its dump of the script's stdout, so it is not buried under the
-    /// `rerun-if-changed` lines of the DUTs built before. A script that handles the error
-    /// (an optional model) and exits 0 builds: a `cargo::error=` line would fail the build
-    /// even then.
+    /// On failure it returns the error, and prints only `rerun-if-changed` and
+    /// `rerun-if-env-changed` lines for the inputs the configuration names (sources,
+    /// include directories, `-f`/`-F` option files, the recipe's files) and the variables
+    /// that locate Verilator: the script decides. Returned from `main` with `?` (or
+    /// unwrapped), the error is printed on stderr, which Cargo shows last, after its dump
+    /// of the script's stdout. A script that handles the error (an optional model) and
+    /// exits 0 builds, and reruns when the failed DUT's inputs change: without those lines
+    /// Cargo would rerun it only for the other DUTs' inputs. No `cargo::error=` line: it
+    /// would fail the build even when the script handles the error.
     #[expect(clippy::print_stdout, reason = "build scripts talk to Cargo on stdout")]
     pub fn build(self) -> Result<Built, Error> {
-        let built = BuildEnv::from_cargo().and_then(|env| self.build_in(&env))?;
+        let reruns = failed_reruns(&self.config, &self.recipe);
+        let built = BuildEnv::from_cargo()
+            .and_then(|env| self.build_in(&env))
+            .inspect_err(|_| {
+                for line in &reruns {
+                    println!("{line}");
+                }
+            })?;
         for line in &built.directives {
             println!("{line}");
         }
@@ -923,6 +933,35 @@ fn rerun_directives(
     out
 }
 
+/// The reruns of a failed build: every input the configuration names (sources,
+/// `` `include `` directories, option files, the recipe's files) and the tracked
+/// variables (which locate Verilator).
+///
+/// Coarser than [`rerun_directives`], which lists what Verilator read: a failed build may
+/// not have run Verilator, so the configuration is all there is. A named file that does
+/// not exist reruns the script on every build until it does, which a failed DUT is
+/// waiting for anyway.
+fn failed_reruns(config: &DutConfig, recipe: &CppRecipe) -> Vec<String> {
+    let option_files = crate::optfile::files(&config.verilator_args);
+    let files = config
+        .sources
+        .iter()
+        .chain(&config.include_dirs)
+        .chain(option_files.iter())
+        .chain(&recipe.global_sources)
+        .chain(&recipe.model_sources)
+        .chain(&recipe.include_dirs);
+    let mut out: Vec<String> = files
+        .map(|p| format!("cargo::rerun-if-changed={}", absolute(p).display()))
+        .collect();
+    out.extend(
+        BuildEnv::TRACKED_VARS
+            .iter()
+            .map(|v| format!("cargo::rerun-if-env-changed={v}")),
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -935,6 +974,31 @@ mod tests {
             .param("DEPTH", 16)
             .top("fifo")
             .config
+    }
+
+    #[test]
+    fn a_failed_build_reruns_on_every_configured_input() {
+        let config = Dut::new("fifo")
+            .sources(["/r/fifo.sv"])
+            .include_dirs(["/r/inc"])
+            .verilator_args(["-f", "/r/opts.f"])
+            .config;
+        let recipe = CppRecipe {
+            model_sources: vec![PathBuf::from("/r/glue.cpp")],
+            ..CppRecipe::default()
+        };
+        let reruns = failed_reruns(&config, &recipe);
+        for path in ["/r/fifo.sv", "/r/inc", "/r/opts.f", "/r/glue.cpp"] {
+            assert!(
+                reruns.contains(&format!("cargo::rerun-if-changed={path}")),
+                "{path}: {reruns:?}"
+            );
+        }
+        assert!(reruns.contains(&"cargo::rerun-if-env-changed=SIMJIG_VERILATOR".to_owned()));
+        assert!(
+            !reruns.iter().any(|l| l.starts_with("cargo::error")),
+            "{reruns:?}"
+        );
     }
 
     #[test]

@@ -24,6 +24,17 @@ pub(crate) fn find(args: &[String], refused: fn(&str) -> bool) -> Option<(PathBu
     })
 }
 
+/// Every option file `args` name, nested ones too, readable or not (a missing one may be
+/// created later).
+pub(crate) fn files(args: &[String]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    walk(args, None, 0, &mut |path, _| {
+        out.push(path.to_path_buf());
+        None::<()>
+    });
+    out
+}
+
 /// Calls `visit` on each option file `args` name, depth first in order, with its words
 /// (none for a file that cannot be read), until `visit` returns `Some`.
 ///
@@ -121,6 +132,19 @@ mod tests {
             find(&["-F".to_owned(), outer.clone()], is_g),
             Some((sub.join("inner.f"), "-GX=1".to_owned()))
         );
+        assert_eq!(
+            files(&[
+                "-F".to_owned(),
+                outer.clone(),
+                "-f".to_owned(),
+                "missing.f".to_owned()
+            ]),
+            [
+                sub.join("outer.F"),
+                sub.join("inner.f"),
+                PathBuf::from("missing.f")
+            ]
+        );
         // `-f` resolves it against the working directory, where there is none.
         std::fs::rename(sub.join("outer.F"), sub.join("outer.f")).unwrap();
         let outer = sub.join("outer.f").display().to_string();
@@ -131,6 +155,11 @@ mod tests {
         assert_eq!(
             find(&["-F".to_owned(), me.display().to_string()], is_g),
             None
+        );
+        assert_eq!(
+            files(&["-F".to_owned(), me.display().to_string()]).len(),
+            usize::try_from(MAX_DEPTH + 1).unwrap(),
+            "a self-including file is listed once per level, up to the depth limit"
         );
     }
 }

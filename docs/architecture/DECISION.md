@@ -53,9 +53,10 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
   `ir_hash` and the Verilator version, all checked when the model loads. A hand-written C++
   runtime of about 300 lines provides the `VL_USER_*` hooks and the exception barrier.
 - **Fatal routing:** record `{file, line, hier, msg, time}` and throw `FatalUnwind`. The
-  eval wrapper catches it, and the model is poisoned (no further eval). M0 must prove that
-  unwinding through generated code works. The fallback is record, `_exit`, and let the
-  harness report.
+  eval wrapper catches it, and the model is poisoned (no further eval). **Proven (docs/notes/abi.md):** plain models unwind cleanly. `--timing` models
+  record the fatal and return FATAL after eval, because throwing out of a coroutine
+  aborts. An internal Verilator fatal inside a coroutine still aborts the process, and
+  nextest's process-per-test contains it.
 - **Failures are data** (`Failure { kind, time, component, task, location, signature }`),
   with an actionable `Display`, a one-line repro, and waves from a deterministic replay.
   The replay doubles as the determinism check. Retries are never used.

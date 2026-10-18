@@ -1,0 +1,418 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 0,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 3,
+      "kind": {
+        "kind": "Bits",
+        "width": 3,
+        "signed": false,
+        "range": {
+          "left": 2,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::implicit_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 3,
+      "kind": {
+        "kind": "Enum",
+        "base": 0,
+        "variants": [
+          {
+            "name": "A",
+            "value": {
+              "width": 3,
+              "signed": false,
+              "words": [
+                0
+              ]
+            }
+          },
+          {
+            "name": "B",
+            "value": {
+              "width": 3,
+              "signed": false,
+              "words": [
+                1
+              ]
+            }
+          },
+          {
+            "name": "C",
+            "value": {
+              "width": 3,
+              "signed": false,
+              "words": [
+                2
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Bits",
+        "width": 8,
+        "signed": false,
+        "range": {
+          "left": 7,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::explicit_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Enum",
+        "base": 2,
+        "variants": [
+          {
+            "name": "OFF",
+            "value": {
+              "width": 8,
+              "signed": false,
+              "words": [
+                0
+              ]
+            }
+          },
+          {
+            "name": "ON",
+            "value": {
+              "width": 8,
+              "signed": false,
+              "words": [
+                90
+              ]
+            }
+          },
+          {
+            "name": "ERR",
+            "value": {
+              "width": 8,
+              "signed": false,
+              "words": [
+                255
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Bits",
+        "width": 4,
+        "signed": false,
+        "range": {
+          "left": 3,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::mixed_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Enum",
+        "base": 4,
+        "variants": [
+          {
+            "name": "X0",
+            "value": {
+              "width": 4,
+              "signed": false,
+              "words": [
+                2
+              ]
+            }
+          },
+          {
+            "name": "X1",
+            "value": {
+              "width": 4,
+              "signed": false,
+              "words": [
+                3
+              ]
+            }
+          },
+          {
+            "name": "X2",
+            "value": {
+              "width": 4,
+              "signed": false,
+              "words": [
+                9
+              ]
+            }
+          },
+          {
+            "name": "X3",
+            "value": {
+              "width": 4,
+              "signed": false,
+              "words": [
+                10
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": true,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::int_t",
+      "alias_of": null,
+      "four_state": false,
+      "width": 32,
+      "kind": {
+        "kind": "Enum",
+        "base": 6,
+        "variants": [
+          {
+            "name": "RED",
+            "value": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                0
+              ]
+            }
+          },
+          {
+            "name": "GREEN",
+            "value": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                10
+              ]
+            }
+          },
+          {
+            "name": "BLUE",
+            "value": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                11
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 2,
+      "kind": {
+        "kind": "Bits",
+        "width": 2,
+        "signed": false,
+        "range": {
+          "left": 1,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "pkg::twostate_t",
+      "alias_of": null,
+      "four_state": false,
+      "width": 2,
+      "kind": {
+        "kind": "Enum",
+        "base": 8,
+        "variants": [
+          {
+            "name": "LO",
+            "value": {
+              "width": 2,
+              "signed": false,
+              "words": [
+                0
+              ]
+            }
+          },
+          {
+            "name": "HI",
+            "value": {
+              "width": 2,
+              "signed": false,
+              "words": [
+                1
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Enum",
+        "base": 10,
+        "variants": [
+          {
+            "name": "NO",
+            "value": {
+              "width": 1,
+              "signed": false,
+              "words": [
+                0
+              ]
+            }
+          },
+          {
+            "name": "YES",
+            "value": {
+              "width": 1,
+              "signed": false,
+              "words": [
+                1
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "i_impl",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": "i_impl",
+          "storage": "CData"
+        },
+        {
+          "name": "i_expl",
+          "dir": "Input",
+          "ty": 3,
+          "cpp_member": "i_expl",
+          "storage": "CData"
+        },
+        {
+          "name": "i_mixed",
+          "dir": "Input",
+          "ty": 5,
+          "cpp_member": "i_mixed",
+          "storage": "CData"
+        },
+        {
+          "name": "i_int",
+          "dir": "Input",
+          "ty": 7,
+          "cpp_member": "i_int",
+          "storage": "IData"
+        },
+        {
+          "name": "i_two",
+          "dir": "Input",
+          "ty": 9,
+          "cpp_member": "i_two",
+          "storage": "CData"
+        },
+        {
+          "name": "i_anon",
+          "dir": "Input",
+          "ty": 11,
+          "cpp_member": "i_anon",
+          "storage": "CData"
+        },
+        {
+          "name": "o_expl",
+          "dir": "Output",
+          "ty": 3,
+          "cpp_member": "o_expl",
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": [
+    {
+      "name": "pkg",
+      "params": [],
+      "typedefs": [
+        1,
+        3,
+        5,
+        7,
+        9
+      ]
+    }
+  ]
+}

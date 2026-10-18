@@ -1,0 +1,58 @@
+{
+  "files": {
+    "a": {
+      "filename": "<built-in>",
+      "language": "1800-2023",
+      "realpath": "<built-in>"
+    },
+    "b": {
+      "filename": "<command-line>",
+      "language": "1800-2023",
+      "realpath": "<command-line>"
+    },
+    "c": {
+      "filename": "<verilated_std_waiver>",
+      "language": "1800-2023",
+      "realpath": "verilated_std_waiver.vlt"
+    },
+    "d": {
+      "filename": "<verilated_std>",
+      "language": "1800-2023",
+      "realpath": "verilated_std.sv"
+    },
+    "e": {
+      "filename": "design.sv",
+      "language": "1800-2023",
+      "realpath": "design.sv"
+    }
+  },
+  "ptrFieldNames": [
+    "aboveCellp",
+    "aboveScopep",
+    "addr",
+    "classOrPackagep",
+    "constPoolp",
+    "constraintRefp",
+    "delaySchedulerp",
+    "dollarUnitPkgp",
+    "dpiExportTriggerp",
+    "dtypep",
+    "emptyQueuep",
+    "modPTypep",
+    "modVarp",
+    "modp",
+    "nbaEventTriggerp",
+    "nbaEventp",
+    "queueIndexp",
+    "sensIfacep",
+    "stdPackageProcessp",
+    "stdPackagep",
+    "stlFirstIterationp",
+    "streamp",
+    "topScopep",
+    "typeTablep",
+    "varScopep",
+    "varp",
+    "voidp"
+  ]
+}

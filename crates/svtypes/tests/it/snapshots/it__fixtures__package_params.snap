@@ -1,0 +1,246 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 0,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": true,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Bits",
+        "width": 8,
+        "signed": false,
+        "range": {
+          "left": 7,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 100,
+      "kind": {
+        "kind": "Bits",
+        "width": 100,
+        "signed": false,
+        "range": {
+          "left": 99,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 12,
+      "kind": {
+        "kind": "Bits",
+        "width": 12,
+        "signed": false,
+        "range": {
+          "left": 11,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": "cfg::word_t",
+      "alias_of": 4,
+      "four_state": true,
+      "width": 12,
+      "kind": {
+        "kind": "Bits",
+        "width": 12,
+        "signed": false,
+        "range": {
+          "left": 11,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 24,
+      "kind": {
+        "kind": "Bits",
+        "width": 24,
+        "signed": false,
+        "range": {
+          "left": 23,
+          "right": 0
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "data",
+          "dir": "Input",
+          "ty": 5,
+          "cpp_member": "data",
+          "storage": "SData"
+        },
+        {
+          "name": "wide",
+          "dir": "Output",
+          "ty": 6,
+          "cpp_member": "wide",
+          "storage": "IData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": [
+    {
+      "name": "cfg",
+      "params": [
+        {
+          "name": "WIDTH",
+          "value": {
+            "Bits": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                12
+              ]
+            }
+          },
+          "ty": 0
+        },
+        {
+          "name": "NEG",
+          "value": {
+            "Bits": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                4294967291
+              ]
+            }
+          },
+          "ty": 0
+        },
+        {
+          "name": "MAGIC",
+          "value": {
+            "Bits": {
+              "width": 8,
+              "signed": false,
+              "words": [
+                165
+              ]
+            }
+          },
+          "ty": 1
+        },
+        {
+          "name": "BIG",
+          "value": {
+            "Bits": {
+              "width": 100,
+              "signed": false,
+              "words": [
+                1,
+                34359738368
+              ]
+            }
+          },
+          "ty": 2
+        },
+        {
+          "name": "FLAG",
+          "value": {
+            "Bits": {
+              "width": 1,
+              "signed": false,
+              "words": [
+                1
+              ]
+            }
+          },
+          "ty": 3
+        },
+        {
+          "name": "NAME",
+          "value": {
+            "String": "simjig"
+          },
+          "ty": null
+        },
+        {
+          "name": "RATIO",
+          "value": {
+            "Real": "0.25"
+          },
+          "ty": null
+        },
+        {
+          "name": "DEPTH",
+          "value": {
+            "Bits": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                24
+              ]
+            }
+          },
+          "ty": 0
+        }
+      ],
+      "typedefs": [
+        5
+      ]
+    }
+  ]
+}

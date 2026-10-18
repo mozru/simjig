@@ -1,0 +1,78 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -14,
+  "top": 1,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "leaf",
+      "orig_name": "leaf",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "a",
+          "dir": "Input",
+          "ty": 0,
+          "cpp_member": null,
+          "storage": "CData"
+        },
+        {
+          "name": "y",
+          "dir": "Output",
+          "ty": 0,
+          "cpp_member": null,
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    },
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "a",
+          "dir": "Input",
+          "ty": 0,
+          "cpp_member": "a",
+          "storage": "CData"
+        },
+        {
+          "name": "y",
+          "dir": "Output",
+          "ty": 0,
+          "cpp_member": "y",
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": []
+}

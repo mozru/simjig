@@ -1,0 +1,361 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 0,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 3,
+      "kind": {
+        "kind": "Bits",
+        "width": 3,
+        "signed": false,
+        "range": {
+          "left": 2,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 1,
+      "kind": {
+        "kind": "Bits",
+        "width": 1,
+        "signed": false,
+        "range": null
+      }
+    },
+    {
+      "name": "pkg::pair_t",
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Struct",
+        "packed": true,
+        "signed": false,
+        "fields": [
+          {
+            "name": "a",
+            "ty": 0,
+            "lsb": 1
+          },
+          {
+            "name": "b",
+            "ty": 1,
+            "lsb": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 12,
+      "kind": {
+        "kind": "PackedArray",
+        "elem": 0,
+        "range": {
+          "left": 3,
+          "right": 0
+        },
+        "signed": false
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 3,
+      "kind": {
+        "kind": "Bits",
+        "width": 3,
+        "signed": false,
+        "range": {
+          "left": 0,
+          "right": 2
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 12,
+      "kind": {
+        "kind": "PackedArray",
+        "elem": 4,
+        "range": {
+          "left": 1,
+          "right": 4
+        },
+        "signed": false
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 12,
+      "kind": {
+        "kind": "PackedArray",
+        "elem": 2,
+        "range": {
+          "left": 2,
+          "right": 0
+        },
+        "signed": false
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Bits",
+        "width": 4,
+        "signed": false,
+        "range": {
+          "left": 3,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "PackedArray",
+        "elem": 7,
+        "range": {
+          "left": 1,
+          "right": 0
+        },
+        "signed": true
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 8,
+      "kind": {
+        "kind": "Bits",
+        "width": 8,
+        "signed": false,
+        "range": {
+          "left": 7,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": null,
+      "kind": {
+        "kind": "UnpackedArray",
+        "elem": 9,
+        "range": {
+          "left": 0,
+          "right": 3
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": null,
+      "kind": {
+        "kind": "UnpackedArray",
+        "elem": 9,
+        "range": {
+          "left": 1,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": null,
+      "kind": {
+        "kind": "UnpackedArray",
+        "elem": 11,
+        "range": {
+          "left": 3,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 100,
+      "kind": {
+        "kind": "Bits",
+        "width": 100,
+        "signed": false,
+        "range": {
+          "left": 99,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": null,
+      "kind": {
+        "kind": "UnpackedArray",
+        "elem": 13,
+        "range": {
+          "left": 0,
+          "right": 1
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": null,
+      "kind": {
+        "kind": "UnpackedArray",
+        "elem": 9,
+        "range": {
+          "left": 3,
+          "right": 1
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [],
+      "ports": [
+        {
+          "name": "pa2",
+          "dir": "Input",
+          "ty": 3,
+          "cpp_member": "pa2",
+          "storage": "SData"
+        },
+        {
+          "name": "pa_asc",
+          "dir": "Input",
+          "ty": 5,
+          "cpp_member": "pa_asc",
+          "storage": "SData"
+        },
+        {
+          "name": "pa_struct",
+          "dir": "Input",
+          "ty": 6,
+          "cpp_member": "pa_struct",
+          "storage": "SData"
+        },
+        {
+          "name": "pa_signed",
+          "dir": "Input",
+          "ty": 8,
+          "cpp_member": "pa_signed",
+          "storage": "CData"
+        },
+        {
+          "name": "ua",
+          "dir": "Input",
+          "ty": 10,
+          "cpp_member": "ua",
+          "storage": {
+            "VlUnpacked": {
+              "elem": "CData",
+              "len": 4
+            }
+          }
+        },
+        {
+          "name": "ua2",
+          "dir": "Input",
+          "ty": 12,
+          "cpp_member": "ua2",
+          "storage": {
+            "VlUnpacked": {
+              "elem": {
+                "VlUnpacked": {
+                  "elem": "CData",
+                  "len": 2
+                }
+              },
+              "len": 4
+            }
+          }
+        },
+        {
+          "name": "ua_wide",
+          "dir": "Input",
+          "ty": 14,
+          "cpp_member": "ua_wide",
+          "storage": {
+            "VlUnpacked": {
+              "elem": {
+                "VlWide": {
+                  "words": 4
+                }
+              },
+              "len": 2
+            }
+          }
+        },
+        {
+          "name": "ua_out",
+          "dir": "Output",
+          "ty": 15,
+          "cpp_member": "ua_out",
+          "storage": {
+            "VlUnpacked": {
+              "elem": "CData",
+              "len": 3
+            }
+          }
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": [
+    {
+      "name": "pkg",
+      "params": [],
+      "typedefs": [
+        2
+      ]
+    }
+  ]
+}

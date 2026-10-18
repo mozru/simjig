@@ -1,0 +1,48 @@
+{"type":"NETLIST","name":"$root","addr":"(B)","loc":"a,0:0,0:0","timescaleSpecified":true,"timeunit":"1ps","timeprecision":"10fs","typeTablep":"(C)","constPoolp":"(D)","dollarUnitPkgp":"UNLINKED","stdPackagep":"UNLINKED","stdPackageProcessp":"UNLINKED","dpiExportTriggerp":"UNLINKED","delaySchedulerp":"UNLINKED","nbaEventp":"UNLINKED","nbaEventTriggerp":"UNLINKED","topScopep":"UNLINKED","stlFirstIterationp":"UNLINKED",
+ "modulesp": [
+  {"type":"MODULE","name":"top","addr":"(E)","loc":"e,9:8,9:11","origName":"top","verilogName":"top","level":1,"depth":2,"timeunit":"1ns","inlinesp": [],
+   "stmtsp": [
+    {"type":"VAR","name":"a","addr":"(F)","loc":"e,9:25,9:26","dtypep":"(G)","origName":"a","verilogName":"a","isPrimaryIO":true,"direction":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic","sensIfacep":"UNLINKED","childDTypep": [],"delayp": [],"valuep": [],"attrsp": []},
+    {"type":"VAR","name":"y","addr":"(H)","loc":"e,9:41,9:42","dtypep":"(G)","origName":"y","verilogName":"y","isPrimaryIO":true,"direction":"OUTPUT","isSigPublic":true,"icoMaybeWritten":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic","sensIfacep":"UNLINKED","childDTypep": [],"delayp": [],"valuep": [],"attrsp": []},
+    {"type":"CELL","name":"u_leaf","addr":"(I)","loc":"e,10:8,10:14","modName":"leaf","origName":"u_leaf","verilogName":"u_leaf","modp":"(J)",
+     "pinsp": [
+      {"type":"PIN","name":"a","addr":"(K)","loc":"e,10:17,10:18","svDotName":true,"modVarp":"(L)","modPTypep":"UNLINKED",
+       "exprp": [
+        {"type":"VARREF","name":"a","addr":"(M)","loc":"e,10:19,10:20","dtypep":"(G)","access":"RD","varp":"(F)","varScopep":"UNLINKED","classOrPackagep":"UNLINKED"}
+      ]},
+      {"type":"PIN","name":"y","addr":"(N)","loc":"e,10:24,10:25","svDotName":true,"modVarp":"(O)","modPTypep":"UNLINKED",
+       "exprp": [
+        {"type":"VARREF","name":"y","addr":"(P)","loc":"e,10:26,10:27","dtypep":"(G)","access":"WR","varp":"(H)","varScopep":"UNLINKED","classOrPackagep":"UNLINKED"}
+      ]}
+    ],"paramsp": [],"rangep": [],"intfRefsp": []}
+  ]},
+  {"type":"MODULE","name":"leaf","addr":"(J)","loc":"e,3:8,3:12","origName":"leaf","verilogName":"leaf","level":2,"depth":2,"timeunit":"1ps","inlinesp": [],
+   "stmtsp": [
+    {"type":"VAR","name":"a","addr":"(L)","loc":"e,3:26,3:27","dtypep":"(G)","origName":"a","verilogName":"a","direction":"INPUT","lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic","sensIfacep":"UNLINKED","childDTypep": [],"delayp": [],"valuep": [],"attrsp": []},
+    {"type":"VAR","name":"y","addr":"(O)","loc":"e,3:42,3:43","dtypep":"(G)","origName":"y","verilogName":"y","direction":"OUTPUT","icoMaybeWritten":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic","sensIfacep":"UNLINKED","childDTypep": [],"delayp": [],"valuep": [],"attrsp": []},
+    {"type":"ALWAYS","name":"","addr":"(Q)","loc":"e,6:12,6:13","keyword":"cont_assign","sentreep": [],
+     "stmtsp": [
+      {"type":"ASSIGNW","name":"","addr":"(R)","loc":"e,6:12,6:13","dtypep":"(G)",
+       "rhsp": [
+        {"type":"VARREF","name":"a","addr":"(S)","loc":"e,6:14,6:15","dtypep":"(G)","access":"RD","varp":"(L)","varScopep":"UNLINKED","classOrPackagep":"UNLINKED"}
+      ],
+       "lhsp": [
+        {"type":"VARREF","name":"y","addr":"(T)","loc":"e,6:10,6:11","dtypep":"(G)","access":"WR","varp":"(O)","varScopep":"UNLINKED","classOrPackagep":"UNLINKED"}
+      ],"timingControlp": [],"strengthSpecp": []}
+    ]}
+  ]}
+],"filesp": [],
+ "miscsp": [
+  {"type":"TYPETABLE","name":"","addr":"(C)","loc":"a,0:0,0:0","constraintRefp":"UNLINKED","emptyQueuep":"UNLINKED","queueIndexp":"UNLINKED","streamp":"UNLINKED","voidp":"(U)",
+   "typesp": [
+    {"type":"VOIDDTYPE","name":"","addr":"(U)","loc":"d,61:17,61:26","dtypep":"(U)"},
+    {"type":"BASICDTYPE","name":"logic","addr":"(G)","loc":"e,9:19,9:24","dtypep":"(G)","keyword":"logic","generic":true,"rangep": []}
+  ]},
+  {"type":"CONSTPOOL","name":"","addr":"(D)","loc":"a,0:0,0:0",
+   "modulep": [
+    {"type":"MODULE","name":"@CONST-POOL@","addr":"(V)","loc":"a,0:0,0:0","origName":"@CONST-POOL@","verilogName":"@CONST-POOL@","level":0,"depth":0,"timeunit":"NONE","inlinesp": [],
+     "stmtsp": [
+      {"type":"SCOPE","name":"@CONST-POOL@","addr":"(W)","loc":"a,0:0,0:0","aboveScopep":"UNLINKED","aboveCellp":"UNLINKED","modp":"(V)","varsp": [],"blocksp": [],"inlinesp": []}
+    ]}
+  ]}
+]}

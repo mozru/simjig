@@ -1,0 +1,248 @@
+---
+source: crates/svtypes/tests/it/fixtures.rs
+expression: json
+---
+{
+  "schema": 1,
+  "producer": {
+    "tool": "verilator",
+    "version": "5.052"
+  },
+  "time_precision": -12,
+  "top": 2,
+  "types": [
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 32,
+      "kind": {
+        "kind": "Bits",
+        "width": 32,
+        "signed": true,
+        "range": {
+          "left": 31,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 16,
+      "kind": {
+        "kind": "Bits",
+        "width": 16,
+        "signed": false,
+        "range": {
+          "left": 15,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 3,
+      "kind": {
+        "kind": "Bits",
+        "width": 3,
+        "signed": false,
+        "range": {
+          "left": 2,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": true,
+      "width": 4,
+      "kind": {
+        "kind": "Bits",
+        "width": 4,
+        "signed": false,
+        "range": {
+          "left": 3,
+          "right": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "alias_of": null,
+      "four_state": false,
+      "width": 70,
+      "kind": {
+        "kind": "Bits",
+        "width": 70,
+        "signed": false,
+        "range": {
+          "left": 69,
+          "right": 0
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "name": "sub__N10",
+      "orig_name": "sub",
+      "kind": "Module",
+      "params": [
+        {
+          "name": "N",
+          "value": {
+            "Bits": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                16
+              ]
+            }
+          },
+          "ty": 0
+        }
+      ],
+      "ports": [
+        {
+          "name": "x",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": null,
+          "storage": "SData"
+        },
+        {
+          "name": "y",
+          "dir": "Output",
+          "ty": 1,
+          "cpp_member": null,
+          "storage": "SData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    },
+    {
+      "name": "sub__N3",
+      "orig_name": "sub",
+      "kind": "Module",
+      "params": [
+        {
+          "name": "N",
+          "value": {
+            "Bits": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                3
+              ]
+            }
+          },
+          "ty": 0
+        }
+      ],
+      "ports": [
+        {
+          "name": "x",
+          "dir": "Input",
+          "ty": 2,
+          "cpp_member": null,
+          "storage": "CData"
+        },
+        {
+          "name": "y",
+          "dir": "Output",
+          "ty": 2,
+          "cpp_member": null,
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    },
+    {
+      "name": "top",
+      "orig_name": "top",
+      "kind": "Module",
+      "params": [
+        {
+          "name": "W",
+          "value": {
+            "Bits": {
+              "width": 32,
+              "signed": true,
+              "words": [
+                16
+              ]
+            }
+          },
+          "ty": 0
+        },
+        {
+          "name": "MODE",
+          "value": {
+            "Bits": {
+              "width": 4,
+              "signed": false,
+              "words": [
+                12
+              ]
+            }
+          },
+          "ty": 3
+        },
+        {
+          "name": "LABEL",
+          "value": {
+            "String": "over"
+          },
+          "ty": null
+        },
+        {
+          "name": "WIDE",
+          "value": {
+            "Bits": {
+              "width": 70,
+              "signed": false,
+              "words": [
+                1,
+                0
+              ]
+            }
+          },
+          "ty": 4
+        }
+      ],
+      "ports": [
+        {
+          "name": "a",
+          "dir": "Input",
+          "ty": 1,
+          "cpp_member": "a",
+          "storage": "SData"
+        },
+        {
+          "name": "y",
+          "dir": "Output",
+          "ty": 1,
+          "cpp_member": "y",
+          "storage": "SData"
+        },
+        {
+          "name": "narrow",
+          "dir": "Output",
+          "ty": 2,
+          "cpp_member": "narrow",
+          "storage": "CData"
+        }
+      ],
+      "iface_ports": [],
+      "modports": []
+    }
+  ],
+  "packages": []
+}

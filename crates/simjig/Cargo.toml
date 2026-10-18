@@ -13,5 +13,10 @@ workspace = true
 [dependencies]
 simjig-macros.workspace = true
 
+[dev-dependencies]
+insta.workspace = true
+serde_json.workspace = true
+trybuild.workspace = true
+
 [build-dependencies]
 cc.workspace = true

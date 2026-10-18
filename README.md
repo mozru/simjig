@@ -131,7 +131,7 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `dut.x.value = 5` | `dut.x.set(5)` |
 | `int(dut.x.value)`, `bool(dut.x.value)` | `dut.x.get().to_u128()`, `dut.bit.get().to_bool()` |
 | `get_sim_time("ns")` | `simjig::now()`; print it with `simjig::now_display()` (`1250 ns`) |
-| `dut._log.info("x=%d", x)` | `simjig::log!("x={x}")` (prints `[1250 ns main.monitor] x=3`) |
+| `dut._log.info("x=%d", x)` | `simjig::tb_log!("x={x}")` (prints `[1250 ns main.monitor] x=3`) |
 | `Event`, `Queue`, `Lock` | `simjig::{Event, Queue, Lock}` |
 
 What to keep in mind:

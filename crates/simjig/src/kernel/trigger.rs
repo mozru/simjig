@@ -338,8 +338,8 @@ impl Future for YieldNow {
 }
 
 /// The current simulation time, in ticks of the design's precision. To print it in
-/// physical units, use [`now_display`] (`1250 ns`), or [`log!`](crate::log) for a line
-/// with the time and the task.
+/// physical units, use [`now_display`] (`1250 ns`), or [`tb_log!`](crate::tb_log) for a
+/// line with the time and the task.
 ///
 /// # Panics
 /// Outside [`Sim::run`](crate::Sim::run).
@@ -351,7 +351,7 @@ pub fn now() -> SimTime {
 
 /// The current simulation time in physical units, ready to print (`1250 ns`): `now()`
 /// displayed with the running simulation's precision, which no caller has to thread
-/// through. [`log!`](crate::log) prints it with the task's name.
+/// through. [`tb_log!`](crate::tb_log) prints it with the task's name.
 ///
 /// # Panics
 /// Outside [`Sim::run`](crate::Sim::run).
@@ -361,13 +361,13 @@ pub fn now_display() -> TimeDisplay {
     state::with_current("now_display()", |k| k.now.get().display(k.precision))
 }
 
-/// The `[<time> <task>]` prefix of [`log!`](crate::log): the time as [`now_display`]
+/// The `[<time> <task>]` prefix of [`tb_log!`](crate::tb_log): the time as [`now_display`]
 /// prints it and the hierarchical name of the running task.
 #[doc(hidden)]
 #[must_use]
 #[track_caller]
 pub fn log_prefix() -> String {
-    state::with_current("simjig::log!", |k| {
+    state::with_current("simjig::tb_log!", |k| {
         let time = k.now.get().display(k.precision);
         match k.current.get() {
             Some(task) => format!("[{time} {}]", k.task_name(task)),
@@ -387,17 +387,21 @@ pub fn log_prefix() -> String {
 /// sim.run(async {
 ///     spawn("monitor", async {
 ///         Timer::new(SimDuration::from_ticks(1250)).await;
-///         simjig::log!("hdr len={}", 3); // [1250 ns monitor] hdr len=3
+///         simjig::tb_log!("hdr len={}", 3); // [1250 ns monitor] hdr len=3
 ///     })
 ///     .await;
 /// })
 /// .unwrap();
 /// ```
 ///
+/// Named `tb_log!`, not `log!`: the `log` crate exports a `log!` macro too, and a
+/// testbench that glob-imports both crates (`use log::*; use simjig::*;`) could not call
+/// either by its bare name.
+///
 /// # Panics
 /// Outside [`Sim::run`](crate::Sim::run).
 #[macro_export]
-macro_rules! log {
+macro_rules! tb_log {
     ($($arg:tt)*) => {
         ::std::println!(
             "{} {}",

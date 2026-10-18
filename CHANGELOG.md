@@ -42,7 +42,8 @@ the public API, the generated code or simulation semantics.
 - README: "A parameter sweep", writing each test once against a user trait
   implemented for each configuration's `Dut`.
 - `simjig::now_display()` prints the current time in physical units without the
-  precision (`now().display(ctx.precision())` needed `ctx`), and `simjig::log!(..)`
+  precision (`now().display(ctx.precision())` needed `ctx`), and `simjig::tb_log!(..)`
+  (not `log!`, which a glob import of the `log` crate's `log!` would make ambiguous)
   prints a `format!` line prefixed with it and the running task:
   `[1250 ns main.monitor] hdr len=3`. The `first!` docs and the cocotb table show how to
   tell which operand won (an enum of your own).

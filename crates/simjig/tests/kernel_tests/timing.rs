@@ -192,7 +192,7 @@ fn an_event_scheduled_in_the_past_is_a_model_failure() {
     );
 }
 
-/// `now_display()` and `simjig::log!`'s prefix print the time in the design's units and
+/// `now_display()` and `simjig::tb_log!`'s prefix print the time in the design's units and
 /// the running task, with no precision passed in.
 #[test]
 fn log_prefix_names_the_time_in_units_and_the_task() {
@@ -202,7 +202,7 @@ fn log_prefix_names_the_time_in_units_and_the_task() {
             let task = simjig::spawn("monitor", async {
                 Timer::new(simjig::ns(1)).await;
                 Timer::new(simjig::SimDuration::from_ticks(250)).await;
-                simjig::log!("from the task");
+                simjig::tb_log!("from the task");
                 (
                     simjig::now_display().to_string(),
                     simjig::__private::log_prefix(),

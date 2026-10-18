@@ -199,3 +199,37 @@ async fn s3c4m_a_fork_whose_first_sibling_wins_in_the_child(ctx: &TestCtx, dut: 
     let result = r.expect("the refusal completes in the operand's first poll");
     assert_refused(result.map(|_| ()));
 }
+
+/// A branch child whose `run_from_checkpoint` future is dropped before the body returns
+/// (here by a hand-written poll, the only way left once combinators are refused) ends
+/// with a failure, and never runs the rest of the test.
+#[simjig::test(timeout = "100us")]
+async fn a_branch_whose_fork_future_is_dropped_ends_the_child(ctx: &TestCtx, dut: counter::Dut) {
+    warm_up(dut).await;
+    let pid = std::process::id();
+    let mut fork = Box::pin(fork::run_from_checkpoint(ctx.seed(), 1, |_| async move {
+        Timer::new(ns(50)).await;
+        Ok(())
+    }));
+    // The parent's first poll returns the outcomes; the child's is pending on the timer.
+    let polled = std::future::poll_fn(|cx| std::task::Poll::Ready(fork.as_mut().poll(cx))).await;
+    drop(fork);
+    assert_eq!(
+        std::process::id(),
+        pid,
+        "the child ran on after its fork future was dropped"
+    );
+    let std::task::Poll::Ready(result) = polled else {
+        panic!("the parent's poll of run_from_checkpoint is pending");
+    };
+    let branches = result.unwrap();
+    let Err(fork::BranchError::Failed(failure)) = &branches.outcomes()[0].result else {
+        panic!("{:?}", branches.outcomes()[0].result);
+    };
+    assert!(
+        failure
+            .message
+            .contains("the branch body was dropped before it returned"),
+        "{failure:?}"
+    );
+}

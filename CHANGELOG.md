@@ -9,6 +9,9 @@ the public API, the generated code or simulation semantics.
   operands ran on inside every branch, and an operand that won a `first!` in the child
   cancelled the branch body, so the child ran the rest of the test as if it were the
   parent.
+- A fork branch's child whose `run_from_checkpoint` future is dropped before the branch
+  body returns (by a hand-written poll) ends with a failed branch ("the branch body was
+  dropped before it returned"). It ran on as if it were the parent.
 - Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.

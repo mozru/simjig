@@ -87,10 +87,31 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
   same ending) a different kernel trace hash. It prints `replay: NON-DETERMINISTIC` with one
   line per difference and a help line; it never retries. If the child wrote no summary
   (crash), the verdict is `NOT VERIFIED` with the child's last stderr lines.
-- Files in the run dir: `waves.fst`, `waves.gtkw` (`[dumpfile]`, `[timestart] <from>`, the
-  primary marker at the failure time in ticks, a zoom fitting the window into ~1000 px,
-  the failing signals as `TOP.<kernel name>` for WriteConflict/WriteInReadOnly/DeltaLimit),
-  and `replay/` (the replay's `summary.json`, `events.jsonl`, to diff against this run's).
+- Files in the run dir (multi-file since s3c1fix, `docs/notes/s3c1fix.md` §1): every FST
+  the replay wrote, moved from the replay's root by `replay::move_waves`:
+  - `waves.fst` for the first model, `waves.model-<i>.fst` for model `i > 0` of a
+    multi-DUT test (`harness::dut`, `ModelOptions::for_model`);
+  - `waves[.model-<i>].branch-<j>.fst` for each `fork` branch, one `.branch-<j>` per
+    checkpoint level (`model::trace::branch_path`; `.branch-1.branch-4` is branch 4 of a
+    checkpoint inside branch 1). `replay::trace_identity` parses the names; any other
+    file is left where it is;
+  - one `<stem>.gtkw` per FST (`[dumpfile]`, `[timestart] <from>`, the primary marker at
+    the failure time in ticks, a zoom fitting the window into ~1000 px, the failing
+    signals as `TOP.<kernel name>` for WriteConflict/WriteInReadOnly/DeltaLimit);
+  - `replay/` (the replay's `summary.json`, `events.jsonl`, to diff against this run's).
+
+  `WavesReplay::files: Vec<WavesFile>` (each with `fst`, `gtkw`, `model`, `branch`,
+  `marker`, `failing_branch`) lists them; it replaced the single `fst`/`gtkw` fields.
+  Order: the files of the fork branch that failed the test first, then the rest in
+  (branch, model) order. The report's `waves:` line names the first file (with its model
+  or branch label when it is not model 0 of the main process) and prints one continuation
+  line per other file.
+- A failing fork branch: `Branches::into_values` records the first failed branch (index
+  and its failure time) in the thread-local `fork::FailedBranch`; the runner takes it
+  after a failed run and clears it at the start of every run. The test fails at the
+  checkpoint's time, but the branch ran on past it, so its `.gtkw` marker is at the
+  branch's own failure. The traced span is not cut at the checkpoint: a default window
+  has no end, so each branch child traces to its own end.
 - A passing run under `SIMJIG_WAVES=1` prints the waves block to stderr and fails the test
   if the replay did not reproduce it.
 - Report: `FailureReport` gains `signals: Vec<String>` and `waves: Option<WavesReplay>`
@@ -141,6 +162,7 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
 - Value correctness inside the FST (only timestamps, counts and header are decoded; the
   hierarchy block is LZ4 and is not read).
 - Linux; a `--timing` model under tracing (the C side tests it; the Rust path is the same).
-- The trace window when a test sets `SIMJIG_TRACE` and also runs several Sims in one test.
+- The trace window when a test sets `SIMJIG_TRACE` and also runs several Sims in one test
+  (several DUTs in one Sim get one file each, above).
 - Waves for a `$fatal` cover the timesteps before the fatal only (above).
 - No CHANGELOG exists for the API additions (constitution rule 4).

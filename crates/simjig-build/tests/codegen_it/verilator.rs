@@ -189,28 +189,28 @@ fn cpp_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("cpp")
 }
 
-#[test]
-fn shim_builds_against_the_model_and_exports_its_vtable() {
+/// A `wide` shim built by [`build_wide_shim`].
+struct WideBuild {
+    lowered: Lowered,
+    out: Output,
+    /// The built driver.
+    exe: PathBuf,
+}
+
+/// Emits the `wide` shim with `opts` (after `tweak` edits the lowering) and builds it with
+/// `verilator --build` and the extra Verilator `flags`.
+fn build_wide_shim(
+    dir: &str,
+    opts: &ShimOptions,
+    flags: &[&str],
+    tweak: fn(&mut Lowered),
+) -> WideBuild {
     let case = cases::wide();
-    let lowered = lower(&case.design, &case.config).unwrap();
-    assert!(
-        lowered
-            .items
-            .iter()
-            .any(|i| matches!(i.kind, ItemKind::Struct { .. }) && i.width > 128)
-    );
-    let dir = cases::scratch("shim_wide");
-    let prefix = "Vwide_top";
-    let shim = dir.join(format!("{prefix}_shim.cpp"));
-    let shim_text = emit_shim(
-        &lowered,
-        &ShimOptions {
-            prefix: prefix.into(),
-            timing: false,
-        },
-    )
-    .unwrap();
-    fs::write(&shim, shim_text).unwrap();
+    let mut lowered = lower(&case.design, &case.config).unwrap();
+    tweak(&mut lowered);
+    let dir = cases::scratch(dir);
+    let shim = dir.join(format!("{}_shim.cpp", opts.prefix));
+    fs::write(&shim, emit_shim(&lowered, opts).unwrap()).unwrap();
     let vlt = dir.join("probes.vlt");
     fs::write(&vlt, emit_vlt(&lowered)).unwrap();
     let cpp = cpp_dir();
@@ -223,33 +223,38 @@ fn shim_builds_against_the_model_and_exports_its_vtable() {
     let mut files = vec![vlt];
     files.extend(case.sources.iter().cloned());
     files.extend([shim, driver, cpp.join("simjig_rt.cpp")]);
-    let out = verilator(
-        &[
-            "--cc",
-            "--exe",
-            "--build",
-            "-j",
-            "4",
-            "--no-timing",
-            "-Wno-fatal",
-            "--top-module",
-            "wide_top",
-            "--prefix",
-            prefix,
-            "--Mdir",
-            mdir.to_str().unwrap(),
-            "-CFLAGS",
-            &cflags,
-        ],
-        &files,
-    );
+    let mut args = vec![
+        "--cc",
+        "--exe",
+        "--build",
+        "-j",
+        "4",
+        "--no-timing",
+        "-Wno-fatal",
+        "--top-module",
+        "wide_top",
+        "--prefix",
+        &opts.prefix,
+        "--Mdir",
+        mdir.to_str().unwrap(),
+        "-CFLAGS",
+        &cflags,
+    ];
+    args.extend_from_slice(flags);
+    let out = verilator(&args, &files);
+    let exe = mdir.join(&opts.prefix);
+    WideBuild { lowered, out, exe }
+}
+
+/// Runs the driver built by [`build_wide_shim`] and checks the table it prints.
+fn run_wide_driver(build: &WideBuild) {
     assert!(
-        out.status.success(),
+        build.out.status.success(),
         "model build failed:\n{}",
-        stderr(&out)
+        stderr(&build.out)
     );
-    let run = Command::new(mdir.join(prefix))
-        .arg(format!("{:x}", lowered.ir_hash))
+    let run = Command::new(&build.exe)
+        .arg(format!("{:x}", build.lowered.ir_hash))
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&run.stdout);
@@ -258,5 +263,98 @@ fn shim_builds_against_the_model_and_exports_its_vtable() {
         "driver failed:\n{stdout}{}",
         stderr(&run)
     );
-    assert_eq!(stdout, expected_table(&lowered));
+    assert_eq!(stdout, expected_table(&build.lowered));
+}
+
+fn wide_opts(trace_fst: bool, coverage: bool) -> ShimOptions {
+    ShimOptions {
+        prefix: "Vwide_top".into(),
+        timing: false,
+        trace_fst,
+        coverage,
+    }
+}
+
+#[test]
+fn shim_builds_against_the_model_and_exports_its_vtable() {
+    let lowered = lower(&cases::wide().design, &cases::wide().config).unwrap();
+    assert!(
+        lowered
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, ItemKind::Struct { .. }) && i.width > 128)
+    );
+    run_wide_driver(&build_wide_shim(
+        "shim_wide",
+        &wide_opts(false, false),
+        &[],
+        |_| {},
+    ));
+}
+
+/// With trace and coverage on, the shim includes the coverage headers and builds against a
+/// `--trace-fst --coverage` model (whose libverilated then has the FST writer and coverage).
+#[test]
+fn trace_and_coverage_shim_builds_against_a_traced_covered_model() {
+    let flags = ["--trace-fst", "--coverage"];
+    run_wide_driver(&build_wide_shim(
+        "shim_wide_trace_cov",
+        &wide_opts(true, true),
+        &flags,
+        |_| {},
+    ));
+}
+
+/// A shim that claims `--trace-fst` for a model verilated without it fails to compile with
+/// `simjig_model.h`'s message instead of building a model whose waves are silently empty.
+#[test]
+fn trace_flag_that_disagrees_with_the_model_fails_the_build() {
+    let out = build_wide_shim(
+        "shim_wide_trace_mismatch",
+        &wide_opts(true, false),
+        &[],
+        |_| {},
+    )
+    .out;
+    assert!(!out.status.success(), "the build should fail");
+    assert!(
+        stderr(&out).contains("kTraceFst must be true exactly when verilated with --trace-fst"),
+        "unexpected failure:\n{}",
+        stderr(&out)
+    );
+}
+
+/// A probe whose width disagrees with the model but fits the same storage class (the 3-bit
+/// `state` claimed as 5 bits, both `CData`) builds, and then fails at create.
+#[test]
+fn probe_with_a_wrong_width_fails_create() {
+    let build = build_wide_shim(
+        "shim_wide_probe_width",
+        &wide_opts(false, false),
+        &[],
+        |l| {
+            let state = l
+                .signals
+                .iter_mut()
+                .find(|s| s.name == "wide_top.state")
+                .expect("the wide case probes wide_top.state");
+            assert_eq!(state.width, 3);
+            state.width = 5;
+        },
+    );
+    assert!(
+        build.out.status.success(),
+        "model build failed:\n{}",
+        stderr(&build.out)
+    );
+    let run = Command::new(&build.exe)
+        .arg(format!("{:x}", build.lowered.ir_hash))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(!run.status.success(), "create should fail:\n{stdout}");
+    assert!(
+        stdout.contains("vt->create(&opts, &h) == SIMJIG_OK"),
+        "failed elsewhere:\n{stdout}"
+    );
 }

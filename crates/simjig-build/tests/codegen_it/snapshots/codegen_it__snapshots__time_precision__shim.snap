@@ -16,6 +16,8 @@ struct Traits {
     static constexpr const char* kPrefix = "Vtop";
     static constexpr uint64_t kIrHash = 0x7fc4d54ddc4b22d8ull;
     static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
     static void bind(Vtop& m, simjig::SignalTable& t) {
         SIMJIG_SIGNAL(t, m.a, "top.a", 1, SIMJIG_DIR_IN, kReadWrite);
         SIMJIG_SIGNAL(t, m.y, "top.y", 1, SIMJIG_DIR_OUT, kRead);

@@ -140,6 +140,35 @@ fn a_prefix_owned_by_another_configuration_is_rejected() {
     assert_eq!(s.verilations(), verilated, "rejected before verilating");
 }
 
+/// An upgrade of simjig-build that changes `DutConfig` (so every identity's `Debug` form)
+/// must not find its own old claims and fail with "rename the DUT": claims are kept per
+/// identity scheme, and the claims an older simjig-build left (under its scheme, or in the
+/// flat `prefixes/<prefix>` of the releases before schemes) are not consulted.
+#[test]
+fn an_upgrade_that_changes_the_config_shape_ignores_the_old_claims() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let dut = counter(&rtl, 8);
+    let prefix = dut.config().prefix();
+    let prefixes = s.path().join("cache/prefixes");
+    // What the same configuration left as seen by older builds: another identity.
+    let old_scheme = prefixes.join("0000000000000000");
+    std::fs::create_dir_all(&old_scheme).unwrap();
+    std::fs::write(old_scheme.join(&prefix), "identity-under-the-old-shape").unwrap();
+    std::fs::write(prefixes.join(&prefix), "identity-before-schemes").unwrap();
+    dut.build_in(&s.env()).unwrap();
+    let claims: Vec<_> = std::fs::read_dir(&prefixes)
+        .unwrap()
+        .map(|scheme| scheme.unwrap().path().join(&prefix))
+        .filter(|claim| claim.is_file())
+        .collect();
+    assert_eq!(
+        claims.len(),
+        2,
+        "the old claim and this scheme's: {claims:?}"
+    );
+}
+
 /// The model archive's entry directory (from its link directives).
 fn model_entry(built: &simjig_build::Built) -> std::path::PathBuf {
     built

@@ -7,7 +7,8 @@
 //!   verilation, of an archive compile, see `archive`, or of a DUT's IR, see `front`).
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
-//! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
+//! - `prefixes/<scheme>/<prefix>`: the identity of the configuration that owns a model
+//!   prefix, per identity scheme (see `pipeline::claim`).
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
 //! - `archives/<key>/`: compiled models (see `compile`).
 //! - `fronts/<key>`: the IR of a DUT; `checks/<key>`: a layout check that passed (see

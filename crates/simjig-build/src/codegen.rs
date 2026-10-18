@@ -10,7 +10,7 @@
 //!   type differs from the IR.
 //! - [`emit_wrapper`] and [`emit_elab_top`]: the flat-port top for a DUT with interface
 //!   ports.
-//! - `emit_shim`: the per-model C++ shim that exports the model's vtable.
+//! - [`emit_shim`]: the per-model C++ shim that exports the model's vtable.
 //!
 //! The module is pure: no file system, no processes. Output is deterministic (a plain
 //! indenting writer, IR order everywhere).
@@ -22,6 +22,7 @@ mod lower;
 mod lowered;
 mod names;
 mod rust;
+mod shim;
 mod vlt;
 mod wrapper;
 mod writer;
@@ -36,5 +37,6 @@ pub use lowered::{
     SignalTarget, StructField, UnionView, Wrapper, WrapperIface, WrapperPort,
 };
 pub use rust::emit_rust;
+pub use shim::{ShimOptions, emit_shim};
 pub use vlt::emit_vlt;
 pub use wrapper::{emit_elab_top, emit_wrapper};

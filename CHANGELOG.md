@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A failed `Dut::build` resolves the paths inside an `-f` file named in an `-F` file
+  against the working directory, as Verilator 5.052 does; they were joined to the `-F`
+  file's directory, so its reruns (and the `-G` check) looked at the wrong files.
 - A Verilator failure on `TIMESCALEMOD` hints at the units missing a `timeunit`
   (`` `file:line` ``) and `.verilator_args(["--timescale", "1ns/1ps"])`, instead of the
   generic lint waiver.

@@ -136,7 +136,7 @@ fn traverse_in<T>(
             return Some(found);
         }
         let words = std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words(&t));
-        let dir = if relative { path.parent() } else { base };
+        let dir = if relative { path.parent() } else { None };
         if let Some(found) = traverse_in(&words, dir, Some(&path), depth + 1, visit) {
             return Some(found);
         }
@@ -228,6 +228,27 @@ mod tests {
             PathBuf::from("ylib"),
         ];
         assert_eq!(inputs(&args), want);
+    }
+
+    /// An `-f` file named inside an `-F` file is found next to the `-F` file, but its own
+    /// paths are relative to the working directory (`parseOptsFile(.., false)` sets the
+    /// option directory to `.`; checked against Verilator 5.052), not to the `-F` file's.
+    #[test]
+    fn an_f_file_inside_an_upper_f_file_resolves_against_the_working_directory() {
+        let t = tempfile::tempdir().unwrap();
+        let sub = t.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("outer.F"), "-f inner.f\n").unwrap();
+        std::fs::write(sub.join("inner.f"), "top.sv\n-GX=1\n").unwrap();
+        let outer = vec!["-F".to_owned(), sub.join("outer.F").display().to_string()];
+        assert_eq!(
+            inputs(&outer),
+            [sub.join("outer.F"), sub.join("inner.f"), PathBuf::from("top.sv")]
+        );
+        assert_eq!(
+            find(&outer, |w| w.starts_with("-G")),
+            Some((sub.join("inner.f"), "-GX=1".to_owned()))
+        );
     }
 
     #[test]

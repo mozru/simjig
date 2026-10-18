@@ -1,9 +1,0 @@
----
-source: crates/simjig-build/tests/codegen_it/errors.rs
-expression: "out.join(\"\\n\")"
----
-codegen: probe wide_top.state: unsupported: probes are reached as members of the model root (`top__DOT__u__DOT__x`), which exist only when every module is inlined, but the Verilator argument `-fno-inline` keeps modules apart; drop it, or drop the probes
-codegen: probe wide_top.state: unsupported: probes are reached as members of the model root (`top__DOT__u__DOT__x`), which exist only when every module is inlined, but the Verilator argument `--O0` keeps modules apart; drop it, or drop the probes
-codegen: probe wide_top.state: unsupported: probes are reached as members of the model root (`top__DOT__u__DOT__x`), which exist only when every module is inlined, but the Verilator argument `--hierarchical` keeps modules apart; drop it, or drop the probes
-codegen: probe wide_top.state: unsupported: probes are reached as members of the model root (`top__DOT__u__DOT__x`), which exist only when every module is inlined, but the control-file line `no_inline -module "acc"` keeps modules apart; drop it, or drop the probes
-codegen: probe wide_top.state: unsupported: probes are reached as members of the model root (`top__DOT__u__DOT__x`), which exist only when every module is inlined, but the control-file line `hier_block -module "acc"` keeps modules apart; drop it, or drop the probes

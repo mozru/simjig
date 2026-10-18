@@ -5,7 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-use svtypes::version::{VerilatorVersion, supported_list};
+use svtypes::toolchain::{self, Verdict};
+use svtypes::version::supported_list;
 
 use super::facts::{DEFAULT_CXX, Facts, Probe};
 use super::{Check, Finding};
@@ -39,7 +40,24 @@ pub(super) fn run_all(facts: &Facts, exists: &dyn Fn(&Path) -> bool) -> Vec<Find
 fn verilator(facts: &Facts) -> Finding {
     let check = Check::Verilator;
     let Some(path) = &facts.verilator else {
-        return Finding::fail(check, "verilator not found on PATH", PIXI_FIX);
+        let searched: Vec<String> = facts
+            .verilator_searched
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        let summary = format!(
+            "verilator not found (SIMJIG_VERILATOR, then $VERILATOR_ROOT/bin, then PATH); \
+             searched: {}",
+            searched.join(", ")
+        );
+        // The build looks where VERILATOR_ROOT points and nowhere else, so a stale one is
+        // the cause whenever it is set (and SIMJIG_VERILATOR is not, which would win).
+        let fix = if facts.env_root.is_some() && facts.verilator_searched.len() == 1 {
+            "unset VERILATOR_ROOT, or point it at a Verilator installation"
+        } else {
+            PIXI_FIX
+        };
+        return Finding::fail(check, summary, fix);
     };
     let banner = match &facts.verilator_version {
         Probe::Output(text) => text,
@@ -51,26 +69,32 @@ fn verilator(facts: &Facts) -> Finding {
             return Finding::fail(check, summary, PIXI_FIX);
         }
     };
-    let Some(version) = VerilatorVersion::from_banner(banner) else {
-        let line = banner.lines().next().unwrap_or("");
-        let summary = format!("cannot read a version from `{line}`");
-        return Finding::fail(check, summary, PIXI_FIX);
-    };
     let at = path.display();
-    if version.is_supported() {
-        Finding::ok(check, format!("Verilator {version} at {at}"))
-    } else if facts.allow_untested {
-        let summary = format!(
-            "Verilator {version} at {at} is untested (supported: {}); allowed by SIMJIG_UNTESTED_VERILATOR=1",
-            supported_list()
-        );
-        Finding::warn(check, summary, PIXI_FIX)
-    } else {
-        let summary = format!(
-            "Verilator {version} at {at} is not supported (supported: {})",
-            supported_list()
-        );
-        Finding::fail(check, summary, PIXI_FIX)
+    // The build's rule (svtypes::toolchain::judge), so the doctor and the build agree.
+    match toolchain::judge(banner, facts.allow_untested) {
+        Verdict::Supported(version) => Finding::ok(check, format!("Verilator {version} at {at}")),
+        Verdict::Untested(version) => {
+            let summary = format!(
+                "Verilator {version} at {at} is untested (supported: {}); allowed by SIMJIG_UNTESTED_VERILATOR=1",
+                supported_list()
+            );
+            Finding::warn(check, summary, PIXI_FIX)
+        }
+        Verdict::Refused(Some(version)) => {
+            let summary = format!(
+                "Verilator {version} at {at} is not supported (supported: {})",
+                supported_list()
+            );
+            Finding::fail(check, summary, PIXI_FIX)
+        }
+        Verdict::Refused(None) => {
+            let line = banner.lines().next().unwrap_or("");
+            Finding::fail(
+                check,
+                format!("cannot read a version from `{line}`"),
+                PIXI_FIX,
+            )
+        }
     }
 }
 
@@ -260,6 +284,7 @@ mod tests {
         Facts {
             cwd: PathBuf::from("/src/simjig"),
             verilator: Some(PathBuf::from("/env/bin/verilator")),
+            verilator_searched: Vec::new(),
             verilator_version: Probe::Output(
                 "Verilator 5.052 2026-09-05 rev conda-forge build".to_owned(),
             ),
@@ -314,7 +339,18 @@ mod tests {
 
         let mut f = healthy();
         f.verilator = None;
-        expect(&verilator(&f), Status::Fail, "not found on PATH");
+        f.verilator_searched = vec![PathBuf::from("/opt/v/bin/verilator")];
+        expect(
+            &verilator(&f),
+            Status::Fail,
+            "not found (SIMJIG_VERILATOR, then $VERILATOR_ROOT/bin, then PATH); searched: \
+             /opt/v/bin/verilator",
+        );
+        f.env_root = Some(EnvRoot {
+            raw: "/opt/v".to_owned(),
+            canonical: None,
+        });
+        expect(&verilator(&f), Status::Fail, "unset VERILATOR_ROOT");
 
         let mut f = healthy();
         f.verilator_version = Probe::Failed("%Error: oops".to_owned());

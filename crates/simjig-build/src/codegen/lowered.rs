@@ -253,14 +253,17 @@ pub enum SignalTarget {
         /// The C++ member name.
         cpp_member: String,
     },
-    /// A `public_flat` member of the root class (`m.rootp-><root_member>`).
+    /// A `public_flat` variable, found at create time in Verilator's scope table
+    /// (`<model name>.<scope>`, variable `<var>`), wherever Verilator placed it: in the root
+    /// when the module was inlined, or in the module's own object when it was not.
     Probe {
         /// The declaring module, for the `.vlt` line.
         module: String,
         /// The variable name.
         var: String,
-        /// The encoded root member (`top__DOT__u__DOT__x`).
-        root_member: String,
+        /// The elaborated instance path below the model, as Verilator names the scope
+        /// (`top.u_core`, or `<wrapper>.dut.u_core` for an interface-ported DUT).
+        scope: String,
     },
 }
 

@@ -1,5 +1,5 @@
 // Coverage points in a module Verilator keeps as its own object (no_inline_module), so they
-// are not in the top's counter array: cov_counters must refuse, cov_write must still work.
+// are not in the top's counter array: cov_runs must still return them, one run per object.
 module tc_hier (
     input  logic clk,
     input  logic a,

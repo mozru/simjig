@@ -71,11 +71,12 @@ fn doctor_json_reports_ok() {
 
 #[test]
 fn doctor_fails_on_inconsistent_verilator_root() {
-    // Verilator itself refuses to run with this setting, so doctor must exit non-zero.
+    // The build would look for `$VERILATOR_ROOT/bin/verilator` only (the shared rule in
+    // svtypes::toolchain), and there is none, so doctor must fail and name the variable.
     let mut command = doctor(&[]);
     command.env("VERILATOR_ROOT", env!("CARGO_MANIFEST_DIR"));
     let (output, stdout) = run(command);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
-    assert!(stdout.contains("FAIL verilator-root"), "{stdout}");
+    assert!(stdout.contains("FAIL verilator "), "{stdout}");
     assert!(stdout.contains("fix: unset VERILATOR_ROOT"), "{stdout}");
 }

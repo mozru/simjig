@@ -1,6 +1,6 @@
 //! Failures carry the command line, the stderr excerpt and the offending path.
 
-use simjig_build::{Dut, Error};
+use simjig_build::{Dut, Error, Verilator};
 
 use crate::support::{Sandbox, write_script};
 
@@ -69,10 +69,34 @@ fn unsupported_verilator_versions_are_rejected() {
         err.to_string(),
         format!(
             "unsupported Verilator at {}: `Verilator 5.050 2025-01-01 rev v5.050`; \
-             supported versions: 5.052",
+             supported versions: 5.052; install the pinned one: `pixi install --locked`",
             fake.display()
         )
     );
+}
+
+/// `SIMJIG_UNTESTED_VERILATOR=1` accepts an unsupported release, as `cargo simjig doctor`
+/// does (one rule: `svtypes::toolchain::judge`), and the build then warns.
+#[test]
+fn the_untested_override_accepts_an_unsupported_release() {
+    let s = Sandbox::new();
+    let fake = s.path().join("old-verilator");
+    write_script(
+        &fake,
+        "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'Verilator 5.050 2025-01-01 rev v5.050';;\n  \
+         --getenv) echo /opt/old;;\nesac\n",
+    );
+    let mut env = s.env();
+    env.simjig_verilator = Some(fake.clone());
+    assert!(matches!(
+        Verilator::locate(&env),
+        Err(Error::UnsupportedVerilator { .. })
+    ));
+    env.untested_verilator = true;
+    let v = Verilator::locate(&env).unwrap();
+    assert!(v.untested, "{v:?}");
+    assert_eq!(v.version.to_string(), "5.050");
+    assert_eq!(v.include_dir, std::path::Path::new("/opt/old/include"));
 }
 
 #[test]

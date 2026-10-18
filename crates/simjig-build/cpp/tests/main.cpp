@@ -6,6 +6,9 @@
 #include "simjig_abi.h"
 #include "simjig_rt.h"
 
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -265,12 +268,13 @@ void probe_width_is_checked_at_create() {
 void abi_field_table_covers_every_field() {
     size_t n = 0;
     const simjig_abi_field* f = simjig_rt_abi_fields(&n);
-    CHECK_EQ(n, 47u);
+    CHECK_EQ(n, 49u);
     const std::pair<const char*, size_t> types[] = {
         {"simjig_model_vtable", sizeof(simjig_model_vtable)},
         {"simjig_signal", sizeof(simjig_signal)},
         {"simjig_msg", sizeof(simjig_msg)},
         {"simjig_create_opts", sizeof(simjig_create_opts)},
+        {"simjig_cov_run", sizeof(simjig_cov_run)},
     };
     size_t i = 0;
     for (const auto& [type, size] : types) {
@@ -298,7 +302,7 @@ void plain_model_reports_unsupported() {
     CHECK_EQ(vt->trace_close(m.h()), SIMJIG_UNSUPPORTED);
     CHECK(!exists(fst));
     size_t n = 99;
-    CHECK(vt->cov_counters(m.h(), &n) == nullptr);
+    CHECK(vt->cov_runs(m.h(), &n) == nullptr);
     CHECK_EQ(n, 0u);
     CHECK_EQ(vt->cov_zero(m.h()), SIMJIG_UNSUPPORTED);
     CHECK_EQ(vt->cov_write(m.h(), path("plain.dat").c_str()), SIMJIG_UNSUPPORTED);
@@ -393,6 +397,32 @@ void unwritable_paths_are_io_errors_not_fatals() {
 
 // A forked child detaches from the inherited trace and writes its own; the parent's file
 // stays valid (docs/notes/spikes.md §1 rule 4).
+// redirect_to_devnull finds every descriptor open on the file, including one above the
+// current soft RLIMIT_NOFILE (the limit can be lowered after the descriptor was opened), by
+// listing the open descriptors instead of scanning up to the limit.
+void devnull_redirect_finds_descriptors_above_the_limit() {
+    const std::string file = path("redirect.txt");
+    const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    CHECK(fd >= 0);
+    constexpr int kHigh = 3000;
+    CHECK_EQ(::dup2(fd, kHigh), kHigh);
+    struct rlimit old{};
+    CHECK_EQ(::getrlimit(RLIMIT_NOFILE, &old), 0);
+    struct rlimit low = old;
+    low.rlim_cur = 256;
+    CHECK_EQ(::setrlimit(RLIMIT_NOFILE, &low), 0);
+    const int moved = simjig::redirect_to_devnull(simjig::file_id(file.c_str()));
+    CHECK_EQ(::setrlimit(RLIMIT_NOFILE, &old), 0);
+    CHECK_EQ(moved, 2);
+    struct stat high{};
+    struct stat null{};
+    CHECK_EQ(::fstat(kHigh, &high), 0);
+    CHECK_EQ(::stat("/dev/null", &null), 0);
+    CHECK(high.st_rdev == null.st_rdev && high.st_ino == null.st_ino);
+    ::close(kHigh);
+    ::close(fd);
+}
+
 void fork_child_detaches_and_reopens() {
     CHECK_EQ(thread_count(), 1u);
     Model m{simjig_vtable_Vtc_full(), "TOP"};
@@ -443,18 +473,27 @@ void fork_child_detaches_and_reopens() {
     CHECK_EQ(c.end_time, fork_time + 50);
 }
 
+// The sum of every counter of every run, and (in *counters) how many counters there are.
+uint64_t runs_total(Model& m, size_t* counters = nullptr, size_t* runs = nullptr) {
+    size_t n = 0;
+    const simjig_cov_run* r = m.vt()->cov_runs(m.h(), &n);
+    uint64_t sum = 0;
+    size_t len = 0;
+    for (size_t k = 0; r != nullptr && k < n; ++k) {
+        len += r[k].len;
+        for (size_t i = 0; i < r[k].len; ++i) sum += r[k].counters[i];
+    }
+    if (counters != nullptr) *counters = len;
+    if (runs != nullptr) *runs = n;
+    return sum;
+}
+
 void coverage_counters_count_and_zero() {
     Model m{simjig_vtable_Vtc_full(), "TOP"};
     size_t n = 0;
-    uint32_t* c = m.vt()->cov_counters(m.h(), &n);
-    CHECK(c != nullptr);
+    runs_total(m, &n);
     CHECK(n > 0);
-    if (c == nullptr) return;
-    const auto sum = [&] {
-        uint64_t s = 0;
-        for (size_t i = 0; i < n; ++i) s += c[i];
-        return s;
-    };
+    const auto sum = [&] { return runs_total(m); };
     m.reset();
     for (int i = 0; i < 10; ++i) m.cycle();
     const uint64_t first = sum();
@@ -493,12 +532,10 @@ void coverage_dat_is_written() {
     size_t points = 0;
     const uint64_t total = dat_total(text, &points);
     size_t n = 0;
-    const uint32_t* c = m.vt()->cov_counters(m.h(), &n);
-    uint64_t live = 0;
-    for (size_t i = 0; c != nullptr && i < n; ++i) live += c[i];
-    // Every counter is at least one point, and a counter shared by aliased signals (tc_sub.clk
-    // is tc.clk, tc_sub.q is tc.odd) is one point per alias (docs/notes/tracecov.md).
-    CHECK(points > n);
+    const uint64_t live = runs_total(m, &n);
+    // A counter shared by aliased signals (tc_sub.clk is tc.clk, tc_sub.q is tc.odd) is one
+    // point per alias (docs/notes/tracecov.md), so coverage.dat counts more than the counters.
+    CHECK(n > 0);
     CHECK(total > live);
     CHECK(live > 0);
     CHECK_EQ(m.vt()->cov_zero(m.h()), SIMJIG_OK);
@@ -514,11 +551,19 @@ void coverage_dat_is_written() {
     CHECK(text.find("v_toggle/tc") != std::string::npos);
 }
 
-void points_outside_the_top_have_no_counter_array() {
+// Each tc_leaf instance is its own object with its own 3 counters, and the symbol table has 3
+// more (for static functions): three runs in symbol-table order, nothing in the root, and no
+// counter twice, so the live counts sum to exactly the coverage.dat total. coverage.dat has 3
+// points: without per_instance, both instances' points have the same keys and are summed.
+void counters_of_every_module_object_are_runs() {
     Model m{simjig_vtable_Vtc_hier(), "TOP"};
-    size_t n = 99;
-    CHECK(m.vt()->cov_counters(m.h(), &n) == nullptr);
-    CHECK_EQ(n, 0u);
+    size_t n = 0;
+    const simjig_cov_run* r = m.vt()->cov_runs(m.h(), &n);
+    CHECK_EQ(n, 3u);
+    for (size_t k = 0; r != nullptr && k < n; ++k) {
+        CHECK_EQ(r[k].len, 3u);
+        if (k > 0) CHECK(r[k - 1].counters < r[k].counters);
+    }
     *static_cast<uint8_t*>(m.vt()->signals(m.h(), nullptr)[1].ptr) = 1;
     for (uint64_t t = 0; t < 100; t += 5) {
         *static_cast<uint8_t*>(m.vt()->signals(m.h(), nullptr)[0].ptr) = (t / 5) % 2;
@@ -528,8 +573,10 @@ void points_outside_the_top_have_no_counter_array() {
     const std::string dat = path("hier.dat");
     CHECK_EQ(m.vt()->cov_write(m.h(), dat.c_str()), SIMJIG_OK);
     size_t points = 0;
-    CHECK(dat_total(slurp(dat), &points) > 0);
-    CHECK(points > 0);
+    const uint64_t total = dat_total(slurp(dat), &points);
+    CHECK(total > 0);
+    CHECK_EQ(points, 3u);
+    CHECK_EQ(runs_total(m), total);
     CHECK_EQ(m.vt()->cov_zero(m.h()), SIMJIG_OK);
     CHECK_EQ(m.vt()->cov_write(m.h(), dat.c_str()), SIMJIG_OK);
     CHECK_EQ(dat_total(slurp(dat), &points), 0u);
@@ -659,8 +706,9 @@ int main(int argc, char** argv) {
         {"unwritable_paths_are_io_errors_not_fatals", unwritable_paths_are_io_errors_not_fatals},
         {"coverage_counters_count_and_zero", coverage_counters_count_and_zero},
         {"coverage_dat_is_written", coverage_dat_is_written},
-        {"points_outside_the_top_have_no_counter_array",
-         points_outside_the_top_have_no_counter_array},
+        {"devnull_redirect_finds_descriptors_above_the_limit",
+         devnull_redirect_finds_descriptors_above_the_limit},
+        {"counters_of_every_module_object_are_runs", counters_of_every_module_object_are_runs},
         {"urandom_streams_are_per_model_and_reproducible",
          urandom_streams_are_per_model_and_reproducible},
         {"display_is_attributed_to_its_model", display_is_attributed_to_its_model},

@@ -41,6 +41,77 @@ pub struct GeneratedInput {
     pub contents: String,
 }
 
+/// How the model is verilated, decided once ([`DutConfig::features`]) and used by every
+/// step that must agree with Verilator: the model build, the JSON pass and layout check
+/// (`--timing`), the shim (`kTiming`, `kTraceFst`, `kCoverage`) and the link (FST writer,
+/// coverage runtime). The compile step checks the result against the `VM_*` switches
+/// Verilator wrote, so an option file (`-f`) that changes one fails the build.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Features {
+    /// `--timing` ([`Dut::timing`]); raw `--timing`/`--no-timing` are rejected.
+    pub timing: bool,
+    /// `--trace-fst` ([`Dut::trace_fst`]); raw trace switches are rejected.
+    pub trace_fst: bool,
+    /// Coverage counters: [`Dut::coverage`], then the coverage flags among the extra
+    /// arguments, by Verilator's rule (see [`DutConfig::features`]).
+    pub coverage: bool,
+}
+
+/// The coverage kinds of Verilator 5.052 (`V3Options::coverage(bool)` sets all five; the
+/// model has counters while any is on).
+const COVERAGE_KINDS: [&str; 5] = ["line", "toggle", "expr", "fsm", "user"];
+
+/// An option's name without its one or two leading dashes (Verilator accepts both), or
+/// `None` for a file or an option value.
+fn option_name(arg: &str) -> Option<&str> {
+    arg.strip_prefix("--")
+        .or_else(|| arg.strip_prefix('-'))
+        .filter(|name| !name.is_empty())
+}
+
+/// Coverage after the builder switch and then `args`, last word winning per kind.
+fn coverage_after(builder: bool, args: &[String]) -> bool {
+    let mut kinds = [builder; COVERAGE_KINDS.len()];
+    for name in args.iter().filter_map(|a| option_name(a)) {
+        let (on, rest) = match name.strip_prefix("no-") {
+            Some(rest) => (false, rest),
+            None => (true, name),
+        };
+        if rest == "coverage" {
+            kinds = [on; COVERAGE_KINDS.len()];
+        } else if let Some(kind) = rest.strip_prefix("coverage-")
+            && let Some(i) = COVERAGE_KINDS.iter().position(|k| *k == kind)
+        {
+            kinds[i] = on;
+        }
+    }
+    kinds.contains(&true)
+}
+
+/// Why a raw Verilator argument is refused, if it is: each has a builder switch (or a
+/// fixed value) that every Verilator run and the generated code must agree on.
+fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
+    let name = option_name(arg)?;
+    if name.starts_with('G') || name.starts_with("pvalue+") {
+        return Some(
+            "pass parameters with `.param(name, value)`: a raw override reaches every              Verilator run, and the layout check, whose top has no such parameter, fails              (`Parameters from the command line were not found in the design`)",
+        );
+    }
+    match name {
+        "timing" | "no-timing" => Some(
+            "use `.timing(true)` or `.timing(false)`: the JSON pass, the layout check and              the shim (which must know whether the model runs coroutines) all follow it",
+        ),
+        "trace" | "no-trace" | "trace-fst" | "trace-vcd" | "trace-saif" | "trace-threads"
+        | "trace-fst-thread" => Some(
+            "use `.trace_fst(true)`: simjig writes FST waves through the shim, which must              know the model is traced, and on the testbench's one thread",
+        ),
+        "threads" if next != Some("1") => Some(
+            "simjig runs each model on one thread (its context has `threads(1)`, so runs              are deterministic and the testbench owns the only thread); a model built for              more needs a thread pool",
+        ),
+        _ => None,
+    }
+}
+
 /// Everything recorded about a DUT. Emitters read this.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DutConfig {
@@ -73,6 +144,20 @@ pub struct DutConfig {
 }
 
 impl DutConfig {
+    /// Timing, FST tracing and coverage as Verilator will build them (see [`Features`]).
+    ///
+    /// Coverage is [`Dut::coverage`] followed by the extra arguments: `--coverage` and
+    /// `--no-coverage` switch every kind (line, toggle, expr, fsm, user), `--coverage-<kind>`
+    /// and `--no-coverage-<kind>` one, the last word winning; coverage is on while any kind
+    /// is. Options that only tune coverage (`--coverage-max-width`) do not turn it on.
+    pub fn features(&self) -> Features {
+        Features {
+            timing: self.timing,
+            trace_fst: self.trace_fst,
+            coverage: coverage_after(self.coverage, &self.verilator_args),
+        }
+    }
+
     /// The Verilator `--prefix`: `V<name>_<hash8>`, unique per configuration so several
     /// variants of one design can link into one binary.
     ///
@@ -80,34 +165,39 @@ impl DutConfig {
     /// params, probes, bindings, user-supplied generated inputs) but not file contents
     /// or emitter outputs, so emitters can compute it before generating anything.
     pub fn prefix(&self) -> String {
-        let mut h = KeyHasher::new("simjig-prefix-v1");
-        h.str(&self.name);
-        h.str(self.top.as_deref().unwrap_or(""));
+        // Every entry is tagged with its list, so an entry cannot move to another list (a
+        // define `W=8` to a parameter `W=8`) without changing the prefix.
+        let mut h = KeyHasher::new("simjig-prefix-v2");
+        h.str("name").str(&self.name);
+        h.str("top").str(self.top.as_deref().unwrap_or(""));
         for s in &self.sources {
-            h.path(s);
+            h.str("source").path(s);
         }
         for d in &self.include_dirs {
-            h.path(d);
+            h.str("include").path(d);
         }
-        for (k, v) in self.defines.iter().chain(&self.params) {
-            h.str(k).str(v);
+        for (k, v) in &self.defines {
+            h.str("define").str(k).str(v);
+        }
+        for (k, v) in &self.params {
+            h.str("param").str(k).str(v);
         }
         for p in &self.probes {
-            h.str(&format!("{p:?}"));
+            h.str("probe").str(&format!("{p:?}"));
         }
         for b in &self.ifaces {
-            h.str(&format!("{b:?}"));
+            h.str("iface").str(&format!("{b:?}"));
         }
-        h.field(&[
+        h.str("switches").field(&[
             u8::from(self.timing),
             u8::from(self.trace_fst),
             u8::from(self.coverage),
         ]);
         for a in &self.verilator_args {
-            h.str(a);
+            h.str("arg").str(a);
         }
         for g in &self.generated {
-            h.str(&g.file_name).str(&g.contents);
+            h.str("generated").str(&g.file_name).str(&g.contents);
         }
         format!("V{}_{}", self.name, &h.finish()[..8])
     }
@@ -124,7 +214,7 @@ impl DutConfig {
         let mut a: Vec<String> = ["--cc", "--MMD", "--prefix", prefix]
             .map(str::to_owned)
             .into();
-        if self.trace_fst {
+        if self.features().trace_fst {
             a.push("--trace-fst".to_owned());
         }
         if self.coverage {
@@ -156,7 +246,7 @@ impl DutConfig {
         svtypes::verilator::JsonPassOpts {
             sources,
             top: top.to_owned(),
-            timing: self.timing,
+            timing: self.features().timing,
             defines: self
                 .defines
                 .iter()
@@ -178,17 +268,6 @@ impl DutConfig {
         CodegenConfig {
             probes: self.probes.clone(),
             iface_top: self.iface_top(),
-            verilator_args: self.verilator_args.clone(),
-            control_files: self
-                .generated
-                .iter()
-                .filter(|g| {
-                    Path::new(&g.file_name)
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("vlt"))
-                })
-                .map(|g| g.contents.clone())
-                .collect(),
         }
     }
 
@@ -202,20 +281,37 @@ impl DutConfig {
     }
 
     /// The JSON pass inputs: the same design as the model build sees ([`Self::design`]),
-    /// run by the Verilator that builds the model. `extra` sources (generated tops) come
-    /// after the user's.
+    /// run by the Verilator that builds the model. `generated` (the stored user-generated
+    /// SystemVerilog inputs, [`Self::sv_inputs`]) come before the user's sources, as in the
+    /// model build; `extra` sources (generated tops) after them.
     pub(crate) fn json_pass_opts(
         &self,
         top: &str,
+        generated: &[PathBuf],
         extra: &[PathBuf],
         verilator: &Verilator,
     ) -> svtypes::verilator::JsonPassOpts {
-        let sources = self.sources.iter().chain(extra).cloned().collect();
+        let sources = generated
+            .iter()
+            .chain(&self.sources)
+            .chain(extra)
+            .cloned()
+            .collect();
         svtypes::verilator::JsonPassOpts {
             exe: verilator.exe.clone(),
             env: verilator.child_env(),
             ..self.design(top, sources, self.ifaces.is_empty())
         }
+    }
+
+    /// The user-generated inputs ([`Dut::verilator_input`]) that are design sources, not
+    /// control files: every Verilator run needs them, while a `.vlt` only shapes the model.
+    pub(crate) fn sv_inputs(&self) -> impl Iterator<Item = &GeneratedInput> {
+        self.generated.iter().filter(|g| {
+            !Path::new(&g.file_name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("vlt"))
+        })
     }
 
     /// Checks the configuration and returns the top module.
@@ -237,6 +333,12 @@ impl DutConfig {
         }
         if self.sources.is_empty() {
             return fail("no sources; add them with `.sources([..])`".to_owned());
+        }
+        let args = &self.verilator_args;
+        for (i, arg) in args.iter().enumerate() {
+            if let Some(why) = refused_arg(arg, args.get(i + 1).map(String::as_str)) {
+                return fail(format!("Verilator argument `{arg}`: {why}"));
+            }
         }
         if self
             .sources
@@ -484,11 +586,16 @@ impl Dut {
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
         pipeline::claim(env, &cache, &self.config, &prefix)?;
-        let ir = pipeline::design_ir(&self.config, top, &verilator, &cache)?;
+        let sv_inputs = self
+            .config
+            .sv_inputs()
+            .map(|g| cache.store_input(g))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ir = pipeline::design_ir(&self.config, top, &sv_inputs, &verilator, &cache)?;
         let emitted = (self.emitter)(&ir.design, &self.config)?;
         let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
         if let Some(check) = &placed.layout_check {
-            pipeline::layout_check(&self.config, &verilator, &cache, check)?;
+            pipeline::layout_check(&self.config, &sv_inputs, &verilator, &cache, check)?;
         }
         let mut generated = ir.wrapper.into_iter().collect::<Vec<_>>();
         for g in placed.inputs.iter().chain(&self.config.generated) {
@@ -517,6 +624,14 @@ impl Dut {
             model_sources: &placed.model_sources,
         })?;
         directives.extend(rerun_directives(&verilator, &model.deps, &self.recipe));
+        if verilator.untested {
+            directives.push(format!(
+                "cargo::warning=simjig: {} is not a supported Verilator (supported: {}); \
+                 building anyway because SIMJIG_UNTESTED_VERILATOR=1",
+                verilator.version_line,
+                svtypes::version::supported_list()
+            ));
+        }
         Ok(Built {
             prefix,
             obj_dir: model.obj_dir,
@@ -578,6 +693,7 @@ mod tests {
             version_line: "Verilator 5.052".into(),
             include_dir: PathBuf::from("/opt/v/share/verilator/include"),
             verilator_root: None,
+            untested: false,
         };
         let reruns = rerun_directives(&verilator, &[], &CppRecipe::default());
         assert!(reruns.contains(&"cargo::rerun-if-changed=/opt/v/bin/verilator".to_owned()));
@@ -704,6 +820,49 @@ mod tests {
         }
     }
 
+    /// Each list is tagged, so moving an entry from one list to another (a define to a
+    /// parameter, a source to an include directory) changes the prefix.
+    #[test]
+    fn prefix_fields_do_not_run_into_each_other() {
+        let empty = DutConfig {
+            sources: vec![],
+            include_dirs: vec![],
+            defines: vec![],
+            params: vec![],
+            ..cfg()
+        };
+        let define = DutConfig {
+            defines: vec![("W".into(), "8".into())],
+            ..empty.clone()
+        };
+        let param = DutConfig {
+            params: vec![("W".into(), "8".into())],
+            ..empty.clone()
+        };
+        assert_ne!(define.prefix(), param.prefix());
+        let source = DutConfig {
+            sources: vec!["/r/a".into()],
+            ..empty.clone()
+        };
+        let include = DutConfig {
+            include_dirs: vec!["/r/a".into()],
+            ..empty.clone()
+        };
+        assert_ne!(source.prefix(), include.prefix());
+        let arg = DutConfig {
+            verilator_args: vec!["x".into()],
+            ..empty.clone()
+        };
+        let generated = DutConfig {
+            generated: vec![GeneratedInput {
+                file_name: "x".into(),
+                contents: String::new(),
+            }],
+            ..empty
+        };
+        assert_ne!(arg.prefix(), generated.prefix());
+    }
+
     #[test]
     fn builder_records_probes_and_bindings() {
         let d = Dut::new("top")
@@ -737,6 +896,81 @@ mod tests {
                 (&"axis_if".to_owned(), &None)
             ]
         );
+    }
+
+    fn with_args(args: &[&str]) -> DutConfig {
+        DutConfig {
+            verilator_args: args.iter().map(|a| (*a).to_owned()).collect(),
+            ..cfg()
+        }
+    }
+
+    /// Coverage follows Verilator's own rule (`V3Options`, 5.052): `--coverage` switches every
+    /// kind, `--coverage-<kind>` one, the last word wins, and coverage is on while any kind
+    /// is. Options that only tune coverage do not turn it on.
+    #[test]
+    fn coverage_is_on_exactly_when_verilator_turns_a_kind_on() {
+        let on = |args: &[&str]| with_args(args).features().coverage;
+        assert!(on(&["--coverage-line"]));
+        assert!(on(&["-coverage-toggle"]));
+        assert!(on(&["--coverage"]));
+        assert!(on(&["--no-coverage-line", "--coverage-user"]));
+        assert!(!on(&[]));
+        assert!(!on(&["--coverage-max-width", "8"]));
+        assert!(!on(&["--coverage-underscore"]));
+        assert!(!on(&["--coverage", "--no-coverage"]));
+        assert!(!on(&["--coverage-line", "--no-coverage-line"]));
+        assert!(on(&[
+            "--coverage",
+            "--no-coverage-line",
+            "--no-coverage-toggle",
+            "--no-coverage-user",
+            "--no-coverage-expr"
+        ]));
+        let builder = DutConfig {
+            coverage: true,
+            ..with_args(&["--no-coverage"])
+        };
+        assert!(
+            !builder.features().coverage,
+            "the extra arguments come last"
+        );
+        assert!(
+            DutConfig {
+                coverage: true,
+                ..cfg()
+            }
+            .features()
+            .coverage
+        );
+    }
+
+    #[test]
+    fn raw_flags_that_have_a_builder_switch_are_rejected() {
+        let msg = |args: &[&str]| with_args(args).validate().unwrap_err().to_string();
+        for (args, hint) in [
+            (&["-GDEPTH=4"][..], "`.param(name, value)`"),
+            (&["-pvalue+DEPTH=4"], "`.param(name, value)`"),
+            (&["--timing"], "`.timing(true)`"),
+            (&["-no-timing"], "`.timing(true)`"),
+            (&["--trace-fst"], "`.trace_fst(true)`"),
+            (&["--trace"], "`.trace_fst(true)`"),
+            (&["--trace-vcd"], "`.trace_fst(true)`"),
+            (&["--trace-threads", "2"], "`.trace_fst(true)`"),
+            (&["--threads", "4"], "one thread"),
+        ] {
+            let m = msg(args);
+            assert!(m.contains(hint) && m.contains(args[0]), "{args:?}: {m}");
+        }
+        for ok in [
+            &["--threads", "1"][..],
+            &["--trace-depth", "3"],
+            &["--trace-structs"],
+            &["--coverage-line"],
+            &["-Wno-WIDTH"],
+        ] {
+            assert!(with_args(ok).validate().is_ok(), "{ok:?}");
+        }
     }
 
     #[test]

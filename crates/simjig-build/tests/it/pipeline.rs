@@ -612,3 +612,44 @@ fn dut_names_differing_only_in_case_are_refused() {
     );
     assert_eq!(generated(&s, "counter"), before);
 }
+
+/// A file list is read after simjig's own `--top-module`/`--timing`, so an option the
+/// builder refuses in `verilator_args` would silently override it from a list (vendor
+/// lists often carry `--top-module`, `--trace`, `--cc --exe --build`): it is refused there
+/// too, naming the list's line.
+#[test]
+fn s3c9_a_file_list_cannot_override_the_top() {
+    let s = Sandbox::new();
+    let rtl = s.path().join("lt");
+    std::fs::create_dir_all(&rtl).unwrap();
+    std::fs::write(
+        rtl.join("lt.sv"),
+        "module lt_a(input logic a, output logic y);\n  assign y = a;\nendmodule\n\
+         module lt_b(input logic [3:0] b, output logic [3:0] z);\n  assign z = b;\nendmodule\n",
+    )
+    .unwrap();
+    let list = rtl.join("files.F");
+    std::fs::write(&list, "lt.sv\n--top-module lt_b\n").unwrap();
+    let r = Dut::new("lt")
+        .file_list_relative(&list)
+        .top("lt_a")
+        .build_in(&s.env());
+    match r {
+        Err(e) => assert!(
+            e.to_string().contains(&format!(
+                "file list `{}` has `--top-module` on line 2: set the top with `.top(\"module\")`",
+                list.display()
+            )),
+            "{e}"
+        ),
+        Ok(b) => panic!(
+            "built with the list's top silently; IR top ports: {:?}",
+            b.design
+                .top_module()
+                .ports
+                .iter()
+                .map(|p| &p.name)
+                .collect::<Vec<_>>()
+        ),
+    }
+}

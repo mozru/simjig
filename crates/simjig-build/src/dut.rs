@@ -494,13 +494,20 @@ impl DutConfig {
                 return fail(format!("Verilator argument `{arg}`: {why}"));
             }
         }
-        let param = |w: &str, _: Option<&str>| is_param_override(w).then_some(());
-        if let Some(found) = crate::optfile::find(&self.option_args(), param) {
+        // A file list is read after simjig's own options, so a refused option in one
+        // would override them as silently as one among the arguments.
+        if let Some(found) = crate::optfile::find(&self.option_args(), refused_arg) {
+            let kind = if self.file_lists.iter().any(|l| l.path == found.file) {
+                "file list"
+            } else {
+                "Verilator option file"
+            };
             return fail(format!(
-                "Verilator option file `{}` has `{}` on line {}: {PARAM_HINT}",
+                "{kind} `{}` has `{}` on line {}: {}",
                 found.file.display(),
                 found.word,
-                found.line
+                found.line,
+                found.why
             ));
         }
         if self
@@ -1621,10 +1628,63 @@ mod tests {
                 .validate()
                 .unwrap_err()
                 .to_string()
-                .contains(&format!("option file `{path}` has `-pvalue+W=2`")),
+                .contains(&format!("file list `{path}` has `-pvalue+W=2` on line 1")),
             "a file list is searched like an `-f` among the arguments"
         );
         std::fs::write(&opts, "// -GDEPTH=4\n-Wall\n").unwrap();
+        assert!(with_args(&["-f", &path]).validate().is_ok());
+    }
+
+    /// Every option the builder refuses among the arguments is refused in an option file
+    /// or file list too, naming the file, the line and the builder call: Verilator reads
+    /// them after simjig's own options, so the last value (the file's) would win.
+    #[test]
+    fn refused_options_in_option_files_are_rejected() {
+        let t = tempfile::tempdir().unwrap();
+        let opts = t.path().join("files.f");
+        let path = opts.display().to_string();
+        for (text, word, line, hint) in [
+            (
+                "a.sv\n--top-module x\n",
+                "--top-module",
+                2,
+                "`.top(\"module\")`",
+            ),
+            ("a.sv --timing", "--timing", 1, "`.timing(true)`"),
+            (
+                "// c\n\n--cc --exe --build",
+                "--cc",
+                3,
+                "`.recipe(CppRecipe",
+            ),
+            ("--threads 1\n--threads 4", "--threads", 2, "one thread"),
+            ("--prefix=Vx", "--prefix=Vx", 1, "`Dut::new(name)`"),
+            ("\"--Mdir\" obj", "--Mdir", 1, "`SIMJIG_CACHE_DIR`"),
+        ] {
+            std::fs::write(&opts, text).unwrap();
+            let listed = DutConfig {
+                file_lists: vec![FileList {
+                    path: opts.clone(),
+                    relative: false,
+                }],
+                ..cfg()
+            };
+            let m = listed.validate().unwrap_err().to_string();
+            assert!(
+                m.contains(&format!("file list `{path}` has `{word}` on line {line}: "))
+                    && m.contains(hint),
+                "{text:?}: {m}"
+            );
+            let m = with_args(&["-f", &path])
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                m.contains(&format!("Verilator option file `{path}` has `{word}`")),
+                "{m}"
+            );
+        }
+        std::fs::write(&opts, "a.sv\n--threads 1\n-Wno-WIDTH\n// --timing\n").unwrap();
         assert!(with_args(&["-f", &path]).validate().is_ok());
     }
 

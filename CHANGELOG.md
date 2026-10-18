@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A file list (`Dut::file_list`, `file_list_relative`) or an `-f`/`-F` file among
+  `verilator_args` may not carry an option the builder refuses as an argument
+  (`--top-module`, `--timing`, trace switches, `--threads N`, `--prefix`, `--Mdir`,
+  `--cc`/`--exe`/`--build`, ...): Verilator reads the list after simjig's own options and
+  takes the last value, so `--top-module` in a vendor list silently built another top.
+  The error names the file, the line and the builder call to use. Only `-G` was refused.
 - Option files (`-f`, `-F`, file lists) are split into words as Verilator 5.052 does:
   `\` escapes, `"..."` and `'"..."'` quotes, and `// verilator fargs` comments, which
   replace the file's words. The configuration checks and a failed build's reruns read

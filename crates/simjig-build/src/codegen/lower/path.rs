@@ -220,6 +220,7 @@ fn check_variable(probe: &Probe, level: &Level<'_>, var: &str, scope: &str) -> R
         VariableKind::Signal => None,
         VariableKind::Parameter => Some("parameter"),
         VariableKind::Localparam => Some("localparam"),
+        _ => return Err(format!("`{var}`: {}", super::super::error::UNKNOWN_IR_KIND)),
     };
     if let (Some(what), ProbeAccess::ReadWrite) = (constant, probe.access) {
         return Err(format!(

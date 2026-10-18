@@ -30,6 +30,11 @@ pub enum Error {
     },
 }
 
+/// The reason for an IR construct this `simjig-build` does not know: the IR's enums are
+/// `#[non_exhaustive]`, and a newer `svtypes` may produce a kind added after this release.
+pub(crate) const UNKNOWN_IR_KIND: &str = "a kind of IR construct this simjig-build does not know (from a newer svtypes); update \
+     simjig-build";
+
 impl Error {
     pub(crate) fn unsupported(item: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::Unsupported {

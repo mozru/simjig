@@ -26,6 +26,12 @@ the public API, the generated code or simulation semantics.
   probe of a `real`, a `string` or another variable that is not stored as a packed vector
   fails the build naming its type (it passed as one bit, and `create` refused it), and so
   does a variable whose storage is not the one its width has.
+- Breaking: the public enums that may grow are `#[non_exhaustive]`, so a `match` on them
+  outside their crate needs a wildcard arm: `svtypes::ir::{TypeKind, VariableKind,
+  ParamValue, ModuleKind}`, `simjig_build::codegen::{ProbeType, SignalTarget, ItemKind,
+  RustType, ConstValue, DutField}`, `simjig_build::PortProblem` and
+  `cargo_simjig::doctor::{Check, Status, Format}`. The lowering reports an IR kind it
+  does not know as `codegen::Error::Unsupported`.
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

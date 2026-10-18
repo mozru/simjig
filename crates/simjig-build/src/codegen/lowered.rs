@@ -37,6 +37,7 @@ pub struct Lowered {
 
 /// A Rust type expression, rendered by the Rust emitter.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RustType {
     /// `simjig_bits::Bit`, for a 1-bit value.
     Bit,
@@ -73,6 +74,7 @@ pub struct Item {
 
 /// The shape of an [`Item`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ItemKind {
     /// A typedef of another type: `pub type Name = Target;`.
     Alias {
@@ -169,6 +171,7 @@ pub struct Const {
 
 /// The type and value of a [`Const`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ConstValue {
     /// A Rust primitive (`bool`, `u8` .. `u128`, `i8` .. `i128`) and its decimal value.
     Int {
@@ -247,6 +250,7 @@ pub struct Signal {
 
 /// Where a signal lives in the Verilated model.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SignalTarget {
     /// A member of the model class (`m.<cpp_member>`).
     Port {
@@ -269,6 +273,7 @@ pub enum SignalTarget {
 
 /// A field of the generated `Dut`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DutField {
     /// One signal.
     Signal {

@@ -393,6 +393,12 @@ fn lower_const(
             }
             _ => int_const(lit),
         },
+        _ => {
+            return Err(Error::unsupported(
+                format!("parameter {}", param.name),
+                super::error::UNKNOWN_IR_KIND,
+            ));
+        }
     };
     Ok(Const {
         name: ns.claim(&screaming(&param.name)),

@@ -176,14 +176,7 @@ impl Toolchain<'_> {
 /// compiles several archives per DUT, and the answer does not change while it runs.
 pub(crate) fn compiler_identity(env: &BuildEnv, tool: &cc::Tool) -> String {
     static VERSIONS: Mutex<Vec<(PathBuf, PathBuf, String)>> = Mutex::new(Vec::new());
-    let named = tool.path();
-    let found = if named.components().count() == 1 {
-        env.find_on_path(&named.to_string_lossy())
-    } else {
-        None
-    };
-    let exe = found.as_deref().unwrap_or(named);
-    let exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let exe = resolve(env, tool.path()).1;
     let file = match std::fs::metadata(&exe) {
         Ok(m) => {
             let mtime = m
@@ -207,6 +200,37 @@ pub(crate) fn compiler_identity(env: &BuildEnv, tool: &cc::Tool) -> String {
         v
     });
     format!("{file}\n{version}")
+}
+
+/// The files whose change must rerun the build script because they are the compiler: the
+/// path `tool` names (found on `PATH` when it is a bare name: a symlink or a wrapper
+/// script), the executable that resolves to, and the same for a wrapper `cc` runs it
+/// through (`CXX="ccache c++"`). An upgrade in place changes them while `CXX` and `PATH`
+/// stay the same, and neither variable would rerun the script.
+pub(crate) fn compiler_files(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
+    // The program of the command `cc` runs: the wrapper, if there is one.
+    let program = PathBuf::from(tool.to_command().get_program());
+    let mut files = Vec::new();
+    for named in [tool.path(), program.as_path()] {
+        let (found, exe) = resolve(env, named);
+        files.extend([found, exe]);
+    }
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// The path `named` is found at (through `PATH` when it is a bare name), and the
+/// executable that path resolves to through symlinks.
+fn resolve(env: &BuildEnv, named: &Path) -> (PathBuf, PathBuf) {
+    let found = if named.components().count() == 1 {
+        env.find_on_path(&named.to_string_lossy())
+    } else {
+        None
+    };
+    let found = found.unwrap_or_else(|| named.to_path_buf());
+    let exe = std::fs::canonicalize(&found).unwrap_or_else(|_| found.clone());
+    (found, exe)
 }
 
 /// `<exe> --version`, with its status and both streams. A compiler that cannot answer

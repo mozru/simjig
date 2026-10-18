@@ -42,7 +42,8 @@
 //! Every archive is keyed on its sources and every file the compiler read for them, so a
 //! header edit anywhere (next to a recipe source, in an include directory, in the
 //! toolchain) compiles it again (see `archive`). The build script reruns on those files
-//! too, except the ones under the cache and `OUT_DIR`, which derive from tracked inputs.
+//! too, except the ones under the cache and `OUT_DIR`, which derive from tracked inputs,
+//! and on the compiler's executable (`archive::compiler_files`).
 //!
 //! ccache is used when available (see [`ccache_compiler`]).
 
@@ -310,6 +311,11 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     d.extend(stdlib.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
     d.extend(link_args(&archives, &natives, stdlib.as_deref()));
     d.extend(rerun_on_deps(i, &archives));
+    d.extend(
+        archive::compiler_files(i.env, &compiler)
+            .into_iter()
+            .map(|p| format!("cargo::rerun-if-changed={}", p.display())),
+    );
     Ok(d)
 }
 

@@ -10,6 +10,9 @@ the public API, the generated code or simulation semantics.
   a rerun of the build script compiles only the models whose DUT changed (it compiled
   every model after any DUT changed, and most of them on the first rerun after a cold
   build). Every model archive is compiled again once.
+- The build script reruns when the C++ compiler changes in place: it emits
+  `cargo::rerun-if-changed` for the path `CXX` (or `cc`'s default) is found at, the
+  executable that resolves to, and the same for a compiler wrapper (`CXX="ccache c++"`).
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

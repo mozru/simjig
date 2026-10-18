@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::fixture_crate::cargo_with;
-use crate::support::{copy_dir, dut, fixtures};
+use crate::support::{copy_dir, dut, fixtures, write_script};
 
 /// The fixture crate under `root` (a stable path), pointed at this crate, with its DUTs.
 fn prepare(root: &Path) -> PathBuf {
@@ -136,5 +136,49 @@ fn a_rerun_compiles_only_the_edited_model() {
         shims.len(),
         1,
         "the old counter's shim is removed: {shims:?}"
+    );
+}
+/// An upgrade of the compiler in place (same `CXX`, same `PATH`) reruns the build script:
+/// it reruns on the executable `CXX` resolves to, here a script behind a symlink found on
+/// `PATH`.
+#[test]
+fn a_compiler_changed_in_place_reruns_the_build_script() {
+    let (krate, target, _lock) = fixture();
+    let root = krate.parent().unwrap();
+    let name = std::env::var("CXX").unwrap_or_else(|_| "c++".to_owned());
+    let path = std::env::var_os("PATH").unwrap();
+    let real = std::env::split_paths(&path)
+        .map(|d| d.join(&name))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from(&name));
+    let (bin, tools) = (root.join("bin"), root.join("tools"));
+    for d in [&bin, &tools] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let compiler = tools.join("cxx");
+    write_script(
+        &compiler,
+        &format!("#!/bin/sh\nexec '{}' \"$@\"\n", real.display()),
+    );
+    let link = bin.join("simjig-test-cxx");
+    if link.symlink_metadata().is_err() {
+        std::os::unix::fs::symlink(&compiler, &link).unwrap();
+    }
+    let envs = [
+        (
+            "PATH",
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap(),
+        ),
+        ("CXX", "simjig-test-cxx".into()),
+        ("SIMJIG_CACHE_DIR", root.join("cache").into_os_string()),
+        ("SIMJIG_CCACHE", "0".into()),
+    ];
+    build(&krate, &target, &envs);
+    assert!(!build(&krate, &target, &envs), "nothing changed");
+    let text = std::fs::read_to_string(&compiler).unwrap();
+    std::fs::write(&compiler, format!("{text}# upgraded\n")).unwrap();
+    assert!(
+        build(&krate, &target, &envs),
+        "the compiler changed, but the build script did not rerun"
     );
 }

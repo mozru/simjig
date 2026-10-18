@@ -96,10 +96,7 @@ pub(crate) fn design_ir(
             top: top.to_owned(),
         });
     };
-    let codegen_err = |source| Error::Codegen {
-        dut: config.name.clone(),
-        source,
-    };
+    let codegen_err = |source| Error::codegen(&config.name, source);
     let elab_top = codegen::elab_module(top);
     let elab = cache.store_input(&GeneratedInput {
         file_name: format!("{elab_top}.sv"),

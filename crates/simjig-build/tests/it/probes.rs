@@ -24,8 +24,10 @@ fn read_write_probe_of_a_localparam_fails_the_build() {
     let s = Sandbox::new();
     let msg = probed(&s, "lp.LP", "lp", 8, ProbeAccess::ReadWrite);
     assert!(
-        msg.contains("probe lp.LP: `LP` is a localparam of `lp`")
-            && msg.contains("probe it with `ProbeAccess::Read`"),
+        msg.starts_with(
+            "invalid DUT `probed` configuration: probe `lp.LP` (declared in build.rs): `LP` is \
+             a localparam of `lp`"
+        ) && msg.contains("probe it with `ProbeAccess::Read`"),
         "{msg}"
     );
     assert_eq!(s.verilations(), 0, "refused before verilating");
@@ -38,9 +40,9 @@ fn probe_width_mismatch_fails_the_build() {
     let s = Sandbox::new();
     let msg = probed(&s, "lp.u_core.result", "lp_core", 5, ProbeAccess::Read);
     assert!(
-        msg.contains(
-            "probe `lp.u_core.result` (declared in build.rs): `result` is 8 bits wide in the \
-             design, but the probe's type is 5 bits"
+        msg.starts_with(
+            "invalid DUT `probed` configuration: probe `lp.u_core.result` (declared in \
+             build.rs): `result` is 8 bits wide in the design, but the probe's type is 5 bits"
         ),
         "{msg}"
     );

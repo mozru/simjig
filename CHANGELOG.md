@@ -27,6 +27,10 @@ the public API, the generated code or simulation semantics.
 - A probe whose module is a typo names the closest module ("did you mean `core`?"), and a
   probe path that ends at an instance or generate block says that it must end at a
   variable.
+- `codegen::Error::Probe { path, reason }` (new variant) carries every probe mistake the
+  lowering finds; `Dut::build` reports it as `Error::Config` ("probe `p` (declared in
+  build.rs): ..."), the same headline as the probe checks against the scope table, where
+  it used to be `Error::Codegen`.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

@@ -95,10 +95,7 @@ pub fn noop_emitter(_design: &Design, _config: &DutConfig) -> Result<Emitted, Er
 /// The code generator: [`codegen::lower`] once, then the Rust bindings, the shim, the
 /// `.vlt` file and the layout check from the same [`codegen::Lowered`].
 pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
-    let fail = |source| Error::Codegen {
-        dut: config.name.clone(),
-        source,
-    };
+    let fail = |source| Error::codegen(&config.name, source);
     let lowered = codegen::lower(design, &config.codegen_config()).map_err(fail)?;
     let features = config.features();
     let opts = ShimOptions {

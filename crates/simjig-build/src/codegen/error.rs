@@ -14,6 +14,13 @@ pub enum Error {
         /// What is unsupported and what to do instead.
         reason: String,
     },
+    /// A probe does not match the design (its path, module, type or access).
+    Probe {
+        /// The probe's path, as configured.
+        path: String,
+        /// What is wrong and how to fix it.
+        reason: String,
+    },
     /// The configuration does not match the design.
     Config {
         /// The configuration entry, e.g. `probe top.u.x` or `bind_iface(in_bus)`.
@@ -27,6 +34,13 @@ impl Error {
     pub(crate) fn unsupported(item: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::Unsupported {
             item: item.into(),
+            reason: reason.into(),
+        }
+    }
+
+    pub(crate) fn probe(path: &str, reason: impl Into<String>) -> Self {
+        Self::Probe {
+            path: path.to_owned(),
             reason: reason.into(),
         }
     }
@@ -45,6 +59,7 @@ impl fmt::Display for Error {
             Self::Unsupported { item, reason } => {
                 write!(f, "codegen: {item}: unsupported: {reason}")
             }
+            Self::Probe { path, reason } => write!(f, "codegen: probe {path}: {reason}"),
             Self::Config { item, reason } => write!(f, "codegen: {item}: {reason}"),
         }
     }

@@ -180,6 +180,22 @@ impl Error {
         }
     }
 
+    /// Converts a code generator failure. A probe that does not match the design becomes
+    /// [`Error::Config`], worded like the probe checks against Verilator's scope table
+    /// (`syms`), so every probe mistake reads alike whichever check found it.
+    pub(crate) fn codegen(dut: &str, source: crate::codegen::Error) -> Self {
+        match source {
+            crate::codegen::Error::Probe { path, reason } => Self::Config {
+                dut: dut.to_owned(),
+                msg: format!("probe `{path}` (declared in build.rs): {reason}"),
+            },
+            source => Self::Codegen {
+                dut: dut.to_owned(),
+                source,
+            },
+        }
+    }
+
     pub(crate) fn io(op: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> Self {
         let path = path.to_path_buf();
         move |source| Self::Io { op, path, source }

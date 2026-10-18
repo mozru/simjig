@@ -137,21 +137,13 @@ fn roots(design: &Design, config: &CodegenConfig) -> Result<Vec<Root>, Error> {
 fn probe_type(design: &Design, probe: &Probe) -> Result<Option<TypeId>, Error> {
     match &probe.ty {
         ProbeType::Bits { width } if *width >= 1 => Ok(None),
-        ProbeType::Bits { .. } => Err(Error::config(
-            format!("probe {}", probe.path),
-            "width must be at least 1",
-        )),
+        ProbeType::Bits { .. } => Err(Error::probe(&probe.path, "width must be at least 1")),
         ProbeType::Named(name) => design
             .types
             .iter()
             .position(|t| t.name.as_deref() == Some(name))
             .map(|i| Some(TypeId(u32::try_from(i).unwrap_or(u32::MAX))))
-            .ok_or_else(|| {
-                Error::config(
-                    format!("probe {}", probe.path),
-                    format!("no type named `{name}` in the IR"),
-                )
-            }),
+            .ok_or_else(|| Error::probe(&probe.path, format!("no type named `{name}` in the IR"))),
     }
 }
 
@@ -313,15 +305,12 @@ fn lower_probe(
     let item = || format!("probe {}", probe.path);
     let segments: Vec<&str> = probe.path.split('.').collect();
     check_probe_path(design, probe, &segments, wrapper)
-        .map_err(|why| Error::config(item(), why))?;
+        .map_err(|why| Error::probe(&probe.path, why))?;
     let (ty, width) = match (probe_type(design, probe)?, &probe.ty) {
         (Some(id), _) => (types.rust(design, id), design.ty(id).width.unwrap_or(0)),
         (None, ProbeType::Bits { width }) => (bits(*width), *width),
         (None, ProbeType::Named(_)) => {
-            return Err(Error::config(
-                format!("probe {}", probe.path),
-                "internal: unresolved type",
-            ));
+            return Err(Error::probe(&probe.path, "internal: unresolved type"));
         }
     };
     if width == 0 {

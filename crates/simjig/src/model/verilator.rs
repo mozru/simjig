@@ -19,7 +19,7 @@
 //! default error limit of 1, as in cocotb on Verilator.
 
 use super::abi::{ACCESS_WRITE, Dir, MsgKind, OwnedMsg, Status};
-use super::meta::{LoadError, ModelMeta, SignalAccess};
+use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel};
 use crate::kernel::backend::{EvalStatus, ModelBackend, ModelError};
 use crate::kernel::time::{Precision, SimTime};
@@ -36,8 +36,9 @@ pub(crate) struct VerilatorModel {
 }
 
 impl VerilatorModel {
-    /// Creates the model described by `meta` and checks it against the generated Rust.
-    pub(crate) fn load(meta: &ModelMeta) -> Result<Self, LoadError> {
+    /// Creates the model described by `meta`, passing `args` (plusargs such as
+    /// `+verilator+seed+N`) to its context, and checks it against the generated Rust.
+    pub(crate) fn load(meta: &ModelMeta, args: &[String]) -> Result<Self, LoadError> {
         let vt = (meta.vtable)().as_abi();
         let prefix = vt.prefix();
         if prefix != meta.prefix {
@@ -55,10 +56,14 @@ impl VerilatorModel {
                     exponent: meta.precision_exponent,
                 }
             })?;
-        let (raw, status) = RawModel::create(vt).map_err(|e| match e {
+        let (raw, status) = RawModel::create(vt, args).map_err(|e| match e {
             CreateError::NoHandle(status) => LoadError::Create {
                 prefix: meta.prefix,
                 reason: format!("no model handle (status {status})"),
+            },
+            CreateError::BadArg(arg) => LoadError::Create {
+                prefix: meta.prefix,
+                reason: format!("argument {arg:?} contains a NUL byte"),
             },
             CreateError::BadRow { slot, problem } => LoadError::SignalTable {
                 prefix: meta.prefix,
@@ -73,6 +78,8 @@ impl VerilatorModel {
             msgs: Vec::new(),
         };
         if let Err(e) = model.outcome(status) {
+            // A model that failed to construct runs no final blocks when dropped.
+            model.poisoned = Some(e.message.clone());
             return Err(LoadError::Create {
                 prefix: meta.prefix,
                 reason: e.message,
@@ -101,6 +108,10 @@ impl VerilatorModel {
         }
         for (slot, (row, want)) in rows.iter().zip(meta.signals).enumerate() {
             let name = &names[slot];
+            if want.slot as usize != slot {
+                let problem = format!("the Rust lists `{}` with slot {}", want.name, want.slot);
+                return Err(mismatch(slot, problem));
+            }
             if name != want.name {
                 let problem = format!("the model has `{name}`, the Rust `{}`", want.name);
                 return Err(mismatch(slot, problem));
@@ -109,6 +120,16 @@ impl VerilatorModel {
                 let problem = format!(
                     "`{name}` is {} bits in the model and {} in the Rust",
                     row.width, want.width
+                );
+                return Err(mismatch(slot, problem));
+            }
+            if want.storage != Storage::packed(row.width) {
+                let problem = format!(
+                    "`{name}` has storage {:?} in the Rust, but simjig's C ABI describes only \
+                     packed signals ({:?} for {} bits)",
+                    want.storage,
+                    Storage::packed(row.width),
+                    row.width
                 );
                 return Err(mismatch(slot, problem));
             }
@@ -233,17 +254,17 @@ impl Drop for VerilatorModel {
 }
 
 /// Whether a C++ row's direction and access bits implement the generated access kind.
-fn access_matches(dir: u8, access: u8, want: SignalAccess) -> bool {
+fn access_matches(dir: u8, access: u8, want: Access) -> bool {
     let writable = access & ACCESS_WRITE != 0;
     let Ok(dir) = Dir::try_from(dir) else {
         return false;
     };
     match want {
-        SignalAccess::In => dir == Dir::In && writable,
-        SignalAccess::Out => dir == Dir::Out,
-        SignalAccess::InOut => dir == Dir::Inout && writable,
-        SignalAccess::PublicRd => dir == Dir::Internal,
-        SignalAccess::PublicRw => dir == Dir::Internal && writable,
+        Access::In => dir == Dir::In && writable,
+        Access::Out => dir == Dir::Out,
+        Access::InOut => dir == Dir::Inout && writable,
+        Access::PublicRd => dir == Dir::Internal,
+        Access::PublicRw => dir == Dir::Internal && writable,
     }
 }
 
@@ -315,7 +336,120 @@ fn print_line(text: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::abi::Status;
+    use super::super::meta::{SignalMeta, Vtable};
+    use super::super::raw::fake::{self, STATE};
     use super::*;
+
+    fn fake_vtable() -> &'static Vtable {
+        thread_local! {
+            static VT: &'static Vtable = Vtable::leak(fake::vtable());
+        }
+        VT.with(|vt| *vt)
+    }
+
+    static FAKE: ModelMeta = ModelMeta {
+        vtable: fake_vtable,
+        prefix: "Vfake",
+        ir_hash: 7,
+        precision_exponent: -9,
+        signals: &[
+            SignalMeta {
+                name: "fake.a",
+                slot: 0,
+                width: 4,
+                storage: Storage::CData,
+                access: Access::In,
+            },
+            SignalMeta {
+                name: "fake.y",
+                slot: 1,
+                width: 8,
+                storage: Storage::CData,
+                access: Access::Out,
+            },
+        ],
+    };
+
+    fn counts() -> (u32, u32, u32) {
+        STATE.with_borrow(|s| (s.evals, s.finals, s.destroys))
+    }
+
+    #[test]
+    fn a_fatal_poisons_the_model() {
+        fake::reset();
+        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        STATE.with_borrow_mut(|s| {
+            s.statuses.push_back(Status::Fatal);
+            s.pending.push_back((MsgKind::Fatal as u32, c"boom"));
+        });
+        let first = model.eval().unwrap_err().message;
+        assert_eq!(first, "$fatal in TOP.fake at fake.sv:7: boom");
+        let second = model.eval().unwrap_err().message;
+        assert_eq!(
+            second,
+            format!("the model can no longer be evaluated: {first}")
+        );
+        assert!(!model.events_pending());
+        assert_eq!(counts(), (1, 0, 0), "the second eval must not reach C++");
+        drop(model);
+        assert_eq!(
+            counts(),
+            (1, 0, 1),
+            "no final blocks after a fatal; destroyed once"
+        );
+    }
+
+    #[test]
+    fn a_clean_model_runs_final_blocks_then_is_destroyed() {
+        fake::reset();
+        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        assert_eq!(model.eval(), Ok(EvalStatus::Running));
+        drop(model);
+        assert_eq!(counts(), (1, 1, 1));
+    }
+
+    #[test]
+    fn an_error_record_fails_the_eval_without_poisoning() {
+        fake::reset();
+        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Error as u32, c"bad")));
+        assert!(model.eval().is_err());
+        assert_eq!(model.eval(), Ok(EvalStatus::Running));
+    }
+
+    #[test]
+    fn a_failure_while_creating_fails_the_load() {
+        fake::reset();
+        STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Fatal as u32, c"init")));
+        let err = VerilatorModel::load(&FAKE, &[]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed while being created: $fatal"),
+            "{err}"
+        );
+        assert_eq!(
+            counts(),
+            (0, 0, 1),
+            "a failed load still destroys the handle"
+        );
+    }
+
+    #[test]
+    fn writes_are_masked_and_outputs_are_read_only() {
+        fake::reset();
+        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        model.write(0, &[0xff]);
+        assert_eq!(STATE.with_borrow(|s| s.members[0]), 0x0f);
+        let mut out = [0];
+        model.read(0, &mut out);
+        assert_eq!(out, [0x0f]);
+        let write = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            model.write(1, &[1]);
+        }));
+        assert!(write.is_err(), "writing an output must panic");
+        assert_eq!(STATE.with_borrow(|s| s.members[1]), 0);
+    }
 
     fn record(kind: MsgKind, hier: &str, msg: &str) -> OwnedMsg {
         OwnedMsg {

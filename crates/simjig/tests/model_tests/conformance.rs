@@ -11,17 +11,17 @@ use simjig::{
 };
 
 use super::conflog::{Log, Probe};
-use super::duts::{comb_chain, counter, flop};
+use super::duts::{comb_chain, counter, flop, sim};
 use super::start_clock;
 
 fn flop_sim() -> (Sim, flop::Dut) {
-    let (mut sim, dut) = flop::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<flop::Dut>();
     start_clock(&mut sim, dut.clk.raw());
     (sim, dut)
 }
 
 fn counter_sim() -> (Sim, counter::Dut) {
-    let (mut sim, dut) = counter::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<counter::Dut>();
     start_clock(&mut sim, dut.clk.raw());
     (sim, dut)
 }
@@ -269,7 +269,7 @@ fn first_combine() {
 
 #[test]
 fn comb_settle() {
-    let (sim, dut) = comb_chain::Dut::sim().unwrap();
+    let (sim, dut) = sim::<comb_chain::Dut>();
     let comb_chain::Dut {
         a,
         b,

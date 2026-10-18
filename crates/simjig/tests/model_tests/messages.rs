@@ -7,12 +7,12 @@ use std::process::Command;
 use simjig::{Failure, FailureKind, ReadOnly, Sim, SimTime};
 use simjig_bits::Bits;
 
-use super::duts::{fatal, hello};
+use super::duts::{fatal, hello, sim};
 use super::start_clock;
 
 /// Runs the `fatal` DUT: reset for one cycle, then fire `kind` on the next rising edge.
 fn fire(kind: u8) -> (Result<u8, Failure>, Sim) {
-    let (mut sim, dut) = fatal::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<fatal::Dut>();
     start_clock(&mut sim, dut.clk.raw());
     let result = sim.run(async move {
         dut.clk.set(0);
@@ -80,7 +80,7 @@ fn the_process_survives_a_fatal_and_runs_another_model() {
     let (first, _) = model_failure(0);
     assert!(first.contains("$fatal"), "{first}");
     // A fresh model in the same process: unrelated to the poisoned one, and healthy.
-    let (mut sim, dut) = fatal::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<fatal::Dut>();
     start_clock(&mut sim, dut.clk.raw());
     let alive = sim.run(async move {
         dut.rst.set(0);
@@ -98,7 +98,7 @@ fn the_process_survives_a_fatal_and_runs_another_model() {
 #[test]
 #[ignore = "child of display_reaches_the_test_output"]
 fn hello_child() {
-    let (mut sim, dut) = hello::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<hello::Dut>();
     start_clock(&mut sim, dut.clk.raw());
     let n = sim.run(async move {
         for _ in 0..3 {

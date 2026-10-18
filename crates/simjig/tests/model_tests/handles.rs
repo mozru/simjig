@@ -3,11 +3,13 @@
 //! masked; outputs cannot be written even through a `RawSig`; mismatched metadata is
 //! rejected at load.
 
-use simjig::__private::{In, ModelMeta, SignalAccess, SignalMeta, load};
-use simjig::{FailureKind, LoadError, ReadOnly, Timer, ns};
+use simjig::__private::{Access, Binder, ModelMeta, SignalMeta, Storage, create, instantiate};
+use simjig::{
+    Clock, FailureKind, ModelOptions, ReadOnly, Seed, SeedSource, SimTime, TimeUnit, Timer, ns,
+};
 use simjig_bits::{Bit, Bits, WideBits};
 
-use super::duts::{inv, timing, wide};
+use super::duts::{counter, flop, inv, sim, timing, wide};
 use super::ticks;
 
 /// A 200-bit value with every word distinct, and the top 8 bits (199..192) set.
@@ -22,7 +24,7 @@ fn pattern() -> WideBits<200, 7> {
 
 #[test]
 fn output_follows_input_after_the_next_eval() {
-    let (mut sim, dut) = inv::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<inv::Dut>();
     let seen = sim.run(async move {
         let at_start = (dut.a.get(), dut.y.get());
         dut.a.set(1);
@@ -40,7 +42,7 @@ fn output_follows_input_after_the_next_eval() {
 
 #[test]
 fn every_width_class_round_trips() {
-    let (mut sim, dut) = wide::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<wide::Dut>();
     let got = sim.run(async move {
         let wide = pattern();
         dut.i1.set(true);
@@ -73,7 +75,7 @@ fn every_width_class_round_trips() {
 
 #[test]
 fn wide_flop_captures_on_the_clock() {
-    let (mut sim, dut) = wide::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<wide::Dut>();
     let q = sim.run(async move {
         dut.clk.set(0);
         dut.i200.set(pattern());
@@ -88,7 +90,7 @@ fn wide_flop_captures_on_the_clock() {
 
 #[test]
 fn literal_that_does_not_fit_names_the_signal() {
-    let (mut sim, dut) = wide::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<wide::Dut>();
     let failure = sim
         .run(async move { dut.i8.set(0x15a) })
         .expect_err("an out-of-range literal must fail the run");
@@ -103,7 +105,7 @@ fn literal_that_does_not_fit_names_the_signal() {
 
 #[test]
 fn write_location_is_the_callers_line() {
-    let (mut sim, dut) = inv::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<inv::Dut>();
     let line = line!() + 3;
     let failure = sim.run(async move {
         ReadOnly::new().await;
@@ -117,7 +119,7 @@ fn write_location_is_the_callers_line() {
 
 #[test]
 fn outputs_reject_raw_writes() {
-    let (mut sim, _dut) = inv::Dut::sim().unwrap();
+    let (mut sim, _dut) = sim::<inv::Dut>();
     let y = sim.signal("inv.y").unwrap();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         // The panic unwinds out of the kernel's write-log application, so run never returns.
@@ -135,7 +137,7 @@ fn outputs_reject_raw_writes() {
 fn model_events_advance_time() {
     // timing_dut runs its own clock with `#5` delays: time advances with no kernel clock,
     // through events_pending/next_time_slot.
-    let (mut sim, dut) = timing::Dut::sim().unwrap();
+    let (mut sim, dut) = sim::<timing::Dut>();
     let seen = sim.run(async move {
         let mut seen = Vec::new();
         for _ in 0..3 {
@@ -155,61 +157,144 @@ fn model_events_advance_time() {
     assert_eq!(rose - fell, 23_000, "done rises 23 ns after it falls");
 }
 
+simjig::__private::link_model!(fn inv_vtable = "simjig_vtable_Vdut_inv");
+
+const INV: ModelMeta = ModelMeta {
+    vtable: inv_vtable,
+    prefix: "Vdut_inv",
+    ir_hash: inv::Dut::IR_HASH,
+    precision_exponent: -12,
+    signals: inv::Dut::SIGNALS,
+};
+
+static GOOD: ModelMeta = INV;
+
 static BAD_HASH: ModelMeta = ModelMeta {
     ir_hash: 0xbad,
-    ..inv::MODEL
+    ..INV
 };
 
 static BAD_PREFIX: ModelMeta = ModelMeta {
     prefix: "Vother",
-    ..inv::MODEL
+    ..INV
 };
 
+const fn meta(name: &'static str, slot: u32, access: Access) -> SignalMeta {
+    SignalMeta {
+        name,
+        slot,
+        width: 1,
+        storage: Storage::CData,
+        access,
+    }
+}
+
 static BAD_NAME: ModelMeta = ModelMeta {
-    signals: &[
-        SignalMeta::new("inv.a", 1, SignalAccess::In),
-        SignalMeta::new("inv.z", 1, SignalAccess::Out),
-    ],
-    ..inv::MODEL
+    signals: &[meta("inv.a", 0, Access::In), meta("inv.z", 1, Access::Out)],
+    ..INV
 };
 
 static BAD_ACCESS: ModelMeta = ModelMeta {
-    signals: &[
-        SignalMeta::new("inv.a", 1, SignalAccess::In),
-        SignalMeta::new("inv.y", 1, SignalAccess::In),
-    ],
-    ..inv::MODEL
+    signals: &[meta("inv.a", 0, Access::In), meta("inv.y", 1, Access::In)],
+    ..INV
 };
+
+static BAD_STORAGE: ModelMeta = ModelMeta {
+    signals: &[
+        meta("inv.a", 0, Access::In),
+        SignalMeta {
+            storage: Storage::VlUnpacked {
+                elem: &Storage::CData,
+                len: 4,
+            },
+            ..meta("inv.y", 1, Access::Out)
+        },
+    ],
+    ..INV
+};
+
+fn load_error(meta: &'static ModelMeta) -> String {
+    let options = ModelOptions::new(Seed::new(1, SeedSource::Env));
+    let failure = instantiate(meta, &options).map(|_| ()).unwrap_err();
+    assert_eq!(failure.time, SimTime::ZERO);
+    let FailureKind::ModelFatal { message } = failure.kind else {
+        panic!("expected ModelFatal, got {failure}");
+    };
+    message
+}
 
 #[test]
 fn load_rejects_mismatched_metadata() {
-    let err = |meta: &'static ModelMeta| load(meta).map(|_| ()).unwrap_err();
-    assert_eq!(
-        err(&BAD_HASH),
-        LoadError::IrHash {
-            prefix: "Vdut_inv",
-            model: 0x5eed_0000_0000_0001,
-            expected: 0xbad
-        }
+    let options = ModelOptions::new(Seed::new(1, SeedSource::Env));
+    assert!(instantiate(&GOOD, &options).is_ok());
+    let text = load_error(&BAD_HASH);
+    assert!(
+        text.contains("`Vdut_inv` was built from IR 0x5eed000000000001, the generated Rust from 0x0000000000000bad"),
+        "{text}"
     );
-    assert!(matches!(err(&BAD_PREFIX), LoadError::Prefix { found, .. } if found == "Vdut_inv"));
-    let text = err(&BAD_NAME).to_string();
+    let text = load_error(&BAD_PREFIX);
+    assert!(text.contains("belongs to model `Vdut_inv`"), "{text}");
+    let text = load_error(&BAD_NAME);
     assert!(
         text.contains("slot 1: the model has `inv.y`, the Rust `inv.z`"),
         "{text}"
     );
-    let text = err(&BAD_ACCESS).to_string();
+    let text = load_error(&BAD_ACCESS);
     assert!(text.contains("`inv.y` has direction 2"), "{text}");
+    let text = load_error(&BAD_STORAGE);
+    assert!(text.contains("only packed signals"), "{text}");
 }
 
 #[test]
-fn binder_rejects_a_mismatched_handle_type() {
-    let (_sim, b) = load(&inv::MODEL).unwrap();
-    let bind = std::panic::catch_unwind(|| b.bind::<In<Bits<8>>>(0));
-    let message = bind.expect_err("8-bit handle on a 1-bit slot");
+fn create_rejects_a_simulation_of_another_model() {
+    let (sim, _flop) = sim::<flop::Dut>();
+    let failure = create(&sim, &GOOD, inv::Dut::__bind)
+        .map(|_| ())
+        .unwrap_err();
+    assert!(failure.message.contains("no `inv.a`"), "{failure}");
+}
+
+#[test]
+fn binder_rejects_the_wrong_access() {
+    let options = ModelOptions::new(Seed::new(1, SeedSource::Env));
+    let sim = instantiate(&GOOD, &options).unwrap();
+    let bind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        create(&sim, &GOOD, |b| b.output::<Bit>(&inv::Dut::SIGNALS[0])).is_ok()
+    }));
+    let message = bind.map(|_| ()).unwrap_err();
     let message = message.downcast_ref::<String>().unwrap();
-    assert_eq!(
-        message,
-        "generated code binds `inv.a` (1 bits, In) as a In handle of 8 bits"
+    assert_eq!(message, "generated code binds `inv.a` (In) as Out");
+}
+
+#[test]
+fn a_handle_of_the_wrong_width_fails_on_access() {
+    let options = ModelOptions::new(Seed::new(1, SeedSource::Env));
+    let mut sim = instantiate(&GOOD, &options).unwrap();
+    let a = create(&sim, &GOOD, |b| b.input::<Bits<8>>(&inv::Dut::SIGNALS[0])).unwrap();
+    let failure = sim.run(async move { a.get() }).unwrap_err();
+    assert!(
+        failure
+            .message
+            .contains("signal `inv.a` is 1 bits wide, but its handle's type is 8 bits"),
+        "{failure}"
     );
+}
+
+#[test]
+fn a_clock_edge_at_time_zero_is_captured() {
+    // The kernel's first eval runs before any write is applied, so it settles the model at
+    // its initial values; the edge applied after it is seen by the next eval (Verilator's
+    // first eval after construction never sees an edge, docs/notes/spikes.md §2).
+    let (mut sim, dut) = sim::<counter::Dut>();
+    let period = sim.precision().duration(10, TimeUnit::Ns).unwrap();
+    sim.add_clock(Clock::new(dut.clk.raw(), period)).unwrap();
+    let count = sim.run(async move {
+        dut.rst.set(0);
+        dut.en.set(1);
+        dut.clk.rising().await;
+        let at_edge = simjig::now();
+        ReadOnly::new().await;
+        (at_edge, dut.count.get())
+    });
+    assert_eq!(count.unwrap(), (SimTime::ZERO, Bits::new(1)));
 }

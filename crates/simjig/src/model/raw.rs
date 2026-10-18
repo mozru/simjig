@@ -20,6 +20,7 @@
     reason = "calls through the C vtable and the abi raw accessors (DECISION §2 row 12)"
 )]
 
+use std::ffi::{CString, c_char};
 use std::ptr::{self, NonNull};
 
 use super::abi::{
@@ -41,26 +42,39 @@ pub(crate) struct RawModel {
 pub(crate) enum CreateError {
     /// `create` returned no handle; the raw status code.
     NoHandle(i32),
+    /// A command-line argument contains a NUL byte.
+    BadArg(String),
     /// Row `slot` of the signal table breaks the ABI contract.
     BadRow { slot: usize, problem: String },
 }
 
 impl RawModel {
-    /// Creates a model through `vt` (which [`ModelVtable::check`] accepted). Returns the model
-    /// and `create`'s raw status: a non-OK status still yields a model, to drain its messages
-    /// and destroy it.
-    pub(crate) fn create(vt: &'static ModelVtable) -> Result<(Self, i32), CreateError> {
+    /// Creates a model through `vt` (which [`ModelVtable::check`] accepted), passing `args`
+    /// to `VerilatedContext::commandArgs` after a program name. Returns the model and
+    /// `create`'s raw status: a non-OK status still yields a model, to drain its messages and
+    /// destroy it.
+    pub(crate) fn create(
+        vt: &'static ModelVtable,
+        args: &[String],
+    ) -> Result<(Self, i32), CreateError> {
+        let mut owned = vec![c"simjig".to_owned()];
+        for arg in args {
+            owned
+                .push(CString::new(arg.as_str()).map_err(|_nul| CreateError::BadArg(arg.clone()))?);
+        }
+        let pointers: Vec<*const c_char> = owned.iter().map(|a| a.as_ptr()).collect();
         let opts = CreateOpts {
             size: CreateOpts::SIZE,
             // No SIMJIG_CREATE_ECHO: Rust prints the messages, so they reach the test's output.
             flags: 0,
             name: ptr::null(),
             error_limit: 0,
-            argc: 0,
-            argv: ptr::null(),
+            argc: u32::try_from(pointers.len()).unwrap_or(u32::MAX),
+            argv: pointers.as_ptr(),
         };
         let mut raw = ptr::null_mut();
-        // SAFETY: `opts` and `raw` are valid for the duration of the call, and `create` is a
+        // SAFETY: `opts`, `raw` and the `argc` NUL-terminated strings behind `argv` (`owned`)
+        // are valid for the duration of the call (commandArgs copies them), and `create` is a
         // noexcept C++ function that never unwinds into Rust.
         let status = unsafe { (vt.create)(&raw const opts, &raw mut raw) };
         let handle = NonNull::new(raw).ok_or(CreateError::NoHandle(status))?;
@@ -244,5 +258,175 @@ fn split(value: u64, out: &mut [u32]) {
     out[0] = value as u32;
     if let Some(high) = out.get_mut(1) {
         *high = (value >> 32) as u32;
+    }
+}
+
+/// A pure-Rust model behind a real [`ModelVtable`], for testing the backend's handling of
+/// statuses, messages, poisoning and teardown without Verilator. One model per thread.
+///
+/// Slot 0 is a writable 4-bit input (`fake.a`), slot 1 a read-only 8-bit output (`fake.y`).
+#[cfg(test)]
+pub(crate) mod fake {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::ffi::{CStr, c_void};
+    use std::ptr::{self, NonNull};
+
+    use super::super::abi::{
+        ABI_VERSION, ACCESS_READ, ACCESS_WRITE, CreateOpts, Dir, Handle, ModelVtable, Msg, Signal,
+        Status, Storage,
+    };
+
+    /// What the fake model did and will do.
+    #[derive(Debug, Default)]
+    pub(crate) struct State {
+        /// Statuses the next evals return (then OK).
+        pub(crate) statuses: VecDeque<Status>,
+        /// Messages the next drain returns: kind and text.
+        pub(crate) pending: VecDeque<(u32, &'static CStr)>,
+        pub(crate) evals: u32,
+        pub(crate) finals: u32,
+        pub(crate) destroys: u32,
+        /// The two members, `a` and `y`.
+        pub(crate) members: Box<[u8; 2]>,
+        rows: Vec<Signal>,
+    }
+
+    thread_local! {
+        pub(crate) static STATE: RefCell<State> = RefCell::default();
+    }
+
+    const fn row(id: u32, width: u32, dir: Dir, access: u8, name: &'static CStr) -> Signal {
+        Signal {
+            id,
+            width,
+            words: 1,
+            storage: Storage::C as u8,
+            dir: dir as u8,
+            access,
+            reserved: 0,
+            name: name.as_ptr(),
+            ptr: ptr::null_mut(),
+        }
+    }
+
+    extern "C" fn create(_opts: *const CreateOpts, out: *mut *mut Handle) -> i32 {
+        STATE.with_borrow_mut(|s| {
+            let base = s.members.as_mut_ptr();
+            let mut a = row(0, 4, Dir::In, ACCESS_READ | ACCESS_WRITE, c"fake.a");
+            let mut y = row(1, 8, Dir::Out, ACCESS_READ, c"fake.y");
+            a.ptr = base.cast::<c_void>();
+            // SAFETY: `members` has two bytes; offset 1 stays inside it.
+            y.ptr = unsafe { base.add(1) }.cast::<c_void>();
+            s.rows = vec![a, y];
+        });
+        // SAFETY: `out` is the caller's valid out-parameter.
+        unsafe { out.write(NonNull::<Handle>::dangling().as_ptr()) };
+        0
+    }
+
+    extern "C" fn destroy(_h: *mut Handle) {
+        STATE.with_borrow_mut(|s| s.destroys += 1);
+    }
+
+    extern "C" fn eval(_h: *mut Handle) -> i32 {
+        STATE.with_borrow_mut(|s| {
+            s.evals += 1;
+            s.statuses.pop_front().unwrap_or(Status::Ok) as i32
+        })
+    }
+
+    extern "C" fn final_blocks(_h: *mut Handle) -> i32 {
+        STATE.with_borrow_mut(|s| s.finals += 1);
+        0
+    }
+
+    extern "C" fn set_time(_h: *mut Handle, _t: u64) {}
+
+    extern "C" fn events_pending(_h: *mut Handle) -> u32 {
+        0
+    }
+
+    extern "C" fn next_time_slot(_h: *mut Handle) -> u64 {
+        u64::MAX
+    }
+
+    extern "C" fn signals(_h: *mut Handle, count: *mut u32) -> *const Signal {
+        STATE.with_borrow(|s| {
+            // SAFETY: `count` is the caller's valid out-parameter.
+            unsafe { count.write(2) };
+            s.rows.as_ptr()
+        })
+    }
+
+    extern "C" fn drain(_h: *mut Handle, out: *mut Msg, cap: usize) -> usize {
+        STATE.with_borrow_mut(|s| {
+            let mut n = 0;
+            while n < cap {
+                let Some((kind, text)) = s.pending.pop_front() else {
+                    break;
+                };
+                let msg = Msg {
+                    kind,
+                    line: 7,
+                    time: 0,
+                    file: c"fake.sv".as_ptr(),
+                    hier: c"TOP.fake".as_ptr(),
+                    msg: text.as_ptr(),
+                    msg_len: text.to_bytes().len(),
+                };
+                // SAFETY: `n < cap`, and `out` has room for `cap` records.
+                let slot = unsafe { out.add(n) };
+                // SAFETY: `slot` is a valid, writable record of the caller's buffer.
+                unsafe { slot.write(msg) };
+                n += 1;
+            }
+            n
+        })
+    }
+
+    extern "C" fn unsupported(_h: *mut Handle) -> i32 {
+        Status::Unsupported as i32
+    }
+
+    extern "C" fn trace_open(_h: *mut Handle, _path: *const std::ffi::c_char) -> i32 {
+        Status::Unsupported as i32
+    }
+
+    extern "C" fn trace_dump(_h: *mut Handle, _t: u64) -> i32 {
+        Status::Unsupported as i32
+    }
+
+    extern "C" fn cov(_h: *mut Handle, _count: *mut usize) -> *mut u32 {
+        ptr::null_mut()
+    }
+
+    /// The fake's vtable (prefix `Vfake`, IR hash 7).
+    pub(crate) fn vtable() -> ModelVtable {
+        ModelVtable {
+            abi_version: ABI_VERSION,
+            size: 136,
+            prefix: c"Vfake".as_ptr(),
+            verilator_version: c"fake".as_ptr(),
+            ir_hash: 7,
+            create,
+            destroy,
+            eval,
+            final_: final_blocks,
+            set_time,
+            events_pending,
+            next_time_slot,
+            signals,
+            drain_msgs: drain,
+            trace_open,
+            trace_dump,
+            trace_close: unsupported,
+            cov_counters: cov,
+        }
+    }
+
+    /// Resets this thread's fake state.
+    pub(crate) fn reset() {
+        STATE.with_borrow_mut(|s| *s = State::default());
     }
 }

@@ -1,50 +1,15 @@
-//! What generated code hands the runtime: the model's metadata ([`ModelMeta`],
-//! [`SignalMeta`]), the link to its C vtable ([`link_model!`](crate::__link_model)), and
-//! the [`Binder`] that turns slots into typed handles.
+//! What generated code hands the runtime about a model: its signal table
+//! ([`SignalMeta`], built by simjig-build's codegen as `Dut::SIGNALS`), its vtable symbol
+//! ([`link_model!`](crate::__link_model)) and the rest of [`ModelMeta`]; and the
+//! [`LoadError`] when the model and the generated Rust disagree.
 //!
-//! The generated Rust for one model looks like this (`tests/model_tests/duts.rs` holds
-//! hand-written instances):
-//!
-//! ```text
-//! ::simjig::__private::link_model!(fn vtable = "simjig_vtable_Vcounter");
-//!
-//! pub static MODEL: ::simjig::__private::ModelMeta = ::simjig::__private::ModelMeta {
-//!     vtable,
-//!     prefix: "Vcounter",
-//!     ir_hash: 0x0123_4567_89ab_cdef,
-//!     precision_exponent: -12,
-//!     signals: Dut::SIGNALS,
-//! };
-//!
-//! pub struct Dut {
-//!     pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,
-//!     pub count: ::simjig::__private::Out<::simjig::__private::bits::Bits<8>>,
-//! }
-//!
-//! impl Dut {
-//!     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[
-//!         ::simjig::__private::SignalMeta::new("counter.clk", 1, ::simjig::__private::SignalAccess::In),
-//!         ::simjig::__private::SignalMeta::new("counter.count", 8, ::simjig::__private::SignalAccess::Out),
-//!     ];
-//!
-//!     pub fn sim() -> ::core::result::Result<(::simjig::Sim, Self), ::simjig::LoadError> {
-//!         let (sim, b) = ::simjig::__private::load(&MODEL)?;
-//!         Ok((sim, Self { clk: b.bind(0), count: b.bind(1) }))
-//!     }
-//! }
-//! ```
-//!
-//! Invariant: slot `i` of the C++ signal table, of [`ModelMeta::signals`] and of the kernel are
-//! the same signal. [`load`] checks the first two against each other; the kernel numbers its
-//! slots from the C++ table.
+//! Invariant: slot `i` of the C++ signal table, of [`ModelMeta::signals`] and of the kernel
+//! are the same signal. Loading checks the first two against each other; the kernel numbers
+//! its slots from the C++ table.
 
 use std::fmt;
 
 use super::abi::{AbiError, ModelVtable};
-use super::verilator::VerilatorModel;
-use crate::kernel::signal::RawSig;
-use crate::kernel::sim::Sim;
-use crate::signal::Bind;
 
 /// A model's C vtable, as returned by its `simjig_vtable_<prefix>` symbol; opaque to Rust code
 /// outside simjig.
@@ -54,6 +19,12 @@ pub struct Vtable(ModelVtable);
 impl Vtable {
     pub(crate) fn as_abi(&self) -> &ModelVtable {
         &self.0
+    }
+
+    /// A vtable built in Rust (the fake model of the backend's unit tests), leaked.
+    #[cfg(test)]
+    pub(crate) fn leak(vt: ModelVtable) -> &'static Self {
+        Box::leak(Box::new(Self(vt)))
     }
 }
 
@@ -69,7 +40,7 @@ impl fmt::Debug for Vtable {
 
 /// How the testbench may access a signal; decides which handle type binds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SignalAccess {
+pub enum Access {
     /// A top-level input: [`In`](crate::In).
     In,
     /// A top-level output: [`Out`](crate::Out).
@@ -82,41 +53,75 @@ pub enum SignalAccess {
     PublicRw,
 }
 
-/// One signal of a model, as the generator saw it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SignalMeta {
-    /// Hierarchical name (`counter.clk`); equals the C++ table's name.
-    pub name: &'static str,
-    /// Width in bits.
-    pub width: u32,
-    /// Access kind.
-    pub access: SignalAccess,
+/// The C++ type Verilator stores a signal in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Storage {
+    /// `CData`, 1 to 8 bits.
+    CData,
+    /// `SData`, 9 to 16 bits.
+    SData,
+    /// `IData`, 17 to 32 bits.
+    IData,
+    /// `QData`, 33 to 64 bits.
+    QData,
+    /// `VlWide<words>`, more than 64 bits.
+    VlWide {
+        /// 32-bit words.
+        words: u32,
+    },
+    /// `VlUnpacked<elem, len>`, an unpacked array; not supported by the C ABI yet.
+    VlUnpacked {
+        /// The element's storage.
+        elem: &'static Storage,
+        /// Number of elements.
+        len: u32,
+    },
 }
 
-impl SignalMeta {
-    /// A signal entry; `const` so generated tables are `static` data.
-    #[must_use]
-    pub const fn new(name: &'static str, width: u32, access: SignalAccess) -> Self {
-        Self {
-            name,
-            width,
-            access,
+impl Storage {
+    /// Verilator's storage for a packed value of `width` bits.
+    pub(crate) const fn packed(width: u32) -> Self {
+        match width {
+            0..=8 => Self::CData,
+            9..=16 => Self::SData,
+            17..=32 => Self::IData,
+            33..=64 => Self::QData,
+            _ => Self::VlWide {
+                words: width.div_ceil(32),
+            },
         }
     }
 }
 
-/// Everything the runtime needs to load one generated model.
+/// One signal of a model, as the generator saw it (one entry of `Dut::SIGNALS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignalMeta {
+    /// Hierarchical name (`counter.clk`); equals the C++ table's name.
+    pub name: &'static str,
+    /// Slot number: the index in `Dut::SIGNALS` and in the C++ table.
+    pub slot: u32,
+    /// Packed width in bits (of one element, for an unpacked array).
+    pub width: u32,
+    /// Verilator storage.
+    pub storage: Storage,
+    /// Access kind.
+    pub access: Access,
+}
+
+/// Everything the runtime needs to load one generated model; built by
+/// [`dut_model!`](crate::__dut_model).
 #[derive(Clone, Copy)]
 pub struct ModelMeta {
     /// The model's vtable symbol, declared with [`link_model!`](crate::__link_model).
     pub vtable: fn() -> &'static Vtable,
     /// Verilator `--prefix`; must equal the vtable's.
     pub prefix: &'static str,
-    /// The IR hash the generated Rust was made from; must equal the vtable's.
+    /// The IR hash the generated Rust was made from (`Dut::IR_HASH`); must equal the
+    /// vtable's.
     pub ir_hash: u64,
     /// The design's time precision as a power of ten of seconds (`-12` is 1 ps).
     pub precision_exponent: i8,
-    /// Every signal, in slot order.
+    /// Every signal, in slot order (`Dut::SIGNALS`).
     pub signals: &'static [SignalMeta],
 }
 
@@ -128,64 +133,6 @@ impl fmt::Debug for ModelMeta {
             .field("precision_exponent", &self.precision_exponent)
             .field("signals", &self.signals.len())
             .finish_non_exhaustive()
-    }
-}
-
-/// Loads the model `meta` describes into a new [`Sim`], and returns the [`Binder`] that makes
-/// its typed handles.
-///
-/// # Errors
-/// See [`LoadError`]: the model and the generated Rust disagree, or the model failed while
-/// being constructed.
-pub fn load(meta: &'static ModelMeta) -> Result<(Sim, Binder), LoadError> {
-    let model = VerilatorModel::load(meta)?;
-    let sim = Sim::from_backend(Box::new(model));
-    // `Sim` keeps its id private; any signal's handle carries it. A model without signals
-    // has nothing to bind, so its id is never needed.
-    let sim_gen = meta
-        .signals
-        .first()
-        .and_then(|s| sim.signal(s.name))
-        .map_or(0, RawSig::sim_gen);
-    let binder = Binder {
-        sim_gen,
-        signals: meta.signals,
-    };
-    Ok((sim, binder))
-}
-
-/// Makes the typed handles of one loaded model; only [`load`] creates it.
-#[derive(Debug)]
-pub struct Binder {
-    sim_gen: u32,
-    signals: &'static [SignalMeta],
-}
-
-impl Binder {
-    /// The handle of `slot`, typed by the field it is assigned to.
-    ///
-    /// # Panics
-    /// If `slot` is out of range, or its width or access kind does not match `H` (a generator
-    /// bug: the metadata and the field types come from the same lowering).
-    #[track_caller]
-    #[must_use]
-    pub fn bind<H: Bind>(&self, slot: u32) -> H {
-        let Some(meta) = self.signals.get(slot as usize) else {
-            panic!(
-                "generated code binds slot {slot}, but the model has {} signals",
-                self.signals.len()
-            );
-        };
-        assert!(
-            meta.access == H::ACCESS && meta.width == H::WIDTH,
-            "generated code binds `{}` ({} bits, {:?}) as a {:?} handle of {} bits",
-            meta.name,
-            meta.width,
-            meta.access,
-            H::ACCESS,
-            H::WIDTH
-        );
-        H::from_raw(RawSig::new(self.sim_gen, slot))
     }
 }
 

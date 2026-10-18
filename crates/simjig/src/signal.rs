@@ -29,10 +29,15 @@
 //! own panic, which knows only the width, never fires). Other conversions (`bool` into `Bit`,
 //! a generated enum's constants) go through `Into` unchanged.
 //!
-//! `get` and `set` require `T: Packed<Raw: RawStorage>`. [`RawStorage`] is implemented for
+//! `get` and `set` require `T: Packed<Raw: RawWords>`. [`RawWords`] is implemented for
 //! exactly the storage types the [`Packed`] contract allows (`u8`, `u16`, `u32`, `u64` and
 //! `[u32; W]`), so the bound holds for every conforming type; it exists because the contract
-//! does not state it in the type system.
+//! does not state it in the type system. Generated packed structs use the same trait to
+//! convert their storage ([`pack_field`](crate::__private::pack_field)).
+//!
+//! A handle's type parameter is unconstrained, so generated code can name handles of
+//! unpacked arrays (`In<[Bits<8>; 4]>`); such handles have no `get`/`set` until the ABI
+//! describes unpacked storage.
 
 use std::any::Any;
 use std::fmt;
@@ -40,61 +45,63 @@ use std::marker::PhantomData;
 
 use simjig_bits::Packed;
 
+use crate::kernel::backend::words;
 use crate::kernel::signal::RawSig;
 use crate::kernel::trigger::{self, Edge};
-use crate::model::meta::SignalAccess;
 
-mod sealed {
-    use crate::kernel::signal::RawSig;
-
-    /// Conversion between a Verilator storage type and the kernel's `u32` words.
-    pub trait Words: Copy {
-        /// A word buffer of exactly the right length.
+pub(crate) mod sealed {
+    /// A word buffer sized for one storage type, so accesses need no allocation.
+    pub trait Buffer: Copy {
+        /// A buffer of exactly the storage's word count.
         type Buf: AsRef<[u32]> + AsMut<[u32]>;
         /// An all-zero buffer.
         fn zeroed() -> Self::Buf;
-        /// The value as words, least significant first.
-        fn to_words(self) -> Self::Buf;
-        /// The value of `buf`.
-        fn from_words(buf: &Self::Buf) -> Self;
-    }
-
-    /// Construction of a handle from a slot; crate-only, so a handle's direction cannot be
-    /// changed by rebinding its `RawSig`.
-    pub trait FromRaw {
-        fn from_raw(raw: RawSig) -> Self;
     }
 }
 
-/// A Verilator storage type: `u8`, `u16`, `u32`, `u64` or `[u32; W]` (the [`Packed::Raw`]
-/// types). Sealed; it only exists to name the bound on [`In::get`] and [`In::set`].
-pub trait RawStorage: sealed::Words {}
+/// Verilator storage as little-endian 32-bit words (word 0 holds bits 31..0): implemented
+/// for the [`Packed::Raw`] types `u8`, `u16`, `u32` (one word), `u64` (two words) and
+/// `[u32; W]` (`W` words). Sealed.
+pub trait RawWords: sealed::Buffer {
+    /// Writes the value into `out[..n]`, `n` being the storage's word count.
+    ///
+    /// # Panics
+    /// If `out` is shorter than `n`.
+    fn to_words(self, out: &mut [u32]);
+
+    /// Reads a value from the first `n` words of `words`, ignoring bits beyond the
+    /// storage type.
+    ///
+    /// # Panics
+    /// If `words` is shorter than `n`.
+    fn from_words(words: &[u32]) -> Self;
+}
 
 macro_rules! narrow_words {
     ($($raw:ty => $n:literal),*) => {$(
-        impl sealed::Words for $raw {
+        impl sealed::Buffer for $raw {
             type Buf = [u32; $n];
             fn zeroed() -> Self::Buf {
                 [0; $n]
             }
-            fn to_words(self) -> Self::Buf {
+        }
+
+        impl RawWords for $raw {
+            fn to_words(self, out: &mut [u32]) {
                 let wide = u64::from(self);
-                let mut buf = [0; $n];
-                buf[0] = low_word(wide);
-                if let Some(high) = buf.get_mut(1) {
-                    *high = low_word(wide >> 32);
+                out[0] = low_word(wide);
+                if $n == 2 {
+                    out[1] = low_word(wide >> 32);
                 }
-                buf
             }
-            fn from_words(buf: &Self::Buf) -> Self {
-                let high = buf.get(1).map_or(0, |&w| u64::from(w));
-                let wide = high << 32 | u64::from(buf[0]);
-                // The model keeps the bits above the storage width clear; masking makes the
-                // conversion total anyway.
+
+            fn from_words(words: &[u32]) -> Self {
+                let high = if $n == 2 { u64::from(words[1]) } else { 0 };
+                let wide = high << 32 | u64::from(words[0]);
+                // Bits beyond the storage type are ignored, so the conversion is total.
                 <$raw>::try_from(wide & u64::from(<$raw>::MAX)).unwrap_or(<$raw>::MAX)
             }
         }
-        impl RawStorage for $raw {}
     )*};
 }
 
@@ -105,45 +112,60 @@ fn low_word(value: u64) -> u32 {
     u32::try_from(value & 0xffff_ffff).unwrap_or(u32::MAX)
 }
 
-impl<const W: usize> sealed::Words for [u32; W] {
+impl<const W: usize> sealed::Buffer for [u32; W] {
     type Buf = Self;
     fn zeroed() -> Self {
         [0; W]
     }
-    fn to_words(self) -> Self {
-        self
+}
+
+impl<const W: usize> RawWords for [u32; W] {
+    fn to_words(self, out: &mut [u32]) {
+        out[..W].copy_from_slice(&self);
     }
-    fn from_words(buf: &Self) -> Self {
-        *buf
+
+    fn from_words(words: &[u32]) -> Self {
+        let mut out = [0; W];
+        out.copy_from_slice(&words[..W]);
+        out
     }
 }
 
-impl<const W: usize> RawStorage for [u32; W] {}
+/// Construction of a handle from a slot; crate-only, so a handle's direction cannot be
+/// changed by rebinding its `RawSig`.
+pub(crate) trait FromRaw {
+    fn from_raw(raw: RawSig) -> Self;
+}
 
-/// A handle type that generated code binds to a slot with
-/// [`Binder::bind`](crate::__private::Binder::bind). Sealed.
-pub trait Bind: Copy + sealed::FromRaw {
-    /// The access kind the slot must have.
-    const ACCESS: SignalAccess;
-    /// The width the slot must have.
-    const WIDTH: u32;
+/// One kernel lookup: checks the width (a handle typed for another width would silently
+/// read the wrong bits) and copies the value out.
+#[track_caller]
+fn get<T: Packed<Raw: RawWords>>(raw: RawSig) -> T {
+    let mut buf = <T::Raw as sealed::Buffer>::zeroed();
+    raw.with(|k, slot| {
+        let width = k.widths[slot as usize];
+        assert!(
+            width == T::WIDTH && buf.as_ref().len() == words(width),
+            "signal `{}` is {width} bits wide, but its handle's type is {} bits",
+            k.names[slot as usize],
+            T::WIDTH
+        );
+        k.model.borrow().read(slot, buf.as_mut());
+    });
+    T::from_raw(RawWords::from_words(buf.as_ref()))
 }
 
 #[track_caller]
-fn get<T: Packed<Raw: RawStorage>>(raw: RawSig) -> T {
-    let mut buf = <T::Raw as sealed::Words>::zeroed();
-    raw.read_words(buf.as_mut());
-    T::from_raw(sealed::Words::from_words(&buf))
-}
-
-#[track_caller]
-fn set<T: Packed<Raw: RawStorage>, V: Into<T> + 'static>(raw: RawSig, value: V) {
+fn set<T: Packed<Raw: RawWords>, V: Into<T> + 'static>(raw: RawSig, value: V) {
     // Monomorphised per `V`, so the type test folds away and other conversions pay nothing.
     if let Some(&literal) = (&value as &dyn Any).downcast_ref::<u128>() {
         check_literal::<T>(raw, literal);
     }
+    debug_assert_eq!(raw.width(), T::WIDTH, "the handle's type width");
     let value: T = value.into();
-    raw.write_words(sealed::Words::to_words(value.to_raw()).as_ref());
+    let mut buf = <T::Raw as sealed::Buffer>::zeroed();
+    value.to_raw().to_words(buf.as_mut());
+    raw.write_words(buf.as_ref());
 }
 
 /// Panics, naming the signal, if `literal` does not fit `T`.
@@ -159,7 +181,7 @@ fn check_literal<T: Packed>(raw: RawSig, literal: u128) {
 }
 
 macro_rules! handle {
-    ($(#[$doc:meta])* $name:ident, $access:ident) => {
+    ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         pub struct $name<T> {
             raw: RawSig,
@@ -180,18 +202,13 @@ macro_rules! handle {
             }
         }
 
-        impl<T> sealed::FromRaw for $name<T> {
+        impl<T> FromRaw for $name<T> {
             fn from_raw(raw: RawSig) -> Self {
                 Self {
                     raw,
                     value: PhantomData,
                 }
             }
-        }
-
-        impl<T: Packed> Bind for $name<T> {
-            const ACCESS: SignalAccess = SignalAccess::$access;
-            const WIDTH: u32 = T::WIDTH;
         }
 
         impl<T: Packed> $name<T> {
@@ -244,7 +261,7 @@ macro_rules! handle {
             }
         }
 
-        impl<T: Packed<Raw: RawStorage>> $name<T> {
+        impl<T: Packed<Raw: RawWords>> $name<T> {
             /// The signal's current value (writes become visible after the next eval).
             ///
             /// # Panics
@@ -260,7 +277,7 @@ macro_rules! handle {
 
 macro_rules! settable {
     ($name:ident) => {
-        impl<T: Packed<Raw: RawStorage>> $name<T> {
+        impl<T: Packed<Raw: RawWords>> $name<T> {
             /// Deposits `value`; it is applied after the next eval and lasts until the
             /// design or another write changes it.
             ///
@@ -279,7 +296,7 @@ macro_rules! settable {
 handle! {
     /// A top-level input of the model: the testbench drives it with [`set`](Self::set) and
     /// can read it back with [`get`](Self::get).
-    In, In
+    In
 }
 settable!(In);
 
@@ -305,12 +322,12 @@ handle! {
     ///     y.set(1);
     /// }
     /// ```
-    Out, Out
+    Out
 }
 
 handle! {
     /// A top-level inout of the model: the testbench can deposit values and read them.
-    InOut, InOut
+    InOut
 }
 settable!(InOut);
 
@@ -327,12 +344,12 @@ handle! {
     ///     s.set(1);
     /// }
     /// ```
-    PublicRd, PublicRd
+    PublicRd
 }
 
 handle! {
     /// An internal signal made writable with `public_flat_rw`. A write is a deposit: it lasts
     /// only until the signal's driver next evaluates.
-    PublicRw, PublicRw
+    PublicRw
 }
 settable!(PublicRw);

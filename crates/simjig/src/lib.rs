@@ -43,7 +43,8 @@ pub use kernel::trigger::{
     now, rising, with_timeout, yield_now,
 };
 pub use model::meta::LoadError;
-pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawStorage};
+pub use model::values::{FieldDiff, InvalidEnum};
+pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
 
 /// Marks an `async fn` as a simjig test; see the attribute's own documentation.
 pub use simjig_macros::test;
@@ -56,9 +57,12 @@ pub mod __private {
     };
     pub use crate::kernel::combinator::{MaybeDone, boxed};
 
-    // Generated model code (simjig-build) names these; see `model::meta` for its shape.
-    pub use crate::__link_model as link_model;
-    pub use crate::model::meta::{Binder, ModelMeta, SignalAccess, SignalMeta, Vtable, load};
-    pub use crate::signal::{Bind, In, InOut, Out, PublicRd, PublicRw};
+    // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,
+    // "The `__private` contract", and `model::bind` for the model glue.
+    pub use crate::model::bind::{Binder, ModelBinder, create, instantiate};
+    pub use crate::model::meta::{Access, ModelMeta, SignalMeta, Storage, Vtable};
+    pub use crate::model::values::{FieldDiff, InvalidEnum, pack_field, unpack_field};
+    pub use crate::signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
+    pub use crate::{__dut_model as dut_model, __link_model as link_model};
     pub use simjig_bits as bits;
 }

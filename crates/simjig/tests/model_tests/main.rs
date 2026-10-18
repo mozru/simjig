@@ -17,6 +17,8 @@ fn models_were_built() {
 #[cfg(simjig_abi_models)]
 mod bench;
 #[cfg(simjig_abi_models)]
+mod codegen;
+#[cfg(simjig_abi_models)]
 mod conflog;
 #[cfg(simjig_abi_models)]
 mod conformance;

@@ -16,6 +16,7 @@ simjig-macros.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+proptest.workspace = true
 serde_json.workspace = true
 trybuild.workspace = true
 

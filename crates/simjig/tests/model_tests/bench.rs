@@ -10,7 +10,7 @@ use std::time::Instant;
 use simjig::Timer;
 use simjig_bits::Bits;
 
-use super::duts::{counter, wide};
+use super::duts::{counter, sim, wide};
 use super::ticks;
 
 const N: u32 = 10_000_000;
@@ -30,15 +30,18 @@ fn per_op(mut f: impl FnMut(u32)) -> f64 {
 #[test]
 #[ignore = "measurement; run explicitly in release mode"]
 fn measure_typed_access() {
-    let (mut sim, dut) = counter::Dut::sim().unwrap();
-    let (mut wsim, wdut) = wide::Dut::sim().unwrap();
+    let (mut wsim, wdut) = sim::<wide::Dut>();
+    let (mut sim, dut) = sim::<counter::Dut>();
     let narrow = sim.run(async move {
         let mut acc = 0u128;
         let read = per_op(|_| acc ^= black_box(dut.count).get().to_u128());
         let write = per_op(|i| black_box(dut.en).set(i & 1 == 1));
+        // The kernel's own write path (write log), without the typed layer.
+        let en = dut.en.raw();
+        let raw_write = per_op(|i| black_box(en).write_words(&[i & 1]));
         // Let the write log drain once, so the next run starts clean.
         Timer::new(ticks(1)).await;
-        (read, write, black_box(acc))
+        (read, write, raw_write, black_box(acc))
     });
     let wide = wsim.run(async move {
         let mut acc = 0u128;
@@ -49,10 +52,11 @@ fn measure_typed_access() {
         Timer::new(ticks(1)).await;
         (read8, read200, write64, black_box(acc), black_box(acc200))
     });
-    let (read, write, _) = narrow.unwrap();
+    let (read, write, raw_write, _) = narrow.unwrap();
     let (read8, read200, write64, _, _) = wide.unwrap();
     println!(
         "typed get 8-bit {read:.2} ns, 8-bit (wide DUT) {read8:.2} ns, 200-bit {read200:.2} ns; \
-         typed set 1-bit {write:.2} ns, 64-bit {write64:.2} ns"
+         typed set 1-bit {write:.2} ns, 64-bit {write64:.2} ns; RawSig::write_words 1-bit \
+         {raw_write:.2} ns"
     );
 }

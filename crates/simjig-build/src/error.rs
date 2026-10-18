@@ -284,13 +284,33 @@ fn display_paths(paths: &[PathBuf]) -> String {
 /// (NOTIMING), naming the flag, not the `simjig_build` option.
 fn hint(stderr: &str) -> Option<&'static str> {
     let timing = ["%Warning-STMTDLY", "%Error-STMTDLY", "%Error-NOTIMING"];
-    stderr
+    if stderr
         .lines()
         .any(|line| timing.iter().any(|tag| line.starts_with(tag)))
-        .then_some(
+    {
+        return Some(
             "the design has `#` delays or event controls that need `--timing`; add \
              `.timing(true)` to its `simjig_build::Dut`",
-        )
+        );
+    }
+    only_lint_warnings(stderr).then_some(
+        "Verilator's lint warnings are fatal by default; fix them, waive one with a \
+         `/* verilator lint_off <CODE> */` comment in the source or \
+         `.verilator_args([\"-Wno-<CODE>\"])` (the code follows `%Warning-`), or make all \
+         warnings non-fatal with `.verilator_args([\"-Wno-fatal\"])` on the `Dut`",
+    )
+}
+
+/// Whether Verilator stopped only because of warnings: it printed `%Warning-` lines and no
+/// error but its closing `Exiting due to N warning(s)` (`V3Error.cpp`, which prints that
+/// line only when the error count is 0).
+fn only_lint_warnings(stderr: &str) -> bool {
+    let warned = stderr.lines().any(|l| l.starts_with("%Warning-"));
+    let errored = stderr.lines().any(|l| {
+        l.starts_with("%Error")
+            && !(l.starts_with("%Error: Exiting due to") && l.ends_with("warning(s)"))
+    });
+    warned && !errored
 }
 
 fn display_command_failure(
@@ -449,6 +469,44 @@ mod tests {
         }
         let text = failure("%Error: /r/d.sv:3:5: syntax error\n");
         assert!(!text.contains("hint:"), "{text}");
+    }
+
+    /// A model that failed only on lint warnings (Verilator 5.052's output for one
+    /// WIDTHTRUNC) gets the ways to waive them; a real error does not.
+    #[test]
+    fn lint_warnings_suggest_waivers_and_wno_fatal() {
+        let failure = |stderr: &str| {
+            Error::Command {
+                what: "verilating DUT `d`".into(),
+                command: "verilator --cc d.sv".into(),
+                status: Some(1),
+                stderr: stderr.into(),
+                path: None,
+            }
+            .to_string()
+        };
+        let warned = "%Warning-WIDTHTRUNC: /r/d.sv:2:12: Operator ASSIGNW expects 4 bits on \
+                      the Assign RHS, but Assign RHS's VARREF 'a' generates 8 bits.\n    \
+                      2 |   assign y = a;\n                     ... Use \"/* verilator \
+                      lint_off WIDTHTRUNC */\" and lint_on around source to disable this \
+                      message.\n%Error: Exiting due to 1 warning(s)\n";
+        let text = failure(warned);
+        for waiver in [
+            "`.verilator_args([\"-Wno-fatal\"])`",
+            "`.verilator_args([\"-Wno-<CODE>\"])`",
+            "lint_off",
+        ] {
+            assert!(text.contains(waiver), "{waiver}: {text}");
+        }
+        // Truncated: the warnings, without the closing line.
+        assert!(failure("%Warning-WIDTH: /r/d.sv:4:13: w\n").contains("-Wno-fatal"));
+        for stderr in [
+            "%Warning-WIDTH: /r/d.sv:4:13: w\n%Error: /r/d.sv:9:1: syntax error\n\
+             %Error: Exiting due to 1 error(s), 1 warning(s)\n",
+            "%Error: /r/d.sv:3:5: syntax error\n%Error: Exiting due to 1 error(s)\n",
+        ] {
+            assert!(!failure(stderr).contains("-Wno-fatal"), "{stderr}");
+        }
     }
 
     #[test]

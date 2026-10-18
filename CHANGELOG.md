@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A model that fails to verilate only because of lint warnings gets a `hint:` naming the
+  waivers: a `lint_off` comment, `.verilator_args(["-Wno-<CODE>"])`, or
+  `.verilator_args(["-Wno-fatal"])`.
 - A failed `Dut::build` prints the error as `cargo::error=` lines (one per line of the
   message) and none of that DUT's directives. Cargo shows them as `error:` lines right
   after `Compiling`, before its dump of the build script's stdout (the `rerun-if-changed`

@@ -117,12 +117,7 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
         trace_fst: features.trace_fst,
         coverage: features.coverage,
     };
-    let dpi = config.rust_dpi_imports(design)?;
-    let rust = RustOptions {
-        prefix: opts.prefix.clone(),
-        precision_exponent: design.time_precision.0,
-        dpi_imports: dpi.iter().map(|i| i.c_name.clone()).collect(),
-    };
+    let (rust, dpi) = rust_options(design, config)?;
     Ok(Emitted {
         rust: Some(
             codegen::emit_rust(&lowered, &rust)
@@ -137,6 +132,22 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
         ports: None,
         probes: probe_sites(&lowered),
     })
+}
+
+/// The model glue options of `config`'s Rust bindings, and the DPI-C imports they
+/// implement: one place for [`codegen_emitter`] and a sweep's members (`crate::sweep`),
+/// which emit the same bindings.
+pub(crate) fn rust_options(
+    design: &Design,
+    config: &DutConfig,
+) -> Result<(RustOptions, Vec<svtypes::ir::DpiImport>), Error> {
+    let dpi = config.rust_dpi_imports(design)?;
+    let rust = RustOptions {
+        prefix: config.prefix(),
+        precision_exponent: design.time_precision.0,
+        dpi_imports: dpi.iter().map(|i| i.c_name.clone()).collect(),
+    };
+    Ok((rust, dpi))
 }
 
 fn probe_sites(lowered: &codegen::Lowered) -> Vec<ProbeSite> {

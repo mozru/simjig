@@ -34,3 +34,18 @@ fn the_runtime_is_looked_up_once_per_build_script() {
         "only the new model is compiled: {names:?}"
     );
 }
+
+/// A build script asks Verilator for its installation once, not once per DUT.
+#[test]
+fn verilator_is_located_once_per_build_script() {
+    let s = Sandbox::new();
+    let env = s.env();
+    build("inv", &env);
+    build("flop", &env);
+    let asks = s
+        .verilator_calls()
+        .lines()
+        .filter(|l| l.starts_with("--getenv"))
+        .count();
+    assert_eq!(asks, 1, "{}", s.verilator_calls());
+}

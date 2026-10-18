@@ -33,6 +33,9 @@ extern "C" {
 const simjig_model_vtable* simjig_vtable_Vtc_full(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_badprobe(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_param_rd(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_param_rw(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_rd_as_rw(void);
 const simjig_model_vtable* simjig_vtable_Vtc_hier(void);
 const simjig_model_vtable* simjig_vtable_Vtc_timing(void);
 }
@@ -261,6 +264,43 @@ void probe_width_is_checked_at_create() {
     }
     CHECK(named);
     CHECK_EQ(bad.vt()->eval(bad.h()), SIMJIG_POISONED);
+}
+
+// The message of a failed create, or "" when there is none.
+std::string create_failure(Model& m) {
+    for (const simjig_msg& msg : m.drain()) {
+        if (msg.kind == SIMJIG_MSG_EXCEPTION) return msg.msg;
+    }
+    return "";
+}
+
+// A localparam is constexpr storage in the model: it may be probed for reading, but a
+// read-write probe would hand out a writable pointer to read-only memory (a write is SIGBUS on
+// macOS, undefined behaviour anywhere). A public_flat_rd variable is not writable either.
+void probe_access_is_checked_at_create() {
+    {
+        Model rd{simjig_vtable_Vtc_plain_param_rd(), "TOP"};
+        CHECK_EQ(rd.created(), SIMJIG_OK);
+        uint32_t n = 0;
+        const simjig_signal* s = rd.vt()->signals(rd.h(), &n);
+        CHECK(n == 6 && *static_cast<const uint8_t*>(s[5].ptr) == 0x5a);
+    }
+    Model rw{simjig_vtable_Vtc_plain_param_rw(), "TOP"};
+    CHECK_EQ(rw.created(), SIMJIG_EXCEPTION);
+    const std::string why = create_failure(rw);
+    if (why.find("probe 'tc.u.LP'") == std::string::npos
+        || why.find("is a parameter") == std::string::npos) {
+        std::fprintf(stderr, "  message: %s\n", why.c_str());
+        CHECK(false);
+    }
+    Model ro{simjig_vtable_Vtc_plain_rd_as_rw(), "TOP"};
+    CHECK_EQ(ro.created(), SIMJIG_EXCEPTION);
+    const std::string ro_why = create_failure(ro);
+    if (ro_why.find("probe 'tc.u.r'") == std::string::npos
+        || ro_why.find("public_flat_rd") == std::string::npos) {
+        std::fprintf(stderr, "  message: %s\n", ro_why.c_str());
+        CHECK(false);
+    }
 }
 
 // simjig_rt_abi_fields lists every field: within each struct the fields start at 0, follow
@@ -697,6 +737,7 @@ int main(int argc, char** argv) {
         {"fork_child_detaches_and_reopens", fork_child_detaches_and_reopens},
         {"plain_model_reports_unsupported", plain_model_reports_unsupported},
         {"probe_width_is_checked_at_create", probe_width_is_checked_at_create},
+        {"probe_access_is_checked_at_create", probe_access_is_checked_at_create},
         {"abi_field_table_covers_every_field", abi_field_table_covers_every_field},
         {"thread_rng_survives_a_reseed_epoch", thread_rng_survives_a_reseed_epoch},
         {"fst_trace_is_written_and_parses", fst_trace_is_written_and_parses},

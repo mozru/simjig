@@ -62,6 +62,46 @@ struct BadProbeTraits {
     }
 };
 
+// The localparam tc_sub.LP, read-only (allowed: the value is readable) and read-write (refused
+// at create: the variable is constexpr storage, and a write through it is undefined).
+struct ParamReadTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000006ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "LP", "tc.u.LP", 8, kRead);
+    }
+};
+struct ParamWriteTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000007ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "LP", "tc.u.LP", 8, kReadWrite);
+    }
+};
+// tc_sub.r is public_flat_rd only: a read-write probe of it is refused too.
+struct ReadOnlyWriteTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000008ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "r", "tc.u.r", 1, kReadWrite);
+    }
+};
+
 struct HierTraits {
     using Model = Vtc_hier;
     static constexpr const char* kPrefix = "Vtc_hier";
@@ -92,5 +132,8 @@ struct TimingTraits {
 SIMJIG_EXPORT_VTABLE(Vtc_full, FullTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain, PlainTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_badprobe, BadProbeTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rd, ParamReadTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rw, ParamWriteTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_rd_as_rw, ReadOnlyWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_hier, HierTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_timing, TimingTraits)

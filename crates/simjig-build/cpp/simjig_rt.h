@@ -163,9 +163,13 @@ bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept;
 // this is the one way to find a probe that does not depend on inlining (V3Inline.cpp in 5.052
 // keeps large multi-use modules, modules with classes and no_inline_module ones apart). The
 // variable must have the storage class Verilator uses for `width`, exactly `width` bits and no
-// unpacked dimension. Throws std::runtime_error naming the probe (`display`) otherwise.
+// unpacked dimension. A probe with SIMJIG_ACCESS_WRITE in `access` must be public_flat_rw and
+// not a parameter: Verilator stores parameters as `static constexpr` members, so a writable
+// pointer to one would let safe Rust write read-only memory (SIGBUS on macOS, undefined
+// behaviour anywhere); a read-only probe of a parameter is fine. Throws std::runtime_error
+// naming the probe (`display`) otherwise.
 void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
-                 const char* var, const char* display, uint32_t width);
+                 const char* var, const char* display, uint32_t width, uint8_t access);
 
 }  // namespace simjig
 

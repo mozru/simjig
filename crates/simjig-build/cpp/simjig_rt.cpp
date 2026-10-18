@@ -214,7 +214,7 @@ bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
 }
 
 void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
-                 const char* var, const char* display, uint32_t width) {
+                 const char* var, const char* display, uint32_t width, uint8_t access) {
     const std::string scope_name = std::string{or_empty(model_name)} + "." + or_empty(scope);
     const auto fail = [&](const std::string& why) {
         throw std::runtime_error("simjig: probe '" + std::string{or_empty(display)} + "': " + why);
@@ -225,6 +225,18 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
     if (v == nullptr) {
         fail("no public variable '" + std::string{or_empty(var)} + "' in scope '" + scope_name
              + "' (a probe inside a hierarchical block, hier_block, is in another model)");
+    }
+    if ((access & SIMJIG_ACCESS_WRITE) != 0) {
+        // verilated_sym_props.h: isParam() marks Verilator's `static constexpr` parameter
+        // members; isPublicRW() is public_flat_rw (public_flat_rd variables may be optimised
+        // as constants by Verilator, so writing them is not allowed either).
+        if (v->isParam()) {
+            fail("the model's variable is a parameter (constant storage); a parameter can only "
+                 "be probed for reading");
+        }
+        if (!v->isPublicRW()) {
+            fail("the model's variable is public_flat_rd, but the probe is bound for writing");
+        }
     }
     if (v->udims() != 0) fail("the model's variable is an unpacked array");
     if (v->entBits() != static_cast<int>(width)) {

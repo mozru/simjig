@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use svtypes::ir::Design;
 
 use crate::Error;
-use crate::codegen::{CodegenConfig, IfaceBinding, Probe, ProbeAccess, ProbeType};
+use crate::codegen::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 
 /// Accumulates length-prefixed fields into a SHA-256 digest.
 #[derive(Debug, Clone, Default)]
@@ -76,20 +76,23 @@ pub(crate) fn ir_hash(design: &Design, config: &CodegenConfig) -> u64 {
     }
     match &config.iface_top {
         None => h.str("no-iface-top"),
-        Some(top) => {
-            h.str("iface-top").str(&top.dut);
-            pairs(&mut h, &top.params);
-            h.field(&(top.bindings.len() as u64).to_le_bytes());
-            for b in &top.bindings {
-                binding(&mut h, b);
-            }
-            &mut h
-        }
+        Some(top) => iface_top(&mut h, top),
     };
     let digest = h.0.finalize();
     let mut first = [0u8; 8];
     first.copy_from_slice(&digest[..8]);
     u64::from_be_bytes(first)
+}
+
+/// Hashes every field of an interface-ported DUT's generated top.
+pub(crate) fn iface_top<'h>(h: &'h mut KeyHasher, top: &IfaceTop) -> &'h mut KeyHasher {
+    h.str("iface-top").str(&top.dut);
+    pairs(h, &top.params);
+    h.field(&(top.bindings.len() as u64).to_le_bytes());
+    for b in &top.bindings {
+        binding(h, b);
+    }
+    h
 }
 
 fn probe(h: &mut KeyHasher, p: &Probe) {

@@ -57,12 +57,24 @@ fn fixture() -> (PathBuf, PathBuf, std::fs::File) {
 /// Runs `cargo <args>` in the fixture crate; returns stdout and stderr after checking
 /// that it succeeded.
 fn cargo(krate: &Path, target: &Path, args: &[&str]) -> (String, String) {
+    cargo_with(krate, target, args, &[])
+}
+
+/// [`cargo`] with extra environment variables (`SIMJIG_CACHE_DIR` is removed unless
+/// `envs` sets it).
+pub(crate) fn cargo_with(
+    krate: &Path,
+    target: &Path,
+    args: &[&str],
+    envs: &[(&str, std::ffi::OsString)],
+) -> (String, String) {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = Command::new(cargo)
         .args(args)
         .current_dir(krate)
         .env("CARGO_TARGET_DIR", target)
         .env_remove("SIMJIG_CACHE_DIR")
+        .envs(envs.iter().map(|(k, v)| (k, v)))
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();

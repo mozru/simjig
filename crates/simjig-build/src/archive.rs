@@ -11,10 +11,15 @@
 //!    [`compiler_identity`]), the target, optimisation and debug settings, the defines,
 //!    every source (path and contents), the include paths, and the file names in every
 //!    directory a quoted include may be found in ([`search_dirs`]), so a new file that
-//!    would shadow a header changes the key;
+//!    would shadow a header changes the key; directories simjig generates are not listed
+//!    (`Toolchain::is_generated`);
 //! 2. every compile runs with `-MD`, and the manifest `manifests/<pre key>` lists every
 //!    file the compiler read (system headers included); the *full key* adds their current
-//!    contents. The entry for the full key is a hit.
+//!    contents (read again only for files whose status changed, see `manifest`). The
+//!    entry for the full key is a hit.
+//!
+//! A Verilator runtime is looked up once per build script ([`RUNTIMES`]): every model of
+//! the script links the same one, and its sources do not change while the script runs.
 //!
 //! Invariants: an entry directory is published by an atomic rename of a complete work
 //! directory holding only the archive (the objects are inside it); an entry directory
@@ -26,9 +31,11 @@ use std::sync::{Mutex, PoisonError};
 use crate::cache::{self, Cache};
 use crate::compile::Inputs;
 use crate::hash::KeyHasher;
+use crate::manifest::Manifest;
 use crate::{ABI_VERSION, BuildEnv, Error, depfile};
 
 /// A static library, compiled or found in the cache.
+#[derive(Debug, Clone)]
 pub(crate) struct Archive {
     pub(crate) dir: PathBuf,
     pub(crate) name: String,
@@ -54,17 +61,58 @@ pub(crate) struct Spec<'a> {
     pub(crate) defines: &'a [(String, Option<String>)],
     /// Include paths for this archive only, beyond the base build's.
     pub(crate) includes: &'a [PathBuf],
+    /// Compiler flags for this archive only, after the base build's.
+    pub(crate) flags: &'a [String],
 }
+
+/// The domain of the full keys (see the module docs).
+const DEPS_DOMAIN: &str = "simjig-archive-deps-v2";
+
+/// The Verilator runtimes this process found, by (`OUT_DIR`, cache root, pre key). Keyed
+/// by `OUT_DIR` like `script`, so tests that stand for several build scripts in one
+/// process look again.
+static RUNTIMES: Mutex<Vec<(RuntimeKey, Archive)>> = Mutex::new(Vec::new());
+
+/// (`OUT_DIR`, cache root, pre key).
+type RuntimeKey = (PathBuf, PathBuf, String);
 
 impl Toolchain<'_> {
     /// Returns the archive of `spec` from the cache, compiling it on a miss.
     pub(crate) fn cached_archive(&self, spec: &Spec<'_>) -> Result<Archive, Error> {
-        let cache = self.i.cache;
         let pre = self.pre_key(spec)?;
-        let manifest = cache.root().join("manifests").join(&pre);
-        if let Some(hit) = lookup(cache, spec, &pre, &manifest) {
+        if spec.kind != "libverilated" {
+            return self.cached_archive_keyed(spec, &pre);
+        }
+        let memo = (
+            self.i.env.out_dir.clone(),
+            self.i.cache.root().to_path_buf(),
+            pre,
+        );
+        // A panic while holding the lock leaves the list itself consistent.
+        let known = RUNTIMES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(k, _)| *k == memo)
+            .map(|(_, a)| a.clone());
+        if let Some(a) = known {
+            return Ok(a);
+        }
+        let a = self.cached_archive_keyed(spec, &memo.2)?;
+        RUNTIMES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((memo, a.clone()));
+        Ok(a)
+    }
+
+    fn cached_archive_keyed(&self, spec: &Spec<'_>, pre: &str) -> Result<Archive, Error> {
+        let cache = self.i.cache;
+        let manifest = cache.root().join("manifests").join(pre);
+        if let Some(hit) = lookup(cache, spec, pre, &manifest) {
             return Ok(hit);
         }
+        let started = std::time::SystemTime::now();
         let work = cache.work_dir()?;
         let compiled = self.compile_in(&work, spec);
         let (lib, deps) = match compiled {
@@ -74,11 +122,12 @@ impl Toolchain<'_> {
                 return Err(e);
             }
         };
-        let full = full_key(&pre, &deps).ok_or_else(|| Error::Parse {
+        let recorded = Manifest::record(&deps, started).ok_or_else(|| Error::Parse {
             path: work.clone(),
             line: 0,
             msg: "a file the compiler read vanished before it could be hashed".to_owned(),
         })?;
+        let full = recorded.recorded_key(DEPS_DOMAIN, pre);
         let name = archive_name(spec.what, &full);
         // Publish the archive alone: its objects are inside it.
         let out = cache.work_dir()?;
@@ -90,7 +139,7 @@ impl Toolchain<'_> {
             cache::remove_best_effort(&entry);
         }
         Cache::publish(&out, &entry)?;
-        cache.write_atomic(&manifest, &listing(&deps))?;
+        cache.write_atomic(&manifest, &recorded.text())?;
         Ok(Archive {
             dir: entry,
             name,
@@ -124,10 +173,25 @@ impl Toolchain<'_> {
         for d in spec.includes {
             h.path(d);
         }
+        for f in spec.flags {
+            h.str(f);
+        }
         for d in search_dirs(i, spec) {
-            hash_listing(&mut h, &d);
+            if !self.is_generated(&d) {
+                hash_listing(&mut h, &d);
+            }
         }
         Ok(h.finish())
+    }
+
+    /// Whether simjig generates the files in `dir`: the cache, whose entries never change
+    /// once published, and `OUT_DIR/simjig/`, whose files are named after the DUT and the
+    /// prefix, which the key has already. Nothing else writes there, so no new file in
+    /// them can shadow a header; and listing `OUT_DIR/simjig/`, which holds every DUT's
+    /// files, made every model's key change with every other DUT.
+    fn is_generated(&self, dir: &Path) -> bool {
+        dir.starts_with(self.i.cache.root())
+            || dir.starts_with(crate::emit::generated_dir(&self.i.env.out_dir))
     }
 
     /// Compiles `spec` in `work` with `-MD`; returns the archive and every file read.
@@ -136,6 +200,7 @@ impl Toolchain<'_> {
         let mut b = self.base.clone();
         b.out_dir(work)
             .includes(spec.includes)
+            .flags(spec.flags)
             .files(spec.sources)
             .flag("-MD");
         for (k, v) in spec.defines {
@@ -163,14 +228,7 @@ impl Toolchain<'_> {
 /// compiles several archives per DUT, and the answer does not change while it runs.
 pub(crate) fn compiler_identity(env: &BuildEnv, tool: &cc::Tool) -> String {
     static VERSIONS: Mutex<Vec<(PathBuf, PathBuf, String)>> = Mutex::new(Vec::new());
-    let named = tool.path();
-    let found = if named.components().count() == 1 {
-        env.find_on_path(&named.to_string_lossy())
-    } else {
-        None
-    };
-    let exe = found.as_deref().unwrap_or(named);
-    let exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let exe = resolve(env, tool.path()).1;
     let file = match std::fs::metadata(&exe) {
         Ok(m) => {
             let mtime = m
@@ -196,6 +254,37 @@ pub(crate) fn compiler_identity(env: &BuildEnv, tool: &cc::Tool) -> String {
     format!("{file}\n{version}")
 }
 
+/// The files whose change must rerun the build script because they are the compiler: the
+/// path `tool` names (found on `PATH` when it is a bare name: a symlink or a wrapper
+/// script), the executable that resolves to, and the same for a wrapper `cc` runs it
+/// through (`CXX="ccache c++"`). An upgrade in place changes them while `CXX` and `PATH`
+/// stay the same, and neither variable would rerun the script.
+pub(crate) fn compiler_files(env: &BuildEnv, tool: &cc::Tool) -> Vec<PathBuf> {
+    // The program of the command `cc` runs: the wrapper, if there is one.
+    let program = PathBuf::from(tool.to_command().get_program());
+    let mut files = Vec::new();
+    for named in [tool.path(), program.as_path()] {
+        let (found, exe) = resolve(env, named);
+        files.extend([found, exe]);
+    }
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// The path `named` is found at (through `PATH` when it is a bare name), and the
+/// executable that path resolves to through symlinks.
+fn resolve(env: &BuildEnv, named: &Path) -> (PathBuf, PathBuf) {
+    let found = if named.components().count() == 1 {
+        env.find_on_path(&named.to_string_lossy())
+    } else {
+        None
+    };
+    let found = found.unwrap_or_else(|| named.to_path_buf());
+    let exe = std::fs::canonicalize(&found).unwrap_or_else(|_| found.clone());
+    (found, exe)
+}
+
 /// `<exe> --version`, with its status and both streams. A compiler that cannot answer
 /// (MSVC has no `--version`) is identified by the failure instead.
 fn version_output(exe: &Path) -> String {
@@ -212,37 +301,19 @@ fn version_output(exe: &Path) -> String {
 
 /// The cached archive for `pre`, if the manifest's dependencies still hash to an entry.
 fn lookup(cache: &Cache, spec: &Spec<'_>, pre: &str, manifest: &Path) -> Option<Archive> {
-    let text = std::fs::read_to_string(manifest).ok()?;
-    let deps: Vec<PathBuf> = text.lines().map(PathBuf::from).collect();
-    let full = full_key(pre, &deps)?;
+    let m = Manifest::read(manifest)?;
+    let full = m.current_key(DEPS_DOMAIN, pre)?;
     let name = archive_name(spec.what, &full);
     let dir = cache.root().join(spec.kind).join(&full);
-    dir.join(format!("lib{name}.a"))
-        .is_file()
-        .then_some(Archive { dir, name, deps })
+    dir.join(format!("lib{name}.a")).is_file().then(|| Archive {
+        dir,
+        name,
+        deps: m.paths(),
+    })
 }
 
 fn archive_name(what: &str, full: &str) -> String {
     format!("simjig_{what}_{}", &full[..16])
-}
-
-/// `None` when a dependency can no longer be read (the entry cannot be valid).
-fn full_key(pre: &str, deps: &[PathBuf]) -> Option<String> {
-    let mut h = KeyHasher::new("simjig-archive-deps-v1");
-    h.str(pre);
-    for d in deps {
-        h.file(d).ok()?;
-    }
-    Some(h.finish())
-}
-
-fn listing(deps: &[PathBuf]) -> String {
-    let mut out = String::new();
-    for d in deps {
-        out.push_str(&d.display().to_string());
-        out.push('\n');
-    }
-    out
 }
 
 /// Every prerequisite in the `.d` files under `work`, deduplicated, sorted. Relative
@@ -270,7 +341,7 @@ fn compiler_deps(work: &Path) -> Result<Vec<PathBuf>, Error> {
 /// The directories a quoted `#include` of `spec` may be resolved in, besides the fixed
 /// runtime and Verilator directories: each source's directory, the archive's and the
 /// recipe's include directories, and those named by `-I`, `-iquote`, `-isystem` and
-/// `-idirafter` in the recipe flags.
+/// `-idirafter` in the archive's flags.
 fn search_dirs(i: &Inputs<'_>, spec: &Spec<'_>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = spec
         .sources
@@ -279,7 +350,7 @@ fn search_dirs(i: &Inputs<'_>, spec: &Spec<'_>) -> Vec<PathBuf> {
         .collect();
     dirs.extend(spec.includes.iter().cloned());
     dirs.extend(i.recipe.include_dirs.iter().cloned());
-    dirs.extend(flag_dirs(&i.recipe.flags));
+    dirs.extend(flag_dirs(spec.flags));
     dirs.sort();
     dirs.dedup();
     dirs
@@ -304,7 +375,7 @@ fn flag_dirs(flags: &[String]) -> Vec<PathBuf> {
 }
 
 /// Hashes the sorted file names directly in `dir` (none when it cannot be listed).
-fn hash_listing(h: &mut KeyHasher, dir: &Path) {
+pub(crate) fn hash_listing(h: &mut KeyHasher, dir: &Path) {
     let mut names: Vec<_> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -330,19 +401,5 @@ mod tests {
             flag_dirs(&flags),
             ["/a", "/b", "/c", "/d"].map(PathBuf::from)
         );
-    }
-
-    #[test]
-    fn full_key_tracks_dependency_contents() {
-        let t = tempfile::tempdir().unwrap();
-        let h = t.path().join("k.h");
-        std::fs::write(&h, "#define K 1\n").unwrap();
-        let deps = [h.clone()];
-        let k1 = full_key("pre", &deps).unwrap();
-        assert_eq!(full_key("pre", &deps).unwrap(), k1);
-        std::fs::write(&h, "#define K 2\n").unwrap();
-        assert_ne!(full_key("pre", &deps).unwrap(), k1);
-        std::fs::remove_file(&h).unwrap();
-        assert_eq!(full_key("pre", &deps), None, "a vanished header is a miss");
     }
 }

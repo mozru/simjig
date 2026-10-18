@@ -223,7 +223,11 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
         throw std::runtime_error("simjig: probe '" + std::string{or_empty(display)} + "': " + why);
     };
     const VerilatedScope* s = ctx.scopeFind(scope_name.c_str());
-    if (s == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
+    // One diagnosis per case, the same as the build-time check's (syms.rs).
+    if (s == nullptr) {
+        fail("no public scope '" + scope_name + "' in the model: Verilator made nothing in it "
+             "public");
+    }
     const VerilatedVar* v = s->varFind(or_empty(var));
     if (v == nullptr) {
         fail("no public variable '" + std::string{or_empty(var)} + "' in scope '" + scope_name
@@ -247,12 +251,9 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
              + " bits wide, but it is bound as " + std::to_string(width) + " bits");
     }
     // verilated_sym_props.h: the storage class Verilator chose for the variable.
-    const VerilatedVarType expected = width <= 8    ? VLVT_UINT8
-                                      : width <= 16 ? VLVT_UINT16
-                                      : width <= 32 ? VLVT_UINT32
-                                      : width <= 64 ? VLVT_UINT64
-                                                    : VLVT_WDATA;
-    if (v->vltype() != expected) fail("the model's variable is not stored as a packed vector");
+    if (v->vltype() != vltype_for_width(width)) {
+        fail("the model's variable is not stored as a packed vector");
+    }
     if (v->datap() == nullptr) fail("the model's variable has no address");
     return v->datap();
 }

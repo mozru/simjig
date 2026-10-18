@@ -6,7 +6,7 @@ use simjig_build::{CppRecipe, Dut};
 use crate::support::{Sandbox, dut, logging_ccache};
 
 /// Every compile command of one build, as (source file, command line).
-fn compiles(log: &std::path::Path) -> Vec<(String, String)> {
+pub(crate) fn compiles(log: &std::path::Path) -> Vec<(String, String)> {
     let lines: Vec<String> = std::fs::read_dir(log)
         .unwrap()
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
@@ -323,4 +323,40 @@ fn a_new_compiler_version_recompiles_every_archive() {
             && upgraded.iter().any(|n| n.starts_with('V')),
         "{upgraded:?}"
     );
+}
+
+/// Recipe flags belong to the DUT: they reach the model's sources and not the shared
+/// Verilator runtime, so two DUTs with different flags still link one libverilated (two
+/// archives of it in one binary would define the same symbols).
+#[test]
+fn recipe_flags_reach_the_model_only() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    let mut env = s.env();
+    env.simjig_ccache = Some(ccache.into());
+    let mut prefixes = Vec::new();
+    for (name, value) in [("inv", 1), ("flop", 2)] {
+        let built = Dut::new(name)
+            .sources([dut(name).join(format!("{name}.sv"))])
+            .top(name)
+            .recipe(CppRecipe {
+                flags: vec![format!("-DSIMJIG_RECIPE_FLAG={value}")],
+                ..CppRecipe::default()
+            })
+            .build_in(&env)
+            .unwrap();
+        prefixes.push(built.prefix);
+    }
+    for (name, line) in compiles(&log) {
+        let model = prefixes.iter().any(|p| name.starts_with(p.as_str()));
+        assert_eq!(
+            line.contains("-DSIMJIG_RECIPE_FLAG="),
+            model,
+            "{name}: {line}"
+        );
+    }
+    let runtimes = std::fs::read_dir(s.path().join("cache/libverilated"))
+        .unwrap()
+        .count();
+    assert_eq!(runtimes, 1, "one shared libverilated");
 }

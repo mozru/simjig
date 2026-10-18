@@ -10,7 +10,7 @@ Agent `abi`, branch `w1/abi`. Checked against the installed Verilator 5.052 (con
 | `crates/simjig-build/cpp/simjig_vl_config.h` | Force-included into every C++ translation unit: `VL_USER_*`, `VL_TIME_CONTEXT`, `VL_PRINTF`. |
 | `crates/simjig-build/cpp/simjig_rt.{h,cpp}` | Hand-written runtime: hooks, message ring, exception barrier, model-independent entries. |
 | `crates/simjig-build/cpp/simjig_model.h` | `simjig::Vtable<Traits>`, `SIMJIG_SIGNAL`, `SIMJIG_EXPORT_VTABLE`: what the generator instantiates per model. |
-| `crates/simjig-build/cpp/spike/` | The unwinding spike: SV models, hand shim, C++ driver, `run.sh [asan\|ubsan]`. |
+| `crates/simjig-build/cpp/spike/` | Historical: the unwinding spike behind the results below (SV models, hand shim, C++ driver, `run.sh [asan\|ubsan]`). It prints and asserts nothing, so no gate runs it; the behaviours it showed are tested in `crates/simjig/tests/abi_counter.rs` (`fatal_*`, `error_*`, `stop_finish_and_display_are_reported`). Kept to rerun under sanitizers. |
 | `crates/simjig/src/model/abi.rs` | Rust mirror: `#[repr(C)]` structs, decoded enums, layout asserts, raw read/write. |
 | `crates/simjig/build.rs`, `tests/abi_counter.rs`, `tests/abi_counter/` | Integration test models (one plain, one `--timing`), the hand-written shim, 10 tests. |
 
@@ -107,7 +107,7 @@ Consequences:
 - A `vl_fatal` caller may be followed by `VL_UNREACHABLE` (for example `nullPointerError` and
   `didNotConverge`). Returning from `vl_fatal` is therefore UB, so it always throws.
 
-## Spike results (`pixi run bash crates/simjig-build/cpp/spike/run.sh`)
+## Spike results (`pixi run bash crates/simjig-build/cpp/spike/run.sh`, historical)
 | Case | Result |
 |---|---|
 | `$fatal`, plain model | **Unwinds cleanly.** FATAL plus the message, and the statements after `$fatal` do not run. The NBA update is abandoned (`cnt` stays 0). Afterwards eval/final return POISONED, and destroy works. |

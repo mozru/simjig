@@ -172,6 +172,7 @@ pub struct Type {
 /// The structure of a [`Type`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[non_exhaustive]
 pub enum TypeKind {
     /// An integral vector (`logic [7:0]`, `int`, `bit`).
     Bits {
@@ -256,7 +257,21 @@ pub struct Variant {
 }
 
 /// Whether a design unit is a module or an interface.
+///
+/// Like the IR's other enums that may grow, it is `#[non_exhaustive]`: a `match` outside
+/// `svtypes` needs a wildcard arm, so a new kind (a `program`, say) is not a breaking
+/// change.
+///
+/// ```compile_fail,E0004
+/// fn keyword(kind: svtypes::ir::ModuleKind) -> &'static str {
+///     match kind {
+///         svtypes::ir::ModuleKind::Module => "module",
+///         svtypes::ir::ModuleKind::Interface => "interface",
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ModuleKind {
     /// `module`.
     Module,
@@ -352,6 +367,7 @@ pub struct Variable {
 
 /// The kind of a [`Variable`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VariableKind {
     /// A port, net or variable: storage the simulation changes.
     Signal,
@@ -404,6 +420,7 @@ pub struct Param {
 
 /// The value of a parameter.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ParamValue {
     /// An integral value, as wide and as signed as the parameter's type.
     Bits(Literal),

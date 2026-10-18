@@ -4,6 +4,46 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Each DUT's shim is written to `OUT_DIR/simjig/<name>/<prefix>_shim.cpp` (it was
+  `OUT_DIR/simjig/<prefix>_shim.cpp`), and the shim of an earlier configuration is removed.
+  A model archive's key no longer lists the files in `OUT_DIR/simjig/` or in the cache, so
+  a rerun of the build script compiles only the models whose DUT changed (it compiled
+  every model after any DUT changed, and most of them on the first rerun after a cold
+  build). Every model archive is compiled again once.
+- The build script reruns when the C++ compiler changes in place: it emits
+  `cargo::rerun-if-changed` for the path `CXX` (or `cc`'s default) is found at, the
+  executable that resolves to, and the same for a compiler wrapper (`CXX="ccache c++"`).
+- Archive manifests (`manifests/<pre key>`) record each dependency's digest and file
+  status; a later build reads and hashes again only the files whose status (size,
+  modification and change times, inode, device) changed. Every archive is compiled again
+  once (`simjig-archive-deps-v2`).
+- The type IR of each DUT and the layout check's verdict are cached (`fronts/`,
+  `checks/` in the cache), keyed on the JSON pass's arguments and inputs and on every
+  file the model's verilation read: a rerun that changes nothing runs no JSON pass and
+  no layout check. A build script also locates Verilator, sets the C++ compiler up and
+  looks the Verilator runtime up once instead of once per DUT.
+- The build-time probe check reads each variable's `VLVT_*` type from the scope table: a
+  probe of a `real`, a `string` or another variable that is not stored as a packed vector
+  fails the build naming its type (it passed as one bit, and `create` refused it), and so
+  does a variable whose storage is not the one its width has.
+- Breaking: the public enums that may grow are `#[non_exhaustive]`, so a `match` on them
+  outside their crate needs a wildcard arm: `svtypes::ir::{TypeKind, VariableKind,
+  ParamValue, ModuleKind}`, `simjig_build::codegen::{ProbeType, SignalTarget, ItemKind,
+  RustType, ConstValue, DutField}`, `simjig_build::PortProblem` and
+  `cargo_simjig::doctor::{Check, Status, Format}`. The lowering reports an IR kind it
+  does not know as `codegen::Error::Unsupported`.
+- A probe path that ends at a generate-for iteration or an instance array element
+  (`top.g[0]`, `top.arr[1]`) says that it names a generate block or an instance array,
+  instead of "not a plain identifier".
+- A probe whose scope or variable Verilator did not make public gets the same diagnosis
+  at build time and at `create`: "no public scope `s` in the model: Verilator made nothing
+  in it public", or "no public variable `v` in scope `s` (a probe inside a hierarchical
+  block, `hier_block`, is in another model)". The build-time check gave the
+  hierarchical-block reason for a missing scope, where it cannot apply.
+- `CppRecipe::flags` reach the model's translation units only, no longer the shared
+  Verilator runtime: a DUT's flags compiled a libverilated of its own, and two in one
+  binary define the same symbols. Flags that must reach every translation unit (ABI
+  switches such as `-D_GLIBCXX_DEBUG`, `-stdlib=`, `-fsanitize=`) belong in `CXXFLAGS`.
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;
@@ -23,14 +63,13 @@ the public API, the generated code or simulation semantics.
   Every IR hash, and so every generated `IR_HASH`/`kIrHash`, changes once.
 - Probe paths may go through generate blocks (`top.g_x.u.x`, `top.genblk2.u.x`,
   `top.g[0].u.x`); naming a generate-for loop without an index, or an instance array, is
-  a `codegen::Error::Config` that names the fix.
+  a `codegen::Error::Probe` that names the fix.
 - A probe whose module is a typo names the closest module ("did you mean `core`?"), and a
   probe path that ends at an instance or generate block says that it must end at a
   variable.
 - `codegen::Error::Probe { path, reason }` (new variant) carries every probe mistake the
   lowering finds; `Dut::build` reports it as `Error::Config` ("probe `p` (declared in
-  build.rs): ..."), the same headline as the probe checks against the scope table, where
-  it used to be `Error::Codegen`.
+  build.rs): ..."), the same headline as the probe checks against the scope table.
 - Model and runtime archives are keyed in two steps, like the Verilator cache: every
   compile runs with `-MD`, and the key covers every file the compiler read (a header next
   to a recipe source, in an include directory or `-I` flag, or in the toolchain), plus
@@ -53,7 +92,7 @@ the public API, the generated code or simulation semantics.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are
-  `codegen::Error::Config` errors, so the build fails before verilating.
+  `codegen::Error::Probe` errors, so the build fails before verilating.
 - C ABI runtime: `create` refuses a probe bound for writing when its variable is a
   parameter (constant storage) or only `public_flat_rd` (`EXCEPTION`, model poisoned).
 - After verilating, the build checks each probe the shim binds against Verilator's scope

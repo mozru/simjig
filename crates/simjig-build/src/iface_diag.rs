@@ -128,9 +128,7 @@ pub(crate) fn binding_mistakes(config: &DutConfig, e: &svtypes::error::Error) ->
     for diag in stderr.lines() {
         let line = if let Some(pin) = quoted_after(diag, PIN_NOT_FOUND) {
             call(pin).map(|_| {
-                let hint = crate::codegen::closest(pin, missing.iter().copied())
-                    .map(|c| format!("; did you mean `{c}`?"))
-                    .unwrap_or_default();
+                let hint = crate::codegen::did_you_mean(pin, missing.iter().copied());
                 format!("no interface port `{pin}` on `{top}`{hint}")
             })
         } else if let Some(name) = quoted_after(diag, NO_INTERFACE) {

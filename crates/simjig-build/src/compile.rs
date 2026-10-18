@@ -8,7 +8,7 @@
 //!
 //! Libraries, in link order:
 //! 1. **the model**: the generated classes from `<prefix>_classes.mk`, the emitted shim
-//!    and [`CppRecipe::model_sources`]. Its `VM_*` defines are the model's own switches
+//!    and [`CppRecipe::model_sources`], with [`CppRecipe::flags`]. Its `VM_*` defines are the model's own switches
 //!    from `_classes.mk`, exactly as `verilated.mk` passes them. Cached in the shared
 //!    cache like the runtime (`archives/<key>/`), keyed on the Verilator output directory
 //!    (content-addressed), the shim's and recipe sources' contents, every header they
@@ -42,11 +42,13 @@
 //! Every archive is keyed on its sources and every file the compiler read for them, so a
 //! header edit anywhere (next to a recipe source, in an include directory, in the
 //! toolchain) compiles it again (see `archive`). The build script reruns on those files
-//! too, except the ones under the cache and `OUT_DIR`, which derive from tracked inputs.
+//! too, except the ones under the cache and `OUT_DIR`, which derive from tracked inputs,
+//! and on the compiler's executable (`archive::compiler_files`).
 //!
 //! ccache is used when available (see [`ccache_compiler`]).
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use crate::archive::{self, Archive, Spec, Toolchain};
 use crate::cache::Cache;
@@ -70,7 +72,16 @@ pub struct CppRecipe {
     pub model_sources: Vec<PathBuf>,
     /// Extra include directories for every translation unit.
     pub include_dirs: Vec<PathBuf>,
-    /// Extra compiler flags for every translation unit.
+    /// Extra compiler flags for the model's translation units: the generated classes, the
+    /// shim and [`CppRecipe::model_sources`].
+    ///
+    /// Not for the Verilator runtime, which every model of a configuration shares: a
+    /// DUT's flag there would compile a runtime of its own, and two in one binary define
+    /// the same symbols. A flag that must reach every translation unit, the runtime
+    /// included, is one that changes how code links or lays out the standard library
+    /// (`-D_GLIBCXX_DEBUG`, `-D_LIBCPP_ABI_*`, `-stdlib=`, `-fsanitize=`, `-m*` and
+    /// `--target` switches); set it in `CXXFLAGS`, which reaches every translation unit of
+    /// every DUT and reruns the build script when it changes.
     pub flags: Vec<String>,
 }
 
@@ -261,20 +272,7 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
 
     let mut model_defines = mk.defines();
     model_defines.extend(i.recipe.defines.iter().cloned());
-    let mut model_sources: Vec<PathBuf> = mk
-        .model
-        .iter()
-        .map(|c| i.obj_dir.join(format!("{c}.cpp")))
-        .collect();
-    model_sources.extend(i.model_sources.iter().cloned());
-    model_sources.extend(i.recipe.model_sources.iter().cloned());
-    let model = tc.cached_archive(&Spec {
-        kind: "archives",
-        what: &format!("model_{}", i.prefix),
-        sources: &model_sources,
-        defines: &model_defines,
-        includes: &[i.obj_dir.to_path_buf()],
-    })?;
+    let model = model_archive(&tc, &mk, &model_defines)?;
 
     let natives = native_libs(i.env, &mk);
     let mut extras = Vec::new();
@@ -287,6 +285,7 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
             sources: &[src],
             defines: &model_defines,
             includes: &includes,
+            flags: &[],
         })?);
     }
 
@@ -310,7 +309,37 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     d.extend(stdlib.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
     d.extend(link_args(&archives, &natives, stdlib.as_deref()));
     d.extend(rerun_on_deps(i, &archives));
+    d.extend(
+        archive::compiler_files(i.env, &compiler)
+            .into_iter()
+            .map(|p| format!("cargo::rerun-if-changed={}", p.display())),
+    );
     Ok(d)
+}
+
+/// The model's archive: its generated classes, the shim and the recipe's model sources,
+/// with the recipe's flags (see the module docs).
+fn model_archive(
+    tc: &Toolchain<'_>,
+    mk: &ClassesMk,
+    defines: &[(String, Option<String>)],
+) -> Result<Archive, Error> {
+    let i = tc.i;
+    let mut sources: Vec<PathBuf> = mk
+        .model
+        .iter()
+        .map(|c| i.obj_dir.join(format!("{c}.cpp")))
+        .collect();
+    sources.extend(i.model_sources.iter().cloned());
+    sources.extend(i.recipe.model_sources.iter().cloned());
+    tc.cached_archive(&Spec {
+        kind: "archives",
+        what: &format!("model_{}", i.prefix),
+        sources: &sources,
+        defines,
+        includes: &[i.obj_dir.to_path_buf()],
+        flags: &i.recipe.flags,
+    })
 }
 
 /// The shared libverilated, with its fixed switches (see the module docs).
@@ -333,6 +362,7 @@ fn shared_runtime(tc: &Toolchain<'_>, runtime: &Runtime) -> Result<Archive, Erro
         sources: &sources,
         defines: &defines,
         includes: &[],
+        flags: &[],
     })
 }
 
@@ -384,7 +414,7 @@ fn link_args(archives: &[&Archive], natives: &[NativeLib], stdlib: Option<&str>)
 /// compiler (before any ccache wrapping), which identifies the toolchain in cache keys.
 fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool), Error> {
     let env = i.env;
-    let mut b = cc::Build::new();
+    let mut b = seed(env);
     b.cpp(true)
         .std(CXX_STD)
         .target(&env.target)
@@ -403,8 +433,7 @@ fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool)
         .include(runtime.dir())
         .include(&i.verilator.include_dir)
         .include(i.verilator.include_dir.join("vltstd"))
-        .includes(&i.recipe.include_dirs)
-        .flags(&i.recipe.flags);
+        .includes(&i.recipe.include_dirs);
     let compiler = b.try_get_compiler().map_err(|source| Error::Compile {
         what: "the model (finding the C++ compiler)".to_owned(),
         source,
@@ -413,6 +442,22 @@ fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool)
         b.compiler(wrapper);
     }
     Ok((b, compiler))
+}
+
+/// A fresh `cc::Build` for the build script of `env` (its `OUT_DIR`). Every one is a clone
+/// of the first, so they share `cc`'s cache of what it found out about the compiler (its
+/// kind, the flags it accepts, the SDK): `cc` otherwise runs the compiler again to ask,
+/// for every DUT.
+fn seed(env: &BuildEnv) -> cc::Build {
+    static SEEDS: Mutex<Vec<(PathBuf, cc::Build)>> = Mutex::new(Vec::new());
+    // A panic while holding the lock leaves the list itself consistent.
+    let mut seeds = SEEDS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, b)) = seeds.iter().find(|(out, _)| *out == env.out_dir) {
+        return b.clone();
+    }
+    let b = cc::Build::new();
+    seeds.push((env.out_dir.clone(), b.clone()));
+    b
 }
 
 /// A native library a runtime extra links against.

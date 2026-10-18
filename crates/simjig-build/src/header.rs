@@ -170,6 +170,7 @@ fn parse_dpi_exports(text: &str) -> Vec<String> {
 
 /// One disagreement between the header and the expected ports.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PortProblem {
     /// Expected, but the header has no such port.
     Missing(HeaderPort),

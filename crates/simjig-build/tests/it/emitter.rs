@@ -64,7 +64,7 @@ fn generated_files_reach_out_dir_verilator_and_the_compiler() {
     );
     let shim = env
         .out_dir
-        .join(format!("simjig/{}_shim.cpp", built.prefix));
+        .join(format!("simjig/struct_pipe/{}_shim.cpp", built.prefix));
     let shim = std::fs::read_to_string(shim).unwrap();
     // The probe is found at create in the scope table that the `.vlt` fills.
     assert!(

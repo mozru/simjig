@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `examples/lib` uses the lib-target layout too: `src/lib.rs` re-exports the prelude (and
+  `In`, `Out`), includes every DUT and holds `assert_param_checks` (from
+  `tests/common/mod.rs`, removed); each test file starts with `use
+  simjig_examples_lib::*;`. Both examples list their own lint tables, which `xtask`'s
+  `example_lints_mirror_the_workspace` keeps equal to the workspace's but for
+  `unwrap_used`, `expect_used` and `missing_docs`.
 - `examples/quickstart` uses the recommended lib-target layout: `src/lib.rs` has `pub use
   simjig::prelude::*;`, the `include_dut!`s and a shared `reset`, and each test file
   starts with `use quickstart::*;`. It depends on `simjig` only (`simjig::bits`, no

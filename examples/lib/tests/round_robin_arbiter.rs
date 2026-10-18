@@ -15,13 +15,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simjig::{Rng, TestCtx, clock, cycles, ns, spawn};
-
-mod common;
-
-simjig::include_dut!(round_robin_arbiter);
-
 use round_robin_arbiter::Dut;
+use simjig_examples_lib::*;
 
 /// The number of requesters the build script chose (`.param("N", 5)`).
 const N: usize = Dut::N as usize;
@@ -313,7 +308,7 @@ fn parameters_are_checked_at_elaboration() {
     let src = &["rtl/round_robin_arbiter.sv"];
     let good: &[&[&str]] = &[&["N=2"], &["N=7"], &["N=32"]];
     let bad: &[&[&str]] = &[&["N=0"], &["N=1"]];
-    common::assert_param_checks(
+    assert_param_checks(
         "round_robin_arbiter",
         src,
         good,

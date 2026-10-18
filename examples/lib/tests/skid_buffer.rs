@@ -8,22 +8,12 @@
 //! keeps the beats in flight: each beat taken on `up` must leave on `down` exactly once, in
 //! order, and never more than two at a time (the buffer's two registers). A reset edge
 //! empties the board, so a test may reset mid-run.
-#![expect(
-    clippy::unwrap_used,
-    reason = "test helpers outside #[test] functions: a panic is the test failure"
-)]
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use simjig::bits::{Bit, Bits};
-use simjig::{ReadOnly, Rng, TestCtx, Timer, clock, cycles, ns, spawn, us, with_timeout};
-
-mod common;
-
-simjig::include_dut!(skid_buffer);
-
+use simjig_examples_lib::*;
 use skid_buffer::Dut;
 
 /// One beat of the 16-bit stream.
@@ -383,7 +373,7 @@ fn parameters_are_checked_at_elaboration() {
     let src = &["rtl/stream_if.sv", "rtl/skid_buffer.sv"];
     // As a top, the module's interface ports get `stream_if` instances with WIDTH = 8.
     let good: &[&[&str]] = &[&[], &["WIDTH=8"]];
-    common::assert_param_checks(
+    assert_param_checks(
         "skid_buffer",
         src,
         good,
@@ -391,5 +381,5 @@ fn parameters_are_checked_at_elaboration() {
         "WIDTH must be at least 1",
     );
     let bad: &[&[&str]] = &[&["WIDTH=16"]];
-    common::assert_param_checks("skid_buffer", src, &[], bad, "but up.data has 8 bits");
+    assert_param_checks("skid_buffer", src, &[], bad, "but up.data has 8 bits");
 }

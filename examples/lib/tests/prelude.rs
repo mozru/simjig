@@ -2,9 +2,7 @@
 //! resolves without an ambiguity error (E0659). `Value`, `Vector` and `Packed` come in
 //! through both globs as the same items; this file fails to compile if they ever differ.
 
-use simjig::prelude::*;
-
-simjig::include_dut!(hop_stage);
+use simjig_examples_lib::*; // `pub use simjig::prelude::*;` and the DUT modules
 
 use hop_stage::*;
 

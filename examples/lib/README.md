@@ -13,7 +13,8 @@ pixi run cargo simjig show sync_fifo -p simjig-examples-lib   # a DUT's generate
 |---|---|
 | `rtl/` | the modules, lint-clean under Verilator `-Wall` |
 | `build.rs` | one function per module, each building that module's DUTs (every one with `-Wall` and FST tracing, for waves on failure) |
-| `tests/<module>.rs` | one test binary per module |
+| `src/lib.rs` | the testbench library: `pub use simjig::prelude::*;`, every `simjig::include_dut!`, and `assert_param_checks` |
+| `tests/<module>.rs` | one test binary per module, starting with `use simjig_examples_lib::*;` |
 
 ## The testbench shape
 

@@ -6,13 +6,9 @@
 //! (`beat.data()`, `down_data`) are one type, `D::DownData`. The glob import is the body's only one for the sweep: it
 //! brings the sweep's traits and the runtime's `Value`, `Vector` and `Packed`.
 
-use simjig::{ReadOnly, clock, ns};
+use simjig_examples_lib::*;
 
-mod common;
-
-simjig::include_dut!(hop_stage); // the sweep: hop_stage::{Ports, BeatFields, hop_8x2, hop_32x4}
-
-use hop_stage::*;
+use hop_stage::*; // the sweep: Ports, BeatFields, hop_8x2, hop_32x4
 
 /// A beat crosses the stage in one cycle with its hop count incremented, wrapping at the
 /// tag's width, in both configurations (the top README's "A parameter sweep").
@@ -48,7 +44,7 @@ fn parameters_are_checked_at_elaboration() {
     let src = &["rtl/tagged_if.sv", "rtl/hop_stage.sv"];
     let good: &[&[&str]] = &[&[], &["WIDTH=8", "TAG_W=2"]];
     let bad: &[&[&str]] = &[&["TAG_W=3"], &["WIDTH=16"]];
-    common::assert_param_checks(
+    assert_param_checks(
         "hop_stage",
         src,
         good,

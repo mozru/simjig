@@ -15,25 +15,14 @@
 //! - **Stimulus.** A producer and a consumer task draw from their own seeded streams
 //!   (`ctx.rng("producer")`), so the consumer's backpressure and the producer's bursts are
 //!   independent and replay exactly from the report's seed.
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test helpers outside #[test] functions: a panic is the test failure"
-)]
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use simjig::bits::{Bit, Bits, Packed};
-use simjig::{In, Out, ReadOnly, Rng, TestCtx, Value, Vector, with_timeout};
-use simjig::{clock, cycles, fork, ns, spawn, us};
-
-mod common;
-
-simjig::include_dut!(sync_fifo); // the sweep: sync_fifo::{Ports, fifo_8x4, fifo_32x16}
-simjig::include_dut!(item_fifo);
+use simjig::fork;
+use simjig_examples_lib::*;
 
 use item_fifo::{Item, Kind};
 use sync_fifo::*; // `Ports` and the configurations' modules
@@ -703,7 +692,7 @@ fn parameters_are_checked_at_elaboration() {
     let src = &["rtl/sync_fifo.sv"];
     let good: &[&[&str]] = &[&["DEPTH=2"], &["DEPTH=16", "WIDTH=33", "FWFT=1"]];
     let bad_depth: &[&[&str]] = &[&["DEPTH=1"], &["DEPTH=6"]];
-    common::assert_param_checks(
+    assert_param_checks(
         "sync_fifo",
         src,
         good,
@@ -711,7 +700,7 @@ fn parameters_are_checked_at_elaboration() {
         "DEPTH must be a power of two",
     );
     let bad_width: &[&[&str]] = &[&["WIDTH=0"]];
-    common::assert_param_checks("sync_fifo", src, &[], bad_width, "WIDTH must be at least 1");
+    assert_param_checks("sync_fifo", src, &[], bad_width, "WIDTH must be at least 1");
 }
 
 /// The top README's "A parameter sweep" shows this crate's code: each of its Rust blocks

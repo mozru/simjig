@@ -32,17 +32,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use simjig::bits::{Bit, Bits};
-use simjig::{
-    In, Out, Queue, ReadOnly, Rng, SimDuration, TestCtx, Timer, clock, cycles, join, ns, ps, spawn,
-    us, with_timeout,
-};
-
-mod common;
-
-simjig::include_dut!(async_fifo);
-
 use async_fifo::Dut;
+use simjig::SimDuration;
+use simjig_examples_lib::*;
 
 /// The FIFO's depth, from the build script (`.param("DEPTH", 8)`).
 const DEPTH: usize = Dut::DEPTH as usize;
@@ -571,7 +563,7 @@ fn parameters_are_checked_at_elaboration() {
     let src = &["rtl/async_fifo.sv"];
     let good: &[&[&str]] = &[&["DEPTH=2"], &["DEPTH=64", "WIDTH=1"]];
     let bad_depth: &[&[&str]] = &[&["DEPTH=1"], &["DEPTH=12"]];
-    common::assert_param_checks(
+    assert_param_checks(
         "async_fifo",
         src,
         good,
@@ -579,7 +571,7 @@ fn parameters_are_checked_at_elaboration() {
         "DEPTH must be a power of 2",
     );
     let bad_width: &[&[&str]] = &[&["WIDTH=0"]];
-    common::assert_param_checks(
+    assert_param_checks(
         "async_fifo",
         src,
         &[],

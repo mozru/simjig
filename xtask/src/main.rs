@@ -226,4 +226,43 @@ mod tests {
             .collect();
         assert!(lax.is_empty(), "unsafe_code not denied in {lax:?}");
     }
+
+    /// The `key = value` lines of the TOML table `[name]` in `text`, comments dropped.
+    fn table(text: &str, name: &str) -> std::collections::BTreeMap<String, String> {
+        let header = format!("\n[{name}]\n");
+        let Some((_, rest)) = text.split_once(&header) else {
+            return std::collections::BTreeMap::new();
+        };
+        rest.lines()
+            .take_while(|l| !l.starts_with('['))
+            .filter_map(|l| l.split_once(" = "))
+            .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+            .collect()
+    }
+
+    /// An example crate's own `[lints.*]` tables are the workspace's, except that tests
+    /// may unwrap and need no docs (Cargo cannot extend `workspace = true` locally).
+    #[test]
+    fn example_lints_mirror_the_workspace() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let relaxed = ["missing_docs", "unwrap_used", "expect_used"];
+        let mut checked = 0;
+        for example in std::fs::read_dir(root.join("examples")).unwrap() {
+            let manifest = example.unwrap().path().join("Cargo.toml");
+            let text = std::fs::read_to_string(&manifest).unwrap();
+            for kind in ["rust", "clippy", "rustdoc"] {
+                let mut want = table(&workspace, &format!("workspace.lints.{kind}"));
+                for (key, level) in &mut want {
+                    if relaxed.contains(&key.as_str()) {
+                        "\"allow\"".clone_into(level);
+                    }
+                }
+                let have = table(&text, &format!("lints.{kind}"));
+                assert_eq!(have, want, "{} [lints.{kind}]", manifest.display());
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "no example checked");
+    }
 }

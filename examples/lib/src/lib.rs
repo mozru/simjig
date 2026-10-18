@@ -1,12 +1,24 @@
-//! Helpers shared by this crate's test binaries (each `tests/<module>.rs` includes this
-//! module with `mod common;`).
+//! The testbench library of this crate's tests: each `tests/<module>.rs` starts with
+//! `use simjig_examples_lib::*;`, which brings the simjig prelude, every DUT module the
+//! build script made, the handle types `In` and `Out` that the tests' helpers take, and
+//! [`assert_param_checks`].
 //!
-//! [`assert_param_checks`] runs Verilator's elaboration on a module with chosen parameters, outside any
-//! model: each module's parameter checks (`$fatal` in a generate block, IEEE 1800-2023
-//! §20.11) stop elaboration, which Verilator 5.052 reports as a `USERFATAL` warning that
-//! fails the run (warnings are fatal without `-Wno-fatal`).
+//! [`assert_param_checks`] runs Verilator's elaboration on a module with chosen
+//! parameters, outside any model: each module's parameter checks (`$fatal` in a generate
+//! block, IEEE 1800-2023 §20.11) stop elaboration, which Verilator 5.052 reports as a
+//! `USERFATAL` warning that fails the run (warnings are fatal without `-Wno-fatal`).
 
 use std::process::Command;
+
+pub use simjig::prelude::*;
+pub use simjig::{In, Out};
+
+simjig::include_dut!(sync_fifo); // the sweep: sync_fifo::{Ports, fifo_8x4, fifo_32x16}
+simjig::include_dut!(item_fifo);
+simjig::include_dut!(skid_buffer);
+simjig::include_dut!(round_robin_arbiter);
+simjig::include_dut!(async_fifo);
+simjig::include_dut!(hop_stage); // the sweep: hop_stage::{Ports, BeatFields, hop_8x2, hop_32x4}
 
 /// What `verilator --lint-only -Wall` said about one parameter set.
 #[derive(Debug)]
@@ -17,10 +29,6 @@ struct Lint {
 
 /// Lints `top` from `sources` (paths relative to this crate's root) with `-G` overrides
 /// `params` (such as `"DEPTH=6"`). Needs `verilator` on `PATH`: run under `pixi run`.
-#[expect(
-    clippy::expect_used,
-    reason = "a test helper: a panic is the test failure"
-)]
 fn lint(top: &str, sources: &[&str], params: &[&str]) -> Lint {
     let root = env!("CARGO_MANIFEST_DIR");
     let out = Command::new("verilator")
@@ -41,7 +49,7 @@ fn lint(top: &str, sources: &[&str], params: &[&str]) -> Lint {
 /// # Panics
 /// On the first parameter set that does otherwise.
 #[track_caller]
-pub(crate) fn assert_param_checks(
+pub fn assert_param_checks(
     top: &str,
     sources: &[&str],
     good: &[&[&str]],

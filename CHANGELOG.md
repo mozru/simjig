@@ -32,6 +32,13 @@ the public API, the generated code or simulation semantics.
   1800-2017 §25.5), so the shared name is only a heuristic, and a module may read a
   wider interface through its port. This changes the generated wrapper of a DUT that
   relied on the interface's default.
+- A build warns when the DUT module and a bound interface both declare a parameter,
+  neither the binding nor a `.param` sets it, and their values differ (`up16`'s `WIDTH`
+  defaults to 16, `bus_if`'s to 8): ``simjig: DUT `up16_unset`: module `up16` has
+  `WIDTH` = 16 but interface `bus_if` (bound to `up`) has `WIDTH` = 8, and neither is
+  set; ..``, naming the `.bind_iface_with_params(..)` that settles it. Under
+  `-Wno-fatal` such a DUT built silently with a port of the wrong width. Setting either
+  side explicitly silences it.
 - A misspelled interface parameter in `bind_iface_with_params("up", "acc_if.sink",
   [("WW", 12)])` fails like a misspelled `.param`: ``interface `acc_if` (bound to `up`)
   has no parameter `WW`; did you mean `W`? (it has W)``, instead of Verilator's

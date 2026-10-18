@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use svtypes::ir::{Design, Module, VariableKind};
+use svtypes::ir::{Design, Module, ParamValue, VariableKind};
 
 use crate::cache::Cache;
 use crate::codegen;
@@ -119,7 +119,8 @@ pub(crate) fn design_ir(
 /// assignments, so nothing in the design says that a module's `W` and its interface
 /// port's `W` are one quantity; the shared name is only a heuristic. A module may read a
 /// wider interface's width through the port (`out.W`), and the binding is then the
-/// user's only say.
+/// user's only say. Where the heuristic leaves the two apart, [`iface_param_warnings`]
+/// says so.
 fn elaborate(
     iface: &mut codegen::IfaceTop,
     cache: &Cache,
@@ -179,6 +180,85 @@ fn tie_iface_params(design: &Design, iface: &mut codegen::IfaceTop) -> bool {
 fn declares(unit: &Module, name: &str) -> bool {
     unit.params.iter().any(|p| p.name == name)
         || unit.unrepresentable.iter().any(|p| p.name == name)
+}
+
+/// The `cargo::warning`s for a parameter that the DUT module and a bound interface both
+/// declare, that neither the binding nor a [`crate::Dut::param`] sets, and whose
+/// elaborated values differ in `design` (for example, two different defaults). Under
+/// `-Wno-fatal` such a pair builds silently, with a port of the wrong width extended or
+/// truncated (checked against 5.052); the name tie of [`elaborate`] cannot settle it,
+/// because it applies only to a `.param`. An explicit value on either side silences it.
+///
+/// Read from the IR the emitter sees, so a build whose IR came from the cache warns too.
+pub(crate) fn iface_param_warnings(config: &DutConfig, design: &Design) -> Vec<String> {
+    let Some(iface) = config.iface_top() else {
+        return Vec::new();
+    };
+    let Some(dut) = dut_in(design, &iface) else {
+        return Vec::new();
+    };
+    let value = |unit: &Module, name: &str| {
+        unit.params
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| shown(&p.value))
+    };
+    let set = |params: &[(String, String)], name: &str| params.iter().any(|(n, _)| n == name);
+    let mut lines = Vec::new();
+    for b in &iface.bindings {
+        let Some(unit) = bound(design, dut, &b.port) else {
+            continue;
+        };
+        for p in &dut.params {
+            if set(&iface.params, &p.name) || set(&b.params, &p.name) {
+                continue;
+            }
+            let (Some(ours), Some(theirs)) = (value(dut, &p.name), value(unit, &p.name)) else {
+                continue;
+            };
+            if ours != theirs {
+                lines.push(iface_param_warning(config, b, &p.name, &ours, &theirs));
+            }
+        }
+    }
+    lines
+}
+
+/// One line of [`iface_param_warnings`].
+fn iface_param_warning(
+    config: &DutConfig,
+    b: &codegen::IfaceBinding,
+    name: &str,
+    ours: &str,
+    theirs: &str,
+) -> String {
+    let spec = match &b.modport {
+        Some(m) => format!("{}.{m}", b.interface),
+        None => b.interface.clone(),
+    };
+    format!(
+        "cargo::warning=simjig: DUT `{dut}`: module `{module}` has `{name}` = {ours} but \
+         interface `{iface}` (bound to `{port}`) has `{name}` = {theirs}, and neither is \
+         set; simjig ties a `.param` to a same-named interface parameter only by name, a \
+         heuristic (interface ports carry no parameters, IEEE 1800-2017 §25.5). If they \
+         are one quantity, set it with `.bind_iface_with_params(\"{port}\", \"{spec}\", \
+         [(\"{name}\", {ours})])` or `.param(\"{name}\", {ours})`, which reaches both; \
+         setting either explicitly silences this",
+        dut = config.name,
+        module = config.top.as_deref().unwrap_or_default(),
+        iface = b.interface,
+        port = b.port,
+    )
+}
+
+/// A parameter value as the user wrote it: an integral one in decimal.
+fn shown(value: &ParamValue) -> String {
+    match value {
+        ParamValue::Bits(l) => l.to_u64().map_or_else(|| l.to_string(), |v| v.to_string()),
+        ParamValue::String(text) => format!("{text:?}"),
+        ParamValue::Real(text) => text.clone(),
+        other => format!("{other:?}"),
+    }
 }
 
 /// Verilator's diagnostics for a parameter override the design does not have (5.052): a

@@ -409,3 +409,85 @@ fn an_explicit_interface_param_is_not_refused_by_name() {
         explicit.unwrap_err()
     );
 }
+
+/// The `simjig:` warnings among a build's directives.
+fn simjig_warnings(b: &simjig_build::Built) -> Vec<&str> {
+    b.directives
+        .iter()
+        .filter_map(|d| d.strip_prefix("cargo::warning=simjig: "))
+        .collect()
+}
+
+/// A module whose `WIDTH` defaults to 16, bound to an interface whose `WIDTH` defaults
+/// to 8: the shape that builds silently with the wrong widths under `-Wno-fatal`.
+fn up16(s: &Sandbox, name: &str) -> Dut {
+    let rtl = s.path().join("up16");
+    std::fs::create_dir_all(&rtl).unwrap();
+    std::fs::write(
+        rtl.join("up16.sv"),
+        "interface bus_if #(parameter int WIDTH = 8);\n  logic [WIDTH-1:0] d;\n  \
+         modport sink(input d);\nendinterface\n\
+         module up16 #(parameter int WIDTH = 16)(bus_if.sink up, \
+         output logic [WIDTH-1:0] q);\n  assign q = up.d;\nendmodule\n",
+    )
+    .unwrap();
+    Dut::new(name)
+        .sources([rtl.join("up16.sv")])
+        .top("up16")
+        .verilator_args(["-Wno-fatal"])
+}
+
+/// When neither side sets a parameter that both declare and their values differ, the
+/// build warns, naming both values and the call that settles it; a cached rerun warns
+/// again (the warning is read from the IR, which the front-end cache keeps).
+#[test]
+fn differing_interface_parameter_defaults_warn() {
+    let s = Sandbox::new();
+    let expected = "DUT `up16_unset`: module `up16` has `WIDTH` = 16 but interface `bus_if` \
+         (bound to `up`) has `WIDTH` = 8, and neither is set; simjig ties a `.param` to a \
+         same-named interface parameter only by name, a heuristic (interface ports carry \
+         no parameters, IEEE 1800-2017 §25.5). If they are one quantity, set it with \
+         `.bind_iface_with_params(\"up\", \"bus_if.sink\", [(\"WIDTH\", 16)])` or \
+         `.param(\"WIDTH\", 16)`, which reaches both; setting either explicitly silences \
+         this";
+    for _ in 0..2 {
+        let built = up16(&s, "up16_unset")
+            .bind_iface("up", "bus_if.sink")
+            .build_in(&s.env())
+            .unwrap();
+        assert_eq!(simjig_warnings(&built), [expected]);
+    }
+    // Equal defaults are not a mismatch.
+    let same = acc(&s, "acc_defaults", true)
+        .bind_iface("up", "acc_if.sink")
+        .build_in(&s.env())
+        .unwrap();
+    assert_eq!(simjig_warnings(&same), Vec::<&str>::new());
+}
+
+/// An explicit value on either side silences the warning: a `.param` (which the
+/// binding then takes), or a binding value, even one that leaves the two apart.
+#[test]
+fn an_explicit_interface_parameter_silences_the_warning() {
+    let s = Sandbox::new();
+    let cases = [
+        (
+            "up16_param",
+            up16(&s, "up16_param")
+                .param("WIDTH", 16)
+                .bind_iface("up", "bus_if.sink"),
+        ),
+        (
+            "up16_bound",
+            up16(&s, "up16_bound").bind_iface_with_params("up", "bus_if.sink", [("WIDTH", 16)]),
+        ),
+        (
+            "up16_apart",
+            up16(&s, "up16_apart").bind_iface_with_params("up", "bus_if.sink", [("WIDTH", 8)]),
+        ),
+    ];
+    for (name, dut) in cases {
+        let built = dut.build_in(&s.env()).unwrap();
+        assert_eq!(simjig_warnings(&built), Vec::<&str>::new(), "{name}");
+    }
+}

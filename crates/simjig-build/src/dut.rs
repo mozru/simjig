@@ -953,7 +953,7 @@ impl Dut {
         let top = self.config.validate()?;
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
-        let (front, ir, placed) = self.front_end(env, &cache, &verilator, top)?;
+        let (front, ir, placed, mut warnings) = self.front_end(env, &cache, &verilator, top)?;
         // After the front end's checks (the JSON pass, `dpi_in_c`, the emitters, the
         // layout check): a build they fail leaves no claim in the shared cache.
         pipeline::claim_prefix(&cache, &self.config, &prefix)?;
@@ -970,7 +970,7 @@ impl Dut {
             &self.config.include_dirs,
             &env.out_dir,
         )?;
-        let mut warnings: Vec<String> = env.unshared_cache_warning().into_iter().collect();
+        warnings.extend(env.unshared_cache_warning());
         warnings.extend(
             model
                 .changed
@@ -1051,14 +1051,15 @@ fn check_dpi_header(imports: &[DpiImport], obj_dir: &Path, prefix: &str) -> Resu
 
 impl Dut {
     /// The IR (cached or from the JSON pass), the emitted files placed, and the layout
-    /// check run unless it passed for this IR before.
+    /// check run unless it passed for this IR before; with the IR's warnings
+    /// ([`pipeline::iface_param_warnings`]), given on a cached IR too.
     fn front_end(
         &self,
         env: &BuildEnv,
         cache: &cache::Cache,
         verilator: &Verilator,
         top: &str,
-    ) -> Result<(Front, pipeline::Ir, emit::Placed), Error> {
+    ) -> Result<(Front, pipeline::Ir, emit::Placed, Vec<String>), Error> {
         let sv_inputs = self
             .config
             .sv_inputs()
@@ -1076,7 +1077,8 @@ impl Dut {
         {
             pipeline::layout_check(&self.config, &sv_inputs, verilator, cache, check)?;
         }
-        Ok((front, ir, placed))
+        let warnings = pipeline::iface_param_warnings(&self.config, &ir.design);
+        Ok((front, ir, placed, warnings))
     }
 }
 
@@ -1644,7 +1646,10 @@ mod tests {
     #[test]
     fn the_dashless_no_forms_are_seen() {
         for arg in ["--notiming", "-notiming", "--notrace"] {
-            assert!(with_args(&[arg]).validate().is_err(), "{arg} is not refused");
+            assert!(
+                with_args(&[arg]).validate().is_err(),
+                "{arg} is not refused"
+            );
         }
         assert!(
             !with_args(&["--coverage-line", "--nocoverage-line"])

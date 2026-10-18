@@ -127,6 +127,8 @@ an `In<Bit>` the testbench writes, `dut.up.ready` an `Out<Bit>` it reads.
 | `random_valid_and_ready_lose_nothing` | 1000 beats with random `valid` (held until taken) and bursty random `ready`: no loss, no duplicate, order kept, `down` stable while stalled, at most two beats inside, and both sides saw backpressure |
 | `full_throughput_while_ready_is_high` | with `ready` high and a beat every cycle, `up.ready` never drops and the beats leave on consecutive edges |
 | `a_stall_fills_the_skid_then_drains_in_order` | `up.ready` drops only once both registers hold a beat, and returns two edges after the release |
+| `a_reset_with_the_skid_full_empties_both_registers` | after random traffic, both registers full and `up` offering a third beat: one `rst` edge leaves `down.valid` low and `up.ready` high; the board restarts empty and random traffic flows again |
+| `outputs_do_not_follow_inputs_within_a_cycle` | with the skid empty and full, toggling `down.ready`, `up.valid` and `up.data` mid-cycle leaves `up.ready`, `down.valid` and `down.data` unchanged (read in `ReadOnly`): no combinational path |
 | `parameters_are_checked_at_elaboration` | `$fatal` on a WIDTH below 1, or one that differs from the `stream_if` instances' own `WIDTH` |
 
 ## round_robin_arbiter

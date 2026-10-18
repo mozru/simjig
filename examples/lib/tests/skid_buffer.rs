@@ -6,7 +6,8 @@
 //! As in `tests/sync_fifo.rs`, tasks drive on the falling edge and sample on the rising
 //! edge, where signals still hold the values the flops capture. The [`Board`] scoreboard
 //! keeps the beats in flight: each beat taken on `up` must leave on `down` exactly once, in
-//! order, and never more than two at a time (the buffer's two registers).
+//! order, and never more than two at a time (the buffer's two registers). A reset edge
+//! empties the board, so a test may reset mid-run.
 #![forbid(unsafe_code)]
 #![expect(
     clippy::unwrap_used,
@@ -18,7 +19,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use simjig::bits::{Bit, Bits};
-use simjig::{ReadOnly, Rng, TestCtx, clock, cycles, ns, spawn, us, with_timeout};
+use simjig::{ReadOnly, Rng, TestCtx, Timer, clock, cycles, ns, spawn, us, with_timeout};
 
 mod common;
 
@@ -50,6 +51,9 @@ struct Board {
     first_out: Option<u32>,
     last_out: u32,
     edges: u32,
+    /// Reset edges after the first reset, and the beats in flight they discarded.
+    resets: u32,
+    flushed: usize,
 }
 
 impl Board {
@@ -64,6 +68,16 @@ impl Board {
         if let Some(held) = self.stalled.take() {
             assert!(down.0, "down.valid dropped while stalled");
             assert_eq!(down_data, held, "down.data changed while stalled");
+        }
+        if dut.rst.get().to_bool() {
+            // The edge empties both registers, so nothing in flight comes out; and no
+            // handshake at a reset edge counts on either side.
+            self.resets += 1;
+            self.flushed += self.in_flight.len();
+            self.in_flight.clear();
+            self.received.clear();
+            self.edges += 1;
+            return;
         }
         // A beat leaving now was taken at an earlier edge: there is no zero-cycle path.
         if down.0 && down.1 {
@@ -186,6 +200,108 @@ async fn random_valid_and_ready_lose_nothing(ctx: &TestCtx, dut: Dut) {
     assert_eq!(board.received, beats);
     assert!(board.in_flight.is_empty());
     assert!(board.down_stalls > 0 && board.up_blocked > 0, "{board:?}");
+}
+
+/// Resets the buffer with both registers full, in the middle of traffic: the edge
+/// empties it (`down.valid` low, `up.ready` high) even with `up` offering a beat, and
+/// random traffic then flows as before. Without a reset from this state, Verilator's
+/// all-zero start would hide a `skid_valid` or `out_valid` that reset does not clear.
+#[simjig::test(timeout = "200us")]
+async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: Dut) {
+    let board = start(dut).await;
+    let mut beats = ctx.rng("beats");
+    let before = random_beats(&mut beats, 100);
+    let sink_task = spawn("sink", sink(dut, ctx.rng("sink")));
+    spawn("source", source(dut, before.clone(), ctx.rng("source"), 70)).await;
+    with_timeout(us(5), received(dut, &board, before.len()))
+        .await
+        .expect("the first beats leave");
+    sink_task.cancel();
+    // Stall `down` and offer three beats: two fill the registers, the third waits.
+    for beat in [0xa1, 0xb2, 0xc3] {
+        dut.clk.falling().await;
+        dut.down.ready.set(0);
+        dut.up.valid.set(1);
+        dut.up.data.set(beat);
+        dut.clk.rising().await;
+    }
+    assert_eq!(board.borrow().in_flight.len(), 2, "both registers full");
+    assert_eq!(dut.up.ready.get(), Bit::ZERO);
+    dut.clk.falling().await;
+    dut.rst.set(1); // `up` still offers 0xc3
+    dut.clk.rising().await;
+    ReadOnly::new().await;
+    assert_eq!(dut.down.valid.get(), Bit::ZERO, "down.valid after reset");
+    assert_eq!(dut.up.ready.get(), Bit::ONE, "up.ready after reset");
+    dut.clk.falling().await;
+    dut.rst.set(0);
+    dut.up.valid.set(0);
+    let after = random_beats(&mut beats, 100);
+    spawn("sink", sink(dut, ctx.rng("sink after reset"))).detach();
+    spawn(
+        "source",
+        source(dut, after.clone(), ctx.rng("source after"), 70),
+    )
+    .await;
+    with_timeout(us(5), received(dut, &board, after.len()))
+        .await
+        .expect("the beats after the reset leave");
+    let board = board.borrow();
+    assert_eq!((board.resets, board.flushed), (1, 2));
+    assert_eq!(board.received, after);
+}
+
+/// No combinational path: within a cycle, toggling `down.ready` or `up.valid` changes
+/// none of the outputs (`up.ready`, `down.valid`, `down.data`), with the skid empty and
+/// with it full. Each toggle is checked in `ReadOnly`, once the model settled.
+#[simjig::test(timeout = "2us")]
+async fn outputs_do_not_follow_inputs_within_a_cycle(dut: Dut) {
+    let board = start(dut).await;
+    for beat in [0x11, 0x22] {
+        dut.clk.falling().await;
+        dut.up.valid.set(1);
+        dut.up.data.set(beat);
+        dut.clk.rising().await;
+        dut.clk.falling().await;
+        dut.up.valid.set(0);
+        // One beat inside (skid empty, up.ready high), then two (skid full, low).
+        toggle_inputs_mid_cycle(dut).await;
+    }
+    assert_eq!(board.borrow().in_flight.len(), 2);
+    dut.clk.falling().await;
+    dut.down.ready.set(1);
+    with_timeout(us(1), received(dut, &board, 2))
+        .await
+        .expect("both beats leave");
+    assert_eq!(board.borrow().received, [0x11, 0x22].map(Bits::new));
+}
+
+/// Called at a falling edge with `down.ready` and `up.valid` low: toggles each input high
+/// and back, 1 ns apart (all before the next rising edge, 5 ns away), and asserts after
+/// each toggle that the outputs are as they were.
+async fn toggle_inputs_mid_cycle(dut: Dut) {
+    let outputs = || {
+        (
+            dut.up.ready.get(),
+            dut.down.valid.get(),
+            dut.down.data.get(),
+        )
+    };
+    ReadOnly::new().await;
+    let before = outputs();
+    let steps = [
+        (dut.down.ready, 1, "down.ready rose"),
+        (dut.down.ready, 0, "down.ready fell"),
+        (dut.up.valid, 1, "up.valid rose"),
+        (dut.up.valid, 0, "up.valid fell"),
+    ];
+    for (input, value, what) in steps {
+        Timer::new(ns(1)).await;
+        input.set(value);
+        dut.up.data.set(0xeeee);
+        ReadOnly::new().await;
+        assert_eq!(outputs(), before, "outputs changed when {what} mid-cycle");
+    }
 }
 
 /// With `down.ready` held high and a beat offered every cycle, one beat moves per cycle:

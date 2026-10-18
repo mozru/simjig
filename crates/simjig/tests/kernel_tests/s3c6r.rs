@@ -82,6 +82,28 @@ fn s3c6r_nested_scope_drop_fails() {
     assert_eq!(f.task.as_deref(), Some("main.outer.inner"));
 }
 
+/// `?` on Elapsed: the failure points at the `?`, so two different `with_timeout` sites
+/// in one test get different triage signatures.
+#[test]
+fn s3c6r_timeout_failure_points_at_the_question_mark() {
+    let mut d = dut();
+    let line = line!() + 5;
+    let out = d
+        .sim
+        .run(async {
+            let never = Event::new("never");
+            with_timeout(ticks(10), never.wait()).await?;
+            simjig::Result::Ok(())
+        })
+        .unwrap();
+    let f: simjig::Failure = out.unwrap_err();
+    assert!(
+        f.location
+            .is_some_and(|l| l.file().ends_with("s3c6r.rs") && l.line() == line),
+        "no location for the `?`: {f:?}"
+    );
+}
+
 /// A detached child drops an unrun handle in its last poll: the task is freed before the
 /// poll is settled, and the failure still names the child (not `<finished task>`).
 #[test]

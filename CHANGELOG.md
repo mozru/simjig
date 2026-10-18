@@ -4,6 +4,8 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The `FailureKind::Timeout` failure of `with_timeout(..).await?` points at the `?`
+  (`Failure::location`); it had none, so every timeout of a test shared one signature.
 - A `Setup` failure for a `Task` handle dropped before its task ran names the task
   whose poll dropped it even when that task finished in the same poll (a detached
   child's last poll); it named `<finished task>`.

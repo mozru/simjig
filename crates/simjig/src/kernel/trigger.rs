@@ -375,7 +375,9 @@ impl fmt::Display for Elapsed {
 impl std::error::Error for Elapsed {}
 
 impl From<Elapsed> for Failure {
-    /// A failure of the task converting it (the one that awaited [`with_timeout`], for `?`).
+    /// A failure of the task converting it (the one that awaited [`with_timeout`], for `?`),
+    /// at the `?` (`#[track_caller]`: `?` passes its location through `From::from`).
+    #[track_caller]
     fn from(e: Elapsed) -> Self {
         let task = state::try_current("Failure::from(Elapsed)", |k| {
             k.current.get().map(|key| k.task_name(key))
@@ -386,7 +388,7 @@ impl From<Elapsed> for Failure {
             time: e.at,
             precision: e.precision,
             task,
-            location: None,
+            location: Some(Location::caller().into()),
             message: e.to_string(),
         }
     }

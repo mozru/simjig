@@ -152,6 +152,7 @@ of the pointer (`PointerModel`). The tests add:
 | `all_requesting_grants_each_once_per_n_cycles` | fairness: every window of `N` cycles grants each requester once |
 | `a_held_request_is_granted_within_n_cycles` | starvation bound under random arrivals, and the bound is reached |
 | `hold_keeps_the_grant_with_its_owner` | directed lock and release |
+| `a_reset_during_traffic_points_the_priority_at_0` | `rst_n` for one edge mid-traffic with the pointer at 3 and every requester requesting: the next grant goes to 0, and random traffic then matches the restarted model |
 | `parameters_are_checked_at_elaboration` | `$fatal` on N below 2 |
 
 ## async_fifo

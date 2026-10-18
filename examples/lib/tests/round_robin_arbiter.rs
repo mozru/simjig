@@ -239,6 +239,36 @@ async fn hold_keeps_the_grant_with_its_owner(dut: Dut) {
     assert_eq!(grants, [1, 2, 2, 2, 2, 2, 2, 8, 8]);
 }
 
+/// A reset in the middle of random traffic, with the pointer away from 0 (Verilator
+/// starts it at 0, so only a reset from elsewhere shows the reset clears it): with every
+/// requester requesting through the reset edge, the first grant after it goes to
+/// requester 0, and random traffic then matches the model, which the monitor restarts at
+/// the reset edge.
+#[simjig::test(timeout = "100us")]
+async fn a_reset_during_traffic_points_the_priority_at_0(ctx: &TestCtx, dut: Dut) {
+    let mut rng = ctx.rng("stim");
+    let log = spawn_monitor(dut);
+    reset(dut).await;
+    for _ in 0..200 {
+        drive(dut, random_req(&mut rng), rng.below(4) == 0).await;
+    }
+    drive(dut, 0b00100, false).await; // 2 wins: the pointer moves to 3
+    dut.rst_n.set(0);
+    let before = drive(dut, ALL, false).await; // the reset edge
+    assert_eq!(before, 1 << 3, "the pointer was at 3 when reset came");
+    dut.rst_n.set(1);
+    let after = drive(dut, ALL, false).await;
+    assert_eq!(
+        after, 1,
+        "the first grant after the reset goes to requester 0"
+    );
+    for _ in 0..200 {
+        drive(dut, random_req(&mut rng), rng.below(4) == 0).await;
+    }
+    // Every edge but the reset edge was checked and logged.
+    assert_eq!(log.borrow().len(), 200 + 1 + 1 + 200);
+}
+
 /// The elaboration check: any N from 2 up elaborates (a power of 2 or not), and N below 2
 /// stops elaboration.
 #[test]

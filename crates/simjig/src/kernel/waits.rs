@@ -27,7 +27,7 @@
 //! in the same walk, while a group it primes itself (or re-primes after it fired) waits for
 //! the next change. `changed`, `rising` and `falling` waiters on one signal are three groups.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::panic::Location;
 use std::rc::Rc;
 use std::task::{Context, Waker};
@@ -95,15 +95,15 @@ impl EdgeKind {
 }
 
 /// The waiters of one (slot, edge kind): one cocotb trigger and its VPI callback.
+/// Keyed in [`WaitTable::groups`] by the `seq` of the registration that primed it; groups
+/// fire in that order.
 struct Group {
-    /// The `seq` of the registration that primed it; groups fire in this order.
-    primed: u64,
     slot: u32,
     edge: EdgeKind,
     /// The slot's value when this group last looked at it (or when it was primed).
     snapshot: Vec<u32>,
     /// In registration order.
-    waiters: Vec<Key>,
+    waiters: Pending,
 }
 
 /// What [`WaitTable::add`] needs to register a waiter.
@@ -122,19 +122,68 @@ pub(crate) struct WaitTable {
     /// Registrations removed before they fired (cancelled waits), ever.
     cancelled: u64,
     waiters: Slab<Waiter>,
-    /// Primed value-change groups, ascending by `primed`.
-    groups: Vec<Group>,
+    /// Primed value-change groups by `primed`: a walk visits them in key order, and
+    /// priming, firing and unpriming one is O(log G).
+    groups: BTreeMap<u64, Group>,
     /// `group_of[slot][kind.index()]`: the `primed` of that slot's live group of that kind.
     group_of: Vec<[Option<u64>; 3]>,
     /// Snapshot buffers of unprimed groups, for reuse.
     spare: Vec<Vec<u32>>,
     /// The value being compared, kept to avoid an allocation per walk step.
     scratch: Vec<u32>,
-    wheel: BTreeMap<SimTime, Vec<Key>>,
+    wheel: BTreeMap<SimTime, Pending>,
     next_step: Vec<Key>,
     read_write: Vec<Key>,
     read_only: Vec<Key>,
     lists: Slab<WaitList>,
+}
+
+/// Registrations of one group or one timer deadline, in registration order, removed
+/// lazily: a cancelled registration leaves the slab at once and its stale key here is
+/// skipped (and compacted away once most keys are stale). Cancelling one of many waiters
+/// is then O(1), not a search and shift; a group or deadline with nobody left is still
+/// removed at once.
+#[derive(Default)]
+struct Pending {
+    keys: VecDeque<Key>,
+    live: usize,
+}
+
+impl Pending {
+    fn one(key: Key) -> Self {
+        let mut p = Self::default();
+        p.push(key);
+        p
+    }
+
+    fn push(&mut self, key: Key) {
+        self.keys.push_back(key);
+        self.live += 1;
+    }
+
+    /// Notes that one of its registrations left `waiters`; returns whether none is left.
+    fn forget(&mut self, waiters: &Slab<Waiter>) -> bool {
+        self.live -= 1;
+        if self.live == 0 {
+            self.keys.clear();
+            return true;
+        }
+        if self.keys.len() > 2 * self.live + 16 {
+            self.keys.retain(|&k| waiters.get(k).is_some());
+        }
+        false
+    }
+
+    /// Takes the oldest live registration.
+    fn pop(&mut self, waiters: &Slab<Waiter>) -> Option<Key> {
+        while let Some(key) = self.keys.pop_front() {
+            if waiters.get(key).is_some() {
+                self.live -= 1;
+                return Some(key);
+            }
+        }
+        None
+    }
 }
 
 fn remove_key(v: &mut Vec<Key>, key: Key) {
@@ -149,7 +198,7 @@ impl WaitTable {
             seq: 0,
             cancelled: 0,
             waiters: Slab::default(),
-            groups: Vec::new(),
+            groups: BTreeMap::new(),
             group_of: vec![[None; 3]; slots],
             spare: Vec::new(),
             scratch: Vec::new(),
@@ -198,30 +247,33 @@ impl WaitTable {
     fn join_group(&mut self, slot: u32, edge: EdgeKind, key: Key, model: &Models) {
         let primed = &mut self.group_of[slot as usize][edge.index()];
         if let Some(seq) = *primed {
-            let i = group_index(&self.groups, seq);
-            self.groups[i].waiters.push(key);
+            group(&mut self.groups, seq).waiters.push(key);
             return;
         }
         *primed = Some(self.seq);
         let mut snapshot = self.spare.pop().unwrap_or_default();
         snapshot.resize(words(model.slot_width(slot)), 0);
         model.read(slot, &mut snapshot);
-        // `seq` only grows, so pushing keeps `groups` sorted by `primed`.
-        self.groups.push(Group {
-            primed: self.seq,
-            slot,
-            edge,
-            snapshot,
-            waiters: vec![key],
-        });
+        self.groups.insert(
+            self.seq,
+            Group {
+                slot,
+                edge,
+                snapshot,
+                waiters: Pending::one(key),
+            },
+        );
     }
 
-    /// Unprimes the group at index `i` and returns its waiters.
-    fn unprime(&mut self, i: usize) -> Vec<Key> {
-        let g = self.groups.remove(i);
+    /// Unprimes the group primed by `primed` and returns its waiters.
+    fn unprime(&mut self, primed: u64) -> VecDeque<Key> {
+        let g = self
+            .groups
+            .remove(&primed)
+            .or_invariant("invariant: a primed group is in the group map");
         self.group_of[g.slot as usize][g.edge.index()] = None;
         self.spare.push(g.snapshot);
-        g.waiters
+        g.waiters.keys
     }
 
     /// Removes a registration from its container (if still there) and from the table.
@@ -235,20 +287,17 @@ impl WaitTable {
         self.cancelled += 1;
         match w.on {
             WaitOn::Edge { slot, edge } => {
-                if let Some(seq) = self.group_of[slot as usize][edge.index()] {
-                    let i = group_index(&self.groups, seq);
-                    remove_key(&mut self.groups[i].waiters, key);
-                    if self.groups[i].waiters.is_empty() {
-                        self.unprime(i);
-                    }
+                if let Some(seq) = self.group_of[slot as usize][edge.index()]
+                    && group(&mut self.groups, seq).waiters.forget(&self.waiters)
+                {
+                    self.unprime(seq);
                 }
             }
             WaitOn::Time(t) => {
-                if let Some(v) = self.wheel.get_mut(&t) {
-                    remove_key(v, key);
-                    if v.is_empty() {
-                        self.wheel.remove(&t);
-                    }
+                if let Some(due) = self.wheel.get_mut(&t)
+                    && due.forget(&self.waiters)
+                {
+                    self.wheel.remove(&t);
                 }
             }
             WaitOn::NextTimeStep => remove_key(&mut self.next_step, key),
@@ -269,7 +318,8 @@ impl WaitTable {
         }
     }
 
-    fn fire_all(&mut self, keys: Vec<Key>, out: &mut Vec<Wake>) {
+    /// Fires `keys`, skipping those whose registration was removed.
+    fn fire_all(&mut self, keys: impl IntoIterator<Item = Key>, out: &mut Vec<Wake>) {
         for key in keys {
             self.fire(key, out);
         }
@@ -284,8 +334,10 @@ impl WaitTable {
             return false;
         };
         // Registration order: a timer is appended when registered, so the oldest is first.
-        let key = due.remove(0);
-        if due.is_empty() {
+        let key = due
+            .pop(&self.waiters)
+            .or_invariant("invariant: a deadline in the wheel has a live timer");
+        if due.live == 0 {
             self.wheel.remove(&t);
         }
         self.fire(key, out);
@@ -334,6 +386,15 @@ impl WaitTable {
     /// from its snapshot takes the new value; a group whose edge that is fires all its
     /// waiters, in registration order, and is unprimed. Returns whether one fired; `*after`
     /// is where the next step resumes.
+    ///
+    /// Edges compare bit 0 of the old and new value. Edge triggers exist only on 1-bit
+    /// signals (`trigger::edge` rejects wider ones, as cocotb's `rising_edge` raises
+    /// `TypeError` for a multi-bit signal), so bit 0 is the whole value.
+    ///
+    /// `until` mirrors `callValueCbs`, which skips callbacks added during the walk. With
+    /// writes held in the write log, a group primed during the walk snapshots the value
+    /// already changed and could not fire anyway; the bound keeps that a property of the
+    /// walk rather than of the write log, and spares looking at such groups.
     pub(crate) fn fire_next_change(
         &mut self,
         model: &Models,
@@ -341,30 +402,37 @@ impl WaitTable {
         after: &mut u64,
         out: &mut Vec<Wake>,
     ) -> bool {
-        let mut i = self.groups.partition_point(|g| g.primed <= *after);
+        if *after >= until {
+            return false;
+        }
         let scratch = &mut self.scratch;
-        while let Some(g) = self.groups.get_mut(i).filter(|g| g.primed <= until) {
-            *after = g.primed;
+        let mut hit = None;
+        for (&primed, g) in self.groups.range_mut(*after + 1..=until) {
+            *after = primed;
             scratch.resize(g.snapshot.len(), 0);
             model.read(g.slot, scratch);
-            if *scratch != g.snapshot {
-                let (old, new) = (g.snapshot[0] & 1, scratch[0] & 1);
-                g.snapshot.copy_from_slice(scratch);
-                let hit = match g.edge {
-                    EdgeKind::Changed => true,
-                    EdgeKind::Rising => old == 0 && new == 1,
-                    EdgeKind::Falling => old == 1 && new == 0,
-                };
-                if hit {
-                    let waiters = self.unprime(i);
-                    self.fire_all(waiters, out);
-                    return true;
-                }
+            if *scratch == g.snapshot {
+                continue;
             }
-            i += 1;
+            let (old, new) = (g.snapshot[0] & 1, scratch[0] & 1);
+            g.snapshot.copy_from_slice(scratch);
+            let fires = match g.edge {
+                EdgeKind::Changed => true,
+                EdgeKind::Rising => old == 0 && new == 1,
+                EdgeKind::Falling => old == 1 && new == 0,
+            };
+            if fires {
+                hit = Some(primed);
+                break;
+            }
         }
-        *after = until;
-        false
+        let Some(primed) = hit else {
+            *after = until;
+            return false;
+        };
+        let waiters = self.unprime(primed);
+        self.fire_all(waiters, out);
+        true
     }
 
     pub(crate) fn alloc_list(&mut self, kind: ListKind, name: Rc<str>) -> Key {
@@ -473,16 +541,20 @@ impl WaitTable {
     }
 }
 
-/// The index of the group primed by registration `seq`.
-fn group_index(groups: &[Group], seq: u64) -> usize {
+/// The group primed by registration `seq`.
+fn group(groups: &mut BTreeMap<u64, Group>, seq: u64) -> &mut Group {
     groups
-        .binary_search_by_key(&seq, |g| g.primed)
-        .ok()
-        .or_invariant("invariant: a primed group is in the group list")
+        .get_mut(&seq)
+        .or_invariant("invariant: a primed group is in the group map")
 }
 
 /// Wakes collected wakers in registration order. No kernel borrow may be held: a waker
 /// may be a foreign combinator's, running arbitrary code.
+///
+/// A foreign waker that panics is not caught here. Woken by the scheduler loop (a value
+/// change, a Timer, a phase), which does not run under `catch_unwind`, the panic escapes
+/// [`Sim::run`](crate::Sim::run) as a panic, not as a [`Failure`](crate::Failure); woken
+/// from inside a task (an `Event` it sets), it becomes that task's `TaskPanic`.
 pub(crate) fn wake_sorted(mut wakes: Vec<Wake>) {
     wakes.sort_by_key(|(seq, _)| *seq);
     for (_, waker) in wakes {

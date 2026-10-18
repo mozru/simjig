@@ -171,6 +171,12 @@ impl Timer {
     /// # Panics
     /// When awaited, if `duration` is zero ticks or the deadline overflows the tick
     /// counter; the panic points at this call.
+    ///
+    /// cocotb 2.1 rejects `Timer(0)` when it is built (`ValueError`). This constructor
+    /// stays `const` (usable in `const` items) and only records the call site; the check
+    /// runs on the first poll, inside the run, so it fails the run as a `TaskPanic` whose
+    /// message names this call, even for a `Timer` built before
+    /// [`Sim::run`](crate::Sim::run). A zero `Timer` that is never awaited is inert.
     #[track_caller]
     pub const fn new(duration: SimDuration) -> Self {
         Self {

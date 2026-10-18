@@ -245,6 +245,21 @@ Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel
   they run in step 1, before the `eval_step()` that executes those events
   (`timing::a_timer_resumes_before_the_designs_event_at_the_same_time`).
 
+### Known differences from cocotb
+Deliberate, each with the reason:
+- **`Timer` of zero ticks** is rejected when it is first **awaited** (a `TaskPanic` naming
+  the line that built it); cocotb raises `ValueError` when `Timer(0)` is **built**.
+  `Timer::new` is a `const fn`, which can neither report a run failure nor put the call
+  site in the message, and a `Timer` may be built before the run starts
+  (`phases::trigger_misuse_points_at_the_line_that_made_the_trigger`).
+- **Combinator operand bodies run in the caller.** cocotb runs each operand of `First`,
+  `Combine` and `with_timeout` in its own helper task, so a multi-step operand (a
+  coroutine that awaits several triggers) resumes at its helper's place in the event loop;
+  simjig polls every operand when the caller is woken. The caller's own resumption point
+  matches cocotb ("Callback order"); code *inside* an operand that runs between two of its
+  awaits may run earlier or later relative to other tasks woken by the same trigger. No
+  golden exercises it.
+
 ### Simulation end
 The simulation ends when no timed callback and no `--timing` event is left. A test that
 awaits `ReadWrite` from inside `ReadWrite` with nothing pending, and no clock running,

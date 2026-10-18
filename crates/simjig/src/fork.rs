@@ -136,7 +136,9 @@ impl fmt::Display for Branch {
 }
 
 /// Why [`run_from_checkpoint`] did not fork.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Its `Debug` is its `Display`, so `.unwrap()` and `.expect(..)` print the advice.
+#[derive(Clone, PartialEq, Eq)]
 pub enum ForkError {
     /// Not a platform fork checkpoints work on.
     Unsupported {
@@ -204,6 +206,12 @@ impl fmt::Display for ForkError {
             Self::Hook { message } => write!(f, "a fork hook failed before the fork: {message}"),
             Self::System { call, error } => write!(f, "{call} failed: {error}"),
         }
+    }
+}
+
+impl fmt::Debug for ForkError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
@@ -772,5 +780,25 @@ mod imp {
 
     pub(super) fn finish_child(_report: &[u8]) -> ! {
         unreachable!("invariant: no branch child exists without fork()")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `run_from_checkpoint(..).await.unwrap()` (the docs' example) prints the error's
+    /// `Debug`: it must read as the advice, not as a struct dump.
+    #[test]
+    fn a_fork_error_debugs_as_its_message() {
+        for error in [
+            ForkError::NoSimulation,
+            ForkError::Threads { count: 9 },
+            ForkError::OtherTasks {
+                tasks: vec!["main.driver".to_owned()],
+            },
+        ] {
+            assert_eq!(format!("{error:?}"), error.to_string());
+        }
     }
 }

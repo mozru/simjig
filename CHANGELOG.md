@@ -93,6 +93,7 @@ the public API, the generated code or simulation semantics.
   `BranchFailure`, `BranchError`, `ChildExit`, `BranchCost`, `RemoteFailure`,
   `BranchValue`, `ForkError`, `ForkHook` (with `at_child_exit`), `register_hook`,
   `HookGuard`. Unix only, with at most two threads in the process (nextest).
+- `ForkError`'s `Debug` is its `Display`, so `.unwrap()` prints the advice.
 
 #### Coverage counters
 - New `Sim::coverage(model) -> Option<Vec<u32>>`: the counters of a model built with

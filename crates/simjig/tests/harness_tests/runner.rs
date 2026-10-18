@@ -112,8 +112,10 @@ fn a_timeout_finer_than_the_precision_is_rejected() {
     run::<counter::Dut, _, _>(&meta, &env(None, "fine"), |_, _| async {});
 }
 
-async fn tick_forever() {
-    loop {
+/// Runs 20 ms, past the default timeout, but ends: if the default did not fire, the test
+/// fails on its own assertion rather than hanging until nextest kills it.
+async fn tick_20ms() {
+    for _ in 0..20 {
         simjig::Timer::new(simjig::ms(1)).await;
     }
 }
@@ -121,7 +123,7 @@ async fn tick_forever() {
 #[test]
 fn a_test_without_a_timeout_stops_at_the_default() {
     let outcome = run::<(), _, _>(&meta("default"), &env(None, "default"), |_, ()| {
-        tick_forever()
+        tick_20ms()
     });
     let report = outcome.failure.expect("the default timeout fires");
     assert_eq!(report.kind, "TimeLimit");

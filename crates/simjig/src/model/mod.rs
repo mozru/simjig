@@ -1,14 +1,20 @@
-//! Model FFI: the C ABI to generated Verilator models.
+//! Model FFI: generated Verilator models behind the kernel's backend interface.
 //!
-//! `abi` mirrors `simjig_abi.h`. Nothing in the runtime uses it yet (the kernel and the typed
-//! `Dut` come later), so it is compiled but dead in the library.
+//! - `abi`: the Rust mirror of `simjig_abi.h` and the raw member accessors;
+//! - `raw`: `RawModel`, the owner of one live model handle (the other `unsafe` module);
+//! - `verilator`: `VerilatorModel`, the kernel backend (load checks, messages, poisoning);
+//! - `meta`: what generated code hands the runtime (`ModelMeta`, `SignalMeta`,
+//!   `link_model!`) and the `Binder` that makes typed handles.
 
 #[expect(
     dead_code,
-    reason = "the ABI mirror lands before the runtime that uses it"
+    reason = "the mirror covers the whole ABI; tracing and coverage are not used yet"
 )]
 #[expect(
     unsafe_code,
     reason = "FFI mirror of simjig_abi.h: raw member pointers and extern vtables"
 )]
 pub(crate) mod abi;
+pub(crate) mod meta;
+mod raw;
+mod verilator;

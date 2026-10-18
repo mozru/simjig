@@ -12,3 +12,6 @@ workspace = true
 
 [build-dependencies]
 cc.workspace = true
+
+[dependencies]
+simjig-bits.workspace = true

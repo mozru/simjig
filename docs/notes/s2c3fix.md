@@ -86,3 +86,9 @@ panic cannot name the call site in its message, both of which
 - `DECISION.md` §1 step 3 ("wake waiters on changed watched signals") and
   `docs/notes/kernel.md` ("wake in registration order") describe the old order; not my
   files. The conformance README is the normative statement.
+
+## Verification
+- `pixi run cargo xtask ci`: all checks passed (nextest 603 passed, 8 skipped).
+- `pixi run -e conformance conformance-regen --check`: 19 goldens reproduced exactly.
+- `pixi run cargo xtask miri`: lib 54 passed (122 s), kernel_tests 81 passed, 1 ignored
+  (405 s); 9:25 wall.

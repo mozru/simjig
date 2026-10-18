@@ -29,6 +29,29 @@ the public API, the generated code or simulation semantics.
   `OUT_DIR/simjig/<name>.rs`), and a DUT may be in one sweep only.
 - `examples/lib` builds `sync_fifo` as the sweep of `fifo_8x4` and `fifo_32x16`; its raw
   FIFO tests run on both (`random_traffic_matches_the_model::fifo_32x16`).
+- Random initial values, to catch a register that reset never clears:
+  `#[simjig::test(init = random)]` (or `init = zero`), or `SIMJIG_INIT=random` for tests
+  without the argument. Each model draws from its own seed, `Seed::init_seed(index)`
+  (stream `init.model-<index>`); `$urandom` is unchanged. New public API:
+  `simjig::InitValues`, `ModelOptions::{init, init_seed, with_init, random_init}`,
+  `RunIdentity::init`, `RunEnv::init`, `TestMeta::init`, `LoadError::NoRandomInit`,
+  `simjig_build::XInitial` and `Dut::x_initial` (default `Unique`, which passes no flag).
+  A random run's report header says `init=random`, its repro starts with
+  `SIMJIG_INIT=random`, and `summary.json` gains `init` and `init_seed` (also written,
+  as `"zero"` and `null`, for zero runs). Zero runs, default builds, prefixes and cache keys
+  are unchanged. Breaking: a raw `--x-initial` in `verilator_args` or an option file is
+  refused (use `.x_initial(..)`); `TestMeta`, `RunEnv`, `RunIdentity`, `ShimOptions` and
+  `DutConfig` have a new field, and `LoadError` a new variant. Reviewed snapshot diff: every
+  `#[simjig::test]` expansion gains `init: None` (`simjig-macros` snapshots).
+- C ABI (version 1, append-only): `simjig_create_opts` gains `init` and `init_seed`
+  (size 32 to 40; a caller passing size 32 gets zeros), `SIMJIG_INIT_ZERO`/`SIMJIG_INIT_RANDOM`
+  and the feature bit `SIMJIG_FEATURE_RANDOM_INIT` (8), set unless the shim's traits say
+  `kXInitialUnique = false`. The vtable (size 192) is unchanged; generated shims change only
+  for a non-default `XInitial`. Every default model's `features` now has bit 8.
+- Sweeps and random initial values together: `#[simjig::test(duts = [..], init = random)]`
+  gives every per-DUT test the one `init`, and each sweep member honours its own
+  `Dut::x_initial`, which is part of its model digest (cache key), like every other
+  `DutConfig` field. The `duts` snapshots gain `init: None`, as every expansion does.
 - `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
   `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
   refused; `--threads 2147483648` is negative and left to Verilator's own error.

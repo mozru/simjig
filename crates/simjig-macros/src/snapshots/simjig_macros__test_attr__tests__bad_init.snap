@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(init = x), quote! { async fn t() {} })"
+---
+error: the initial values are `init = zero` (Verilator's default) or `init = random`

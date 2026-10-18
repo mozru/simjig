@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use simjig_build::XInitial;
 use simjig_build::codegen::{
     CodegenConfig, Lowered, Probe, ProbeAccess, ProbeType, ShimOptions, emit_shim, emit_vlt, lower,
 };
@@ -106,6 +107,7 @@ pub(crate) fn opts(prefix: &str) -> ShimOptions {
         timing: false,
         trace_fst: false,
         coverage: false,
+        x_initial: XInitial::Unique,
     }
 }
 

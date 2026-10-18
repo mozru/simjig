@@ -1,5 +1,6 @@
 //! Snapshots of every emitter's output for every case.
 
+use simjig_build::XInitial;
 use simjig_build::codegen::{
     Lowered, RustOptions, ShimOptions, emit_layout_check, emit_rust, emit_shim, emit_vlt,
     emit_wrapper, lower,
@@ -44,6 +45,7 @@ fn emitter_snapshots() {
                 timing: false,
                 trace_fst: false,
                 coverage: false,
+                x_initial: XInitial::Unique,
             },
         );
         let shim = shim.unwrap_or_else(|e| format!("error: {e}"));
@@ -67,11 +69,33 @@ fn shim_option_snapshots() {
                 timing,
                 trace_fst,
                 coverage,
+                x_initial: XInitial::Unique,
             };
             let shim = emit_shim(&lowered, &opts).unwrap();
             insta::assert_snapshot!(format!("{name}__shim_{tag}"), shim);
         }
     }
+}
+
+/// A model whose initial values are compiled in (`--x-initial 0`/`fast`) says so with one
+/// traits line; the default shim has none, so default snapshots are unchanged.
+#[test]
+fn only_a_compiled_in_x_initial_adds_a_traits_line() {
+    let case = cases::wide();
+    let lowered = lower(&case.design, &case.config).unwrap();
+    let opts = |x_initial| ShimOptions {
+        prefix: format!("V{}", lowered.top),
+        timing: false,
+        trace_fst: false,
+        coverage: false,
+        x_initial,
+    };
+    let line = "static constexpr bool kXInitialUnique = false;";
+    let default = emit_shim(&lowered, &opts(XInitial::Unique)).unwrap();
+    assert!(!default.contains("kXInitialUnique"), "{default}");
+    let fast = emit_shim(&lowered, &opts(XInitial::Fast)).unwrap();
+    assert_eq!(fast.replace(&format!("    {line}\n"), ""), default);
+    assert!(fast.contains(line), "{fast}");
 }
 
 /// The generated Rust of every case is also committed under `generated/`, where

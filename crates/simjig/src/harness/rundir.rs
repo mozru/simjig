@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{Precision, SimTime, TraceRecord};
 
+use super::dut::InitValues;
 use super::report::FailureReport;
 use super::seed::Seed;
 
@@ -175,6 +176,9 @@ pub(crate) struct Summary<'a> {
     pub(crate) launcher: Option<&'a str>,
     pub(crate) seed: Seed,
     pub(crate) verilator_seed: u32,
+    pub(crate) init: InitValues,
+    /// Model 0's [`Seed::init_seed`] with random initial values, else `None`.
+    pub(crate) init_seed: Option<u32>,
     /// `None` if the model could not be built.
     pub(crate) precision: Option<String>,
     pub(crate) end_time: Json,
@@ -223,6 +227,12 @@ impl Summary<'_> {
             ("seed", Json::str(self.seed.to_string())),
             ("seed_source", Json::str(self.seed.source().as_str())),
             ("verilator_seed", Json::U64(u64::from(self.verilator_seed))),
+            ("init", Json::str(self.init.as_str())),
+            (
+                "init_seed",
+                self.init_seed
+                    .map_or(Json::Null, |s| Json::U64(u64::from(s))),
+            ),
             ("precision", Json::opt_str(self.precision.clone())),
             ("end_time", self.end_time.clone()),
             ("timeout", self.timeout.clone()),

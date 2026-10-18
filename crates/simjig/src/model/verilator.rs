@@ -29,7 +29,8 @@ use std::ffi::CString;
 use std::path::Path;
 
 use super::abi::{
-    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_TRACE_FST, MsgKind, OwnedMsg, Status,
+    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_RANDOM_INIT, FEATURE_TRACE_FST, MsgKind, OwnedMsg,
+    Status,
 };
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
@@ -58,11 +59,13 @@ pub(crate) struct VerilatorModel {
 
 impl VerilatorModel {
     /// Creates the model described by `meta`, passing `args` (plusargs such as
-    /// `+verilator+seed+N`) to its context, checks it against the generated Rust, and opens
-    /// the trace `trace` asks for.
+    /// `+verilator+seed+N`) to its context and, with `random_init`, drawing its initial
+    /// values from that seed; checks it against the generated Rust, and opens the trace
+    /// `trace` asks for.
     pub(crate) fn load(
         meta: &ModelMeta,
         args: &[String],
+        random_init: Option<u32>,
         trace: Option<&TraceOptions>,
     ) -> Result<Self, LoadError> {
         // The version and size are checked before anything else is read from the table.
@@ -82,7 +85,12 @@ impl VerilatorModel {
                     exponent: meta.precision_exponent,
                 }
             })?;
-        let (raw, status) = RawModel::create(vt, args).map_err(|e| match e {
+        if random_init.is_some() && vt.features & FEATURE_RANDOM_INIT == 0 {
+            return Err(LoadError::NoRandomInit {
+                prefix: meta.prefix,
+            });
+        }
+        let (raw, status) = RawModel::create(vt, args, random_init).map_err(|e| match e {
             CreateError::NoHandle(status) => LoadError::Create {
                 prefix: meta.prefix,
                 reason: format!("no model handle (status {status})"),
@@ -476,7 +484,7 @@ fn print_line(text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::abi::{ModelVtable, Status};
+    use super::super::abi::{INIT_RANDOM, INIT_ZERO, ModelVtable, Status};
     use super::super::meta::{SignalMeta, Vtable};
     use super::super::raw::fake::{self, STATE};
     use super::*;
@@ -520,7 +528,7 @@ mod tests {
     #[test]
     fn a_fatal_poisons_the_model() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None, None).unwrap();
         STATE.with_borrow_mut(|s| {
             s.statuses.push_back(Status::Fatal);
             s.pending.push_back((MsgKind::Fatal as u32, c"boom"));
@@ -545,7 +553,7 @@ mod tests {
     #[test]
     fn a_clean_model_runs_final_blocks_then_is_destroyed() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None, None).unwrap();
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
         drop(model);
         assert_eq!(counts(), (1, 1, 1));
@@ -558,18 +566,18 @@ mod tests {
             ..FAKE
         };
         fake::reset();
-        let plain = VerilatorModel::load(&FAKE, &[], None).unwrap();
+        let plain = VerilatorModel::load(&FAKE, &[], None, None).unwrap();
         assert!(plain.dpi.is_none());
         drop(plain);
         fake::reset();
-        let with_dpi = VerilatorModel::load(&WITH_DPI, &[], None).unwrap();
+        let with_dpi = VerilatorModel::load(&WITH_DPI, &[], None, None).unwrap();
         assert!(with_dpi.dpi.is_some());
     }
 
     #[test]
     fn an_error_record_fails_the_eval_without_poisoning() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None, None).unwrap();
         STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Error as u32, c"bad")));
         assert!(model.eval().is_err());
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
@@ -594,7 +602,7 @@ mod tests {
             ..FAKE
         };
         fake::reset();
-        let err = VerilatorModel::load(&SHORT, &[], None).unwrap_err();
+        let err = VerilatorModel::load(&SHORT, &[], None, None).unwrap_err();
         assert_eq!(
             err,
             LoadError::VtableSize {
@@ -610,7 +618,7 @@ mod tests {
     fn a_failure_while_creating_fails_the_load() {
         fake::reset();
         STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Fatal as u32, c"init")));
-        let err = VerilatorModel::load(&FAKE, &[], None).unwrap_err();
+        let err = VerilatorModel::load(&FAKE, &[], None, None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("failed while being created: $fatal"),
@@ -626,7 +634,7 @@ mod tests {
     #[test]
     fn writes_are_masked_and_outputs_are_read_only() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None, None).unwrap();
         model.write(0, &[0xff]);
         assert_eq!(STATE.with_borrow(|s| s.members[0]), 0x0f);
         let mut out = [0];
@@ -657,7 +665,7 @@ mod tests {
 
     fn traced(options: &TraceOptions) -> VerilatorModel {
         fake::reset();
-        let model = VerilatorModel::load(&TRACED, &[], Some(options)).unwrap();
+        let model = VerilatorModel::load(&TRACED, &[], None, Some(options)).unwrap();
         let open = calls();
         assert_eq!(open.len(), 1, "{open:?}");
         assert!(open[0].starts_with("open w.fst "), "{open:?}");
@@ -691,7 +699,7 @@ mod tests {
     fn the_trace_is_opened_with_its_depth_and_start() {
         fake::reset();
         let options = TraceOptions::new("w.fst").depth(3).start(SimTime(7));
-        let _model = VerilatorModel::load(&TRACED, &[], Some(&options)).unwrap();
+        let _model = VerilatorModel::load(&TRACED, &[], None, Some(&options)).unwrap();
         assert_eq!(calls(), ["open w.fst depth=3 start=7"]);
     }
 
@@ -795,13 +803,38 @@ mod tests {
     #[test]
     fn a_model_without_fst_rejects_waves_unless_they_are_optional() {
         fake::reset();
-        let err = VerilatorModel::load(&FAKE, &[], Some(&TraceOptions::new("w.fst"))).unwrap_err();
+        let err =
+            VerilatorModel::load(&FAKE, &[], None, Some(&TraceOptions::new("w.fst"))).unwrap_err();
         assert_eq!(err, LoadError::NoTrace { prefix: "Vfake" });
         let help = err.help().expect("a setup error");
         assert!(help.contains(".trace_fst(true)"), "{help}");
         let optional = TraceOptions::new("w.fst").if_supported();
-        let model = VerilatorModel::load(&FAKE, &[], Some(&optional)).unwrap();
+        let model = VerilatorModel::load(&FAKE, &[], None, Some(&optional)).unwrap();
         assert!(model.tracer.is_none());
+    }
+
+    #[test]
+    fn random_init_reaches_create_only_on_a_model_that_supports_it() {
+        fn random_vtable() -> Vtable {
+            thread_local! {
+                static VT: Vtable = Vtable::leak(fake::random_init_vtable());
+            }
+            VT.with(|vt| *vt)
+        }
+        static RANDOM: ModelMeta = ModelMeta {
+            vtable: random_vtable,
+            ..FAKE
+        };
+        fake::reset();
+        let _zero = VerilatorModel::load(&RANDOM, &[], None, None).unwrap();
+        assert_eq!(STATE.with_borrow(|s| s.init), Some((INIT_ZERO, 0)));
+        let _random = VerilatorModel::load(&RANDOM, &[], Some(77), None).unwrap();
+        assert_eq!(STATE.with_borrow(|s| s.init), Some((INIT_RANDOM, 77)));
+        fake::reset();
+        let err = VerilatorModel::load(&FAKE, &[], Some(77), None).unwrap_err();
+        assert_eq!(err, LoadError::NoRandomInit { prefix: "Vfake" });
+        assert!(err.help().is_some_and(|h| h.contains("XInitial::Unique")));
+        assert_eq!(STATE.with_borrow(|s| s.init), None, "nothing was created");
     }
 
     fn record(kind: MsgKind, hier: &str, msg: &str) -> OwnedMsg {

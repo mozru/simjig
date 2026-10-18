@@ -5,6 +5,7 @@
 //! #[simjig::test]
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
 //! #[simjig::test(timeout = "none")]                 no time limit
+//! #[simjig::test(init = random)]                    random initial values (or `zero`)
 //! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
 //!
@@ -53,7 +54,13 @@ struct Args {
     krate: Option<syn::Path>,
     /// `duts = [..]`: the DUT types to instantiate the function for.
     duts: Option<Vec<Type>>,
+    /// The `simjig::InitValues` variant name of an `init` argument; `None` without one
+    /// (`SIMJIG_INIT` decides at run time).
+    init: Option<&'static str>,
 }
+
+/// `init` values and their `simjig::InitValues` variants.
+const INITS: [(&str, &str); 2] = [("zero", "Zero"), ("random", "Random")];
 
 /// A `timeout` argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +106,20 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             };
             args.timeout = Some(parse_timeout(&lit)?);
             Ok(())
+        } else if meta.path.is_ident("init") {
+            if args.init.is_some() {
+                return Err(meta.error("`init` is given twice"));
+            }
+            let value: Ident = meta.value()?.parse()?;
+            let Some(&(_, variant)) = INITS.iter().find(|(name, _)| value == name) else {
+                return Err(syn::Error::new_spanned(
+                    value,
+                    "the initial values are `init = zero` (Verilator's default) or \
+                     `init = random`",
+                ));
+            };
+            args.init = Some(variant);
+            Ok(())
         } else if meta.path.is_ident("crate") {
             if args.krate.is_some() {
                 return Err(meta.error("`crate` is given twice"));
@@ -122,7 +143,8 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             Err(meta.error(
                 "unknown `#[simjig::test]` argument; the arguments are \
                  `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`), \
-                 `duts = [<DUT type>, ..]` and `crate = <path to simjig>`",
+                 `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, and \
+                 `crate = <path to simjig>`",
             ))
         }
     });
@@ -411,6 +433,13 @@ fn run_call(
 ) -> TokenStream {
     let krate = krate(args);
     let timeout = timeout_expr(&krate, args.timeout);
+    let init = match args.init {
+        None => quote!(::core::option::Option::None),
+        Some(variant) => {
+            let variant = format_ident!("{variant}");
+            quote!(::core::option::Option::Some(#krate::InitValues::#variant))
+        }
+    };
     let attrs = &test.func.attrs;
     let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
     let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
@@ -424,6 +453,7 @@ fn run_call(
                 timeout: #timeout,
                 ignored: #ignored,
                 should_panic: #should_panic,
+                init: #init,
             },
             |#sim_pat, #dut_pat| async move { #func(#(#call_args),*).await },
         );
@@ -562,6 +592,14 @@ mod tests {
     }
 
     #[test]
+    fn expands_init_random() {
+        insta::assert_snapshot!(render(
+            quote!(init = random),
+            quote! { async fn no_reset(dut: Counter) {} }
+        ));
+    }
+
+    #[test]
     fn expands_timeout_none() {
         insta::assert_snapshot!(render(
             quote!(timeout = "none"),
@@ -634,6 +672,10 @@ mod tests {
             render(quote!(seed = 1), quote! { async fn t() {} })
         );
         insta::assert_snapshot!(
+            "bad_init",
+            render(quote!(init = x), quote! { async fn t() {} })
+        );
+        insta::assert_snapshot!(
             "duplicate_timeout",
             render(
                 quote!(timeout = "1ns", timeout = "2ns"),
@@ -653,6 +695,15 @@ mod tests {
                     Ok(())
                 }
             }
+        ));
+    }
+
+    /// `init` and `duts` together: every per-DUT test carries the one `init`.
+    #[test]
+    fn expands_init_random_for_each_listed_dut() {
+        insta::assert_snapshot!(render(
+            quote!(duts = [fifo::small::Dut, fifo::big::Dut], init = random),
+            quote! { async fn resets<D: fifo::Ports>(dut: D) {} }
         ));
     }
 

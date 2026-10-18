@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use serde_json::Value;
 use simjig::__private::{RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, run};
 use simjig::{
-    DutModel, Failure, FakeModel, ModelOptions, Precision, Seed, SeedSource, Sim, SimDuration,
-    SimTime, TestCtx, TimeUnit, rising, yield_now,
+    DutModel, Failure, FakeModel, InitValues, ModelOptions, Precision, Seed, SeedSource, Sim,
+    SimDuration, SimTime, TestCtx, TimeUnit, rising, yield_now,
 };
 
 use crate::counter;
@@ -20,6 +20,7 @@ fn meta(name: &'static str) -> TestMeta {
         timeout: TimeoutArg::Default,
         ignored: false,
         should_panic: false,
+        init: None,
     }
 }
 
@@ -317,6 +318,45 @@ fn setup_failures_are_reported_without_running_the_body() {
     assert_eq!(summary["events"], Value::Null);
 }
 
+/// The `init` argument wins over `SIMJIG_INIT`, which decides for tests without one; a
+/// random run names its mode in the report header, the repro and `summary.json`.
+#[test]
+fn random_initial_values_are_chosen_and_recorded() {
+    let seed = Seed::new(0xabc, SeedSource::Env);
+    let fail = |meta_init, env_init, dir| {
+        let meta = TestMeta {
+            init: meta_init,
+            ..meta("init")
+        };
+        let env = RunEnv {
+            init: env_init,
+            ..env(Some(0xabc), dir)
+        };
+        let outcome = run::<counter::Dut, _, _>(&meta, &env, |_, dut| accumulate_then_panic(dut));
+        let report = outcome.failure.expect("the body panics");
+        let summary = read_json(&outcome.run_dir.expect("written").join("summary.json"));
+        (report, summary)
+    };
+    let (report, summary) = fail(None, Some(InitValues::Random), "init_env");
+    assert_eq!(report.run.init, InitValues::Random);
+    assert!(
+        report
+            .run
+            .repro()
+            .starts_with("SIMJIG_INIT=random SIMJIG_SEED=0x"),
+        "{report}"
+    );
+    assert!(report.to_string().contains("  init=random  t="), "{report}");
+    assert_eq!(summary["init"], "random");
+    assert_eq!(summary["init_seed"], u64::from(seed.init_seed(0)));
+    let (report, summary) = fail(Some(InitValues::Zero), Some(InitValues::Random), "init_arg");
+    assert_eq!(report.run.init, InitValues::Zero, "the argument wins");
+    assert!(!report.to_string().contains("init="), "{report}");
+    assert_eq!(summary["init"], "zero");
+    let (report, _) = fail(Some(InitValues::Random), None, "init_arg_only");
+    assert_eq!(report.run.init, InitValues::Random);
+}
+
 fn read_json(path: &std::path::Path) -> Value {
     let text = std::fs::read_to_string(path).expect("readable");
     serde_json::from_str(&text).expect("valid JSON")
@@ -354,6 +394,8 @@ fn the_run_dir_holds_the_summary_and_the_events() {
         summary["verilator_seed"],
         u64::from(Seed::new(0xabc, SeedSource::Env).verilator_seed())
     );
+    assert_eq!(summary["init"], "zero");
+    assert!(summary["init_seed"].is_null());
     assert_eq!(summary["precision"], "1ns");
     assert_eq!(
         summary["end_time"]["ticks"],

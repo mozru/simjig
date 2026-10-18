@@ -142,7 +142,7 @@ fn random_req(rng: &mut Rng) -> u128 {
 }
 
 /// Random requests and random `hold`, checked cycle by cycle against the pointer model.
-#[simjig::test(timeout = "100us")]
+#[simjig::test(init = random, timeout = "100us")]
 async fn grants_match_the_pointer_model(ctx: &TestCtx, dut: Dut) {
     let mut rng = ctx.rng("stim");
     let log = spawn_monitor(dut);
@@ -162,7 +162,7 @@ async fn grants_match_the_pointer_model(ctx: &TestCtx, dut: Dut) {
 
 /// Fairness: with every requester requesting, each is granted exactly once in every
 /// window of `N` consecutive cycles, in rotating order from requester 0.
-#[simjig::test(timeout = "10us")]
+#[simjig::test(init = random, timeout = "10us")]
 async fn all_requesting_grants_each_once_per_n_cycles(dut: Dut) {
     let log = spawn_monitor(dut);
     reset(dut).await;
@@ -184,7 +184,7 @@ async fn all_requesting_grants_each_once_per_n_cycles(dut: Dut) {
 
 /// The starvation bound: a requester that holds its request until granted is granted
 /// within `N` cycles, under random arrivals and without `hold`.
-#[simjig::test(timeout = "100us")]
+#[simjig::test(init = random, timeout = "100us")]
 async fn a_held_request_is_granted_within_n_cycles(ctx: &TestCtx, dut: Dut) {
     let mut rng = ctx.rng("arrivals");
     let log = spawn_monitor(dut);
@@ -224,7 +224,7 @@ fn longest_wait(samples: &[Sample]) -> usize {
 
 /// `hold` keeps the grant with its owner for as long as the owner requests; releasing it
 /// moves the grant on.
-#[simjig::test(timeout = "10us")]
+#[simjig::test(init = random, timeout = "10us")]
 async fn hold_keeps_the_grant_with_its_owner(dut: Dut) {
     let log = spawn_monitor(dut);
     reset(dut).await;
@@ -244,7 +244,7 @@ async fn hold_keeps_the_grant_with_its_owner(dut: Dut) {
 /// requester requesting and `hold` high through the reset edge, the first grant after it
 /// goes to requester 0, and random traffic then matches the model, which the monitor
 /// restarts at the reset edge.
-#[simjig::test(timeout = "100us")]
+#[simjig::test(init = random, timeout = "100us")]
 async fn a_reset_during_traffic_points_the_priority_at_0(ctx: &TestCtx, dut: Dut) {
     let mut rng = ctx.rng("stim");
     let log = spawn_monitor(dut);
@@ -277,7 +277,7 @@ async fn a_reset_during_traffic_points_the_priority_at_0(ctx: &TestCtx, dut: Dut
 /// every requester requesting and `hold` low, a pointer that moved would rotate the
 /// grant. After release, the first grant is again from 0. The monitor skips reset edges,
 /// so this test reads `gnt` itself.
-#[simjig::test(timeout = "10us")]
+#[simjig::test(init = random, timeout = "10us")]
 async fn gnt_grants_from_0_while_reset_is_held(dut: Dut) {
     let log = spawn_monitor(dut);
     reset(dut).await;

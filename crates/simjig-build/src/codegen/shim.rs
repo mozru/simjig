@@ -24,6 +24,10 @@
 //!   keeps the counters every point reports (`VL_COVER_INSERT`, `simjig_vl_config.h`). It
 //!   must match the model's `VM_COVERAGE`, which the compile step checks.
 //!
+//! - `kXInitialUnique = false` is emitted only for a model verilated with `--x-initial 0` or
+//!   `fast`; without it the shim assumes Verilator's default (`unique`) and reports
+//!   `SIMJIG_FEATURE_RANDOM_INIT`, so default shims are unchanged. Nothing can check it.
+//!
 //! Models built without trace or coverage need neither `verilated_fst_c.cpp` nor
 //! `verilated_cov.cpp` at link time (`docs/notes/tracecov.md`).
 
@@ -31,6 +35,7 @@ use svtypes::ir::Storage;
 
 use super::writer::Writer;
 use super::{Access, Error, Lowered, Signal, SignalTarget};
+use crate::XInitial;
 
 /// How the model is verilated; the shim must agree with the Verilator command line.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +48,9 @@ pub struct ShimOptions {
     pub trace_fst: bool,
     /// Whether Verilator runs with `--coverage` (or any `--coverage-*`).
     pub coverage: bool,
+    /// Verilator's `--x-initial`; only [`XInitial::Unique`] (its default) leaves the initial
+    /// values for the runtime to randomize.
+    pub x_initial: XInitial,
 }
 
 /// A C string literal for `text`.
@@ -109,6 +117,9 @@ pub fn emit_shim(lowered: &Lowered, opts: &ShimOptions) -> Result<String, Error>
         "static constexpr bool kCoverage = {};",
         opts.coverage
     ));
+    if opts.x_initial != XInitial::Unique {
+        w.line("static constexpr bool kXInitialUnique = false;");
+    }
     w.open(format!(
         "static void bind({prefix}& m, simjig::SignalTable& t) {{"
     ));

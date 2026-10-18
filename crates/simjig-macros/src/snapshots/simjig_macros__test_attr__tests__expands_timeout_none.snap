@@ -18,6 +18,7 @@ fn soak() {
             timeout: ::simjig::__private::TimeoutArg::Disabled,
             ignored: false,
             should_panic: false,
+            init: ::core::option::Option::None,
         },
         |_, _| async move { soak().await },
     );

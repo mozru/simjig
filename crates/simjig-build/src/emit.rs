@@ -117,6 +117,7 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
         timing: features.timing,
         trace_fst: features.trace_fst,
         coverage: features.coverage,
+        x_initial: config.x_initial,
     };
     let (rust, dpi) = rust_options(design, config)?;
     Ok(Emitted {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # C-level tests of FST tracing, coverage and per-model isolation (cpp/tests/main.cpp).
 # Run from the repository root: pixi run cpp-tests
-# Builds five models into one executable the way the abi spike does (cpp/spike/run.sh): the
+# Builds five models (Vtc_hier with --x-initial fast, so no random initial values) into one executable the way the abi spike does (cpp/spike/run.sh): the
 # other models are verilated first and compiled in as plain --exe sources, and the main model
 # (--trace-fst --coverage) brings libverilated with the FST writer and coverage runtime.
 set -euo pipefail
@@ -13,7 +13,7 @@ rm -rf "$out"
 mkdir -p "$out/scratch"
 vl() { verilator --cc --threads 1 "$@" >/dev/null; }
 vl --no-timing "$here/tc.vlt" "$here/tc.sv" --top-module tc --Mdir "$out/plain" --prefix Vtc_plain
-vl --no-timing --coverage-line "$here/tc_hier.sv" --Mdir "$out/hier" --prefix Vtc_hier
+vl --no-timing --coverage-line --x-initial fast "$here/tc_hier.sv" --Mdir "$out/hier" --prefix Vtc_hier
 vl --timing --trace-fst "$here/tc_timing.sv" --Mdir "$out/timing" --prefix Vtc_timing
 vl --no-timing --coverage-line "$here/tc_cg.sv" --Mdir "$out/cg" --prefix Vtc_cg
 others=$(ls "$out"/plain/*.cpp "$out"/hier/*.cpp "$out"/timing/*.cpp "$out"/cg/*.cpp | grep -v '__ALL')

@@ -100,9 +100,23 @@ impl Seed {
     /// and treats 0 as "pick a random seed" (`verilated.cpp`, 5.052).
     #[must_use]
     pub fn verilator_seed(self) -> u32 {
-        let bits = self.rng("verilator").next_u32() & 0x7fff_ffff;
-        bits.max(1)
+        positive_int(&mut self.rng("verilator"))
     }
+
+    /// The seed model `model` (its index in the simulation, from 0) draws its random
+    /// initial values from ([`InitValues::Random`](crate::InitValues)): the stream
+    /// `"init.model-<model>"`, kept in `1..=i32::MAX` because the shim passes it to
+    /// `VerilatedContext::randSeed`, an `int`. Each model has its own, so two instances of
+    /// one design start apart, while they share [`verilator_seed`](Self::verilator_seed).
+    #[must_use]
+    pub fn init_seed(self, model: usize) -> u32 {
+        positive_int(&mut self.rng(&format!("init.model-{model}")))
+    }
+}
+
+/// The next value of `rng` as a positive C `int`, `1..=i32::MAX`.
+fn positive_int(rng: &mut Rng) -> u32 {
+    (rng.next_u32() & 0x7fff_ffff).max(1)
 }
 
 /// Prints the value the way `SIMJIG_SEED` accepts it: `0x` and 16 hex digits.
@@ -266,6 +280,21 @@ mod tests {
     fn verilator_seed_is_a_positive_int() {
         for v in 0..1000 {
             let s = Seed::new(v, SeedSource::Env).verilator_seed();
+            assert!((1..=0x7fff_ffff).contains(&s), "{s}");
+        }
+    }
+
+    #[test]
+    fn init_seeds_are_positive_ints_per_model() {
+        let seed = Seed::new(9, SeedSource::Env);
+        assert_eq!(seed.init_seed(0), seed.init_seed(0));
+        assert_ne!(seed.init_seed(0), seed.init_seed(1));
+        assert_ne!(
+            seed.init_seed(0),
+            Seed::new(10, SeedSource::Env).init_seed(0)
+        );
+        for v in 0..1000 {
+            let s = Seed::new(v, SeedSource::Env).init_seed(3);
             assert!((1..=0x7fff_ffff).contains(&s), "{s}");
         }
     }

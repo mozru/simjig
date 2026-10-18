@@ -40,7 +40,7 @@ mod verilator;
 
 pub use codegen::{IfaceBinding, Probe, ProbeAccess, ProbeType};
 pub use compile::CppRecipe;
-pub use dut::{Built, CacheStatus, Dut, DutConfig, Features, GeneratedInput};
+pub use dut::{Built, CacheStatus, Dut, DutConfig, Features, GeneratedInput, XInitial};
 pub use emit::{Emitted, Emitter, ProbeSite, SvModule, codegen_emitter, ir_ports, noop_emitter};
 pub use env::BuildEnv;
 pub use error::Error;

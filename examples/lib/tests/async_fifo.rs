@@ -339,7 +339,7 @@ fn assert_ran_dry(coverage: &Coverage) {
 }
 
 /// A write clock somewhat faster than the read clock.
-#[simjig::test(timeout = "1ms")]
+#[simjig::test(init = random, timeout = "1ms")]
 async fn traffic_with_a_7ns_writer_and_an_11ns_reader(ctx: &TestCtx, dut: Dut) {
     let clocks = Clocks {
         wclk: ns(7),
@@ -352,7 +352,7 @@ async fn traffic_with_a_7ns_writer_and_an_11ns_reader(ctx: &TestCtx, dut: Dut) {
 }
 
 /// The same pair swapped: the reader is the faster side.
-#[simjig::test(timeout = "1ms")]
+#[simjig::test(init = random, timeout = "1ms")]
 async fn traffic_with_an_11ns_writer_and_a_7ns_reader(ctx: &TestCtx, dut: Dut) {
     let clocks = Clocks {
         wclk: ns(11),
@@ -366,7 +366,7 @@ async fn traffic_with_an_11ns_writer_and_a_7ns_reader(ctx: &TestCtx, dut: Dut) {
 
 /// A writer almost ten times faster than the reader, whose pointer moves several write
 /// cycles apart: the FIFO is full most of the time.
-#[simjig::test(timeout = "1ms")]
+#[simjig::test(init = random, timeout = "1ms")]
 async fn traffic_with_a_fast_writer_and_a_slow_reader(ctx: &TestCtx, dut: Dut) {
     let clocks = Clocks {
         wclk: ps(3100),
@@ -379,7 +379,7 @@ async fn traffic_with_a_fast_writer_and_a_slow_reader(ctx: &TestCtx, dut: Dut) {
 
 /// The reverse: a slow writer, so the FIFO is empty most of the time (and, the reader
 /// being active at least one cycle in eight, never full).
-#[simjig::test(timeout = "1ms")]
+#[simjig::test(init = random, timeout = "1ms")]
 async fn traffic_with_a_slow_writer_and_a_fast_reader(ctx: &TestCtx, dut: Dut) {
     let clocks = Clocks {
         wclk: ns(29),
@@ -395,7 +395,7 @@ async fn traffic_with_a_slow_writer_and_a_fast_reader(ctx: &TestCtx, dut: Dut) {
 /// after release, and traffic then runs on, every write after the reset read back once.
 /// Verilator starts every flop at zero, so only a reset from such a state shows that each
 /// reset clears its pointer and its synchronizer.
-#[simjig::test(timeout = "1ms")]
+#[simjig::test(init = random, timeout = "1ms")]
 async fn both_resets_mid_traffic_empty_both_sides(ctx: &TestCtx, dut: Dut) {
     let coverage = traffic(ctx, dut, directed_clocks(), true).await;
     assert!(coverage.flushed.get() >= 2, "{coverage:?}");
@@ -425,7 +425,7 @@ fn directed_clocks() -> Clocks {
 /// `DEPTH` ahead of it reads as full). Then the FIFO works again: three words written are
 /// read back in order. Random traffic resets at a falling edge with the flags as they
 /// happen to be, which shows none of this.
-#[simjig::test(timeout = "10us")]
+#[simjig::test(init = random, timeout = "10us")]
 async fn resets_clear_both_flags_without_a_clock_edge(dut: Dut) {
     start_clocks(dut, directed_clocks());
     reset(dut).await;
@@ -497,7 +497,7 @@ async fn read_words(dut: Dut, values: std::ops::Range<usize>) {
 
 /// Directed: with the reader idle, the FIFO takes exactly `DEPTH` writes, then holds
 /// `wfull`, and the read side, no longer empty, shows the oldest word.
-#[simjig::test(timeout = "10us")]
+#[simjig::test(init = random, timeout = "10us")]
 async fn full_after_depth_writes(dut: Dut) {
     start_clocks(dut, directed_clocks());
     reset(dut).await;
@@ -530,7 +530,7 @@ async fn full_after_depth_writes(dut: Dut) {
 /// the pointer moved (two synchronizer flops, then the flag's flop). One write clears
 /// `rempty` at the third `rclk` edge after it; with the FIFO full, one read clears `wfull`
 /// at the third `wclk` edge after it.
-#[simjig::test(timeout = "10us")]
+#[simjig::test(init = random, timeout = "10us")]
 async fn flags_see_the_other_side_three_edges_later(dut: Dut) {
     start_clocks(dut, directed_clocks());
     reset(dut).await;

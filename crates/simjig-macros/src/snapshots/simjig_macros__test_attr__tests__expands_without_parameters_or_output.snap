@@ -20,6 +20,7 @@ pub fn smoke() {
             timeout: ::simjig::__private::TimeoutArg::Default,
             ignored: false,
             should_panic: false,
+            init: ::core::option::Option::None,
         },
         |_, _| async move { smoke().await },
     );

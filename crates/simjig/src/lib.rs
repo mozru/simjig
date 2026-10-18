@@ -76,7 +76,7 @@ mod signal;
 pub use dpi::Chandle;
 pub use harness::Result;
 pub use harness::ctx::TestCtx;
-pub use harness::dut::{DutModel, LoadedModel, ModelOptions};
+pub use harness::dut::{DutModel, InitValues, LoadedModel, ModelOptions};
 pub use harness::multi::{Divergence, Lockstep, Mirror};
 pub use harness::report::{AppliedTimeout, FailureReport, RunIdentity, Signature};
 pub use harness::runner::TestOutput;

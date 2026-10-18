@@ -472,24 +472,24 @@ async fn reset_beats_push_and_pop<T: Value, C: Vector>(fifo: Fifo<T, C>, entries
     assert_eq!((st.resets, st.flushed), (1, 2), "{st:?}");
 }
 
-#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+#[simjig::test(init = random, timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
 async fn a_reset_beats_push_and_pop<D: sync_fifo::Ports>(dut: D) {
     let entries = [0x11, 0x22, 0x33, 0x44].map(D::WrData::from);
     reset_beats_push_and_pop(raw(dut), entries).await;
 }
 
-#[simjig::test(timeout = "2us")]
+#[simjig::test(init = random, timeout = "2us")]
 async fn a_reset_beats_item_push_and_pop(dut: item_fifo::Dut) {
     let entries = [1, 2, 3, 4].map(|i| item(Kind::DATA, i, 0x1111 * i));
     reset_beats_push_and_pop(Fifo::items(dut), entries).await;
 }
 
-#[simjig::test(timeout = "100us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+#[simjig::test(init = random, timeout = "100us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
 async fn a_reset_during_traffic_empties_the_fifo<D: sync_fifo::Ports>(ctx: &TestCtx, dut: D) {
     reset_during_traffic(ctx, raw(dut), random_word).await;
 }
 
-#[simjig::test(timeout = "100us")]
+#[simjig::test(init = random, timeout = "100us")]
 async fn a_reset_during_item_traffic_empties_the_fifo(ctx: &TestCtx, dut: item_fifo::Dut) {
     reset_during_traffic(ctx, Fifo::items(dut), random_item).await;
 }
@@ -520,19 +520,19 @@ fn item(kind: Kind, tag: u128, data: u128) -> Item {
     }
 }
 
-#[simjig::test(timeout = "100us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+#[simjig::test(init = random, timeout = "100us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
 async fn random_traffic_matches_the_model<D: sync_fifo::Ports>(ctx: &TestCtx, dut: D) {
     random_traffic(ctx, raw(dut), random_word).await;
 }
 
-#[simjig::test(timeout = "100us")]
+#[simjig::test(init = random, timeout = "100us")]
 async fn random_items_match_the_model(ctx: &TestCtx, dut: item_fifo::Dut) {
     random_traffic(ctx, Fifo::items(dut), random_item).await;
 }
 
 /// `DEPTH + 1` pushes: `count` climbs to `full` and the last push is dropped; `DEPTH`
 /// pops return the first `DEPTH` in order, and a pop of an empty FIFO is ignored.
-#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+#[simjig::test(init = random, timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
 async fn fills_to_full_and_drains_to_empty<D: sync_fifo::Ports>(dut: D) {
     let fifo = raw(dut);
     let board = start(fifo).await;
@@ -567,7 +567,7 @@ async fn fills_to_full_and_drains_to_empty<D: sync_fifo::Ports>(dut: D) {
 /// holds; when full both are taken, so the FIFO stays full with the new entry last.
 ///
 /// Written for one configuration, as a test of one `Dut` is: its values are `Bits<8>`.
-#[simjig::test(timeout = "2us")]
+#[simjig::test(init = random, timeout = "2us")]
 async fn push_and_pop_in_one_cycle(dut: sync_fifo::fifo_8x4::Dut) {
     let fifo = raw(dut);
     let board = start(fifo).await;
@@ -592,7 +592,7 @@ async fn push_and_pop_in_one_cycle(dut: sync_fifo::fifo_8x4::Dut) {
 
 /// Registered read: a pushed entry stays off `rd` (which holds its reset value) until a
 /// pop, and appears on the edge of that pop.
-#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+#[simjig::test(init = random, timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
 async fn registered_read_waits_for_a_pop<D: sync_fifo::Ports>(dut: D) {
     let fifo = raw(dut);
     start(fifo).await;
@@ -607,7 +607,7 @@ async fn registered_read_waits_for_a_pop<D: sync_fifo::Ports>(dut: D) {
 
 /// `count` climbs by one per push to `DEPTH`, where `full` rises: one body for every
 /// configuration of the sweep (the top README's "A parameter sweep").
-#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+#[simjig::test(init = random, timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
 async fn count_climbs_to_the_depth<D: sync_fifo::Ports>(dut: D) {
     clock(dut.clk(), ns(10)).start();
     dut.rst().set(1);
@@ -628,7 +628,7 @@ async fn count_climbs_to_the_depth<D: sync_fifo::Ports>(dut: D) {
 
 /// First-word fall-through: the head is on `rd` the edge after its push, without a pop,
 /// and each pop puts the next entry there on its own edge.
-#[simjig::test(timeout = "2us")]
+#[simjig::test(init = random, timeout = "2us")]
 async fn first_word_falls_through(dut: item_fifo::Dut) {
     let fifo = Fifo::items(dut);
     start(fifo).await;
@@ -649,7 +649,7 @@ async fn first_word_falls_through(dut: item_fifo::Dut) {
 /// with its own seed: the corner every branch starts from is reached once. Each branch
 /// gets its own monitor (a checkpoint needs every other task finished), seeded with the
 /// entries the fill left.
-#[simjig::test(timeout = "100us")]
+#[simjig::test(init = random, timeout = "100us")]
 async fn random_continuations_from_full(ctx: &TestCtx, dut: item_fifo::Dut) {
     let fifo = Fifo::items(dut);
     clock(fifo.clk, ns(10)).start();

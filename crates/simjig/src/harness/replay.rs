@@ -194,6 +194,7 @@ fn child_in(
             "1",
         ])
         .env("SIMJIG_SEED", run.seed.to_string())
+        .env("SIMJIG_INIT", run.init.as_str())
         .env("SIMJIG_RUNS_DIR", root)
         .env(TRACE_VAR, &waves)
         .env(TRACE_FROM_VAR, from.ticks().to_string())

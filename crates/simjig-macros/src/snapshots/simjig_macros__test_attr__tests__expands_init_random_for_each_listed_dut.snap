@@ -1,0 +1,48 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(duts = [fifo::small::Dut, fifo::big::Dut], init = random),\nquote! { async fn resets<D: fifo::Ports>(dut: D) {} })"
+---
+mod resets {
+    #[allow(unused_imports)]
+    use super::*;
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn resets<D: fifo::Ports>(dut: D) {}
+    #[::core::prelude::v1::test]
+    fn small() {
+        ::simjig::__private::run_test::<
+            fifo::small::Dut,
+            _,
+            _,
+        >(
+            &::simjig::__private::TestMeta {
+                module_path: ::core::module_path!(),
+                name: ::core::stringify!(small),
+                package: ::core::env!("CARGO_PKG_NAME"),
+                timeout: ::simjig::__private::TimeoutArg::Default,
+                ignored: false,
+                should_panic: false,
+                init: ::core::option::Option::Some(::simjig::InitValues::Random),
+            },
+            |_, __simjig_dut| async move { resets(__simjig_dut).await },
+        );
+    }
+    #[::core::prelude::v1::test]
+    fn big() {
+        ::simjig::__private::run_test::<
+            fifo::big::Dut,
+            _,
+            _,
+        >(
+            &::simjig::__private::TestMeta {
+                module_path: ::core::module_path!(),
+                name: ::core::stringify!(big),
+                package: ::core::env!("CARGO_PKG_NAME"),
+                timeout: ::simjig::__private::TimeoutArg::Default,
+                ignored: false,
+                should_panic: false,
+                init: ::core::option::Option::Some(::simjig::InitValues::Random),
+            },
+            |_, __simjig_dut| async move { resets(__simjig_dut).await },
+        );
+    }
+}

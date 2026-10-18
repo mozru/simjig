@@ -16,7 +16,7 @@ use crate::model::trace::TraceOptions;
 use crate::{Failure, Precision, Sim, SimDuration, SimTime, TimeUnit};
 
 use super::ctx::TestCtx;
-use super::dut::{DutModel, ModelOptions};
+use super::dut::{DutModel, InitValues, ModelOptions};
 use super::replay::{self, Original, TRACE_FROM_VAR, TRACE_TO_VAR, TRACE_VAR};
 use super::report::{AppliedTimeout, FailureReport, RunIdentity};
 use super::rundir::{self, Json, Summary};
@@ -70,6 +70,9 @@ pub struct TestMeta {
     /// outcome, so the report is not printed (libtest shows the payload if the panic
     /// does not match).
     pub should_panic: bool,
+    /// The `init` argument (`init = random`); `None` without one, when `SIMJIG_INIT`
+    /// decides.
+    pub init: Option<InitValues>,
 }
 
 impl TestMeta {
@@ -88,6 +91,8 @@ impl TestMeta {
 pub struct RunEnv {
     /// The root seed to use instead of the test-name seed (`SIMJIG_SEED`).
     pub seed: Option<u64>,
+    /// The initial values of tests without an `init` argument (`SIMJIG_INIT`).
+    pub init: Option<InitValues>,
     /// Where run directories go (`SIMJIG_RUNS_DIR`, else `<target>/simjig/runs`); `None`
     /// writes none.
     pub runs_root: Option<PathBuf>,
@@ -104,19 +109,22 @@ pub struct RunEnv {
 }
 
 impl RunEnv {
-    /// Reads `SIMJIG_SEED`, `SIMJIG_RUNS_DIR`, the waves variables (`SIMJIG_WAVES`,
+    /// Reads `SIMJIG_SEED`, `SIMJIG_INIT`, `SIMJIG_RUNS_DIR`, the waves variables (`SIMJIG_WAVES`,
     /// `SIMJIG_WAVES_ON_FAIL`, `SIMJIG_TRACE*`), and the pixi/conda variables that decide
     /// the repro's launcher (`PIXI_WORKSPACE_ROOT`, `PIXI_PROJECT_ROOT`, `CONDA_PREFIX`,
     /// ...; see `runner::launcher`).
     ///
     /// # Panics
-    /// If `SIMJIG_SEED`, a waves variable or a `SIMJIG_TRACE_*` time is set to something
+    /// If `SIMJIG_SEED`, `SIMJIG_INIT`, a waves variable or a `SIMJIG_TRACE_*` time is set to something
     /// it does not accept (the message says what is accepted).
     #[must_use]
     pub fn from_process() -> Self {
         let seed = std::env::var("SIMJIG_SEED")
             .ok()
             .map(|text| parse_seed(&text).unwrap_or_else(|e| panic!("{e}")));
+        let init = std::env::var("SIMJIG_INIT")
+            .ok()
+            .map(|text| InitValues::parse(&text).unwrap_or_else(|e| panic!("{e}")));
         let runs_root = std::env::var_os("SIMJIG_RUNS_DIR")
             .map(PathBuf::from)
             .or_else(rundir::default_root);
@@ -151,6 +159,7 @@ impl RunEnv {
         });
         Self {
             seed,
+            init,
             runs_root,
             launcher,
             binary,
@@ -297,7 +306,8 @@ where
         || Seed::from_test_name(meta.package, &test),
         |value| Seed::new(value, SeedSource::Env),
     );
-    let mut options = ModelOptions::new(seed);
+    let init = init_values(meta, env);
+    let mut options = ModelOptions::new(seed).with_init(init);
     if let Some(trace) = &env.trace {
         options = options.with_trace(trace.clone());
     }
@@ -306,12 +316,20 @@ where
         test,
         package: meta.package.to_owned(),
         seed,
+        init,
         ignored: meta.ignored,
         launcher: env.launcher.clone(),
         binary: env.binary.clone(),
     };
     let executed = execute(meta, &options, ctx, body);
     finish(run, env, &options, executed)
+}
+
+/// A test's initial values: its `init` argument, else `SIMJIG_INIT`, else zeros. The
+/// argument wins so a test whose design needs zeros keeps them under a `SIMJIG_INIT=random`
+/// sweep of the whole suite.
+fn init_values(meta: &TestMeta, env: &RunEnv) -> InitValues {
+    meta.init.or(env.init).unwrap_or_default()
 }
 
 fn execute<D, F, Fut>(meta: &TestMeta, options: &ModelOptions, ctx: TestCtx, body: F) -> Executed
@@ -449,6 +467,8 @@ fn summary<'a>(
         launcher: run.launcher.as_deref(),
         seed: run.seed,
         verilator_seed: options.verilator_seed,
+        init: options.init,
+        init_seed: options.random_init(),
         precision: precision.map(|p| p.to_string()),
         end_time: sim.map_or(Json::Null, |s| Json::time(s.now(), s.precision())),
         timeout: match (timeout, precision) {
@@ -561,6 +581,7 @@ fn replay_with_waves(
         test: outcome.test.clone(),
         package: meta.package.to_owned(),
         seed: outcome.seed,
+        init: init_values(meta, env),
         ignored: meta.ignored,
         launcher: env.launcher.clone(),
         binary: env.binary.clone(),

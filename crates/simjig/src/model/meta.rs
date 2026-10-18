@@ -231,6 +231,13 @@ pub enum LoadError {
         /// The model's prefix.
         prefix: &'static str,
     },
+    /// Random initial values were asked for ([`InitValues::Random`](crate::InitValues)),
+    /// but the model's initial values are compiled in (`--x-initial 0` or `fast`), or its
+    /// shim predates them.
+    NoRandomInit {
+        /// The model's prefix.
+        prefix: &'static str,
+    },
     /// The model's FST trace could not be opened.
     TraceOpen {
         /// The model's prefix.
@@ -266,6 +273,11 @@ impl LoadError {
             Self::TraceOpen { .. } => {
                 Some("check that the trace file's directory exists and is writable")
             }
+            Self::NoRandomInit { .. } => Some(
+                "build the model with `.x_initial(XInitial::Unique)` (the default) on its \
+                 `simjig_build::Dut`, or run the test with zero initial values \
+                 (`init = zero`, `SIMJIG_INIT=zero`)",
+            ),
             Self::Create { .. } => None,
         }
     }
@@ -367,6 +379,11 @@ impl fmt::Display for LoadError {
             Self::NoTrace { prefix } => write!(
                 f,
                 "model `{prefix}` was built without FST tracing, so it cannot write waves"
+            ),
+            Self::NoRandomInit { prefix } => write!(
+                f,
+                "model `{prefix}` cannot start from random initial values: it was built \
+                 with `--x-initial 0` or `fast`, which compile its initial values in"
             ),
             Self::TraceOpen {
                 prefix,

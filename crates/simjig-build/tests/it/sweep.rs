@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use simjig_build::{Dut, Error, Sweep, noop_emitter};
+use simjig_build::{Dut, Error, Sweep, XInitial, noop_emitter};
 
 use crate::support::Sandbox;
 
@@ -66,6 +66,42 @@ fn a_sweep_writes_one_module_over_its_members() {
         member.contains(&format!("prefix = {:?}", built.duts[0].prefix)),
         "{member}"
     );
+}
+
+/// The `<prefix>_shim.cpp` the build of `prefix` wrote somewhere under `dir`.
+fn shim_of(dir: &Path, prefix: &str) -> String {
+    let name = format!("{prefix}_shim.cpp");
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).unwrap().map(Result::unwrap) {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().is_some_and(|n| n == name.as_str()) {
+                return std::fs::read_to_string(path).unwrap();
+            }
+        }
+    }
+    panic!("no {name} under {}", dir.display());
+}
+
+/// A sweep member is built as its own DUT, so its `x_initial` reaches its Verilator flags
+/// and its shim's traits (whether `init = random` is possible) and not its neighbour's.
+#[test]
+fn each_member_keeps_its_own_x_initial() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let built = Sweep::new("counters")
+        .dut(counter(&rtl, "ctr8", 8))
+        .dut(counter(&rtl, "ctr12", 12).x_initial(XInitial::Zero))
+        .build_in(&s.env())
+        .unwrap();
+    let calls = s.verilator_calls();
+    assert_eq!(calls.matches("--x-initial").count(), 1, "{calls}");
+    let line = "kXInitialUnique = false";
+    let [unique, zero] = [0, 1].map(|i| shim_of(s.path(), &built.duts[i].prefix));
+    assert!(!unique.contains(line), "{unique}");
+    assert!(zero.contains(line), "{zero}");
 }
 
 #[test]

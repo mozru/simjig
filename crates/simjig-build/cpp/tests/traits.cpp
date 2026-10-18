@@ -167,6 +167,7 @@ struct HierTraits {
     static constexpr bool kTiming = false;
     static constexpr bool kTraceFst = false;
     static constexpr bool kCoverage = true;
+    static constexpr bool kXInitialUnique = false;  // run.sh: --x-initial fast
     static void bind(Vtc_hier& m, simjig::SignalTable& t) {
         SIMJIG_SIGNAL(t, m.clk, "tc_hier.clk", 1, SIMJIG_DIR_IN, kReadWrite);
         SIMJIG_SIGNAL(t, m.a, "tc_hier.a", 1, SIMJIG_DIR_IN, kReadWrite);

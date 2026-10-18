@@ -27,7 +27,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use simjig_build::{CppRecipe, Dut, ProbeAccess, ProbeType, codegen};
+use simjig_build::{CppRecipe, Dut, ProbeAccess, ProbeType, XInitial, codegen};
 
 /// The cocotb goldens were recorded with `--timescale 1ns/1ps` (tests/conformance/README.md).
 const TIMESCALE: [&str; 2] = ["--timescale", "1ns/1ps"];
@@ -116,6 +116,17 @@ fn duts() -> Vec<Dut> {
             .sources(["tests/model_tests/hello.sv"])
             .top("hello")
             .verilator_args(TIMESCALE),
+        // A register without reset, built with and without randomizable initial values
+        // (tests/model_tests/init.rs).
+        Dut::new("no_reset")
+            .sources(["tests/model_tests/no_reset.sv"])
+            .top("no_reset")
+            .verilator_args(TIMESCALE),
+        Dut::new("no_reset_fast")
+            .sources(["tests/model_tests/no_reset.sv"])
+            .top("no_reset")
+            .verilator_args(TIMESCALE)
+            .x_initial(XInitial::Fast),
         shared("inv", &["inv.sv"]),
         shared("flop", &["flop.sv"]),
         shared("counter", &["counter.sv"]),

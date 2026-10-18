@@ -98,6 +98,8 @@ mod with_models {
                 error_limit,
                 argc: 0,
                 argv: ptr::null(),
+                init: abi::INIT_ZERO,
+                init_seed: 0,
             };
             let mut raw = ptr::null_mut();
             // SAFETY: `opts` and `raw` are valid for the call; create never unwinds.
@@ -272,7 +274,7 @@ mod with_models {
             .map(|f| (f.ty.to_owned(), f.name.to_owned(), f.offset, f.size))
             .collect();
         assert_eq!(rust, cpp);
-        assert_eq!(cpp.len(), 49);
+        assert_eq!(cpp.len(), 51);
     }
 
     #[test]

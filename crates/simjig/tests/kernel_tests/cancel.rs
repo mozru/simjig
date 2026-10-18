@@ -389,3 +389,74 @@ impl<F: FnOnce()> Drop for OnDrop<F> {
         }
     }
 }
+
+/// Conformance README, "Known differences" (review cycle 5, scenario `r5_task_operand`):
+/// a `Task` passed **by value** to `with_timeout` or `first!` is cancelled when the
+/// combinator drops it; passed as `&mut task` it keeps running, as a cocotb Task operand
+/// does ("the callee continues to run").
+#[test]
+fn a_task_operand_by_value_is_cancelled_and_by_reference_keeps_running() {
+    let mut d = clocked();
+    let clk = d.clk;
+    let out = d.sim.run(async move {
+        // Counts rising edges until its 30th, then returns the count.
+        let counter = |name| {
+            let edges = Rc::new(RefCell::new(0_u32));
+            let seen = Rc::clone(&edges);
+            let task = spawn(name, async move {
+                for _ in 0..30 {
+                    rising(clk).await;
+                    *edges.borrow_mut() += 1;
+                }
+                *edges.borrow()
+            });
+            (task, seen)
+        };
+
+        let (by_value, seen_value) = counter("timeout_by_value");
+        let timed_out = with_timeout(ticks(25), by_value).await.is_err();
+        let at_timeout = *seen_value.borrow();
+
+        let (mut by_ref, seen_ref) = counter("timeout_by_ref");
+        let ref_timed_out = with_timeout(ticks(25), &mut by_ref).await.is_err();
+
+        let (first_value, seen_first_value) = counter("first_by_value");
+        simjig::first!(
+            async {
+                Timer::new(ticks(25)).await;
+                0
+            },
+            first_value
+        );
+        let at_first = *seen_first_value.borrow();
+
+        let (mut first_ref, seen_first_ref) = counter("first_by_ref");
+        simjig::first!(
+            async {
+                Timer::new(ticks(25)).await;
+                0
+            },
+            &mut first_ref
+        );
+
+        Timer::new(ticks(400)).await;
+        let after = (
+            *seen_value.borrow() - at_timeout,
+            *seen_first_value.borrow() - at_first,
+        );
+        (
+            timed_out && ref_timed_out,
+            after,
+            by_ref.await,
+            first_ref.await,
+            *seen_ref.borrow() + *seen_first_ref.borrow(),
+        )
+    });
+    assert_eq!(
+        out.unwrap(),
+        (true, (0, 0), 30, 30, 60),
+        "by value: no edge counted after the combinator dropped the task; \
+         by reference: the task ran to its 30th edge"
+    );
+    assert_clean(&d.sim);
+}

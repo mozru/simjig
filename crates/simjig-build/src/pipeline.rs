@@ -173,10 +173,12 @@ pub(crate) fn layout_check(
 fn layout_check_args(config: &DutConfig, module: &str, file: &Path) -> Vec<String> {
     // `-Wno-fatal` first: lint policy belongs to the model build, which sees the same
     // sources. Without it, a design with `timeunit` fails here on TIMESCALEMOD, because
-    // the generated module declares none. `-Werror-USERFATAL` still makes a layout
-    // mismatch fatal.
+    // the generated module declares none. The layout-check flags come last, after the
+    // user's arguments, so that none of these can turn a mismatch into a warning (checked
+    // against 5.052): a later `-Wwarn-USERFATAL` downgrades an earlier
+    // `-Werror-USERFATAL`, and `-Wno-USERFATAL` disables the warning until a later
+    // `-Wwarn-USERFATAL` re-enables it (`-Werror-` alone does not).
     let mut a = vec!["-Wno-fatal".to_owned()];
-    a.extend(codegen::LAYOUT_CHECK_FLAGS.iter().map(|f| (*f).to_owned()));
     let sources = config
         .sources
         .iter()
@@ -184,6 +186,8 @@ fn layout_check_args(config: &DutConfig, module: &str, file: &Path) -> Vec<Strin
         .chain([file.to_path_buf()])
         .collect();
     a.extend(config.design(module, sources, false).design_args());
+    a.push("-Wwarn-USERFATAL".to_owned());
+    a.extend(codegen::LAYOUT_CHECK_FLAGS.iter().map(|f| (*f).to_owned()));
     a
 }
 
@@ -204,8 +208,8 @@ mod tests {
         let args = layout_check_args(&config, "simjig_layout_c", Path::new("/g/l.sv"));
         assert_eq!(
             args.join(" "),
-            "-Wno-fatal --lint-only -Werror-USERFATAL --no-timing --top-module simjig_layout_c -DK=V \
-             /r/c.sv /g/l.sv"
+            "-Wno-fatal --no-timing --top-module simjig_layout_c -DK=V /r/c.sv /g/l.sv \
+             -Wwarn-USERFATAL --lint-only -Werror-USERFATAL"
         );
     }
 

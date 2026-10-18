@@ -5,7 +5,9 @@ use std::process::Command;
 
 use simjig_build::svtypes::ir::{Design, Storage};
 use simjig_build::svtypes::width::packed_storage;
-use simjig_build::{Built, CacheStatus, Dut, DutConfig, Emitted, Error, HeaderPort, PortDir};
+use simjig_build::{
+    Built, CacheStatus, Dut, DutConfig, Emitted, Error, HeaderPort, PortDir, SvModule,
+};
 
 use crate::support::Sandbox;
 
@@ -220,4 +222,42 @@ fn timing_reaches_the_json_pass() {
             .msb,
         7
     );
+}
+
+/// A layout check that always fails, as a mismatch would.
+#[expect(clippy::unnecessary_wraps, reason = "the `Emitter` signature")]
+fn failing_layout_check(_: &Design, _: &DutConfig) -> Result<Emitted, Error> {
+    Ok(Emitted {
+        layout_check: Some(SvModule {
+            module: "always_mismatched".into(),
+            contents: "module always_mismatched;\n  if (1) begin : g\n    \
+                       $fatal(1, \"layout mismatch\");\n  end\nendmodule\n"
+                .into(),
+        }),
+        ..Emitted::default()
+    })
+}
+
+/// The layout-check flags come after the user's Verilator arguments, so a user's
+/// `-Wno-USERFATAL` cannot turn a layout mismatch into a warning.
+#[test]
+fn user_args_cannot_disable_the_layout_check() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let err = counter(&rtl)
+        .emitter(failing_layout_check)
+        .verilator_args(["-Wno-USERFATAL"])
+        .build_in(&s.env())
+        .unwrap_err();
+    let Error::Command {
+        command, stderr, ..
+    } = &err
+    else {
+        panic!("expected the layout check to fail, got {err}");
+    };
+    assert!(
+        command.ends_with("--lint-only -Werror-USERFATAL"),
+        "{command}"
+    );
+    assert!(stderr.contains("layout mismatch"), "{stderr}");
 }

@@ -15,12 +15,17 @@
 //! - **Teardown.** `Drop` runs `final` blocks (unless poisoned), prints their output, then
 //!   destroys the model.
 //!
+//! - **DPI.** Every eval and `final` runs inside [`ModelDpi::scope`], so the model's DPI-C
+//!   imports reach this instance's Rust implementation; a DPI failure (a panic, no
+//!   implementation) poisons the model like a FATAL (see `crate::dpi`).
+//!
 //! `$finish` is reported as [`EvalStatus::Finished`]; `$error` stops the run at Verilator's
 //! default error limit of 1, as in cocotb on Verilator.
 
 use super::abi::{ACCESS_WRITE, Dir, MsgKind, OwnedMsg, Status};
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel};
+use crate::dpi::ModelDpi;
 use crate::kernel::backend::{EvalStatus, ModelBackend, ModelError};
 use crate::kernel::time::{Precision, SimTime};
 
@@ -33,6 +38,8 @@ pub(crate) struct VerilatorModel {
     poisoned: Option<String>,
     /// Scratch buffer for drained messages, reused across evals.
     msgs: Vec<OwnedMsg>,
+    /// The instance's DPI-C implementation context.
+    dpi: ModelDpi,
 }
 
 impl VerilatorModel {
@@ -76,6 +83,7 @@ impl VerilatorModel {
             precision,
             poisoned: None,
             msgs: Vec::new(),
+            dpi: ModelDpi::new(meta.prefix),
         };
         if let Err(e) = model.outcome(status) {
             // A model that failed to construct runs no final blocks when dropped.
@@ -228,8 +236,16 @@ impl ModelBackend for VerilatorModel {
                 message: format!("the model can no longer be evaluated: {reason}"),
             });
         }
-        let status = self.raw.eval();
-        self.outcome(status)
+        let (status, dpi_failure) = self.dpi.scope(|| self.raw.eval());
+        let result = self.outcome(status);
+        match dpi_failure {
+            // The DPI failure happened first: the design went on with a wrong value.
+            Some(message) => {
+                self.poisoned = Some(message.clone());
+                Err(ModelError { message })
+            }
+            None => result,
+        }
     }
 
     fn events_pending(&self) -> bool {
@@ -244,10 +260,13 @@ impl ModelBackend for VerilatorModel {
 impl Drop for VerilatorModel {
     fn drop(&mut self) {
         if self.poisoned.is_none() {
-            let status = self.raw.final_blocks();
+            let (status, dpi_failure) = self.dpi.scope(|| self.raw.final_blocks());
             // A failure in a final block has no run left to fail; its message is printed.
             if let Err(e) = self.outcome(status) {
                 print_line(&format!("simjig: in final blocks: {}", e.message));
+            }
+            if let Some(message) = dpi_failure {
+                print_line(&format!("simjig: in final blocks: {message}"));
             }
         }
     }

@@ -14,11 +14,13 @@
 //! generated Rust disagree).
 #![deny(unsafe_code)]
 
+mod dpi;
 mod harness;
 mod kernel;
 mod model;
 mod signal;
 
+pub use dpi::Chandle;
 pub use harness::Result;
 pub use harness::ctx::TestCtx;
 pub use harness::dut::{DutModel, ModelOptions};
@@ -64,5 +66,14 @@ pub mod __private {
     pub use crate::model::values::{FieldDiff, InvalidEnum, pack_field, unpack_field};
     pub use crate::signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
     pub use crate::{__dut_model as dut_model, __link_model as link_model};
+
+    /// What generated DPI-C trampolines and `Dut::set_dpi` name (`crate::dpi`).
+    pub mod dpi {
+        pub use crate::dpi::{
+            Abi, Bit, BitVec, Handle, I8, I16, I32, I64, InArg, InOutArg, Logic, LogicVec, OutArg,
+            Param, Ret, SvLogicVecVal, U8, U16, U32, U64, call, install,
+        };
+    }
+    pub use crate::__dpi_import as dpi_import;
     pub use simjig_bits as bits;
 }

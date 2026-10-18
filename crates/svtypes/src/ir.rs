@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::literal::Literal;
 
 /// Version of the serialized IR. Bumped on every change to the JSON form.
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 4;
 
 /// An elaborated design: types, modules and packages, as seen by one producer run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,7 +291,8 @@ pub struct Module {
     /// Modports, for an interface.
     pub modports: Vec<Modport>,
     /// Module and interface instances declared directly in the body, in declaration order.
-    /// Instances inside generate blocks are not listed. Omitted from the JSON when empty.
+    /// Instances inside generate blocks are in [`Module::generate_blocks`]. Omitted from
+    /// the JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances: Vec<Instance>,
     /// Variables declared directly in the body (ports, signals, parameters, localparams),
@@ -299,6 +300,31 @@ pub struct Module {
     /// blocks, tasks or functions. Omitted from the JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<Variable>,
+    /// The generate blocks of the body that elaboration kept, in declaration order.
+    /// Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generate_blocks: Vec<GenerateBlock>,
+}
+
+/// An elaborated generate block (IEEE 1800-2023 §27): a scope of its module, named as the
+/// producer names the scope. With Verilator, that is the block's label (`g_x`), the
+/// implicit name of an unnamed block (`genblk2`, §27.6), or the label with the iteration's
+/// index for each iteration of a generate-for loop (`g[0]`, §27.4). Its variables belong
+/// to the enclosing module.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerateBlock {
+    /// The scope name.
+    pub name: String,
+    /// Instances declared directly in the block. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<Instance>,
+    /// Variables declared directly in the block (not the loop's genvar). Omitted from the
+    /// JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<Variable>,
+    /// Nested generate blocks. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generate_blocks: Vec<GenerateBlock>,
 }
 
 /// An instance of a module or interface in a module body. With [`Module::variables`] it
@@ -309,6 +335,10 @@ pub struct Instance {
     pub name: String,
     /// The specialisation instantiated.
     pub module: ModuleId,
+    /// An array of instances (`leaf u[3:0] (..)`, IEEE 1800-2023 §23.3.3.5). Omitted from
+    /// the JSON when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub array: bool,
 }
 
 /// A variable declared in a module body: only its name and kind, not its type.

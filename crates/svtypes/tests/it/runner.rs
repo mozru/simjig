@@ -125,6 +125,43 @@ fn modules_record_instances_and_variables() {
     assert_eq!(design.module(inst.module).orig_name, "hier_leaf");
 }
 
+/// Generate blocks keep their instances and variables under the names Verilator gives
+/// their scopes: the label, `genblk<N>` for an unnamed block (IEEE 1800-2023 §27.6) and
+/// `label[i]` for each generate-for iteration; an instance array is marked as one.
+#[test]
+fn generate_blocks_record_their_hierarchy() {
+    let rtl = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/rtl");
+    let design = json_pass(&JsonPassOpts {
+        sources: vec![rtl.join("generate.sv")],
+        top: "gen_top".into(),
+        ..JsonPassOpts::default()
+    })
+    .unwrap();
+    let top = design.top_module();
+    let blocks: Vec<&str> = top
+        .generate_blocks
+        .iter()
+        .map(|b| b.name.as_str())
+        .collect();
+    assert_eq!(blocks, ["g_x", "genblk2", "g[0]", "g[1]"]);
+    let g_x = &top.generate_blocks[0];
+    assert_eq!(g_x.instances[0].name, "u_x");
+    assert_eq!(design.module(g_x.instances[0].module).orig_name, "gen_cell");
+    assert_eq!(g_x.generate_blocks[0].name, "inner");
+    assert_eq!(g_x.generate_blocks[0].instances[0].name, "u_in");
+    assert_eq!(top.generate_blocks[1].instances[0].name, "u_anon");
+    let g1 = &top.generate_blocks[3];
+    assert_eq!(g1.instances[0].name, "u");
+    let vars: Vec<&str> = g1.variables.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(vars, ["t"], "the genvar is not a variable of an iteration");
+    let flags: Vec<(&str, bool)> = top
+        .instances
+        .iter()
+        .map(|i| (i.name.as_str(), i.array))
+        .collect();
+    assert_eq!(flags, [("arr", true)]);
+}
+
 /// A port the IR cannot represent is reported by its name and source location first, with
 /// the fix when there is one; the JSON path comes last, for a bug report.
 #[test]

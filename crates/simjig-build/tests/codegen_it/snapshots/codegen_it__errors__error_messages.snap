@@ -3,7 +3,7 @@ source: crates/simjig-build/tests/codegen_it/errors.rs
 expression: "out.join(\"\\n\")"
 ---
 codegen: probe other.u.x: the path must start with the top module `top`, e.g. `top.u_core.state`
-codegen: probe top.u.x: no module `nope` in the design
+codegen: probe top.u.x: no module `nope` in the design; did you mean `top`?
 codegen: probe top.x: no type named `pkg::nope_t` in the IR
 codegen: probe top.x: width must be at least 1
 codegen: probe top.a$b: `a$b` is not a plain identifier

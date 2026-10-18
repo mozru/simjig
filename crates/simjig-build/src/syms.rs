@@ -68,12 +68,24 @@ fn read(obj_dir: &Path, prefix: &str) -> Result<Scopes, Error> {
     Ok(parse(&text))
 }
 
+/// A call that adds variables to a scope, by the scope's `Syms` member.
+enum Insert<'t> {
+    /// `varsInsertFromTable(<table>, ..)`.
+    Table(&'t str),
+    /// `varInsert(..)`.
+    Var(Var),
+}
+
 /// The scope table in the text of the `__Syms` sources (see the module docs).
+///
+/// With `--output-split`, the tables, the scope rows and the insert calls are in separate
+/// files, so every line is read before a call is resolved: the result does not depend on
+/// the order of the files.
 fn parse(text: &str) -> Scopes {
     let mut members: BTreeMap<&str, String> = BTreeMap::new();
     let mut tables: BTreeMap<&str, Vec<Var>> = BTreeMap::new();
+    let mut inserts: Vec<(&str, Insert<'_>)> = Vec::new();
     let mut table: Option<&str> = None;
-    let mut scopes = Scopes::default();
     for line in text.lines().map(str::trim) {
         if let Some(rest) = line.strip_prefix("extern const VlVarTableEntry ") {
             // A definition (`<name>[] = {`), not a forward declaration (`<name>[];`).
@@ -99,16 +111,23 @@ fn parse(text: &str) -> Scopes {
                 members.insert(member.trim(), unquote(name).to_owned());
             }
         } else if let Some((member, call)) = line.split_once("->") {
-            let scope = members.get(member).cloned().unwrap_or_default();
             if let Some(args) = call.strip_prefix("varsInsertFromTable(") {
                 let t = args.split(',').next().unwrap_or("").trim();
-                let vars = tables.get(t).cloned().unwrap_or_default();
-                scopes.0.entry(scope).or_default().extend(vars);
+                inserts.push((member, Insert::Table(t)));
             } else if let Some(args) = call.strip_prefix("varInsert(")
                 && let Some(v) = insert_call(args)
             {
-                scopes.0.entry(scope).or_default().push(v);
+                inserts.push((member, Insert::Var(v)));
             }
+        }
+    }
+    let mut scopes = Scopes::default();
+    for (member, insert) in inserts {
+        let scope = members.get(member).cloned().unwrap_or_default();
+        let vars = scopes.0.entry(scope).or_default();
+        match insert {
+            Insert::Table(t) => vars.extend(tables.get(t).cloned().unwrap_or_default()),
+            Insert::Var(v) => vars.push(v),
         }
     }
     scopes
@@ -320,6 +339,20 @@ extern const VlScopeTableEntry Vx__Syms__VpiScopeTable[] = {
         );
         assert!(s.0["x"][4].param && s.0["x"][3].unpacked && !s.0["x"][0].writable);
         assert_eq!(s.0["x.u"][0].width, Some(10));
+    }
+
+    /// `--output-split` puts the insert calls in `__Syms__ctor__<n>__Slow.cpp` files, which
+    /// may be read before the tables and scope rows of `__Syms__Slow.cpp`.
+    #[test]
+    fn calls_before_their_tables_and_scopes_resolve() {
+        let (decls, calls) = SYMS.split_at(SYMS.find("    __Vscopep_x->").unwrap());
+        let reordered = format!("{calls}\n{decls}");
+        let s = parse(&reordered);
+        let names =
+            |scope: &str| -> Vec<String> { s.0[scope].iter().map(|v| v.name.clone()).collect() };
+        assert_eq!(names("x"), ["r", "one", "two", "un", "LP"]);
+        assert_eq!(names("x.u"), ["s"]);
+        assert!(!s.0.contains_key(""), "every call found its scope");
     }
 
     #[test]

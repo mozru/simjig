@@ -148,6 +148,7 @@ mod tests {
                 modports: Vec::new(),
                 instances: Vec::new(),
                 variables: Vec::new(),
+                generate_blocks: Vec::new(),
             }],
             packages: Vec::new(),
         }
@@ -167,11 +168,11 @@ mod tests {
         // Pinned: the hash is compiled into generated Rust and C++ and compared at load,
         // so it must not depend on the Rust release (as `Debug` output may). Changing it
         // needs a CHANGELOG entry. Reference value from Python: sha256 over (u64 LE length,
-        // bytes) of the domain, the IR JSON (schema 3), a zero probe count and
+        // bytes) of the domain, the IR JSON (schema 4), a zero probe count and
         // "no-iface-top"; the first 8 bytes, big-endian.
         assert_eq!(
             ir_hash(&design("t"), &CodegenConfig::default()),
-            0x6819_fe9f_d4d9_70da
+            0x03ff_3895_c6a0_2744
         );
     }
 

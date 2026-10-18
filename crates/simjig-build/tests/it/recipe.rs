@@ -1,7 +1,7 @@
 //! The C ABI compile recipe (docs/notes/abi.md), observed on the real compiler command
 //! lines through a logging ccache stand-in.
 
-use simjig_build::Dut;
+use simjig_build::{CppRecipe, Dut};
 
 use crate::support::{Sandbox, dut, logging_ccache};
 
@@ -179,5 +179,148 @@ fn editing_one_dut_recompiles_only_its_model() {
     assert!(
         !names.iter().any(|n| n.starts_with(&flop.prefix)),
         "the unchanged model is not: {names:?}"
+    );
+}
+
+/// A recipe model source in `<sandbox>/src` that includes `header` (`K` is its value).
+fn recipe_source(s: &Sandbox, file: &str, header: &str) -> std::path::PathBuf {
+    let src = s.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let path = src.join(file);
+    std::fs::write(
+        &path,
+        format!(
+            "#include \"{header}\"\nint simjig_test_{}() {{ return K; }}\n",
+            &file[..file.len() - 4]
+        ),
+    )
+    .unwrap();
+    path
+}
+
+/// Builds `inv` with `recipe`; returns the names of the files compiled.
+fn build_inv(
+    s: &Sandbox,
+    env: &simjig_build::BuildEnv,
+    log: &std::path::Path,
+    recipe: CppRecipe,
+) -> (Vec<String>, Vec<String>) {
+    std::fs::remove_dir_all(log).unwrap();
+    std::fs::create_dir_all(log).unwrap();
+    let built = Dut::new("inv")
+        .sources([dut("inv").join("inv.sv")])
+        .top("inv")
+        .recipe(recipe)
+        .build_in(env)
+        .unwrap();
+    let _ = s;
+    (
+        compiles(log).into_iter().map(|(n, _)| n).collect(),
+        built.directives,
+    )
+}
+
+/// A header in a recipe include directory is part of the model's archive key: editing it
+/// compiles the model again.
+#[test]
+fn editing_a_header_in_a_recipe_include_dir_recompiles_the_model() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    let mut env = s.env();
+    env.simjig_ccache = Some(ccache.into());
+    let inc = s.path().join("inc");
+    std::fs::create_dir_all(&inc).unwrap();
+    std::fs::write(inc.join("k.h"), "#define K 1\n").unwrap();
+    let recipe = CppRecipe {
+        model_sources: vec![recipe_source(&s, "uses_k.cpp", "k.h")],
+        include_dirs: vec![inc.clone()],
+        ..CppRecipe::default()
+    };
+    let (first, _) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(first.contains(&"uses_k.cpp".to_owned()), "{first:?}");
+    let (again, _) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(again.is_empty(), "nothing changed: {again:?}");
+    std::fs::write(inc.join("k.h"), "#define K 2\n").unwrap();
+    let (edited, _) = build_inv(&s, &env, &log, recipe);
+    assert!(edited.contains(&"uses_k.cpp".to_owned()), "{edited:?}");
+}
+
+/// A header found next to a recipe source (not in any include directory) is a dependency
+/// too: editing it compiles the model again, and the build script reruns on it.
+#[test]
+fn editing_a_header_next_to_a_recipe_source_recompiles_the_model() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    let mut env = s.env();
+    env.simjig_ccache = Some(ccache.into());
+    let source = recipe_source(&s, "uses_near.cpp", "near.h");
+    let near = source.with_file_name("near.h");
+    std::fs::write(&near, "#define K 1\n").unwrap();
+    let recipe = CppRecipe {
+        model_sources: vec![source],
+        ..CppRecipe::default()
+    };
+    let (first, directives) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(first.contains(&"uses_near.cpp".to_owned()), "{first:?}");
+    let rerun = format!("cargo::rerun-if-changed={}", near.display());
+    assert!(directives.contains(&rerun), "{directives:?}");
+    let (again, directives) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(again.is_empty(), "nothing changed: {again:?}");
+    assert!(
+        directives.contains(&rerun),
+        "a cache hit reruns on it too: {directives:?}"
+    );
+    std::fs::write(&near, "#define K 2\n").unwrap();
+    let (edited, _) = build_inv(&s, &env, &log, recipe);
+    assert!(edited.contains(&"uses_near.cpp".to_owned()), "{edited:?}");
+}
+
+/// The compiler's identity is part of every archive key: a compiler whose `--version`
+/// changes (an upgrade in place, same path) compiles the model and the runtime again.
+#[test]
+fn a_new_compiler_version_recompiles_every_archive() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    // The compiler `cc` would pick: `CXX` (pixi sets it), else `c++`, found on PATH.
+    let name = std::env::var("CXX").unwrap_or_else(|_| "c++".to_owned());
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join(&name))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| std::path::PathBuf::from(&name));
+    let version = s.path().join("cxx-version");
+    std::fs::write(&version, "fake c++ 1.0\n").unwrap();
+    let cxx = s.path().join("fake-cxx");
+    crate::support::write_script(
+        &cxx,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then cat '{}'; exit 0; fi\nexec '{}' \"$@\"\n",
+            version.display(),
+            real.display()
+        ),
+    );
+    // SAFETY: nextest runs every test in its own process, and nothing else runs yet.
+    unsafe { std::env::set_var("CXX", &cxx) };
+    // Each build stands for one build-script run (one OUT_DIR), which asks the compiler
+    // for its version once.
+    let env_in = |out: &str| {
+        let mut env = s.env();
+        env.out_dir = s.path().join(out);
+        env.simjig_ccache = Some(ccache.clone().into());
+        env
+    };
+    let (first, _) = build_inv(&s, &env_in("out1"), &log, CppRecipe::default());
+    assert!(first.contains(&"verilated.cpp".to_owned()), "{first:?}");
+    let (same, _) = build_inv(&s, &env_in("out2"), &log, CppRecipe::default());
+    // The model's key has the shim's path, which is under OUT_DIR; the runtime's has not.
+    assert!(
+        !same.contains(&"verilated.cpp".to_owned()),
+        "the same compiler: {same:?}"
+    );
+    std::fs::write(&version, "fake c++ 1.1\n").unwrap();
+    let (upgraded, _) = build_inv(&s, &env_in("out3"), &log, CppRecipe::default());
+    assert!(
+        upgraded.contains(&"verilated.cpp".to_owned())
+            && upgraded.iter().any(|n| n.starts_with('V')),
+        "{upgraded:?}"
     );
 }

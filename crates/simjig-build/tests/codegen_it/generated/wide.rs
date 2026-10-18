@@ -337,7 +337,7 @@ pub struct Dut {
 impl Dut {
     /// Hash of the IR and configuration this code was generated from; the model's
     /// vtable carries the same value.
-    pub const IR_HASH: u64 = 0x2911_5f01_0172_846f;
+    pub const IR_HASH: u64 = 0x4f38_c56e_a000_4dea;
 
     /// Every signal, indexed by slot.
     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[

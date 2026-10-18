@@ -11,9 +11,9 @@
 //!    and [`CppRecipe::model_sources`]. Its `VM_*` defines are the model's own switches
 //!    from `_classes.mk`, exactly as `verilated.mk` passes them. Cached in the shared
 //!    cache like the runtime (`archives/<key>/`), keyed on the Verilator output directory
-//!    (content-addressed), the shim's and recipe sources' contents and the toolchain: a
-//!    build script reruns for any edit to any of its DUTs, and only the edited DUT's model
-//!    is compiled again.
+//!    (content-addressed), the shim's and recipe sources' contents, every header they
+//!    read and the toolchain: a build script reruns for any edit to any of its DUTs, and
+//!    only the edited DUT's model is compiled again.
 //! 2. **runtime extras**: runtime classes that only some models need (`verilated_fst_c`
 //!    for `--trace-fst`, `verilated_cov` for `--coverage`, `verilated_covergroup` for
 //!    covergroups), one cached archive per class and set of switches, compiled with the
@@ -33,25 +33,27 @@
 //!    (checked with grep, abi.md).
 //!    Cached once per (Verilator version, compiler, target, flags, runtime sources);
 //!    the runtime sources include `simjig_vl_config.h`.
-//!
-//! Every archive key also covers the contents of every file under
-//! [`CppRecipe::include_dirs`], since recipe sources may include them.
 //! 4. native libraries the extras need (`lz4`, `z` for FST), then the C++ standard
 //!    library.
 //!
 //! Each is emitted both as `rustc-link-lib` and as `rustc-link-arg` (see [`link_args`]),
 //! so the models link into every target of the package, whether or not it has a library.
 //!
+//! Every archive is keyed on its sources and every file the compiler read for them, so a
+//! header edit anywhere (next to a recipe source, in an include directory, in the
+//! toolchain) compiles it again (see `archive`). The build script reruns on those files
+//! too, except the ones under the cache and `OUT_DIR`, which derive from tracked inputs.
+//!
 //! ccache is used when available (see [`ccache_compiler`]).
 
 use std::path::{Path, PathBuf};
 
-use crate::cache::{self, Cache};
+use crate::archive::{self, Archive, Spec, Toolchain};
+use crate::cache::Cache;
 use crate::dut::DutConfig;
-use crate::hash::KeyHasher;
 use crate::runtime::Runtime;
 use crate::verilator::{self, Verilator};
-use crate::{ABI_VERSION, BuildEnv, Error, script};
+use crate::{BuildEnv, Error, script};
 
 /// Additions to the C ABI compile recipe. The default adds nothing, which *is* the ABI
 /// recipe: the base flags, runtime and link order described in the module docs are
@@ -238,12 +240,6 @@ fn check_features(config: &DutConfig, mk: &ClassesMk) -> Result<(), Error> {
     Ok(())
 }
 
-/// A static library, compiled or found in the cache.
-struct Archive {
-    dir: PathBuf,
-    name: String,
-}
-
 /// Compiles the libraries (see the module docs) and returns the link directives in the
 /// order a static linker needs: each library before the ones it calls.
 pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
@@ -260,6 +256,7 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
         i,
         base: &base,
         compiler: &compiler,
+        identity: archive::compiler_identity(i.env, &compiler),
     };
 
     let mut model_defines = mk.defines();
@@ -271,35 +268,29 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
         .collect();
     model_sources.extend(i.model_sources.iter().cloned());
     model_sources.extend(i.recipe.model_sources.iter().cloned());
-    let model = tc.cached_archive(
-        "archives",
-        &format!("model_{}", i.prefix),
-        &model_sources,
-        &model_defines,
-        &[i.obj_dir.to_path_buf()],
-    )?;
+    let model = tc.cached_archive(&Spec {
+        kind: "archives",
+        what: &format!("model_{}", i.prefix),
+        sources: &model_sources,
+        defines: &model_defines,
+        includes: &[i.obj_dir.to_path_buf()],
+    })?;
 
     let natives = native_libs(i.env, &mk);
     let mut extras = Vec::new();
     for class in mk.extras() {
         let src = i.verilator.include_dir.join(format!("{class}.cpp"));
         let includes: Vec<PathBuf> = natives.iter().filter_map(NativeLib::include_dir).collect();
-        extras.push(tc.cached_archive("libverilated", class, &[src], &model_defines, &includes)?);
+        extras.push(tc.cached_archive(&Spec {
+            kind: "libverilated",
+            what: class,
+            sources: &[src],
+            defines: &model_defines,
+            includes: &includes,
+        })?);
     }
 
-    let mut runtime_defines: Vec<(String, Option<String>)> = RUNTIME_SWITCHES
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), Some((*v).to_owned())))
-        .collect();
-    runtime_defines.extend(i.recipe.defines.iter().cloned());
-    let mut sources: Vec<PathBuf> = BASE_RUNTIME
-        .iter()
-        .map(|c| i.verilator.include_dir.join(format!("{c}.cpp")))
-        .collect();
-    sources.push(runtime.source());
-    sources.extend(i.recipe.global_sources.iter().cloned());
-    let shared = tc.cached_archive("libverilated", "verilated", &sources, &runtime_defines, &[])?;
-
+    let shared = shared_runtime(&tc, &runtime)?;
     let archives: Vec<&Archive> = std::iter::once(&model)
         .chain(&extras)
         .chain([&shared])
@@ -318,7 +309,47 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     }
     d.extend(stdlib.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
     d.extend(link_args(&archives, &natives, stdlib.as_deref()));
+    d.extend(rerun_on_deps(i, &archives));
     Ok(d)
+}
+
+/// The shared libverilated, with its fixed switches (see the module docs).
+fn shared_runtime(tc: &Toolchain<'_>, runtime: &Runtime) -> Result<Archive, Error> {
+    let i = tc.i;
+    let mut defines: Vec<(String, Option<String>)> = RUNTIME_SWITCHES
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), Some((*v).to_owned())))
+        .collect();
+    defines.extend(i.recipe.defines.iter().cloned());
+    let mut sources: Vec<PathBuf> = BASE_RUNTIME
+        .iter()
+        .map(|c| i.verilator.include_dir.join(format!("{c}.cpp")))
+        .collect();
+    sources.push(runtime.source());
+    sources.extend(i.recipe.global_sources.iter().cloned());
+    tc.cached_archive(&Spec {
+        kind: "libverilated",
+        what: "verilated",
+        sources: &sources,
+        defines: &defines,
+        includes: &[],
+    })
+}
+
+/// `rerun-if-changed` for every file the compiler read, except the ones under the cache
+/// and `OUT_DIR`: those derive from tracked inputs, and this run may have just written
+/// them, which Cargo would take as a change on the next build.
+fn rerun_on_deps(i: &Inputs<'_>, archives: &[&Archive]) -> Vec<String> {
+    let mut deps: Vec<&PathBuf> = archives
+        .iter()
+        .flat_map(|a| &a.deps)
+        .filter(|p| !p.starts_with(i.cache.root()) && !p.starts_with(&i.env.out_dir))
+        .collect();
+    deps.sort();
+    deps.dedup();
+    deps.into_iter()
+        .map(|p| format!("cargo::rerun-if-changed={}", p.display()))
+        .collect()
 }
 
 /// The same libraries again, as `cargo::rustc-link-arg` lines, in link order.
@@ -382,103 +413,6 @@ fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool)
         b.compiler(wrapper);
     }
     Ok((b, compiler))
-}
-
-/// What identifies a runtime archive besides its own sources and defines.
-struct Toolchain<'a> {
-    i: &'a Inputs<'a>,
-    base: &'a cc::Build,
-    compiler: &'a cc::Tool,
-}
-
-impl Toolchain<'_> {
-    /// Builds `simjig_<what>_<key>` from `sources` into `<cache>/<kind>/<key>/` unless it
-    /// is there. `includes` are hashed by path, so each must be content-addressed (the
-    /// Verilator output directory) or fixed for the Verilator installation.
-    fn cached_archive(
-        &self,
-        kind: &str,
-        what: &str,
-        sources: &[PathBuf],
-        defines: &[(String, Option<String>)],
-        includes: &[PathBuf],
-    ) -> Result<Archive, Error> {
-        let i = self.i;
-        let mut h = KeyHasher::new("simjig-archive-v3");
-        // The simjig-build version covers the fixed flags set in `base_build`; the
-        // runtime directory is content-addressed, so its path covers its headers.
-        h.str(kind)
-            .str(&ABI_VERSION.to_string())
-            .str(env!("CARGO_PKG_VERSION"))
-            .str(&i.verilator.version_line)
-            .path(&i.verilator.include_dir)
-            .path(self.compiler.path())
-            .str(&i.env.target)
-            .str(&i.env.cxx_opt)
-            .field(&[u8::from(i.env.debug)])
-            .str(what);
-        for f in self.compiler.args() {
-            h.field(f.as_encoded_bytes());
-        }
-        for (k, v) in defines {
-            h.str(k).str(v.as_deref().unwrap_or("\0none"));
-        }
-        for s in sources {
-            h.file(s)?;
-        }
-        for d in includes {
-            h.path(d);
-        }
-        for d in &i.recipe.include_dirs {
-            hash_tree(&mut h, d)?;
-        }
-        let key = h.finish();
-        let name = format!("simjig_{what}_{}", &key[..16]);
-        let dir = i.cache.root().join(kind).join(&key);
-        if dir.join(format!("lib{name}.a")).is_file() {
-            return Ok(Archive { dir, name });
-        }
-        let work = i.cache.work_dir()?;
-        let mut b = self.base.clone();
-        b.out_dir(&work).includes(includes).files(sources);
-        for (k, v) in defines {
-            b.define(k, v.as_deref());
-        }
-        if let Err(source) = b.try_compile(&name) {
-            cache::remove_best_effort(&work);
-            let what = match what.strip_prefix("model_") {
-                Some(prefix) => format!("the `{prefix}` model"),
-                None => format!("the Verilator runtime (`{what}`)"),
-            };
-            return Err(Error::Compile { what, source });
-        }
-        Cache::publish(&work, &dir)?;
-        Ok(Archive { dir, name })
-    }
-}
-
-/// Hashes every file under `dir` (relative path and contents, in sorted order), so a
-/// header edit in a recipe include directory changes the archive keys.
-fn hash_tree(h: &mut KeyHasher, dir: &Path) -> Result<(), Error> {
-    let mut stack = vec![dir.to_path_buf()];
-    let mut files = Vec::new();
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).map_err(Error::io("listing", &d))? {
-            let p = e.map_err(Error::io("listing", &d))?.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.is_file() {
-                files.push(p);
-            }
-        }
-    }
-    files.sort();
-    h.path(dir);
-    for f in &files {
-        h.path(f.strip_prefix(dir).unwrap_or(f));
-        h.file(f)?;
-    }
-    Ok(())
 }
 
 /// A native library a runtime extra links against.

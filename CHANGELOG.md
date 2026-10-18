@@ -17,6 +17,39 @@ the public API, the generated code or simulation semantics.
   (`Variable { name, kind: VariableKind::{Signal, Parameter, Localparam} }`), both omitted
   from the JSON when empty. Every IR hash, and so every generated `IR_HASH`/`kIrHash`,
   changes once.
+- IR schema 4: `Module::generate_blocks` (`GenerateBlock { name, instances, variables,
+  generate_blocks }`, named as Verilator names the scope: `g_x`, `genblk2`, `g[0]`) and
+  `Instance::array` (an instance array), each omitted from the JSON when empty or false.
+  Every IR hash, and so every generated `IR_HASH`/`kIrHash`, changes once.
+- Probe paths may go through generate blocks (`top.g_x.u.x`, `top.genblk2.u.x`,
+  `top.g[0].u.x`); naming a generate-for loop without an index, or an instance array, is
+  a `codegen::Error::Config` that names the fix.
+- A probe whose module is a typo names the closest module ("did you mean `core`?"), and a
+  probe path that ends at an instance or generate block says that it must end at a
+  variable.
+- `codegen::Error::Probe { path, reason }` (new variant) carries every probe mistake the
+  lowering finds; `Dut::build` reports it as `Error::Config` ("probe `p` (declared in
+  build.rs): ..."), the same headline as the probe checks against the scope table, where
+  it used to be `Error::Codegen`.
+- Model and runtime archives are keyed in two steps, like the Verilator cache: every
+  compile runs with `-MD`, and the key covers every file the compiler read (a header next
+  to a recipe source, in an include directory or `-I` flag, or in the toolchain), plus
+  the file names in each such directory. The build script also reruns on those files
+  (except the ones under the cache and `OUT_DIR`). Every archive is compiled again once.
+- Every archive key (models and Verilator runtimes) covers the compiler's identity: the
+  executable its path resolves to, with size and modification time, and its `--version`
+  output (run once per build script). Every archive is compiled again once.
+- `Dut::verilator_args` also refuses `--sc`, `--main`, `--binary`, `--lib-create`, `-o`,
+  `--hierarchical`, and the `--prefix=`, `--Mdir=`, `--top=` and `--top-module=` forms.
+- The cache drops a model's object files once they are archived, rebuilds an entry
+  directory that lost its archive, and removes work directories under `tmp/` that are
+  more than an hour old.
+- An interface port whose declaration cannot be read no longer hides the friendly
+  unbound-port message for the other ports; it gets a line of its own.
+- A `bind_iface` naming a port the DUT does not have ("no interface port `rq` on `ifdut`;
+  did you mean `req`?"), an interface no source declares, or an interface other than the
+  port's is an `Error::Config` naming the call to fix, instead of a dump of the generated
+  top.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

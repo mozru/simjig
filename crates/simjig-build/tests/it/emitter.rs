@@ -142,12 +142,13 @@ fn codegen_errors_name_the_dut() {
         )
         .build_in(&s.env())
         .unwrap_err();
-    assert!(matches!(err, Error::Codegen { .. }), "{err}");
-    // The cause is the `source()`, not part of the message, so a reporter that walks
-    // the chain prints it once.
-    assert_eq!(err.to_string(), "generating code for DUT `inv`");
-    let source = std::error::Error::source(&err).expect("the codegen error");
-    assert!(source.to_string().starts_with("codegen: "), "{source}");
+    // A probe mistake reads like the probe checks after verilating (`Error::Config`).
+    assert!(matches!(err, Error::Config { .. }), "{err}");
+    assert_eq!(
+        err.to_string(),
+        "invalid DUT `inv` configuration: probe `inv.nope` (declared in build.rs): no type \
+         named `no::such_t` in the IR"
+    );
 }
 
 /// The header is checked against the IR's ports; also compare them here, sorted.

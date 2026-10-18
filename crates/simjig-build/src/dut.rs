@@ -101,6 +101,8 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
              (`Parameters from the command line were not found in the design`)",
         );
     }
+    // `--prefix=Vx` is `--prefix Vx`.
+    let name = name.split_once('=').map_or(name, |(n, _)| n);
     match name {
         "timing" | "no-timing" => Some(
             "use `.timing(true)` or `.timing(false)`: the JSON pass, the layout check and \
@@ -128,9 +130,17 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
             "the pipeline puts Verilator's output in the shared content-addressed cache; \
              set the cache with `SIMJIG_CACHE_DIR`",
         ),
-        "cc" | "exe" | "build" => Some(
+        "cc" | "exe" | "build" | "main" | "binary" | "lib-create" | "o" => Some(
             "the pipeline verilates with `--cc` and compiles and links the model itself; \
              add C++ sources with `.recipe(CppRecipe { model_sources, .. })`",
+        ),
+        "sc" => Some(
+            "simjig models are C++ (`--cc`): the shim and the runtime drive a C++ model, not \
+             a SystemC one",
+        ),
+        "hierarchical" => Some(
+            "the pipeline compiles one model per DUT, and a hierarchical block is a separate \
+             model whose variables the DUT's scope table does not hold",
         ),
         _ => None,
     }
@@ -498,8 +508,11 @@ impl Dut {
     /// (`counter.u_core.state`); `module` is the module that declares the variable and
     /// `ty` its type, because the type IR has no types of internal variables to look them
     /// up in. The build checks the path, module and access against the IR and the width
-    /// against Verilator's scope table. Paths through generate blocks (`top.g[0].u.x`) are
-    /// not supported yet.
+    /// against Verilator's scope table. A path enters a generate block by the name
+    /// Verilator gives its scope: the label (`top.g_x.u.x`), `genblk<N>` for an unnamed
+    /// block (`top.genblk2.u.x`, IEEE 1800-2023 §27.6), or `label[i]` for one iteration
+    /// of a generate-for loop (`top.g[0].u.x`). Paths through instance arrays are not
+    /// supported.
     pub fn probe(
         mut self,
         path: impl Into<String>,
@@ -1033,6 +1046,16 @@ mod tests {
             (&["--cc"], "`.recipe(CppRecipe"),
             (&["--exe"], "`.recipe(CppRecipe"),
             (&["--build"], "`.recipe(CppRecipe"),
+            (&["--main"], "`.recipe(CppRecipe"),
+            (&["--binary"], "`.recipe(CppRecipe"),
+            (&["--lib-create", "x"], "`.recipe(CppRecipe"),
+            (&["-o", "x"], "`.recipe(CppRecipe"),
+            (&["--sc"], "C++ (`--cc`)"),
+            (&["--hierarchical"], "one model per DUT"),
+            (&["--prefix=Vx"], "`Dut::new(name)`"),
+            (&["--Mdir=obj"], "`SIMJIG_CACHE_DIR`"),
+            (&["--top=x"], "`.top(\"module\")`"),
+            (&["--top-module=x"], "`.top(\"module\")`"),
         ] {
             let m = msg(args);
             assert!(m.contains(hint) && m.contains(args[0]), "{args:?}: {m}");
@@ -1044,6 +1067,8 @@ mod tests {
             &["--trace-structs"],
             &["--coverage-line"],
             &["-Wno-WIDTH"],
+            &["-O3"],
+            &["--output-split", "1"],
         ] {
             assert!(with_args(ok).validate().is_ok(), "{ok:?}");
         }

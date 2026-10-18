@@ -25,7 +25,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use simjig_build::{Dut, ProbeAccess, ProbeType, codegen};
+use simjig_build::{CppRecipe, Dut, ProbeAccess, ProbeType, codegen};
 
 /// The cocotb goldens were recorded with `--timescale 1ns/1ps` (tests/conformance/README.md).
 const TIMESCALE: [&str; 2] = ["--timescale", "1ns/1ps"];
@@ -120,6 +120,15 @@ fn duts() -> Vec<Dut> {
         Dut::new("dpi")
             .sources(["../../tests/duts/dpi/dpi.sv"])
             .top("dpi"),
+        // The same design with both imports in C (the reference implementation).
+        Dut::new("dpi_c")
+            .sources(["../../tests/duts/dpi/dpi.sv"])
+            .top("dpi")
+            .dpi_in_c(["dpi_add", "dpi_tick"])
+            .recipe(CppRecipe {
+                model_sources: vec!["../../tests/duts/dpi/dpi_impl.c".into()],
+                ..CppRecipe::default()
+            }),
         Dut::new("dpi_types")
             .sources(["tests/dpi_tests/dpi_types.sv"])
             .top("dpi_types"),

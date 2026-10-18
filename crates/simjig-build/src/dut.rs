@@ -22,7 +22,7 @@
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
-use svtypes::ir::Design;
+use svtypes::ir::{Design, DpiImport};
 
 use crate::codegen::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 use crate::compile::{self, CppRecipe};
@@ -142,6 +142,9 @@ pub struct DutConfig {
     pub verilator_args: Vec<String>,
     /// Generated Verilator inputs, passed before the sources.
     pub generated: Vec<GeneratedInput>,
+    /// C names of the DPI-C imports the user implements in C or C++ ([`Dut::dpi_in_c`]);
+    /// the code generator emits no Rust trampoline for them.
+    pub dpi_in_c: Vec<String>,
 }
 
 impl DutConfig {
@@ -157,6 +160,43 @@ impl DutConfig {
             trace_fst: self.trace_fst,
             coverage: coverage_after(self.coverage, &self.verilator_args),
         }
+    }
+
+    /// The design's DPI-C imports that Rust implements: all of them except
+    /// [`dpi_in_c`](Self::dpi_in_c).
+    ///
+    /// # Errors
+    /// [`Error::Config`] if `dpi_in_c` names an import the design does not have.
+    pub fn rust_dpi_imports(&self, design: &Design) -> Result<Vec<DpiImport>, Error> {
+        if let Some(unknown) = self
+            .dpi_in_c
+            .iter()
+            .find(|c| !design.dpi_imports.iter().any(|i| &i.c_name == *c))
+        {
+            let known: Vec<&str> = design
+                .dpi_imports
+                .iter()
+                .map(|i| i.c_name.as_str())
+                .collect();
+            return Err(Error::Config {
+                dut: self.name.clone(),
+                msg: format!(
+                    "`dpi_in_c` names `{unknown}`, but the design imports no DPI-C function \
+                     with that C name (its imports: {})",
+                    if known.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        known.join(", ")
+                    }
+                ),
+            });
+        }
+        Ok(design
+            .dpi_imports
+            .iter()
+            .filter(|i| !self.dpi_in_c.contains(&i.c_name))
+            .cloned()
+            .collect())
     }
 
     /// The Verilator `--prefix`: `V<name>_<hash8>`, unique per configuration so several
@@ -529,6 +569,18 @@ impl Dut {
         self
     }
 
+    /// Leaves the DPI-C imports with these C names to C: the generated Rust has no trait
+    /// method and no trampoline for them, so a C or C++ definition (for example in
+    /// [`CppRecipe::model_sources`]) is the only one and links without a duplicate symbol.
+    /// The other imports are still implemented in Rust through `Dut::set_dpi`. Naming a C
+    /// name the design does not import fails the build.
+    pub fn dpi_in_c(mut self, c_names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.config
+            .dpi_in_c
+            .extend(c_names.into_iter().map(Into::into));
+        self
+    }
+
     /// Appends raw Verilator arguments (for example `-Wno-WIDTH`).
     pub fn verilator_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.config
@@ -607,7 +659,11 @@ impl Dut {
         let header_ports =
             header::read_header_ports(&verilator::output_file(&model.obj_dir, &prefix, ".h"))?;
         header::check_ports(&header_ports, &placed.ports)?;
-        check_dpi_header(&ir.design, &model.obj_dir, &prefix)?;
+        check_dpi_header(
+            &self.config.rust_dpi_imports(&ir.design)?,
+            &model.obj_dir,
+            &prefix,
+        )?;
         let dpi_header = verilator::output_file(&model.obj_dir, &prefix, "__Dpi.h");
         script::claim_dpi_exports(
             env,
@@ -649,13 +705,13 @@ impl Dut {
 
 /// Cross-checks the DPI-C trampolines' prototypes against `V<prefix>__Dpi.h`, which
 /// Verilator writes only for a design with DPI functions.
-fn check_dpi_header(design: &Design, obj_dir: &Path, prefix: &str) -> Result<(), Error> {
-    if design.dpi_imports.is_empty() {
+fn check_dpi_header(imports: &[DpiImport], obj_dir: &Path, prefix: &str) -> Result<(), Error> {
+    if imports.is_empty() {
         return Ok(());
     }
     let path = verilator::output_file(obj_dir, prefix, "__Dpi.h");
     let text = std::fs::read_to_string(&path).map_err(Error::io("reading", &path))?;
-    crate::codegen::check_dpi_header(&design.dpi_imports, &text).map_err(|m| Error::Parse {
+    crate::codegen::check_dpi_header(imports, &text).map_err(|m| Error::Parse {
         path,
         line: m.line,
         msg: m.message,

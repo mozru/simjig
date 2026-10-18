@@ -85,14 +85,16 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
         trace_fst: features.trace_fst,
         coverage: features.coverage,
     };
+    let dpi = config.rust_dpi_imports(design)?;
     let rust = RustOptions {
         prefix: opts.prefix.clone(),
         precision_exponent: design.time_precision.0,
+        dpi_imports: dpi.iter().map(|i| i.c_name.clone()).collect(),
     };
     Ok(Emitted {
         rust: Some(
             codegen::emit_rust(&lowered, &rust)
-                + &codegen::emit_dpi(design, &lowered, &opts.prefix).map_err(fail)?,
+                + &codegen::emit_dpi(&dpi, &lowered, &opts.prefix).map_err(fail)?,
         ),
         shim_cpp: Some(codegen::emit_shim(&lowered, &opts).map_err(fail)?),
         vlt: Some(codegen::emit_vlt(&lowered)),

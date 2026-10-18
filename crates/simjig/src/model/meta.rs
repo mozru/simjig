@@ -129,6 +129,9 @@ pub struct ModelMeta {
     pub precision_exponent: i8,
     /// Every signal, in slot order (`Dut::SIGNALS`).
     pub signals: &'static [SignalMeta],
+    /// C names of the model's DPI-C imports implemented in Rust. A model without any
+    /// evaluates without a DPI scope (see `crate::dpi`).
+    pub dpi_imports: &'static [&'static str],
 }
 
 impl fmt::Debug for ModelMeta {
@@ -138,6 +141,7 @@ impl fmt::Debug for ModelMeta {
             .field("ir_hash", &format_args!("{:#018x}", self.ir_hash))
             .field("precision_exponent", &self.precision_exponent)
             .field("signals", &self.signals.len())
+            .field("dpi_imports", &self.dpi_imports)
             .finish_non_exhaustive()
     }
 }

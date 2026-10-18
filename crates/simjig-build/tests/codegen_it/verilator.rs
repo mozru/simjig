@@ -102,6 +102,7 @@ fn iface_dut_parameters_become_dut_consts() {
     let opts = RustOptions {
         prefix: "Vtop".to_owned(),
         precision_exponent: case.design.time_precision.0,
+        dpi_imports: Vec::new(),
     };
     assert!(emit_rust(&lowered, &opts).contains("pub const K: ::core::primitive::i32 = 3;"));
 }

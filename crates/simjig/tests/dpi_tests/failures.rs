@@ -67,7 +67,9 @@ fn a_panic_fails_the_run_and_poisons_the_model() {
     );
     let location = failure.location.expect("the panicking line");
     assert!(
-        location.to_string().starts_with("crates/simjig/tests/dpi_tests/failures.rs:"),
+        location
+            .to_string()
+            .starts_with("crates/simjig/tests/dpi_tests/failures.rs:"),
         "{location}"
     );
     assert!(

@@ -41,7 +41,7 @@ fn ir(top: &str, sv: &Path) -> Design {
 
 fn emit(design: &Design) -> Result<String, simjig_build::codegen::Error> {
     let lowered = lower(design, &CodegenConfig::default()).unwrap();
-    emit_dpi(design, &lowered, "Vprefix")
+    emit_dpi(&design.dpi_imports, &lowered, "Vprefix")
 }
 
 #[test]
@@ -133,5 +133,42 @@ fn the_cross_check_names_a_drifted_prototype() {
     assert_eq!(
         (mismatch.line, mismatch.message.as_str()),
         (0, "DPI-C import `ty_c_alias` is not declared in the header")
+    );
+}
+
+#[test]
+fn imports_left_to_c_get_no_trait_method_and_no_trampoline() {
+    let (top, sv) = &designs()[0];
+    let design = ir(top, sv);
+    let lowered = lower(&design, &CodegenConfig::default()).unwrap();
+    let config = simjig_build::Dut::new("dpi").dpi_in_c(["dpi_add"]);
+    let rust = config.config().rust_dpi_imports(&design).unwrap();
+    assert_eq!(
+        rust.iter().map(|i| i.c_name.as_str()).collect::<Vec<_>>(),
+        ["dpi_tick"]
+    );
+    let text = emit_dpi(&rust, &lowered, "Vprefix").unwrap();
+    assert!(text.contains("fn dpi_tick"), "{text}");
+    assert!(!text.contains("dpi_add"), "{text}");
+
+    let all_c = simjig_build::Dut::new("dpi").dpi_in_c(["dpi_add", "dpi_tick"]);
+    let none = all_c.config().rust_dpi_imports(&design).unwrap();
+    assert_eq!(emit_dpi(&none, &lowered, "Vprefix").unwrap(), "");
+}
+
+#[test]
+fn leaving_an_unknown_import_to_c_is_an_error() {
+    let (top, sv) = &designs()[0];
+    let design = ir(top, sv);
+    let err = simjig_build::Dut::new("dpi")
+        .dpi_in_c(["dpi_sub"])
+        .config()
+        .rust_dpi_imports(&design)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("`dpi_in_c` names `dpi_sub`, but the design imports no DPI-C function")
+            && err.contains("dpi_add, dpi_tick"),
+        "{err}"
     );
 }

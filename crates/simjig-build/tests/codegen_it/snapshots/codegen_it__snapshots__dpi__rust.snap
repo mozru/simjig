@@ -60,4 +60,5 @@ impl Dut {
     prefix = "Vtop",
     symbol = "simjig_vtable_Vtop",
     precision_exponent = -12,
+    dpi_imports = ["c_alias", "f_chandle", "f_int", "f_ints", "f_ret16", "f_scalars", "f_unsupported", "f_vectors", "f_void", "pkg_fn", "t_task"],
 );

@@ -16,8 +16,10 @@
 //!   end of every timestep and closed on drop (see `model::trace`).
 //! - **Teardown.** `Drop` dumps the last timestep, runs `final` blocks (unless poisoned),
 //!   prints their output, closes the trace, then destroys the model.
-//! - **DPI.** Every eval and `final` runs inside [`ModelDpi::scope`], so the model's DPI-C
-//!   imports reach this instance's Rust implementation; a DPI failure (a panic, no
+//! - **DPI.** For a model with DPI-C imports implemented in Rust
+//!   ([`ModelMeta::dpi_imports`]), every eval and `final` runs inside [`ModelDpi::scope`],
+//!   so those imports reach this instance's Rust implementation; models without any skip
+//!   the scope's cost. A DPI failure (a panic, no
 //!   implementation) poisons the model like a FATAL (see `crate::dpi`).
 //!
 //! `$finish` is reported as [`EvalStatus::Finished`]; `$error` stops the run at Verilator's
@@ -27,7 +29,7 @@ use super::abi::{ACCESS_WRITE, Dir, MsgKind, OwnedMsg, Status};
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
 use super::trace::{TraceOptions, Tracer};
-use crate::dpi::ModelDpi;
+use crate::dpi::{DpiFailure, ModelDpi};
 use crate::kernel::backend::{EvalStatus, ModelBackend, ModelError};
 use crate::kernel::time::{Precision, SimTime};
 
@@ -40,8 +42,9 @@ pub(crate) struct VerilatorModel {
     poisoned: Option<String>,
     /// Scratch buffer for drained messages, reused across evals.
     msgs: Vec<OwnedMsg>,
-    /// The instance's DPI-C implementation context.
-    dpi: ModelDpi,
+    /// The instance's DPI-C implementation context; `None` for a model without DPI-C
+    /// imports implemented in Rust.
+    dpi: Option<ModelDpi>,
     /// The open FST trace, if any.
     tracer: Option<Tracer>,
     /// The time of the current timestep (the last `set_time`).
@@ -94,7 +97,7 @@ impl VerilatorModel {
             precision,
             poisoned: None,
             msgs: Vec::new(),
-            dpi: ModelDpi::new(meta.prefix),
+            dpi: (!meta.dpi_imports.is_empty()).then(|| ModelDpi::new(meta.prefix)),
             tracer: None,
             now: SimTime::ZERO,
         };
@@ -264,7 +267,7 @@ impl ModelBackend for VerilatorModel {
                 "the model can no longer be evaluated: {reason}"
             )));
         }
-        let (status, dpi_failure) = self.dpi.scope(|| self.raw.eval());
+        let (status, dpi_failure) = dpi_scope(self.dpi.as_mut(), || self.raw.eval());
         let result = self.outcome(status);
         // Before a DPI failure poisons the model on the Rust side: the C++ model is still
         // healthy, so the waves keep the timestep that failed.
@@ -295,13 +298,21 @@ impl ModelBackend for VerilatorModel {
     }
 }
 
+/// Runs `f` inside `dpi`'s scope, or plainly for a model without Rust DPI imports.
+fn dpi_scope<R>(dpi: Option<&mut ModelDpi>, f: impl FnOnce() -> R) -> (R, Option<DpiFailure>) {
+    match dpi {
+        Some(dpi) => dpi.scope(f),
+        None => (f(), None),
+    }
+}
+
 impl Drop for VerilatorModel {
     fn drop(&mut self) {
         if self.poisoned.is_none() {
             if let Some(tracer) = &mut self.tracer {
                 tracer.end_timestep(&mut self.raw);
             }
-            let (status, dpi_failure) = self.dpi.scope(|| self.raw.final_blocks());
+            let (status, dpi_failure) = dpi_scope(self.dpi.as_mut(), || self.raw.final_blocks());
             // A failure in a final block has no run left to fail; its message is printed.
             if let Err(e) = self.outcome(status) {
                 print_line(&format!("simjig: in final blocks: {}", e.message));
@@ -432,6 +443,7 @@ mod tests {
                 access: Access::Out,
             },
         ],
+        dpi_imports: &[],
     };
 
     fn counts() -> (u32, u32, u32) {
@@ -470,6 +482,21 @@ mod tests {
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
         drop(model);
         assert_eq!(counts(), (1, 1, 1));
+    }
+
+    #[test]
+    fn only_a_model_with_rust_dpi_imports_gets_a_dpi_scope() {
+        static WITH_DPI: ModelMeta = ModelMeta {
+            dpi_imports: &["f"],
+            ..FAKE
+        };
+        fake::reset();
+        let plain = VerilatorModel::load(&FAKE, &[], None).unwrap();
+        assert!(plain.dpi.is_none());
+        drop(plain);
+        fake::reset();
+        let with_dpi = VerilatorModel::load(&WITH_DPI, &[], None).unwrap();
+        assert!(with_dpi.dpi.is_some());
     }
 
     #[test]

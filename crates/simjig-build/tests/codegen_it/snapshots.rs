@@ -13,6 +13,12 @@ fn rust_options(case: &Case, lowered: &Lowered) -> RustOptions {
     RustOptions {
         prefix: format!("V{}", lowered.top),
         precision_exponent: case.design.time_precision.0,
+        dpi_imports: case
+            .design
+            .dpi_imports
+            .iter()
+            .map(|i| i.c_name.clone())
+            .collect(),
     }
 }
 

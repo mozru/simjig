@@ -20,7 +20,7 @@
 //! field `set_dpi` uses and the type names it must not collide with; DPI signatures carry
 //! no type the lowering names.
 
-use svtypes::ir::{Design, Direction, DpiArg, DpiImport, DpiType};
+use svtypes::ir::{Direction, DpiArg, DpiImport, DpiType};
 
 use super::Error;
 use super::lowered::{DutField, Lowered};
@@ -39,18 +39,20 @@ const SUPPORTED: &str = "simjig implements DPI-C arguments and results of type b
                          bit and logic vectors up to 64 bits, byte, shortint, int, longint \
                          (each also unsigned) and chandle";
 
-/// The DPI-C items for `design` (empty without imports); `prefix` is the model's Verilator
+/// The DPI-C items for the Rust-implemented `imports` (a design's
+/// [`dpi_imports`](svtypes::ir::Design::dpi_imports), less those left to C; empty without
+/// any); `prefix` is the model's Verilator
 /// prefix, which the runtime uses to tell models apart.
 ///
 /// # Errors
 /// [`Error::Unsupported`] naming the import for an argument or result type outside
 /// what the runtime implements (scalars, integers, vectors up to 64 bits, `chandle`), a C
 /// name that is not a usable Rust identifier, or a model without ports.
-pub fn emit_dpi(design: &Design, lowered: &Lowered, prefix: &str) -> Result<String, Error> {
-    if design.dpi_imports.is_empty() {
+pub fn emit_dpi(imports: &[DpiImport], lowered: &Lowered, prefix: &str) -> Result<String, Error> {
+    if imports.is_empty() {
         return Ok(String::new());
     }
-    for import in &design.dpi_imports {
+    for import in imports {
         check(import)?;
     }
     let trait_name = trait_name(lowered);
@@ -61,8 +63,7 @@ pub fn emit_dpi(design: &Design, lowered: &Lowered, prefix: &str) -> Result<Stri
         )
     })?;
     let mut methods = Namespace::default();
-    let methods: Vec<Method> = design
-        .dpi_imports
+    let methods: Vec<Method> = imports
         .iter()
         .map(|i| Method::new(i, &mut methods))
         .collect();
@@ -70,7 +71,7 @@ pub fn emit_dpi(design: &Design, lowered: &Lowered, prefix: &str) -> Result<Stri
     w.line("");
     emit_trait(&mut w, &trait_name, &lowered.top, &methods);
     w.line("");
-    emit_set_dpi(&mut w, &trait_name, prefix, &handle, &design.dpi_imports);
+    emit_set_dpi(&mut w, &trait_name, prefix, &handle, imports);
     for m in &methods {
         w.line("");
         emit_trampoline(&mut w, &trait_name, prefix, m);

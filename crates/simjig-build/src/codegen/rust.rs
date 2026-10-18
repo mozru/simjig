@@ -61,6 +61,9 @@ pub struct RustOptions {
     /// The design's time precision as a power of ten seconds (`-12` is 1 ps): the unit of
     /// the simulation's ticks.
     pub precision_exponent: i8,
+    /// C names of the DPI-C imports implemented in Rust (see `emit_dpi`), in IR order; the
+    /// runtime gives only models with some a DPI scope around each eval.
+    pub dpi_imports: Vec<String>,
 }
 
 /// Emits the Rust source for `lowered`, loading the model `opts` names.
@@ -100,6 +103,10 @@ fn emit_model_glue(w: &mut Writer, opts: &RustOptions) {
         format!("simjig_vtable_{}", opts.prefix)
     ));
     w.line(format!("precision_exponent = {},", opts.precision_exponent));
+    if !opts.dpi_imports.is_empty() {
+        let names: Vec<String> = opts.dpi_imports.iter().map(|n| format!("{n:?}")).collect();
+        w.line(format!("dpi_imports = [{}],", names.join(", ")));
+    }
     w.close(");");
 }
 

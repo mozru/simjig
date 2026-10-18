@@ -216,7 +216,8 @@ macro_rules! __dut_model {
         $dut:ident,
         prefix = $prefix:literal,
         symbol = $symbol:literal,
-        precision_exponent = $exp:literal $(,)?
+        precision_exponent = $exp:literal
+        $(, dpi_imports = [$($dpi:literal),* $(,)?])? $(,)?
     ) => {
         const _: () = {
     $crate::__private::link_model!(fn vtable = $symbol);
@@ -227,6 +228,7 @@ macro_rules! __dut_model {
                 ir_hash: $dut::IR_HASH,
                 precision_exponent: $exp,
                 signals: $dut::SIGNALS,
+                dpi_imports: &[$($($dpi),*)?],
             };
 
             impl $crate::DutModel for $dut {

@@ -4,7 +4,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simjig::{NextTimeStep, Timer, TraceKind, now, rising, scope, spawn, with_timeout};
+use simjig::{
+    FailureKind, NextTimeStep, Timer, TraceKind, first, now, rising, scope, spawn, with_timeout,
+};
 
 use super::{assert_clean, clocked, dut, ticks};
 
@@ -243,27 +245,70 @@ fn a_cleanup_panic_while_unwinding_does_not_mask_the_first_panic() {
 }
 
 #[test]
-fn a_handle_dropped_before_its_task_ever_ran_is_recorded() {
+fn a_handle_dropped_before_its_task_ever_ran_fails_the_run_at_the_spawn() {
     let mut d = dut();
     let ran = Rc::new(RefCell::new(false));
     let flag = Rc::clone(&ran);
-    d.sim
+    let f = d
+        .sim
         .run(async move {
-            // The classic mistake: `let _ = spawn(..)` cancels the task at once.
-            drop(spawn("lost", async move { *flag.borrow_mut() = true }));
-            // An explicit cancel is deliberate and is not recorded.
-            spawn("cancelled", async {}).cancel();
+            // The classic mistake: `let _ = spawn(..)` cancels the task at once, so the
+            // driver never runs and the test would pass without it.
+            #[expect(clippy::let_underscore_future, reason = "the mistake under test")]
+            let _ = spawn("lost", async move { *flag.borrow_mut() = true });
             Timer::new(ticks(1)).await;
         })
-        .unwrap();
+        .unwrap_err();
+    let spawn_line = line!() - 4;
     assert!(!*ran.borrow(), "the dropped task never ran");
-    let dropped: Vec<_> = d
+    let FailureKind::Setup { message, help } = &f.kind else {
+        panic!("{f}")
+    };
+    assert!(message.contains("`main.lost`"), "{f}");
+    assert!(message.contains("let _ = spawn(..)"), "{f}");
+    for fix in [".detach()", ".await", ".cancel()"] {
+        assert!(help.contains(fix), "{fix}: {f}");
+    }
+    assert_eq!(f.task.as_deref(), Some("main"), "{f}");
+    let location = f.location.unwrap();
+    assert!(location.file().ends_with("cancel.rs"), "{f}");
+    assert_eq!(location.line(), spawn_line, "the `spawn` line: {f}");
+    let dropped = d
         .sim
         .recent_trace()
         .into_iter()
         .filter(|r| r.kind == TraceKind::DroppedUnpolled)
-        .collect();
-    assert_eq!(dropped.len(), 1, "{dropped:?}");
+        .count();
+    assert_eq!(dropped, 1);
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn deliberate_and_cascading_drops_of_a_task_that_never_ran_pass() {
+    let mut d = dut();
+    d.sim
+        .run(async move {
+            // An explicit cancel is deliberate.
+            spawn("cancelled", async {}).cancel();
+            // A handle dropped after its task ran.
+            let ran = spawn("ran", Timer::new(ticks(5)));
+            Timer::new(ticks(1)).await;
+            drop(ran);
+            // A Task passed by value to `first!` loses before it ever runs: the combinator
+            // cancels it.
+            first!(async {}, async {
+                spawn("loser", async {}).await;
+            });
+            first!(async {}, spawn("loser_by_value", async {}));
+            // A task cancelled while it holds the handle of a child that never ran.
+            let parent = spawn("parent", async {
+                let _child = spawn("child", async {});
+                Timer::new(ticks(10)).await;
+            });
+            Timer::new(ticks(1)).await;
+            parent.cancel();
+        })
+        .unwrap();
     assert_clean(&d.sim);
 }
 

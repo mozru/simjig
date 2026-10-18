@@ -51,7 +51,7 @@ pub enum TraceKind {
     /// A task was cancelled (its future dropped before completing).
     Cancel,
     /// A task's handle was dropped before the task was ever polled, so it never ran (the
-    /// `let _ = spawn(..)` mistake); a `Cancel` follows. Debug information: an explicit
+    /// `let _ = spawn(..)` mistake), and the run fails; a `Cancel` follows. An explicit
     /// [`Task::cancel`](crate::Task::cancel) is not recorded.
     DroppedUnpolled,
     /// A write was applied to the model; `arg` is the slot, `value` its low 64 bits.

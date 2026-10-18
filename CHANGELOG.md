@@ -4,6 +4,13 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Breaking: dropping a `Task` handle before its task ever ran, without awaiting it, fails
+  the run (`FailureKind::Setup`, at the `spawn` call, naming the task and the fixes:
+  `.detach()`, `.await`, `.cancel()`). It printed a warning that test runners capture, so
+  `let _ = spawn(..)`, which rustc's `must_use` help suggests, was a test that passed
+  without its driver. Cancel such a task with `Task::cancel`. A combinator dropping a
+  losing operand, a cancelled task's locals and the end of the run are unaffected; so is
+  dropping a handle whose task has run. The `must_use` message of `Task` says the same.
 - Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.

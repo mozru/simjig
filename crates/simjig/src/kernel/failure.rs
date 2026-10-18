@@ -185,7 +185,8 @@ pub enum FailureKind {
     },
     /// The test is set up in a way that cannot run, and the design is not at fault: a
     /// DPI-C import without an implementation, a model built without an option the test
-    /// needs, DUTs that cannot share a simulation. `help` says what to change.
+    /// needs, DUTs that cannot share a simulation, a `Task` handle dropped before its task
+    /// ever ran (`let _ = spawn(..)`). `help` says what to change.
     Setup {
         /// What is wrong.
         message: String,

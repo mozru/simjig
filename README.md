@@ -80,7 +80,7 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `ReadOnly::new().await`, `ReadWrite::new()`, `NextTimeStep::new()` |
 | `cocotb.start_soon(coro)` | `spawn("name", fut).detach()` |
 | `task = cocotb.start_soon(coro)`; `await task` | `let task = spawn("name", fut);` `task.await` |
-| `task.cancel()` | `task.cancel()`, or drop the `Task` |
+| `task.cancel()` | `task.cancel()` (or drop a `Task` that has run) |
 | `await First(a, b)` | `first!(a, b)` (same output type; ties go to the leftmost) |
 | `await Combine(a, b)` | `join!(a, b)` (a tuple of the outputs) |
 | `await with_timeout(x, 10, "ns")`, `SimTimeoutError` | `with_timeout(ns(10), x).await` (`&mut task` for a Task that must keep running), `Err(Elapsed)` |
@@ -90,9 +90,14 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `Event`, `Queue`, `Lock` | `simjig::{Event, Queue, Lock}` |
 
 What to keep in mind:
-- **Dropping a `Task` cancels it.** `spawn` returns a handle; `let _ = spawn(..)` drops it
-  at once, so the task never runs (simjig prints a warning). Keep the handle, await it, or
-  call `.detach()`, which lets it run until its parent finishes.
+- **Dropping a `Task` cancels it, and `let _ = spawn(..)` fails the test.** `spawn`
+  returns a handle, and rustc's `must_use` help suggests `let _ = ...`; that drops the
+  handle at once, so the task would never run and the test would pass without it. simjig
+  fails the run instead (`Setup`, pointing at the `spawn` call). Call `.detach()` to run
+  the task in the background (cocotb's `start_soon`; it runs until its parent finishes),
+  `.await` the handle, or `.cancel()` it. Only a handle dropped before its task ever ran,
+  and never awaited, fails: dropping one whose task has run cancels it, as does a
+  combinator dropping a losing operand.
 - **Writes are deposits.** `set` is applied after the next eval, so reading a signal right
   after setting it returns the old value, and a write right after `rising()` is not
   captured by that edge.

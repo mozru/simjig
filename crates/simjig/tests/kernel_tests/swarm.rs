@@ -157,7 +157,11 @@ fn interpret(world: Rc<World>, ops: Rc<[Op]>, name: String) -> Boxed {
                 Op::SpawnDetached(p) => {
                     spawn(&child_name, interpret(w, Rc::clone(p), child_name.clone())).detach();
                 }
-                Op::CancelChild => drop(children.pop()),
+                Op::CancelChild => {
+                    if let Some(c) = children.pop() {
+                        c.cancel();
+                    }
+                }
                 Op::AwaitChild => {
                     if let Some(c) = children.pop() {
                         c.await;

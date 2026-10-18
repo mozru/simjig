@@ -71,7 +71,7 @@ async fn another_running_task_refuses_the_fork(dut: counter::Dut) {
             tasks: vec!["main.driver".into()]
         }
     );
-    drop(driver);
+    driver.cancel();
     // A finished task does not count.
     let done = spawn("done", async {});
     Timer::new(ns(1)).await;

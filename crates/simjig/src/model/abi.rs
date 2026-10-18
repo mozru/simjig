@@ -79,6 +79,8 @@ c_enum! {
         Poisoned = 5,
         /// The entry point is reserved but not built into this model.
         Unsupported = 6,
+        /// A file the call names could not be created; a WARNING message says why.
+        IoError = 7,
     }
 }
 
@@ -226,6 +228,14 @@ pub(crate) struct ModelVtable {
     pub(crate) trace_dump: unsafe extern "C" fn(*mut Handle, u64) -> i32,
     pub(crate) trace_close: unsafe extern "C" fn(*mut Handle) -> i32,
     pub(crate) cov_counters: unsafe extern "C" fn(*mut Handle, *mut usize) -> *mut u32,
+    /// `SIMJIG_FEATURE_*` bits.
+    pub(crate) features: u64,
+    pub(crate) trace_open_ex: unsafe extern "C" fn(*mut Handle, *const c_char, u32, u64) -> i32,
+    pub(crate) trace_flush: unsafe extern "C" fn(*mut Handle) -> i32,
+    pub(crate) trace_reopen: unsafe extern "C" fn(*mut Handle, *const c_char) -> i32,
+    pub(crate) cov_zero: unsafe extern "C" fn(*mut Handle) -> i32,
+    pub(crate) cov_write: unsafe extern "C" fn(*mut Handle, *const c_char) -> i32,
+    pub(crate) rng_seed: unsafe extern "C" fn(*mut Handle, u64) -> i32,
 }
 
 // The header is written for LP64/LLP64 targets with 8-byte pointers; pin every offset there.
@@ -244,11 +254,14 @@ const _: () = {
     assert!(offset_of!(CreateOpts, name) == 8 && offset_of!(CreateOpts, error_limit) == 16);
     assert!(offset_of!(CreateOpts, argv) == 24);
 
-    assert!(size_of::<ModelVtable>() == 136 && align_of::<ModelVtable>() == 8);
+    assert!(size_of::<ModelVtable>() == 192 && align_of::<ModelVtable>() == 8);
     assert!(offset_of!(ModelVtable, prefix) == 8 && offset_of!(ModelVtable, ir_hash) == 24);
     assert!(offset_of!(ModelVtable, create) == 32);
     assert!(offset_of!(ModelVtable, drain_msgs) == 96);
     assert!(offset_of!(ModelVtable, cov_counters) == 128);
+    assert!(offset_of!(ModelVtable, features) == 136);
+    assert!(offset_of!(ModelVtable, trace_open_ex) == 144);
+    assert!(offset_of!(ModelVtable, rng_seed) == 184);
 };
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("simjig's C ABI is defined for 64-bit targets only");

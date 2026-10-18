@@ -232,10 +232,14 @@ it raises no `unexpected_cfgs` warning):
 
 ```rust
 // build.rs
-if let Err(e) = simjig_build::Dut::new("fast_model").sources(["rtl/big.sv"]).top("big").build() {
-    println!("cargo::warning=fast_model skipped: {}", e.to_string().lines().next().unwrap_or(""));
+if simjig_build::Dut::new("fast_model").sources(["rtl/big.sv"]).top("big").build().is_err() {
+    println!("cargo::warning=fast_model skipped");
 }
 ```
+
+A failed `Dut::build` has warned its cause already (`warning: <pkg>: simjig: ..`: the
+headline, any hints and, under the default lint, the fatal warning), so the script's own
+warning need only say what it skipped.
 
 ```rust
 // tests/fast.rs
@@ -263,6 +267,15 @@ the files directly in it (Verilator searches it one level deep; Cargo would scan
 whole, `target/` included, and rerun on every build). Not tracked: a positional source
 without a `.v`/`.sv`/`.vh`/`.svh`/`.vlt` (or C++) suffix, `$VAR` in paths, a file added
 to a directory later, and a subdirectory an `` `include "sub/x.svh" `` reaches.
+
+A build script that returns the error fails the build, and Cargo prints, in order: the
+script's warnings (simjig's `simjig: ..` cause first), then under `--- stdout` every
+line the script printed, including those `rerun-if-changed` and `rerun-if-env-changed`
+lines, and last under `--- stderr` the full error. simjig cannot leave the rerun lines
+out. A script that handles the error needs them, or it would not rerun when the DUT is
+fixed. And `Dut::build` returns before the script decides, so nothing is left to run
+once the exit status is known. (A failed script reruns on every build anyway, so in
+that case the lines are only noise.)
 
 If any source declares a `timeunit` (or `` `timescale ``), every module and package
 must: Verilator stops on a mix with `%Warning-TIMESCALEMOD` (IEEE 1800-2023 §3.14.2.3).

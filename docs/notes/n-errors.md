@@ -10,7 +10,7 @@
 - `Error::Command::hints`, boxed to keep `Error` under clippy's `result_large_err`.
 - `Dut::run` split (`Dut::compile`) to get under 70 lines.
 
-## Not done: dropping the `rerun-if-changed` wall before a build error
+## The `rerun-if-changed` wall before a build error
 Checked with a scratch crate on cargo 1.99.1:
 - A build script that exits non-zero has its **whole** stdout dumped under `--- stdout`,
   `cargo::` lines included, before `--- stderr` (where the error is).
@@ -39,3 +39,19 @@ Verilator read) are part of the wall too, and no failure-path change removes the
 A zero-risk partial option: print the failing DUT's headline as a plain stdout line
 before its reruns. Cargo ignores it on exit 0, and it is the first line of the failing
 DUT's part of `--- stdout`.
+
+Decision (director): the zero-risk option, as warnings rather than plain stdout lines.
+Before any of a failing DUT's directives, `Dut::build` prints `Error::summary` as
+`cargo::warning=simjig: ..` lines. Checked on cargo 1.99.1: Cargo prints a script's
+warnings (`warning: <pkg>@<ver>: ..`) above `--- stdout`, both when the script fails and
+when it handles the error and exits 0. The dump then repeats them and the rerun lines.
+`optional::a_failed_scripts_output_leads_with_the_cause` pins the order. The fixtures'
+skipped-DUT warnings no longer repeat the error's first line, so a handled failure warns
+its cause once, which `rebuild::a_handled_build_error_does_not_fail_the_build` and the
+gated run in `optional.rs` check.
+
+Fixture pitfalls:
+- `std::fs::copy` keeps the source's mtime on macOS, so the optional fixture now touches
+  its `build.rs` (as the rebuild one does); otherwise a stale build script ran.
+- That fixture has no library or binary, so `cargo build` needs `--tests` to run its
+  build script at all.

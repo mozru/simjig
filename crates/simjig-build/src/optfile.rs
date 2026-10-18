@@ -6,7 +6,8 @@
 //! skip a file, and a path is the exact bytes Verilator opens. Lines end at `\n` only
 //! (`std::getline`), so the `\r` of a CRLF file stays in the line, where it is whitespace
 //! like any other `isspace` byte (ASCII space, `\t`, `\n`, `\v`, `\f`, `\r`; no other byte
-//! is) except after a `\` or inside quotes, where it is part of the word.
+//! is) except after a `\` or inside quotes, where it is part of the word. A NUL byte ends
+//! its line: Verilator walks each line as a C string.
 //!
 //! A word is what is left between whitespace once the comments are gone: `//` after
 //! whitespace or at the start of a line, `#` as the first non-blank character of a line,
@@ -280,6 +281,8 @@ fn without_comments(text: &[u8]) -> Vec<(u8, usize)> {
     let mut in_comment = false;
     for (n, line) in text.split(|&b| b == b'\n').enumerate() {
         let n = n + 1;
+        // Verilator walks each line as a C string (`line.c_str()`), so a NUL ends it.
+        let line = line.split(|&b| b == 0).next().unwrap_or_default();
         let (mut last, mut blank_so_far, mut i) = (b' ', true, 0);
         while let Some(&c) = line.get(i) {
             let next = line.get(i + 1).copied();
@@ -544,6 +547,16 @@ mod tests {
         assert_eq!(
             words_of(b"// J\xf6rg\n--top-module x\xf6\n"),
             [(b"--top-module".to_vec(), 2), (b"x\xf6".to_vec(), 2)]
+        );
+    }
+
+    /// A NUL ends its line, also inside a block comment, which then goes on on the next
+    /// line (checked against 5.052: `aa`, `dd` and `gg` are the modules it looks for).
+    #[test]
+    fn a_nul_byte_ends_its_line() {
+        assert_eq!(
+            words(b"aa\0bb cc\ndd /* x\0 */ ee\nff */ gg\n"),
+            ["aa", "dd", "gg"]
         );
     }
 

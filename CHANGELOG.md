@@ -4,6 +4,8 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A NUL byte in an option file ends its line, as in 5.052, which walks each line as a C
+  string: the checks no longer see (and refuse) words after it.
 - A `Starved` failure's help names the way out for a combinational design: ``start a
   clock; for a combinational design, await a Timer after each set
   (`Timer::new(ns(1)).await`); ..``.

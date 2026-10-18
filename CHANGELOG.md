@@ -32,7 +32,9 @@ the public API, the generated code or simulation semantics.
 - Random initial values, to catch a register that reset never clears:
   `#[simjig::test(init = random)]` (or `init = zero`), or `SIMJIG_INIT=random` for tests
   without the argument. Each model draws from its own seed, `Seed::init_seed(index)`
-  (stream `init.model-<index>`); `$urandom` is unchanged. New public API:
+  (stream `init.model-<index>`), except that in a multi-DUT test the models of one
+  design (`DutModel::design`, the top module; new, default `None`) share the first one's,
+  so a `Lockstep` pair starts alike; `$urandom` is unchanged. New public API:
   `simjig::InitValues`, `ModelOptions::{init, init_seed, with_init, random_init}`,
   `RunIdentity::init`, `RunEnv::init`, `TestMeta::init`, `LoadError::NoRandomInit`,
   `simjig_build::XInitial` and `Dut::x_initial` (default `Unique`, which passes no flag).

@@ -220,9 +220,10 @@ without an initializer, undriven inputs included, then starts from a value drawn
 run's seed (`Seed::init_seed`), its scope and its name: the same seed gives the same start,
 and a failure's report says `init=random` and its `repro:` line starts with
 `SIMJIG_INIT=random SIMJIG_SEED=...`, which reproduces it exactly (`summary.json` records
-`init` and `init_seed`). Only the start changes: `$urandom` draws as with zeros. Each model
-of a multi-DUT test starts from its own stream; fork branches inherit the start they were
-forked from. The model must keep Verilator's default `--x-initial unique`
+`init` and `init_seed`). Only the start changes: `$urandom` draws as with zeros. In a
+multi-DUT test, models of one design (one top module) start alike, so the two sides of a
+`Lockstep` agree at cycle 0, and models of different designs start from their own streams;
+fork branches inherit the start they were forked from. The model must keep Verilator's default `--x-initial unique`
 (`.x_initial(XInitial::Unique)`); one built with `.x_initial(XInitial::Zero)` or
 `XInitial::Fast` compiles its initial values in and refuses `init = random`. A raw
 `--x-initial` among `verilator_args` is refused. `--x-assign` (explicit `X` in the source)

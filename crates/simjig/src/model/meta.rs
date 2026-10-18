@@ -148,6 +148,15 @@ impl ModelMeta {
     pub fn dut_name(&self) -> &'static str {
         self.module.rsplit("::").next().unwrap_or(self.module)
     }
+
+    /// The top module's name, as every signal's hierarchical name starts (`counter` for
+    /// `counter.clk`; the generated wrapper for a DUT with interface ports); `None` for a
+    /// model without signals.
+    #[must_use]
+    pub fn top(&self) -> Option<&'static str> {
+        let name = self.signals.first()?.name;
+        Some(name.split_once('.').map_or(name, |(top, _)| top))
+    }
 }
 
 impl fmt::Debug for ModelMeta {

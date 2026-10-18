@@ -106,8 +106,9 @@ impl Seed {
     /// The seed model `model` (its index in the simulation, from 0) draws its random
     /// initial values from ([`InitValues::Random`](crate::InitValues)): the stream
     /// `"init.model-<model>"`, kept in `1..=i32::MAX` because the shim passes it to
-    /// `VerilatedContext::randSeed`, an `int`. Each model has its own, so two instances of
-    /// one design start apart, while they share [`verilator_seed`](Self::verilator_seed).
+    /// `VerilatedContext::randSeed`, an `int`. Models of different designs in one simulation
+    /// each draw from their own; models of one design share the first one's
+    /// (`harness::multi`), as all of them share [`verilator_seed`](Self::verilator_seed).
     #[must_use]
     pub fn init_seed(self, model: usize) -> u32 {
         positive_int(&mut self.rng(&format!("init.model-{model}")))

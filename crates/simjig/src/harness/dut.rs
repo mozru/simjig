@@ -84,7 +84,8 @@ pub struct ModelOptions {
     /// The values the model's variables start from.
     pub init: InitValues,
     /// The seed of this model's initial values with [`InitValues::Random`],
-    /// [`Seed::init_seed`] of its index: each model of a simulation has its own.
+    /// [`Seed::init_seed`] of its index, or of the first model of its design
+    /// ([`DutModel::design`]) in a simulation with several (`harness::multi`).
     pub init_seed: u32,
     /// The FST waves a Verilator model records; `None` records none. Models that cannot
     /// trace (a [`FakeModel`]) ignore it.
@@ -93,7 +94,8 @@ pub struct ModelOptions {
 
 impl ModelOptions {
     /// The options of model `index` of a simulation with several: the same, except that
-    /// its initial values come from its own stream ([`Seed::init_seed`] of `index`), and a
+    /// its initial values come from its own stream ([`Seed::init_seed`] of `index`;
+    /// `harness::multi` then gives models of one design the first one's), and a
     /// trace of model `index > 0` goes to `<stem>.model-<index>.fst` beside the given file
     /// (model 0 keeps it), since each model writes its own FST.
     #[must_use]
@@ -235,6 +237,18 @@ pub trait DutModel: Sized + 'static {
         } else {
             Err(unsupported::<Self>("bind"))
         }
+    }
+
+    /// The design this DUT type's model is built from: the name of its top module, as
+    /// its signals' hierarchical names start (`counter` for `counter.clk`).
+    ///
+    /// In a simulation with several DUTs, models of one design draw their random initial
+    /// values from one seed, so two instances of a design, or two builds of one top module
+    /// compared by a [`Lockstep`](crate::Lockstep), start alike (`harness::multi`). The
+    /// default, `None`, keeps the model's own seed. Generated `Dut` types implement it.
+    #[must_use]
+    fn design() -> Option<&'static str> {
+        None
     }
 }
 

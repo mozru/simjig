@@ -268,6 +268,10 @@ macro_rules! __dut_model {
                 ) -> ::core::result::Result<Self, $crate::Failure> {
                     $crate::__private::create_in(sim, model, &MODEL, $dut::__bind)
                 }
+
+                fn design() -> ::core::option::Option<&'static str> {
+                    MODEL.top()
+                }
             }
         };
     };

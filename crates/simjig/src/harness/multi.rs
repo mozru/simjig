@@ -8,9 +8,16 @@
 //! order, before applying the write log (`kernel::models`), so one delta loop and one time
 //! axis serve all of them. Up to four DUTs are supported.
 //!
-//! Every model receives the same [`ModelOptions`], so two instances of one design get the
-//! same Verilator seed: lockstep runs depend on it, since `$urandom` must draw the same
-//! values on both sides.
+//! Every model receives the run's [`ModelOptions`] ([`ModelOptions::for_model`] of its
+//! index), so all of them get the same Verilator seed: lockstep runs depend on it, since
+//! `$urandom` must draw the same values on both sides. Random initial values
+//! ([`InitValues::Random`](crate::InitValues)) follow the same rule for models of one
+//! design ([`DutModel::design`], the top module): the first model of a design picks the
+//! seed ([`Seed::init_seed`](crate::Seed::init_seed) of its index) and every later model
+//! of that design reuses it, so the two sides of a [`Lockstep`] (two instances of one
+//! build, or two builds of one top module) start alike instead of diverging at cycle 0.
+//! Models of different designs keep a seed each, so `inv.q` and `flop.q` do not start
+//! equal because their names are.
 //!
 //! # Lockstep
 //! Two builds of one design (the old RTL and the new one, under two `--prefix`es, or two
@@ -72,13 +79,37 @@ fn model_set_failure(error: &ModelSetError) -> Failure {
     }
 }
 
+/// The options of model `index`, whose design is `designs[index]`: its own, except that a
+/// model of the same design as an earlier one takes that one's initial-value seed (see
+/// the module docs).
+fn model_options(options: &ModelOptions, designs: &[Option<&str>], index: usize) -> ModelOptions {
+    let mut own = options.for_model(index);
+    own.init_seed = options.seed.init_seed(init_stream(designs, index));
+    own
+}
+
+/// The index whose [`Seed::init_seed`](crate::Seed::init_seed) model `index` uses: the
+/// first model of its design, or its own when its design is unknown.
+fn init_stream(designs: &[Option<&str>], index: usize) -> usize {
+    match designs[index] {
+        Some(design) => designs
+            .iter()
+            .position(|d| *d == Some(design))
+            .unwrap_or(index),
+        None => index,
+    }
+}
+
 /// Implements [`DutModel`] for a tuple of DUT types, model `i` being element `i`.
 macro_rules! tuple_dut {
     ($($dut:ident $index:tt),+) => {
         /// Several DUTs in one simulation, numbered in tuple order; see `harness::multi`.
         impl<$($dut: DutModel),+> DutModel for ($($dut,)+) {
             fn instantiate(options: &ModelOptions) -> Result<Sim, Failure> {
-                let models = vec![$($dut::load(&options.for_model($index))?.into_backend()),+];
+                let designs = [$($dut::design()),+];
+                let models = vec![
+                    $($dut::load(&model_options(options, &designs, $index))?.into_backend()),+
+                ];
                 Sim::from_backends(models).map_err(|e| model_set_failure(&e))
             }
 
@@ -309,3 +340,25 @@ impl fmt::Display for Divergence {
 }
 
 impl std::error::Error for Divergence {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Seed, SeedSource};
+
+    #[test]
+    fn models_of_one_design_share_the_first_ones_init_stream() {
+        let designs = [Some("a"), Some("b"), Some("a"), None, None];
+        let streams: Vec<usize> = (0..designs.len())
+            .map(|i| init_stream(&designs, i))
+            .collect();
+        assert_eq!(streams, [0, 1, 0, 3, 4]);
+        let options = ModelOptions::new(Seed::new(9, SeedSource::Env));
+        let seeds: Vec<u32> = (0..designs.len())
+            .map(|i| model_options(&options, &designs, i).init_seed)
+            .collect();
+        assert_eq!(seeds[2], seeds[0]);
+        assert_ne!(seeds[1], seeds[0]);
+        assert_eq!(seeds[1], options.for_model(1).init_seed);
+    }
+}

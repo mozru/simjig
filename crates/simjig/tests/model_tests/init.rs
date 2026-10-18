@@ -75,29 +75,36 @@ fn a_model_with_compiled_in_initial_values_refuses_random_ones() {
     assert!(no_reset_fast::Dut::instantiate(&options(1, InitValues::Zero)).is_ok());
 }
 
-/// Two instances of one design share the `$urandom` seed (lockstep runs depend on it) but
-/// each starts from its own stream.
+/// Two instances of one design share the `$urandom` seed and the initial-value seed
+/// (`harness::multi`), so they start alike and a `Lockstep` of them does not diverge at
+/// cycle 0; model 0 keeps the seed it has alone.
 #[test]
-fn each_model_of_a_simulation_starts_from_its_own_stream() {
+fn the_models_of_one_design_start_alike() {
     type Pair = (no_reset::Dut, no_reset::Dut);
     let run = |init| {
         let mut sim = Pair::instantiate(&options(5, init)).unwrap();
         let (a, b) = Pair::create(&mut sim).unwrap();
         sim.run(async move {
             ReadOnly::new().await;
-            ((a.q.get(), a.u.get()), (b.q.get(), b.u.get()))
+            let diverged = simjig::Lockstep::new()
+                .output(a.q, b.q)
+                .output(a.r, b.r)
+                .check()
+                .err();
+            ((a.q.get(), a.u.get()), (b.q.get(), b.u.get()), diverged)
         })
         .unwrap()
     };
-    let ((qa, ua), (qb, ub)) = run(InitValues::Random);
-    assert_ne!(qa, qb);
-    assert_eq!(ua, ub);
+    let ((qa, ua), (qb, ub), diverged) = run(InitValues::Random);
+    assert!(diverged.is_none(), "{diverged:?}");
+    assert_ne!(qa, Bits::new(0));
+    assert_eq!((qa, ua), (qb, ub));
     assert_eq!(
         qa,
         start(&options(5, InitValues::Random)).0,
         "model 0 keeps stream 0"
     );
-    let ((qa, _), (qb, _)) = run(InitValues::Zero);
+    let ((qa, _), (qb, _), _) = run(InitValues::Zero);
     assert_eq!((qa, qb), (Bits::new(0), Bits::new(0)));
 }
 

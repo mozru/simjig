@@ -52,3 +52,6 @@ the public API, the generated code or simulation semantics.
 - `Error::Command` leads with what the run was for (new field `what`, e.g. ``JSON pass for
   DUT `shreg` ``, ``verilating DUT `x` ``) and ends with the command line; its `status` is
   now the exit code (`Option<i32>`, `None` for a signal) instead of a string.
+- `Dut::verilator_args` refuses the arguments the pipeline sets itself (`--prefix`,
+  `-Mdir`/`--Mdir`, `--top-module`/`--top`, `--cc`, `--exe`, `--build`), each with the
+  builder method or setting to use instead.

@@ -90,24 +90,47 @@ fn coverage_after(builder: bool, args: &[String]) -> bool {
 }
 
 /// Why a raw Verilator argument is refused, if it is: each has a builder switch (or a
-/// fixed value) that every Verilator run and the generated code must agree on.
+/// fixed value) that every Verilator run and the generated code must agree on, or is set
+/// by the pipeline itself.
 fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
     let name = option_name(arg)?;
     if name.starts_with('G') || name.starts_with("pvalue+") {
         return Some(
-            "pass parameters with `.param(name, value)`: a raw override reaches every              Verilator run, and the layout check, whose top has no such parameter, fails              (`Parameters from the command line were not found in the design`)",
+            "pass parameters with `.param(name, value)`: a raw override reaches every \
+             Verilator run, and the layout check, whose top has no such parameter, fails \
+             (`Parameters from the command line were not found in the design`)",
         );
     }
     match name {
         "timing" | "no-timing" => Some(
-            "use `.timing(true)` or `.timing(false)`: the JSON pass, the layout check and              the shim (which must know whether the model runs coroutines) all follow it",
+            "use `.timing(true)` or `.timing(false)`: the JSON pass, the layout check and \
+             the shim (which must know whether the model runs coroutines) all follow it",
         ),
         "trace" | "no-trace" | "trace-fst" | "trace-vcd" | "trace-saif" | "trace-threads"
         | "trace-fst-thread" => Some(
-            "use `.trace_fst(true)`: simjig writes FST waves through the shim, which must              know the model is traced, and on the testbench's one thread",
+            "use `.trace_fst(true)`: simjig writes FST waves through the shim, which must \
+             know the model is traced, and on the testbench's one thread",
         ),
         "threads" if next != Some("1") => Some(
-            "simjig runs each model on one thread (its context has `threads(1)`, so runs              are deterministic and the testbench owns the only thread); a model built for              more needs a thread pool",
+            "simjig runs each model on one thread (its context has `threads(1)`, so runs \
+             are deterministic and the testbench owns the only thread); a model built for \
+             more needs a thread pool",
+        ),
+        "top-module" | "top" => Some(
+            "set the top with `.top(\"module\")`: the JSON pass, the generated wrapper and \
+             the model build each pass their own `--top-module`",
+        ),
+        "prefix" => Some(
+            "the pipeline names the model `V<name>_<hash>` from `Dut::new(name)` and the \
+             configuration, so variants never share C++ symbols; rename the DUT instead",
+        ),
+        "Mdir" => Some(
+            "the pipeline puts Verilator's output in the shared content-addressed cache; \
+             set the cache with `SIMJIG_CACHE_DIR`",
+        ),
+        "cc" | "exe" | "build" => Some(
+            "the pipeline verilates with `--cc` and compiles and links the model itself; \
+             add C++ sources with `.recipe(CppRecipe { model_sources, .. })`",
         ),
         _ => None,
     }
@@ -999,9 +1022,18 @@ mod tests {
             (&["--trace-vcd"], "`.trace_fst(true)`"),
             (&["--trace-threads", "2"], "`.trace_fst(true)`"),
             (&["--threads", "4"], "one thread"),
+            (&["--top-module", "x"], "`.top(\"module\")`"),
+            (&["--top", "x"], "`.top(\"module\")`"),
+            (&["--prefix", "Vx"], "`Dut::new(name)`"),
+            (&["-Mdir", "obj"], "`SIMJIG_CACHE_DIR`"),
+            (&["--Mdir", "obj"], "`SIMJIG_CACHE_DIR`"),
+            (&["--cc"], "`.recipe(CppRecipe"),
+            (&["--exe"], "`.recipe(CppRecipe"),
+            (&["--build"], "`.recipe(CppRecipe"),
         ] {
             let m = msg(args);
             assert!(m.contains(hint) && m.contains(args[0]), "{args:?}: {m}");
+            assert!(!m.contains("  "), "one space between words: {m}");
         }
         for ok in [
             &["--threads", "1"][..],

@@ -13,6 +13,10 @@ the public API, the generated code or simulation semantics.
 - The build script reruns when the C++ compiler changes in place: it emits
   `cargo::rerun-if-changed` for the path `CXX` (or `cc`'s default) is found at, the
   executable that resolves to, and the same for a compiler wrapper (`CXX="ccache c++"`).
+- Archive manifests (`manifests/<pre key>`) record each dependency's digest and file
+  status; a later build reads and hashes again only the files whose status (size,
+  modification and change times, inode, device) changed. Every archive is compiled again
+  once (`simjig-archive-deps-v2`).
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

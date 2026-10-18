@@ -28,6 +28,7 @@ mod error;
 mod hash;
 mod header;
 mod iface_diag;
+mod manifest;
 mod pipeline;
 mod runtime;
 mod script;

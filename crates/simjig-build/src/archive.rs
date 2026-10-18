@@ -15,7 +15,8 @@
 //!    (`Toolchain::is_generated`);
 //! 2. every compile runs with `-MD`, and the manifest `manifests/<pre key>` lists every
 //!    file the compiler read (system headers included); the *full key* adds their current
-//!    contents. The entry for the full key is a hit.
+//!    contents (read again only for files whose status changed, see `manifest`). The
+//!    entry for the full key is a hit.
 //!
 //! Invariants: an entry directory is published by an atomic rename of a complete work
 //! directory holding only the archive (the objects are inside it); an entry directory
@@ -27,6 +28,7 @@ use std::sync::{Mutex, PoisonError};
 use crate::cache::{self, Cache};
 use crate::compile::Inputs;
 use crate::hash::KeyHasher;
+use crate::manifest::Manifest;
 use crate::{ABI_VERSION, BuildEnv, Error, depfile};
 
 /// A static library, compiled or found in the cache.
@@ -57,15 +59,20 @@ pub(crate) struct Spec<'a> {
     pub(crate) includes: &'a [PathBuf],
 }
 
+/// The domain of the full keys (see the module docs).
+const DEPS_DOMAIN: &str = "simjig-archive-deps-v2";
+
 impl Toolchain<'_> {
     /// Returns the archive of `spec` from the cache, compiling it on a miss.
     pub(crate) fn cached_archive(&self, spec: &Spec<'_>) -> Result<Archive, Error> {
-        let cache = self.i.cache;
         let pre = self.pre_key(spec)?;
-        let manifest = cache.root().join("manifests").join(&pre);
-        if let Some(hit) = lookup(cache, spec, &pre, &manifest) {
+        let pre = pre.as_str();
+        let cache = self.i.cache;
+        let manifest = cache.root().join("manifests").join(pre);
+        if let Some(hit) = lookup(cache, spec, pre, &manifest) {
             return Ok(hit);
         }
+        let started = std::time::SystemTime::now();
         let work = cache.work_dir()?;
         let compiled = self.compile_in(&work, spec);
         let (lib, deps) = match compiled {
@@ -75,11 +82,12 @@ impl Toolchain<'_> {
                 return Err(e);
             }
         };
-        let full = full_key(&pre, &deps).ok_or_else(|| Error::Parse {
+        let recorded = Manifest::record(&deps, started).ok_or_else(|| Error::Parse {
             path: work.clone(),
             line: 0,
             msg: "a file the compiler read vanished before it could be hashed".to_owned(),
         })?;
+        let full = recorded.recorded_key(DEPS_DOMAIN, pre);
         let name = archive_name(spec.what, &full);
         // Publish the archive alone: its objects are inside it.
         let out = cache.work_dir()?;
@@ -91,7 +99,7 @@ impl Toolchain<'_> {
             cache::remove_best_effort(&entry);
         }
         Cache::publish(&out, &entry)?;
-        cache.write_atomic(&manifest, &listing(&deps))?;
+        cache.write_atomic(&manifest, &recorded.text())?;
         Ok(Archive {
             dir: entry,
             name,
@@ -249,37 +257,19 @@ fn version_output(exe: &Path) -> String {
 
 /// The cached archive for `pre`, if the manifest's dependencies still hash to an entry.
 fn lookup(cache: &Cache, spec: &Spec<'_>, pre: &str, manifest: &Path) -> Option<Archive> {
-    let text = std::fs::read_to_string(manifest).ok()?;
-    let deps: Vec<PathBuf> = text.lines().map(PathBuf::from).collect();
-    let full = full_key(pre, &deps)?;
+    let m = Manifest::read(manifest)?;
+    let full = m.current_key(DEPS_DOMAIN, pre)?;
     let name = archive_name(spec.what, &full);
     let dir = cache.root().join(spec.kind).join(&full);
-    dir.join(format!("lib{name}.a"))
-        .is_file()
-        .then_some(Archive { dir, name, deps })
+    dir.join(format!("lib{name}.a")).is_file().then(|| Archive {
+        dir,
+        name,
+        deps: m.paths(),
+    })
 }
 
 fn archive_name(what: &str, full: &str) -> String {
     format!("simjig_{what}_{}", &full[..16])
-}
-
-/// `None` when a dependency can no longer be read (the entry cannot be valid).
-fn full_key(pre: &str, deps: &[PathBuf]) -> Option<String> {
-    let mut h = KeyHasher::new("simjig-archive-deps-v1");
-    h.str(pre);
-    for d in deps {
-        h.file(d).ok()?;
-    }
-    Some(h.finish())
-}
-
-fn listing(deps: &[PathBuf]) -> String {
-    let mut out = String::new();
-    for d in deps {
-        out.push_str(&d.display().to_string());
-        out.push('\n');
-    }
-    out
 }
 
 /// Every prerequisite in the `.d` files under `work`, deduplicated, sorted. Relative
@@ -367,19 +357,5 @@ mod tests {
             flag_dirs(&flags),
             ["/a", "/b", "/c", "/d"].map(PathBuf::from)
         );
-    }
-
-    #[test]
-    fn full_key_tracks_dependency_contents() {
-        let t = tempfile::tempdir().unwrap();
-        let h = t.path().join("k.h");
-        std::fs::write(&h, "#define K 1\n").unwrap();
-        let deps = [h.clone()];
-        let k1 = full_key("pre", &deps).unwrap();
-        assert_eq!(full_key("pre", &deps).unwrap(), k1);
-        std::fs::write(&h, "#define K 2\n").unwrap();
-        assert_ne!(full_key("pre", &deps).unwrap(), k1);
-        std::fs::remove_file(&h).unwrap();
-        assert_eq!(full_key("pre", &deps), None, "a vanished header is a miss");
     }
 }

@@ -97,21 +97,35 @@ pub(crate) fn iface_top<'h>(h: &'h mut KeyHasher, top: &IfaceTop) -> &'h mut Key
 }
 
 pub(crate) fn probe(h: &mut KeyHasher, p: &Probe) {
-    h.str(&p.path).str(&p.module);
-    match &p.ty {
+    // No `..`: a new field must be hashed, or left out on purpose (as in `model_digest`).
+    let Probe {
+        path,
+        module,
+        ty,
+        access,
+    } = p;
+    h.str(path).str(module);
+    match ty {
         ProbeType::Named(name) => h.str("named").str(name),
         ProbeType::Bits { width } => h.str("bits").field(&width.to_le_bytes()),
     };
-    h.str(match p.access {
+    h.str(match access {
         ProbeAccess::Read => "read",
         ProbeAccess::ReadWrite => "read-write",
     });
 }
 
 pub(crate) fn binding(h: &mut KeyHasher, b: &IfaceBinding) {
-    h.str(&b.port).str(&b.interface);
-    pairs(h, &b.params);
-    match &b.modport {
+    // No `..`, as in `probe`.
+    let IfaceBinding {
+        port,
+        interface,
+        params,
+        modport,
+    } = b;
+    h.str(port).str(interface);
+    pairs(h, params);
+    match modport {
         None => h.str("no-modport"),
         Some(m) => h.str("modport").str(m),
     };

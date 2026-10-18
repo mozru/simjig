@@ -66,14 +66,34 @@ impl fmt::Display for TraceRecord {
     }
 }
 
-/// FNV-1a, 64-bit: small, dependency-free and stable across platforms and releases.
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+/// FNV-1a, 64-bit: small, dependency-free and stable across platforms and releases,
+/// unlike `DefaultHasher`. simjig's one implementation: the trace hash, test-name seeds,
+/// random-stream seeds and failure signatures all use it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Fnv(u64);
+
+impl Default for Fnv {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Fnv {
+    pub(crate) fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    pub(crate) const fn finish(self) -> u64 {
+        self.0
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct Recorder {
     ring: VecDeque<TraceRecord>,
-    hash: u64,
+    hash: Fnv,
     count: u64,
 }
 
@@ -81,7 +101,7 @@ impl Default for Recorder {
     fn default() -> Self {
         Self {
             ring: VecDeque::with_capacity(RECORDER_CAPACITY),
-            hash: FNV_OFFSET,
+            hash: Fnv::default(),
             count: 0,
         }
     }
@@ -91,9 +111,7 @@ impl Recorder {
     pub(crate) fn record(&mut self, record: TraceRecord) {
         let kind = record.kind as u64;
         for word in [record.time.0, kind, record.task, record.arg, record.value] {
-            for byte in word.to_le_bytes() {
-                self.hash = (self.hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME);
-            }
+            self.hash.write(&word.to_le_bytes());
         }
         if self.ring.len() == RECORDER_CAPACITY {
             self.ring.pop_front();
@@ -103,7 +121,7 @@ impl Recorder {
     }
 
     pub(crate) fn hash(&self) -> u64 {
-        self.hash
+        self.hash.finish()
     }
 
     pub(crate) fn count(&self) -> u64 {
@@ -127,6 +145,19 @@ mod tests {
             arg: 0,
             value: 0,
         }
+    }
+
+    #[test]
+    fn fnv_matches_the_reference_vectors() {
+        // From the FNV reference test suite (draft-eastlake-fnv, FNV-1a 64).
+        let hash = |bytes: &[u8]| {
+            let mut h = Fnv::default();
+            h.write(bytes);
+            h.finish()
+        };
+        assert_eq!(hash(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(hash(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(hash(b"foobar"), 0x8594_4171_f739_67e8);
     }
 
     #[test]

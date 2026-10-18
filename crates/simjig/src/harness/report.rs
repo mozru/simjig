@@ -22,9 +22,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::kernel::recorder::Fnv;
 use crate::{BlockedTask, Failure, FailureKind, Precision, SimDuration, SimTime};
 
-use super::seed::{Fnv, Seed};
+use super::seed::Seed;
 
 /// A stable hash of a failure's kind, location and number-masked message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

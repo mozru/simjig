@@ -1,6 +1,7 @@
 //! Repository automation.
 //!
 //! - `cargo xtask setup` installs every pinned tool (see [`setup`]).
+//! - `cargo xtask doctor [--json]` runs the `cargo simjig doctor` checks.
 //! - `cargo xtask ci` runs the same gate locally and in GitHub Actions, so a green local
 //!   run means a green CI run.
 
@@ -8,6 +9,8 @@ mod setup;
 
 use std::env;
 use std::process::{Command, ExitCode};
+
+use cargo_simjig::doctor::{self, Format};
 
 /// One step of the gate: a program, its arguments, and extra environment variables.
 struct Step {
@@ -95,7 +98,7 @@ fn run(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<(), String>
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <ci | setup>";
+const USAGE: &str = "usage: cargo xtask <ci | setup | doctor [--json]>";
 
 fn ci() -> Result<(), String> {
     for step in CI {
@@ -111,6 +114,8 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["ci"] => ci(),
         ["setup"] => setup::setup(),
+        ["doctor"] => return doctor::run(Format::Text),
+        ["doctor", "--json"] => return doctor::run(Format::Json),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;

@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 mod cache;
+pub mod codegen;
 mod compile;
 mod depfile;
 mod dut;

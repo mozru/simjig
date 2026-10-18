@@ -1,0 +1,5 @@
+---
+source: crates/simjig-build/tests/codegen_it/snapshots.rs
+expression: shim
+---
+error: codegen: signal top.ua: unsupported: unpacked arrays have no simjig_signal descriptor yet (one packed value per entry)

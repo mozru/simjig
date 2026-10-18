@@ -8,6 +8,9 @@ allow = ["MIT", "Apache-2.0", "Unicode-3.0"]  # Unicode-3.0: unicode-ident (via 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace-internal path dependencies (`svtypes`, `simjig-bits`) carry no version; every
+# crate is `publish = false`, so they can never reach a registry.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

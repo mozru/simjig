@@ -12,9 +12,13 @@ workspace = true
 
 [dependencies]
 cc.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 svtypes.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+simjig-bits.workspace = true
 tempfile.workspace = true

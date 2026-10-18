@@ -3,7 +3,7 @@ source: crates/svtypes/tests/it/fixtures.rs
 expression: json
 ---
 {
-  "schema": 2,
+  "schema": 3,
   "producer": {
     "tool": "verilator",
     "version": "5.052"
@@ -135,6 +135,28 @@ expression: json
             }
           ]
         }
+      ],
+      "variables": [
+        {
+          "name": "W",
+          "kind": "Parameter"
+        },
+        {
+          "name": "clk",
+          "kind": "Signal"
+        },
+        {
+          "name": "data",
+          "kind": "Signal"
+        },
+        {
+          "name": "valid",
+          "kind": "Signal"
+        },
+        {
+          "name": "ready",
+          "kind": "Signal"
+        }
       ]
     },
     {
@@ -158,7 +180,13 @@ expression: json
           "modport": "snk"
         }
       ],
-      "modports": []
+      "modports": [],
+      "variables": [
+        {
+          "name": "seen",
+          "kind": "Signal"
+        }
+      ]
     },
     {
       "name": "monitor__Bz1",
@@ -181,7 +209,13 @@ expression: json
           "modport": null
         }
       ],
-      "modports": []
+      "modports": [],
+      "variables": [
+        {
+          "name": "busy",
+          "kind": "Signal"
+        }
+      ]
     },
     {
       "name": "producer__Bz1",
@@ -204,7 +238,13 @@ expression: json
           "modport": "src"
         }
       ],
-      "modports": []
+      "modports": [],
+      "variables": [
+        {
+          "name": "go",
+          "kind": "Signal"
+        }
+      ]
     },
     {
       "name": "top",
@@ -242,7 +282,43 @@ expression: json
         }
       ],
       "iface_ports": [],
-      "modports": []
+      "modports": [],
+      "instances": [
+        {
+          "name": "bus",
+          "module": 0
+        },
+        {
+          "name": "u_prod",
+          "module": 3
+        },
+        {
+          "name": "u_cons",
+          "module": 1
+        },
+        {
+          "name": "u_mon",
+          "module": 2
+        }
+      ],
+      "variables": [
+        {
+          "name": "clk",
+          "kind": "Signal"
+        },
+        {
+          "name": "go",
+          "kind": "Signal"
+        },
+        {
+          "name": "seen",
+          "kind": "Signal"
+        },
+        {
+          "name": "busy",
+          "kind": "Signal"
+        }
+      ]
     }
   ],
   "packages": []

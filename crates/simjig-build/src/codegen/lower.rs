@@ -15,14 +15,14 @@ mod sv;
 mod types;
 mod wrapper;
 
-use svtypes::ir::{Design, Param, ParamValue, Storage, TypeId, TypeKind};
+use svtypes::ir::{Design, Module, Param, ParamValue, Storage, TypeId, TypeKind, VariableKind};
 use svtypes::width::packed_storage;
 
 use self::sv::{LayoutSpeller, nameable};
 use self::types::{Root, Types, Use, bits, lower_types};
 use self::wrapper::dut_module;
 pub use self::wrapper::{DUT_INSTANCE, elab_module, lower_wrapper, wrapper_module};
-use super::names::{Namespace, camel, screaming, snake};
+use super::names::{Namespace, camel, closest, screaming, snake};
 use super::{
     Access, Bundle, BundleMember, CodegenConfig, Const, ConstGroup, ConstValue, DutField, Error,
     ItemKind, Layout, LayoutCheck, LayoutMember, LayoutValue, Lowered, Probe, ProbeAccess,
@@ -332,6 +332,8 @@ fn lower_probe(
             format!("no module `{}` in the design", probe.module),
         ));
     }
+    check_probe_path(design, probe, &segments, wrapper)
+        .map_err(|why| Error::config(item(), why))?;
     let (ty, width) = match (probe_type(design, probe)?, &probe.ty) {
         (Some(id), _) => (types.rust(design, id), design.ty(id).width.unwrap_or(0)),
         (None, ProbeType::Bits { width }) => (bits(*width), *width),
@@ -370,6 +372,69 @@ fn lower_probe(
         },
     };
     Ok((signal, segments[1..].join("_")))
+}
+
+/// Walks a probe's path through the IR's instance tree and checks the variable at its end,
+/// so a mistyped instance or variable, a wrong declaring module or a writable parameter
+/// fails here, before verilation, with a suggestion. `segments` is the path split at `.`
+/// (already checked to start with the DUT and to be plain identifiers). The width is
+/// checked after verilation, against Verilator's scope table (the IR has no types for
+/// internal variables).
+fn check_probe_path(
+    design: &Design,
+    probe: &Probe,
+    segments: &[&str],
+    wrapper: Option<&Wrapper>,
+) -> Result<(), String> {
+    let mut module: &Module = design.top_module();
+    if wrapper.is_some() {
+        let dut = module.instances.iter().find(|i| i.name == DUT_INSTANCE);
+        module = dut.map_or(module, |i| design.module(i.module));
+    }
+    let (var, instances) = segments[1..].split_last().unwrap_or((&"", &[]));
+    for (depth, name) in instances.iter().enumerate() {
+        let here = segments[..=depth].join(".");
+        let Some(inst) = module.instances.iter().find(|i| i.name == *name) else {
+            let hint = closest(name, module.instances.iter().map(|i| i.name.as_str()))
+                .map(|c| format!("; did you mean `{c}`?"))
+                .unwrap_or_default();
+            return Err(format!(
+                "no instance `{name}` in `{here}` (a `{}`){hint}",
+                module.orig_name
+            ));
+        };
+        module = design.module(inst.module);
+    }
+    let scope = segments[..segments.len() - 1].join(".");
+    if module.orig_name != probe.module {
+        return Err(format!(
+            "`{scope}` is an instance of `{}`, not of `{}` as the probe declares; pass `\"{}\"` \
+             as the probe's module",
+            module.orig_name, probe.module, module.orig_name
+        ));
+    }
+    let Some(v) = module.variables.iter().find(|v| v.name == *var) else {
+        let hint = closest(var, module.variables.iter().map(|v| v.name.as_str()))
+            .map(|c| format!("; did you mean `{c}`?"))
+            .unwrap_or_default();
+        return Err(format!(
+            "no variable `{var}` in `{}` (the module of `{scope}`){hint}",
+            module.orig_name
+        ));
+    };
+    let constant = match v.kind {
+        VariableKind::Signal => None,
+        VariableKind::Parameter => Some("parameter"),
+        VariableKind::Localparam => Some("localparam"),
+    };
+    if let (Some(what), ProbeAccess::ReadWrite) = (constant, probe.access) {
+        return Err(format!(
+            "`{var}` is a {what} of `{}`, a constant Verilator keeps in read-only storage; \
+             probe it with `ProbeAccess::Read`",
+            module.orig_name
+        ));
+    }
+    Ok(())
 }
 
 /// `[A-Za-z_][A-Za-z0-9_]*`.

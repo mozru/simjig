@@ -1,8 +1,8 @@
 //! The single error type of `simjig-build`.
 //!
-//! Every variant names what failed and the input that made it fail: the full command line
-//! of a failed tool, an excerpt of its stderr, and the file path it complained about, so a
-//! `build.rs` failure is actionable without rerunning anything by hand.
+//! Every variant names what failed and the input that made it fail: what a failed tool ran
+//! for, the file path it complained about, an excerpt of its stderr and, last, its full
+//! command line, so a `build.rs` failure is actionable without rerunning anything by hand.
 //!
 //! A wrapped cause is the [`source`](std::error::Error::source), never part of the
 //! message, so a reporter that walks the chain prints it once. `Debug` is the message
@@ -47,9 +47,11 @@ pub enum Error {
     },
     /// No `verilator` executable was found.
     #[error(
-        "`verilator` not found (looked in: {}); install it (e.g. `pixi install`), put it on \
-         PATH, set VERILATOR_ROOT, or set SIMJIG_VERILATOR to the executable",
-        display_paths(searched)
+        "`verilator` not found (looked in: {}); install Verilator {} (in the simjig repo: \
+         `pixi install --locked`) and put it on PATH, set VERILATOR_ROOT, or set \
+         SIMJIG_VERILATOR to the executable",
+        display_paths(searched),
+        svtypes::version::supported_list()
     )]
     VerilatorNotFound {
         /// Every location that was checked, in order.
@@ -58,9 +60,10 @@ pub enum Error {
     /// The Verilator found is not in the supported-version table
     /// ([`svtypes::version::SUPPORTED`]).
     #[error(
-        "unsupported Verilator at {}: `{found}`; supported versions: {}; install the \
-         pinned one: `pixi install --locked`",
+        "unsupported Verilator at {}: `{found}`; supported versions: {}; install Verilator \
+         {} (in the simjig repo: `pixi install --locked`)",
         path.display(),
+        svtypes::version::supported_list(),
         svtypes::version::supported_list()
     )]
     UnsupportedVerilator {
@@ -69,13 +72,16 @@ pub enum Error {
         /// Its `--version` output (first line).
         found: String,
     },
-    /// An external tool ran but failed.
-    #[error("{}", display_command_failure(command, status, stderr, path.as_deref()))]
+    /// An external tool ran but failed. The message leads with what failed (`JSON pass
+    /// for DUT `x``, `verilating DUT `x``) and ends with the command line.
+    #[error("{}", display_command_failure(what, command, *status, stderr, path.as_deref()))]
     Command {
+        /// What the run was for, e.g. ``verilating DUT `counter` ``.
+        what: String,
         /// The full command line, shell-quoted.
         command: String,
-        /// How the process ended.
-        status: String,
+        /// The exit code; `None` when a signal ended the process.
+        status: Option<i32>,
         /// The first lines of its stderr.
         stderr: String,
         /// The source file the tool complained about, when it named one.
@@ -161,10 +167,8 @@ impl Error {
                 status,
                 stderr,
             } => Self::Command {
-                status: status.map_or_else(
-                    || "killed by a signal".to_owned(),
-                    |s| format!("exit status: {s}"),
-                ),
+                what: format!("JSON pass for DUT `{dut}`"),
+                status,
                 path: offending_path(&stderr),
                 stderr: excerpt(&stderr),
                 command,
@@ -181,12 +185,13 @@ impl Error {
         move |source| Self::Io { op, path, source }
     }
 
-    /// Builds a [`Error::Command`] from a finished process.
-    pub(crate) fn command(command: String, output: &Output) -> Self {
+    /// Builds a [`Error::Command`] from a finished process run for `what`.
+    pub(crate) fn command(what: &str, command: String, output: &Output) -> Self {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Self::Command {
+            what: what.to_owned(),
             command,
-            status: output.status.to_string(),
+            status: output.status.code(),
             path: offending_path(&stderr),
             stderr: excerpt(&stderr),
         }
@@ -258,12 +263,17 @@ fn display_paths(paths: &[PathBuf]) -> String {
 }
 
 fn display_command_failure(
+    what: &str,
     command: &str,
-    status: &str,
+    status: Option<i32>,
     stderr: &str,
     path: Option<&Path>,
 ) -> String {
-    let mut out = format!("`{command}` failed ({status})");
+    let status = status.map_or_else(
+        || "killed by a signal".to_owned(),
+        |s| format!("exit status: {s}"),
+    );
+    let mut out = format!("{what} failed ({status})");
     if let Some(path) = path {
         out = format!("{out} on `{}`", path.display());
     }
@@ -271,6 +281,8 @@ fn display_command_failure(
         out.push_str("\nstderr:\n");
         out.push_str(stderr.trim_end());
     }
+    out.push_str("\ncommand: ");
+    out.push_str(command);
     out
 }
 
@@ -353,6 +365,23 @@ mod tests {
         let debug = format!("{ports:?}");
         assert_eq!(debug, ports.to_string());
         assert!(debug.contains('\n') && !debug.contains("\\n"), "{debug}");
+    }
+
+    #[test]
+    fn command_failures_lead_with_what_failed_and_end_with_the_command() {
+        let err = Error::json_pass(
+            "shreg",
+            svtypes::error::Error::Tool {
+                command: "verilator --json-only shreg.sv".into(),
+                status: Some(1),
+                stderr: "%Error: /r/shreg.sv:3:5: syntax error\n".into(),
+            },
+        );
+        assert_eq!(
+            err.to_string(),
+            "JSON pass for DUT `shreg` failed (exit status: 1) on `/r/shreg.sv`\nstderr:\n\
+             %Error: /r/shreg.sv:3:5: syntax error\ncommand: verilator --json-only shreg.sv"
+        );
     }
 
     #[test]

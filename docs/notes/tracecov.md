@@ -7,11 +7,12 @@ Agent `tracecov`, branch `w3/tracecov`. Checked against the installed Verilator 
 ```sh
 pixi run cpp-tests      # crates/simjig-build/cpp/tests/run.sh: 18 C++ tests, about 1 min
 ```
-`run.sh` verilates four models (`Vtc_full` with `--trace-fst --coverage`, `Vtc_plain`,
-`Vtc_hier` with `--coverage-line`, `Vtc_timing` with `--timing --trace-fst`) into one
+`run.sh` verilates five models (`Vtc_full` with `--trace-fst --coverage`, `Vtc_plain`,
+`Vtc_hier` with `--coverage-line`, `Vtc_timing` with `--timing --trace-fst`, `Vtc_cg` with a
+covergroup and `--coverage-line`) into one
 executable, the same way `cpp/spike/run.sh` does. `traits.cpp` writes their traits the way
-the shim emitter does. The tests use only the vtable. The run is not part of
-`cargo xtask ci`; the Rust-side shim tests in `tests/codegen_it/verilator.rs` are.
+the shim emitter does. The tests use only the vtable. `cargo xtask ci`
+runs it (since s1c2fix).
 
 ## The ABI after this change (`SIMJIG_ABI_VERSION` stays 1)
 `simjig_model_vtable` grows from 136 to **192 bytes**, append-only. The first 136 bytes keep
@@ -138,11 +139,43 @@ Mapping, for a flat model (`tc`, `-O` defaults inline everything; `--flatten` fo
 Each handle has its own context and so its own `VerilatedCovContext`: `coverage.dat` is per
 model.
 
+## Covergroup bins and `cov_runs` (s1c3fix)
+`cov_runs` (`docs/notes/s1c2fix.md`) hands out the counter arrays that lie inside the
+`V<prefix>__Syms` object. A covergroup's bins are not there: 5.052 registers them through
+`VL_COVER_INSERT` when the covergroup is constructed, which for `cg inst = new;` is the model's
+first eval (static initialisers run in `_eval_static`), into counters it allocates on the
+heap. Decision: **document, not expose.** The ABI comment of `cov_runs` now says the runs hold
+every *code* coverage counter (line, branch, toggle, expression, FSM, user) exactly once and
+no covergroup bin; `cov_write` and `cov_zero` include the bins. Why not expose them: they
+appear after create, one allocation per covergroup instance, so a run list fixed at create
+cannot hold them, and a list that grows during evals would hand out pointers whose layout
+changes with the simulation.
+
+The noting itself now stops when create calls `Runtime::cov_runs` (`m_cov_closed`). Before,
+every registration during an eval (each covergroup `new`) was appended to a vector that was
+never read again, for the model's lifetime.
+
+Tests: `cov_noting_stops_after_create` (a registration after `cov_runs` is not kept; fails
+without the flag) and `covergroup_bins_are_written_but_not_in_runs` (`Vtc_cg`: the runs do not
+change across evals, `coverage.dat` has the covergroup points and a higher total than the
+runs, `cov_zero` clears them).
+
 ## Per-model isolation
 - **Thread context**: every `Scope` (every entry point that runs model code, trace and
   coverage included) sets `Verilated::threadContextp` to the model's context. On exit it
   restores the enclosing model's context if scopes nest. `destroy` restores an enclosing
   model's context after `~VerilatedContext` nulls it.
+  - **Formal data race under multi-threaded `cargo test`.** 5.052's
+    `Verilated::threadContextp(ctx)` (`verilated.h:1048`) sets the thread-local context and
+    also `lastContextp(ctx)`, a plain `static VerilatedContext* s_lastContextp` with no
+    lock or atomic. Two test threads that each run a model write it concurrently: a data
+    race by the C++ memory model (undefined behaviour), although simjig never reads it
+    (every entry point sets the thread-local first, and `threadContextp()` reads
+    `s_lastContextp` only when the thread-local is null). `cargo nextest` runs each test
+    in its own process, so there is one model thread per process and no race; `cargo
+    simjig doctor` recommends it. Under plain `cargo
+    test` the race is real but benign in practice (pointer-sized stores of values nobody
+    loads). Removing it needs Verilator not to write the global, which is upstream code.
 - **`threads(1)`** is set in `Runtime`'s constructor, before the model is added. Test:
   the process has 1 thread after two models are created and evaluated.
 - **`$urandom`** (5.052 `verilated.cpp`, `VlRNG::vl_thread_rng`):
@@ -215,12 +248,32 @@ Ports are not checked this way; `check_ports` against the header macros covers t
 - `cargo nextest run -p simjig-build`: all pass, with 4 new shim snapshots, 13 updated ones
   (two new `kTraceFst`/`kCoverage` lines each) and 3 new Verilator tests.
 
+## Upstream: UBSan on toggle coverage of wide signals
+5.052's `VL_COV_TOGGLE_CHG_ST_W` (`verilated_cov.h:99-100`), which counts toggles of a
+signal stored as `VlWide` (more than 64 bits), loops `j` up to `width - i * 32` for every
+word `i`, not up to 32, and evaluates `newData[i] >> j` and `chgData >> j` on a 32-bit
+`EData`. For every word but the last, `j` reaches 32 and more: a shift by at least the
+operand's width, undefined behaviour that UBSan reports as a shift-exponent error (found
+by the stage 1 review; not rerun in this branch). In practice the shifted-out word's bits are read again as the next
+word's, so the toggle counts of bits above 32 in a word-crossing signal are counted from
+two words. It affects any `--coverage` (or `--coverage-toggle`) model with a toggled
+signal wider than 64 bits, simjig or not; the `_I` and `_Q` variants loop `i < width` over a
+32- or 64-bit value and stay within it. Not worked around here (it is Verilator's generated-code helper);
+`--coverage-max-width 64` keeps Verilator from instrumenting wider signals at all. To report
+upstream.
+
 ## Not verified / open
 - Linux: everything ran on osx-arm64 only. The fd scan uses `RLIMIT_NOFILE` capped at 65536.
 - ASan (it cannot run on this host; see abi.md).
 - A nested scope (DPI → Rust → another model) end to end; only `thread_rng`'s contract is
   tested directly.
-- `cov_counters` for non-flat models returns NULL; whether simjig-build should pass
-  `--flatten` with `--coverage` is open. Probes already assume inlining: they bind
-  `rootp->a__DOT__b`.
-- No `CHANGELOG` exists in the repository to record the ABI addition.
+- (Superseded) `cov_counters` became `cov_runs` in s1c2fix, which covers non-inlined
+  modules; probes are found through the scope table, not `rootp->a__DOT__b`.
+- Probe paths through generate blocks (`top.g[0].u.x`, `top.gen_blk.x`) are not supported
+  yet: the lowering accepts only plain identifiers, and the IR's instance tree
+  (`Module::instances`) lists only instances directly in a module body. Verilator's scope
+  table names such a scope plainly, `g.gb[0].u` (checked on 5.052; only the C++ member
+  name is mangled), so `find_probe` could find it; supporting
+  them needs the IR to record generate scopes and the lowering to accept `name[index]`
+  segments.
+- The `CHANGELOG.md` now exists and records the ABI and build changes.

@@ -11,8 +11,16 @@ use svtypes::version::supported_list;
 use super::facts::{DEFAULT_CXX, Facts, Probe};
 use super::{Check, Finding};
 
-/// The fix for anything the pinned pixi environment provides.
-const PIXI_FIX: &str = "pixi install --locked && pixi shell";
+/// The fix for a missing or unsuitable tool: install it; the simjig repository pins every
+/// one in its pixi environment, but a user's project may get them elsewhere.
+fn install(what: &str) -> String {
+    format!("install {what} (in the simjig repo: `pixi install --locked`)")
+}
+
+/// The fix for a missing or unsupported Verilator.
+fn install_verilator() -> String {
+    install(&format!("Verilator {}", supported_list()))
+}
 
 /// FST tracing sources, relative to the Verilator include directory. Verilator 5.052
 /// compiles these into every model built with `--trace-fst`.
@@ -53,46 +61,58 @@ fn verilator(facts: &Facts) -> Finding {
         // The build looks where VERILATOR_ROOT points and nowhere else, so a stale one is
         // the cause whenever it is set (and SIMJIG_VERILATOR is not, which would win).
         let fix = if facts.env_root.is_some() && facts.verilator_searched.len() == 1 {
-            "unset VERILATOR_ROOT, or point it at a Verilator installation"
+            "unset VERILATOR_ROOT, or point it at a Verilator installation".to_owned()
         } else {
-            PIXI_FIX
+            install_verilator()
         };
         return Finding::fail(check, summary, fix);
     };
     let banner = match &facts.verilator_version {
         Probe::Output(text) => text,
         Probe::NotFound => {
-            return Finding::fail(check, format!("{} cannot run", path.display()), PIXI_FIX);
+            return Finding::fail(
+                check,
+                format!("{} cannot run", path.display()),
+                install_verilator(),
+            );
         }
         Probe::Failed(error) => {
             let summary = format!("`{} --version` failed: {error}", path.display());
-            return Finding::fail(check, summary, PIXI_FIX);
+            return Finding::fail(check, summary, install_verilator());
         }
     };
     let at = path.display();
     // The build's rule (svtypes::toolchain::judge), so the doctor and the build agree.
     match toolchain::judge(banner, facts.allow_untested) {
-        Verdict::Supported(version) => Finding::ok(check, format!("Verilator {version} at {at}")),
+        // The build resolves Verilator when its build script runs and tracks
+        // SIMJIG_VERILATOR and VERILATOR_ROOT, not PATH (BuildEnv::TRACKED_VARS).
+        Verdict::Supported(version) => Finding::ok(
+            check,
+            format!(
+                "Verilator {version} at {at}; builds keep the Verilator their build script \
+                 found (switching PATH alone does not rebuild; setting SIMJIG_VERILATOR does)"
+            ),
+        ),
         Verdict::Untested(version) => {
             let summary = format!(
                 "Verilator {version} at {at} is untested (supported: {}); allowed by SIMJIG_UNTESTED_VERILATOR=1",
                 supported_list()
             );
-            Finding::warn(check, summary, PIXI_FIX)
+            Finding::warn(check, summary, install_verilator())
         }
         Verdict::Refused(Some(version)) => {
             let summary = format!(
                 "Verilator {version} at {at} is not supported (supported: {})",
                 supported_list()
             );
-            Finding::fail(check, summary, PIXI_FIX)
+            Finding::fail(check, summary, install_verilator())
         }
         Verdict::Refused(None) => {
             let line = banner.lines().next().unwrap_or("");
             Finding::fail(
                 check,
                 format!("cannot read a version from `{line}`"),
-                PIXI_FIX,
+                install_verilator(),
             )
         }
     }
@@ -113,7 +133,7 @@ fn verilator_root(facts: &Facts) -> Finding {
         return Finding::warn(
             check,
             "cannot check: `verilator --getenv VERILATOR_ROOT` did not run",
-            PIXI_FIX,
+            install_verilator(),
         );
     };
     match &facts.env_root {
@@ -139,7 +159,11 @@ fn verilator_root(facts: &Facts) -> Finding {
 fn fst(facts: &Facts, exists: &dyn Fn(&Path) -> bool) -> Finding {
     let check = Check::Fst;
     let Some(root) = binary_root(facts) else {
-        return Finding::warn(check, "cannot check: Verilator root unknown", PIXI_FIX);
+        return Finding::warn(
+            check,
+            "cannot check: Verilator root unknown",
+            install_verilator(),
+        );
     };
     let include = root.join("include");
     let missing: Vec<&str> = FST_SOURCES
@@ -154,7 +178,7 @@ fn fst(facts: &Facts, exists: &dyn Fn(&Path) -> bool) -> Finding {
         )
     } else {
         let summary = format!("missing from {}: {}", include.display(), missing.join(", "));
-        Finding::fail(check, summary, PIXI_FIX)
+        Finding::fail(check, summary, install_verilator())
     }
 }
 
@@ -166,14 +190,18 @@ fn cxx(facts: &Facts) -> Finding {
         (None, Some(version)) => Finding::warn(
             check,
             format!("CXX unset; builds use `{DEFAULT_CXX}`: {version}"),
-            PIXI_FIX,
+            install("a C++ compiler, and set CXX to it"),
         ),
         (_, None) => {
             let why = match &facts.cxx_version {
                 Probe::Failed(error) => format!("failed: {error}"),
                 Probe::NotFound | Probe::Output(_) => "not found".to_owned(),
             };
-            Finding::fail(check, format!("C++ compiler `{program}` {why}"), PIXI_FIX)
+            Finding::fail(
+                check,
+                format!("C++ compiler `{program}` {why}"),
+                install("a C++ compiler, and set CXX to it"),
+            )
         }
     }
 }
@@ -184,7 +212,7 @@ fn ccache(facts: &Facts) -> Finding {
         None => Finding::warn(
             Check::Ccache,
             "ccache not found; every model rebuild recompiles all C++",
-            PIXI_FIX,
+            install("ccache"),
         ),
     }
 }
@@ -264,7 +292,7 @@ fn environment(facts: &Facts) -> Finding {
                 "not in a pixi environment, and not on PATH: {}",
                 missing.join(", ")
             ),
-            PIXI_FIX,
+            install("Verilator, make and a C++ compiler"),
         )
     }
 }
@@ -371,8 +399,17 @@ mod tests {
             Status::Fail,
             "5.053 at /env/bin/verilator is not supported (supported: 5.052)",
         );
+        assert_eq!(
+            verilator(&f).fix(),
+            Some("install Verilator 5.052 (in the simjig repo: `pixi install --locked`)")
+        );
         f.allow_untested = true;
         expect(&verilator(&f), Status::Warn, "SIMJIG_UNTESTED_VERILATOR=1");
+        expect(
+            &verilator(&healthy()),
+            Status::Ok,
+            "switching PATH alone does not rebuild; setting SIMJIG_VERILATOR does",
+        );
     }
 
     #[test]
@@ -466,7 +503,11 @@ mod tests {
         let mut f = healthy();
         f.ccache = Probe::NotFound;
         f.nextest = Probe::Failed("error: no such command: `nextest`".to_owned());
-        expect(&ccache(&f), Status::Warn, PIXI_FIX);
+        expect(
+            &ccache(&f),
+            Status::Warn,
+            "install ccache (in the simjig repo: `pixi install --locked`)",
+        );
         expect(
             &nextest(&f),
             Status::Warn,

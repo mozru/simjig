@@ -1,5 +1,8 @@
 // Traits for the test models, written exactly as simjig-build's shim emitter writes them
 // (crates/simjig-build/src/codegen/shim.rs; compare its snapshots).
+#include "Vtc_cg.h"
+#include "Vtc_cg__Syms.h"
+#include "Vtc_cg___024root.h"
 #include "Vtc_full.h"
 #include "Vtc_full__Syms.h"
 #include "Vtc_full___024root.h"
@@ -62,6 +65,46 @@ struct BadProbeTraits {
     }
 };
 
+// The localparam tc_sub.LP, read-only (allowed: the value is readable) and read-write (refused
+// at create: the variable is constexpr storage, and a write through it is undefined).
+struct ParamReadTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000006ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "LP", "tc.u.LP", 8, kRead);
+    }
+};
+struct ParamWriteTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000007ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "LP", "tc.u.LP", 8, kReadWrite);
+    }
+};
+// tc_sub.r is public_flat_rd only: a read-write probe of it is refused too.
+struct ReadOnlyWriteTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c00000000000008ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "r", "tc.u.r", 1, kReadWrite);
+    }
+};
+
 struct HierTraits {
     using Model = Vtc_hier;
     static constexpr const char* kPrefix = "Vtc_hier";
@@ -72,6 +115,19 @@ struct HierTraits {
     static void bind(Vtc_hier& m, simjig::SignalTable& t) {
         SIMJIG_SIGNAL(t, m.clk, "tc_hier.clk", 1, SIMJIG_DIR_IN, kReadWrite);
         SIMJIG_SIGNAL(t, m.a, "tc_hier.a", 1, SIMJIG_DIR_IN, kReadWrite);
+    }
+};
+
+struct CgTraits {
+    using Model = Vtc_cg;
+    static constexpr const char* kPrefix = "Vtc_cg";
+    static constexpr uint64_t kIrHash = 0x7c00000000000009ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = true;
+    static void bind(Vtc_cg& m, simjig::SignalTable& t) {
+        SIMJIG_SIGNAL(t, m.clk, "tc_cg.clk", 1, SIMJIG_DIR_IN, kReadWrite);
+        SIMJIG_SIGNAL(t, m.a, "tc_cg.a", 2, SIMJIG_DIR_IN, kReadWrite);
     }
 };
 
@@ -92,5 +148,9 @@ struct TimingTraits {
 SIMJIG_EXPORT_VTABLE(Vtc_full, FullTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain, PlainTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_badprobe, BadProbeTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rd, ParamReadTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rw, ParamWriteTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_rd_as_rw, ReadOnlyWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_hier, HierTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_cg, CgTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_timing, TimingTraits)

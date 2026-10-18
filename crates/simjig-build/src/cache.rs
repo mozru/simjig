@@ -7,6 +7,7 @@
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
 //! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
+//! - `archives/<key>/`: compiled models (see `compile`).
 //! - `tmp/`: work directories, renamed into place when complete.
 //!
 //! Keys. Verilator only reveals which files it read (`` `include ``s) after running, so
@@ -55,6 +56,7 @@ impl Cache {
             "runtime",
             "prefixes",
             "libverilated",
+            "archives",
             "tmp",
         ] {
             let dir = root.join(sub);
@@ -89,8 +91,10 @@ impl Cache {
     }
 
     /// Returns Verilator's output for `args`, running Verilator only on a miss.
+    /// `dut` names the DUT in a failure message.
     pub(crate) fn verilate(
         &self,
+        dut: &str,
         verilator: &Verilator,
         args: &[String],
         include_dirs: &[PathBuf],
@@ -114,7 +118,7 @@ impl Cache {
         let obj = work.join("obj");
         let mut cmd = verilator.command();
         cmd.arg("-Mdir").arg(&obj).args(args);
-        if let Err(e) = verilator::run(&mut cmd) {
+        if let Err(e) = verilator::run(&mut cmd, &format!("verilating DUT `{dut}`")) {
             remove_best_effort(&work);
             return Err(e);
         }

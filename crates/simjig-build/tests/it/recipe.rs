@@ -139,3 +139,45 @@ fn the_fatal_hooks_are_defined_once_in_the_shared_archive() {
         assert!(defs[0].contains("simjig_rt.o"), "{hook}: {defs:?}");
     }
 }
+
+/// A build script reruns whenever any of its DUTs changes, and builds every DUT again. A
+/// model's compiled archive is cached under its key, so only the edited DUT's C++ is
+/// compiled again: the other model, whose Verilator output, shim and toolchain are the
+/// same, is reused from the cache.
+#[test]
+fn editing_one_dut_recompiles_only_its_model() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    let mut env = s.env();
+    env.simjig_ccache = Some(ccache.into());
+    let rtl = s.path().join("duts");
+    for d in ["inv", "flop"] {
+        crate::support::copy_dir(&dut(d), &rtl.join(d));
+    }
+    let build = |name: &str| {
+        Dut::new(name)
+            .sources([rtl.join(name).join(format!("{name}.sv"))])
+            .top(name)
+            .build_in(&env)
+            .unwrap()
+    };
+    build("inv");
+    let flop = build("flop");
+    std::fs::remove_dir_all(&log).unwrap();
+    std::fs::create_dir_all(&log).unwrap();
+    // The build script runs again after an edit to `inv`: both DUTs are built.
+    let inv_sv = rtl.join("inv/inv.sv");
+    let text = std::fs::read_to_string(&inv_sv).unwrap();
+    std::fs::write(&inv_sv, format!("{text}\n// edited\n")).unwrap();
+    let inv = build("inv");
+    assert_eq!(build("flop").prefix, flop.prefix);
+    let names: Vec<String> = compiles(&log).into_iter().map(|(n, _)| n).collect();
+    assert!(
+        names.iter().any(|n| n.starts_with(&inv.prefix)),
+        "the edited model is compiled: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.starts_with(&flop.prefix)),
+        "the unchanged model is not: {names:?}"
+    );
+}

@@ -88,3 +88,77 @@ fn four_state_constants_are_recorded_not_fatal() {
     assert!(top.params.is_empty(), "{:?}", top.params);
     assert_eq!(top.unrepresentable[0].name, "P");
 }
+
+/// Each module lists its instances and the variables of its body, with their kind, so a
+/// build can check a probe path (instance names, variable, parameter or not) before
+/// verilating.
+#[test]
+fn modules_record_instances_and_variables() {
+    use svtypes::ir::VariableKind;
+    let rtl = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/rtl");
+    let design = json_pass(&JsonPassOpts {
+        sources: vec![rtl.join("hierarchy.sv")],
+        top: "hierarchy".into(),
+        ..JsonPassOpts::default()
+    })
+    .unwrap();
+    let top = design.top_module();
+    let vars: Vec<_> = top
+        .variables
+        .iter()
+        .map(|v| (v.name.as_str(), v.kind))
+        .collect();
+    assert_eq!(
+        vars,
+        [
+            ("P", VariableKind::Parameter),
+            ("clk", VariableKind::Signal),
+            ("y", VariableKind::Signal),
+            ("LP", VariableKind::Localparam),
+            ("r", VariableKind::Signal),
+        ]
+    );
+    let [inst] = top.instances.as_slice() else {
+        panic!("{:?}", top.instances)
+    };
+    assert_eq!(inst.name, "u_leaf");
+    assert_eq!(design.module(inst.module).orig_name, "hier_leaf");
+}
+
+/// A port the IR cannot represent is reported by its name and source location first, with
+/// the fix when there is one; the JSON path comes last, for a bug report.
+#[test]
+fn unsupported_ports_lead_with_the_port_and_its_location() {
+    let rtl = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/rtl");
+    let err = |top: &str| {
+        json_pass(&JsonPassOpts {
+            sources: vec![rtl.join(format!("{top}.sv"))],
+            top: top.into(),
+            ..JsonPassOpts::default()
+        })
+        .unwrap_err()
+        .to_string()
+    };
+    let unpacked = err("unpacked_port");
+    let file = rtl.join("unpacked_port.sv");
+    assert!(
+        unpacked.starts_with(&format!(
+            "{}:4:46: port `s`: unpacked structs and unions have no supported C++ storage; \
+             declare the type `packed`",
+            file.display()
+        )),
+        "{unpacked}"
+    );
+    assert!(
+        unpacked.ends_with(')') && unpacked.contains("(Verilator 5.052 JSON at /"),
+        "{unpacked}"
+    );
+    let string = err("string_port");
+    assert!(
+        string.starts_with(&format!(
+            "{}:4:18: port `name`: unsupported basic type `string`",
+            rtl.join("string_port.sv").display()
+        )),
+        "{string}"
+    );
+}

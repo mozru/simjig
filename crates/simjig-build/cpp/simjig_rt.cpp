@@ -60,12 +60,14 @@ const char* or_empty(const char* s) { return s != nullptr ? s : ""; }
 Runtime* active() noexcept { return t_active; }
 
 void note_cov_counter(uint32_t* countp) noexcept {
-    // Points register while the model is constructed, inside create's Scope. A model built
-    // outside simjig has no active runtime and nobody to tell.
+    // Points register while the model is constructed, inside create's Scope (and, for a
+    // covergroup, when `new` runs, inside an eval's Scope: Runtime ignores those). A model
+    // built outside simjig has no active runtime and nobody to tell.
     if (t_active != nullptr) t_active->note_cov_counter(countp);
 }
 
 void Runtime::note_cov_counter(uint32_t* countp) noexcept {
+    if (m_cov_closed) return;
     try {
         m_cov_counters.push_back(countp);
     } catch (...) {
@@ -76,6 +78,7 @@ void Runtime::note_cov_counter(uint32_t* countp) noexcept {
 std::vector<simjig_cov_run> Runtime::cov_runs(const void* begin, size_t size) {
     std::vector<uint32_t*> seen = std::move(m_cov_counters);
     m_cov_counters.clear();
+    m_cov_closed = true;
     if (m_cov_lost) return {};
     const auto* lo = static_cast<const char*>(begin);
     const auto inside = [lo, size](uint32_t* p) {
@@ -214,7 +217,7 @@ bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
 }
 
 void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
-                 const char* var, const char* display, uint32_t width) {
+                 const char* var, const char* display, uint32_t width, uint8_t access) {
     const std::string scope_name = std::string{or_empty(model_name)} + "." + or_empty(scope);
     const auto fail = [&](const std::string& why) {
         throw std::runtime_error("simjig: probe '" + std::string{or_empty(display)} + "': " + why);
@@ -225,6 +228,18 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
     if (v == nullptr) {
         fail("no public variable '" + std::string{or_empty(var)} + "' in scope '" + scope_name
              + "' (a probe inside a hierarchical block, hier_block, is in another model)");
+    }
+    if ((access & SIMJIG_ACCESS_WRITE) != 0) {
+        // verilated_sym_props.h: isParam() marks Verilator's `static constexpr` parameter
+        // members; isPublicRW() is public_flat_rw (public_flat_rd variables may be optimised
+        // as constants by Verilator, so writing them is not allowed either).
+        if (v->isParam()) {
+            fail("the model's variable is a parameter (constant storage); a parameter can only "
+                 "be probed for reading");
+        }
+        if (!v->isPublicRW()) {
+            fail("the model's variable is public_flat_rd, but the probe is bound for writing");
+        }
     }
     if (v->udims() != 0) fail("the model's variable is an unpacked array");
     if (v->entBits() != static_cast<int>(width)) {

@@ -151,6 +151,40 @@ impl Namespace {
     }
 }
 
+/// The candidate closest to `name` by edit distance, if one is close enough to be a likely
+/// typo (at most one edit per four characters, and at least one): for "did you mean"
+/// hints in configuration errors. Ties go to the first candidate.
+pub(crate) fn closest<'c>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'c str>,
+) -> Option<&'c str> {
+    let limit = 1 + name.chars().count() / 4;
+    candidates
+        .into_iter()
+        .map(|c| (edit_distance(name, c), c))
+        .filter(|&(d, c)| d <= limit && c != name)
+        .min_by_key(|&(d, _)| d)
+        .map(|(_, c)| c)
+}
+
+/// Levenshtein distance over chars.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let next = (row[j] + 1)
+                .min(row[j + 1] + 1)
+                .min(diag + usize::from(ca != cb));
+            diag = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +224,18 @@ mod tests {
         assert_eq!(ns.claim("self_"), "self_");
         assert_eq!(ns.claim("self_"), "self_2");
         assert!(ns.contains("data_2"));
+    }
+
+    #[test]
+    fn closest_suggests_likely_typos_only() {
+        let vars = ["result", "state", "clk"];
+        assert_eq!(closest("reslt", vars), Some("result"));
+        assert_eq!(closest("stat", vars), Some("state"));
+        assert_eq!(closest("count", vars), None);
+        assert_eq!(
+            closest("result", vars),
+            None,
+            "an exact match is no suggestion"
+        );
     }
 }

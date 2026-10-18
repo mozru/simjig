@@ -3,7 +3,7 @@ source: crates/svtypes/tests/it/fixtures.rs
 expression: json
 ---
 {
-  "schema": 2,
+  "schema": 3,
   "producer": {
     "tool": "verilator",
     "version": "5.052"
@@ -252,7 +252,53 @@ expression: json
         }
       ],
       "iface_ports": [],
-      "modports": []
+      "modports": [],
+      "variables": [
+        {
+          "name": "s16",
+          "kind": "Signal"
+        },
+        {
+          "name": "u16",
+          "kind": "Signal"
+        },
+        {
+          "name": "s5_2state",
+          "kind": "Signal"
+        },
+        {
+          "name": "by",
+          "kind": "Signal"
+        },
+        {
+          "name": "si",
+          "kind": "Signal"
+        },
+        {
+          "name": "i",
+          "kind": "Signal"
+        },
+        {
+          "name": "li",
+          "kind": "Signal"
+        },
+        {
+          "name": "ig",
+          "kind": "Signal"
+        },
+        {
+          "name": "tm",
+          "kind": "Signal"
+        },
+        {
+          "name": "s80",
+          "kind": "Signal"
+        },
+        {
+          "name": "neg",
+          "kind": "Signal"
+        }
+      ]
     }
   ],
   "packages": []

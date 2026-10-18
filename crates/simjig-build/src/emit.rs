@@ -53,6 +53,28 @@ pub struct Emitted {
     pub layout_check: Option<SvModule>,
     /// The ports the model header must declare; `None` means the IR top's ports.
     pub ports: Option<Vec<HeaderPort>>,
+    /// The probes the shim binds (`SIMJIG_PROBE`). After verilating, the pipeline checks
+    /// each against Verilator's scope table (width, packing, access), so a mismatch fails
+    /// the build rather than the first `create`.
+    pub probes: Vec<ProbeSite>,
+}
+
+/// A probe as the shim binds it, for the build-time check against the scope table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeSite {
+    /// The probe's path as declared (`counter.u_core.state`), for messages.
+    pub path: String,
+    /// The declaring module, for messages.
+    pub module: String,
+    /// The scope as Verilator names it, without the model's instance name
+    /// ([`codegen::SignalTarget::Probe::scope`]).
+    pub scope: String,
+    /// The variable.
+    pub var: String,
+    /// The bits the shim binds.
+    pub width: u32,
+    /// Bound for writing (`public_flat_rw`).
+    pub writable: bool,
 }
 
 /// A generated SystemVerilog module.
@@ -94,7 +116,26 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
             contents: codegen::emit_layout_check(&lowered),
         }),
         ports: None,
+        probes: probe_sites(&lowered),
     })
+}
+
+fn probe_sites(lowered: &codegen::Lowered) -> Vec<ProbeSite> {
+    lowered
+        .signals
+        .iter()
+        .filter_map(|s| match &s.target {
+            codegen::SignalTarget::Probe { module, var, scope } => Some(ProbeSite {
+                path: s.name.clone(),
+                module: module.clone(),
+                scope: scope.clone(),
+                var: var.clone(),
+                width: s.width,
+                writable: s.access == codegen::Access::PublicRw,
+            }),
+            codegen::SignalTarget::Port { .. } => None,
+        })
+        .collect()
 }
 
 /// The emitter [`crate::Dut`] uses unless [`crate::Dut::emitter`] replaces it.
@@ -158,6 +199,8 @@ pub(crate) struct Placed {
     pub(crate) layout_check: Option<SvModule>,
     /// The ports the header must declare.
     pub(crate) ports: Vec<HeaderPort>,
+    /// The probes the shim binds.
+    pub(crate) probes: Vec<ProbeSite>,
 }
 
 /// Writes the files that live in `OUT_DIR` and collects the rest (see the module docs).
@@ -206,6 +249,7 @@ pub(crate) fn place(
         inputs,
         layout_check: emitted.layout_check,
         ports,
+        probes: emitted.probes,
     })
 }
 

@@ -66,7 +66,10 @@ fn check_links(s: &Sandbox, built: &Built) {
     };
     let links = directive("cargo::rustc-link-lib=");
     let searches = directive("cargo::rustc-link-search=native=");
-    assert_eq!(links[0], format!("static=simjig_model_{}", built.prefix));
+    assert!(
+        links[0].starts_with(&format!("static=simjig_model_{}_", built.prefix)),
+        "{links:?}"
+    );
     assert!(
         links[1].starts_with("static=simjig_verilated_"),
         "{links:?}"
@@ -79,6 +82,7 @@ fn check_links(s: &Sandbox, built: &Built) {
             "{dir} {link}"
         );
     }
+    assert!(Path::new(&searches[0]).starts_with(s.path().join("cache/archives")));
     assert!(Path::new(&searches[1]).starts_with(s.path().join("cache/libverilated")));
 }
 

@@ -288,6 +288,7 @@ fn an_unshared_cache_warns() {
         built.directives
     );
 }
+
 /// `dpi_in_c` changes only the generated Rust, so it is not part of a DUT's prefix; it
 /// must not be part of the identity its prefix claim records either, or moving an import
 /// from Rust to C (an edit to the build script) finds the previous build's claim and fails

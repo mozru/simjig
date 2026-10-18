@@ -158,3 +158,39 @@ fn generate_and_instance_array_mistakes_fail_the_build() {
         assert_eq!(s.verilations(), 0, "{path}: refused before verilating");
     }
 }
+
+/// With `--output-split`, Verilator spreads the scope table over several `__Syms` files;
+/// the check reads them all, so a good probe builds and a bad width is still caught.
+#[test]
+fn probes_are_checked_in_a_split_scope_table() {
+    let build = |s: &Sandbox, width: u32| {
+        Dut::new("probed")
+            .sources([s.rtl().join("probed.sv")])
+            .top("lp")
+            .verilator_args(["--output-split", "1", "--output-split-cfuncs", "1"])
+            .probe(
+                "lp.u_core.result",
+                "lp_core",
+                ProbeType::Bits { width },
+                ProbeAccess::ReadWrite,
+            )
+            .build_in(&s.env())
+    };
+    let s = Sandbox::new();
+    let model = build(&s, 8).unwrap();
+    let split = std::fs::read_dir(&model.obj_dir)
+        .unwrap()
+        .filter(|e| {
+            let name = e.as_ref().unwrap().file_name();
+            let name = name.to_string_lossy();
+            name.contains("__Syms__ctor__") && name.ends_with(".cpp")
+        })
+        .count();
+    assert!(split > 0, "the table is split");
+    let s = Sandbox::new();
+    let msg = format!("{:?}", build(&s, 5).unwrap_err());
+    assert!(
+        msg.contains("`result` is 8 bits wide in the design"),
+        "{msg}"
+    );
+}

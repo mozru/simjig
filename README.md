@@ -142,6 +142,10 @@ pub async fn reset(dut: &flop::Dut) {
 }
 ```
 
+A helper that takes a signal handle names its type, and `In`, `Out` and `InOut` are not in
+the prelude: they are generic names that a glob import would make ambiguous next to a
+testbench's own, so import them by name, `use simjig::{In, Out};`.
+
 ```rust
 // tests/flop.rs
 //! A clocked design: a kernel-driven clock, and the value a clock edge produced, read in

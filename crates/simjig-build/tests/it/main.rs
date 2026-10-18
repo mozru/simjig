@@ -11,4 +11,5 @@ mod errors;
 mod fixture_crate;
 mod header;
 mod pipeline;
+mod recipe;
 mod support;

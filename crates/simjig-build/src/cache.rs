@@ -4,6 +4,7 @@
 //! - `models/<full key>/obj/`: Verilator output; `models/<full key>/deps`: its inputs.
 //! - `manifests/<pre key>`: the input list of the last build with that pre key.
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
+//! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
 //! - `tmp/`: work directories, renamed into place when complete.
 //!
@@ -47,7 +48,14 @@ pub(crate) struct Verilated {
 
 impl Cache {
     pub(crate) fn open(root: PathBuf) -> Result<Self, Error> {
-        for sub in ["models", "manifests", "inputs", "libverilated", "tmp"] {
+        for sub in [
+            "models",
+            "manifests",
+            "inputs",
+            "runtime",
+            "libverilated",
+            "tmp",
+        ] {
             let dir = root.join(sub);
             std::fs::create_dir_all(&dir).map_err(Error::io("creating", &dir))?;
         }
@@ -56,17 +64,27 @@ impl Cache {
 
     /// Writes a generated input under a content-addressed path and returns that path.
     pub(crate) fn store_input(&self, input: &GeneratedInput) -> Result<PathBuf, Error> {
+        let dir = self.store_files("inputs", &[(&input.file_name, &input.contents)])?;
+        Ok(dir.join(&input.file_name))
+    }
+
+    /// Writes `files` (name, contents) into `<kind>/<hash of all of them>/` unless that
+    /// directory exists, and returns it.
+    pub(crate) fn store_files(&self, kind: &str, files: &[(&str, &str)]) -> Result<PathBuf, Error> {
         let mut h = KeyHasher::new("simjig-input-v1");
-        h.str(&input.file_name).str(&input.contents);
-        let dir = self.root.join("inputs").join(h.finish());
-        let path = dir.join(&input.file_name);
-        if !path.is_file() {
+        for (name, contents) in files {
+            h.str(name).str(contents);
+        }
+        let dir = self.root.join(kind).join(h.finish());
+        if !dir.is_dir() {
             let work = self.work_dir()?;
-            let tmp = work.join(&input.file_name);
-            std::fs::write(&tmp, &input.contents).map_err(Error::io("writing", &tmp))?;
+            for (name, contents) in files {
+                let tmp = work.join(name);
+                std::fs::write(&tmp, contents).map_err(Error::io("writing", &tmp))?;
+            }
             Self::publish(&work, &dir)?;
         }
-        Ok(path)
+        Ok(dir)
     }
 
     /// Returns Verilator's output for `args`, running Verilator only on a miss.

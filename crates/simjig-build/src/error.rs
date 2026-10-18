@@ -30,6 +30,16 @@ pub enum Error {
         /// The variable name.
         var: &'static str,
     },
+    /// An environment variable simjig reads has a value it does not accept.
+    #[error("environment variable `{var}` is `{value}`; expected {expected}")]
+    BadEnv {
+        /// The variable name.
+        var: &'static str,
+        /// Its value.
+        value: String,
+        /// What it may be.
+        expected: &'static str,
+    },
     /// No `verilator` executable was found.
     #[error(
         "`verilator` not found (looked in: {}); install it (e.g. `pixi install`), put it on \

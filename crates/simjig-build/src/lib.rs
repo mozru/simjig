@@ -23,6 +23,7 @@ mod env;
 mod error;
 mod hash;
 mod header;
+mod runtime;
 mod verilator;
 
 pub use compile::CppRecipe;

@@ -8,7 +8,7 @@
 //! interface bindings, the model prefix) and plug results back in through three inputs,
 //! all of which are hashed into the cache keys:
 //! - [`Dut::verilator_input`]: generated Verilator inputs (`.vlt`, wrapper SV);
-//! - [`Dut::recipe`]: the [`CppRecipe`] (runtime sources, shim, defines);
+//! - [`Dut::recipe`]: additions to the C ABI [`CppRecipe`] (shim, defines);
 //! - [`Dut::expect_ports`]: the ports the IR expects, checked against the header.
 
 use std::fmt::Display;
@@ -351,7 +351,7 @@ impl Dut {
         self
     }
 
-    /// Replaces the C++ compile recipe (seam for the C ABI runtime and shim).
+    /// Adds to the C++ compile recipe (the C ABI recipe itself is always applied).
     pub fn recipe(mut self, recipe: CppRecipe) -> Self {
         self.recipe = recipe;
         self
@@ -406,6 +406,7 @@ impl Dut {
             prefix: &prefix,
             obj_dir: &model.obj_dir,
             recipe: &self.recipe,
+            model_sources: &[],
         })?;
         directives.extend(rerun_directives(&model.deps, &self.recipe));
         Ok(Built {

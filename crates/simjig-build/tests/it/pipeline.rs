@@ -94,6 +94,8 @@ fn check_reruns(rtl: &Path, directives: &[String]) {
         "{reruns:?}"
     );
     for var in [
+        "PATH",
+        "SIMJIG_CXX_OPT",
         "VERILATOR_ROOT",
         "CXX",
         "SIMJIG_VERILATOR",

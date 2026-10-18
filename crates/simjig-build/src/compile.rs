@@ -1,44 +1,79 @@
-//! Compiling Verilator's C++ output into static libraries and linking them.
+//! Compiling Verilator's C++ output into static libraries and linking them, following
+//! the C ABI's compile recipe (docs/notes/abi.md).
 //!
-//! Two libraries per model:
-//! - **libverilated** (Verilator's runtime, plus [`CppRecipe::global_sources`]) is built
-//!   once per (Verilator version, defines, sources, compiler, target, optimisation) into
-//!   the shared cache, because it is the same for every model with those settings and is
-//!   the slowest part to compile.
-//! - **the model** (the generated classes, plus [`CppRecipe::model_sources`]) is built
-//!   into `OUT_DIR`.
+//! Every translation unit gets the same base: `-include simjig_vl_config.h` (the
+//! `VL_USER_*` hooks, `VL_PRINTF` redirection and `VL_TIME_CONTEXT`), `-std=gnu++20`
+//! (coroutines, for `--timing`), `-O<cxx_opt>` (see [`BuildEnv::cxx_opt`]), the `VM_*`
+//! defines, and include paths for the runtime headers and Verilator's `include/`.
 //!
-//! The file lists come from Verilator's own `<prefix>_classes.mk`, never from guessing,
-//! and the `VM_*` defines from the switches in the same file, exactly as Verilator's
-//! `verilated.mk` passes them. ccache is used when available (see [`ccache_compiler`]).
+//! Libraries, in link order:
+//! 1. **the model**: the generated classes from `<prefix>_classes.mk`, the emitted shim
+//!    and [`CppRecipe::model_sources`], into `OUT_DIR`. Its `VM_*` defines are the
+//!    model's own switches from `_classes.mk`, exactly as `verilated.mk` passes them.
+//! 2. **runtime extras**: runtime classes that only some models need (`verilated_fst_c`
+//!    for `--trace-fst`, `verilated_cov` for `--coverage`), one cached archive per class,
+//!    compiled with the switches of the model that asked for it.
+//! 3. **the shared libverilated**: `verilated.cpp`, `verilated_threads.cpp`,
+//!    `verilated_timing.cpp`, `simjig_rt.cpp` and [`CppRecipe::global_sources`], with
+//!    fixed `VM_*` defines ([`RUNTIME_SWITCHES`]). Fixed, so that every model of a
+//!    configuration links the *same* archive: two archives defining the same runtime
+//!    symbols in one binary would be an ODR violation. That is sound because 5.052's
+//!    runtime sources read only `VM_SC` and `VM_VPI` (and `VM_TRACE` for a compatibility
+//!    macro), and generated code reads no `VM_*` at all (checked with grep, abi.md).
+//!    Cached once per (Verilator version, compiler, target, flags, runtime sources);
+//!    the runtime sources include `simjig_vl_config.h`.
+//! 4. native libraries the extras need (`lz4`, `z` for FST), then the C++ standard
+//!    library.
+//!
+//! ccache is used when available (see [`ccache_compiler`]).
 
 use std::path::{Path, PathBuf};
 
 use crate::cache::{self, Cache};
 use crate::hash::KeyHasher;
+use crate::runtime::Runtime;
 use crate::verilator::{self, Verilator};
 use crate::{ABI_VERSION, BuildEnv, Error};
 
-/// How the generated C++ is compiled: the seam where the C ABI runtime plugs in.
-///
-/// The default compiles exactly what Verilator's own makefiles would: libverilated and
-/// the model's classes, with no extra defines.
+/// Additions to the C ABI compile recipe. The default adds nothing, which *is* the ABI
+/// recipe: the base flags, runtime and link order described in the module docs are
+/// always applied, because every simjig model needs them (the generated shim includes
+/// `simjig_model.h`, and the hooks in `simjig_rt.cpp` must be linked exactly once).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CppRecipe {
-    /// Preprocessor defines for *every* translation unit, libverilated included (for
-    /// example `VL_USER_FATAL`, which removes `vl_fatal` from `verilated.cpp`). A `None`
-    /// value means `-DNAME` without a value.
+    /// Extra preprocessor defines for *every* translation unit, libverilated included. A
+    /// `None` value means `-DNAME` without a value.
     pub defines: Vec<(String, Option<String>)>,
-    /// Sources linked once per executable, compiled into libverilated (for example the
-    /// `VL_USER_*` hook implementations).
+    /// Extra sources linked once per executable, compiled into the shared libverilated.
     pub global_sources: Vec<PathBuf>,
-    /// Sources compiled with each model (for example the per-model vtable shim).
+    /// Extra sources compiled with each model.
     pub model_sources: Vec<PathBuf>,
     /// Extra include directories for every translation unit.
     pub include_dirs: Vec<PathBuf>,
     /// Extra compiler flags for every translation unit.
     pub flags: Vec<String>,
 }
+
+/// The runtime classes in the shared libverilated, whatever the model's switches.
+const BASE_RUNTIME: &[&str] = &["verilated", "verilated_threads", "verilated_timing"];
+
+/// The `VM_*` defines of the shared libverilated (see the module docs). `VM_TIMING` is
+/// on because `verilated_timing.cpp` is always in the archive.
+pub(crate) const RUNTIME_SWITCHES: &[(&str, &str)] = &[
+    ("VERILATOR", "1"),
+    ("VM_COVERAGE", "0"),
+    ("VM_SC", "0"),
+    ("VM_TIMING", "1"),
+    ("VM_TRACE", "0"),
+    ("VM_TRACE_FST", "0"),
+    ("VM_TRACE_VCD", "0"),
+    ("VM_TRACE_SAIF", "0"),
+    ("VM_VPI", "0"),
+];
+
+/// The C++ dialect of every translation unit: C++20 for `--timing` coroutines; GNU
+/// extensions because Verilator's own makefiles use them.
+const CXX_STD: &str = "gnu++20";
 
 /// What `<prefix>_classes.mk` says about the build.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,17 +150,20 @@ impl ClassesMk {
         self.switch(name).is_some_and(|v| v != "0")
     }
 
-    /// The `-D` flags `verilated.mk` passes to every translation unit, plus
-    /// `VL_TIME_CONTEXT`: the testbench owns time and sets it on the `VerilatedContext`,
-    /// so the runtime must not reference the legacy `sc_time_stamp()` hook. (That hook is
-    /// a weak symbol, which Apple's linker rejects when undefined unless every final link
-    /// passes `-Wl,-U,...` as `verilated.mk` does; build scripts cannot add link
-    /// arguments to dependent crates.)
+    /// Runtime classes this model needs beyond [`BASE_RUNTIME`].
+    fn extras(&self) -> impl Iterator<Item = &str> {
+        self.global
+            .iter()
+            .map(String::as_str)
+            .filter(|c| !BASE_RUNTIME.contains(c))
+    }
+
+    /// The `-D` flags `verilated.mk` passes to the model's translation units.
+    /// (`VL_TIME_CONTEXT` comes from `simjig_vl_config.h`.)
     fn defines(&self) -> Vec<(String, Option<String>)> {
         let mut d = vec![
             ("VERILATOR".to_owned(), Some("1".to_owned())),
             ("VM_SC".to_owned(), Some("0".to_owned())),
-            ("VL_TIME_CONTEXT".to_owned(), None),
         ];
         for s in DEFINE_SWITCHES {
             d.push(((*s).to_owned(), self.switch(s).map(str::to_owned)));
@@ -141,79 +179,119 @@ pub(crate) struct Inputs<'a> {
     pub(crate) prefix: &'a str,
     pub(crate) obj_dir: &'a Path,
     pub(crate) recipe: &'a CppRecipe,
+    /// Generated sources compiled with the model (the emitted shim).
+    pub(crate) model_sources: &'a [PathBuf],
 }
 
-/// Compiles libverilated (cached) and the model, returning the link directives in the
-/// order a static linker needs: the model before the runtime it calls.
+/// A static library, compiled or found in the cache.
+struct Archive {
+    dir: PathBuf,
+    name: String,
+}
+
+/// Compiles the libraries (see the module docs) and returns the link directives in the
+/// order a static linker needs: each library before the ones it calls.
 pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     let mk_path = verilator::output_file(i.obj_dir, i.prefix, "_classes.mk");
     let text = std::fs::read_to_string(&mk_path).map_err(Error::io("reading", &mk_path))?;
     let mk = ClassesMk::parse(&mk_path, &text)?;
-    let std = if mk.on("VM_TIMING") { "c++20" } else { "c++17" };
-    let mut defines = mk.defines();
-    defines.extend(i.recipe.defines.iter().cloned());
-    let (base, compiler) = base_build(i, std, &defines)?;
+    let runtime = Runtime::extract(i.cache)?;
+    let (base, compiler) = base_build(i, &runtime)?;
+    let tc = Toolchain {
+        i,
+        base: &base,
+        compiler: &compiler,
+    };
 
-    let (lib_dir, lib_name) = libverilated(i, &base, &compiler, &mk, &defines, std)?;
+    let mut model_defines = mk.defines();
+    model_defines.extend(i.recipe.defines.iter().cloned());
+    let model = compile_model(i, &base, &mk, &model_defines)?;
 
-    let model_name = format!("simjig_model_{}", i.prefix);
-    let out = i.env.out_dir.join(format!("simjig-{}", i.prefix));
-    std::fs::create_dir_all(&out).map_err(Error::io("creating", &out))?;
-    let mut b = base;
-    b.out_dir(&out).include(i.obj_dir);
-    b.files(mk.model.iter().map(|c| i.obj_dir.join(format!("{c}.cpp"))));
-    b.files(&i.recipe.model_sources);
-    b.try_compile(&model_name)
-        .map_err(|source| Error::Compile {
-            what: format!("the `{}` model", i.prefix),
-            source,
-        })?;
-
-    let mut d = vec![
-        format!("cargo::rustc-link-search=native={}", out.display()),
-        format!("cargo::rustc-link-lib=static={model_name}"),
-        format!("cargo::rustc-link-search=native={}", lib_dir.display()),
-        format!("cargo::rustc-link-lib=static={lib_name}"),
-    ];
-    d.extend(cxx_stdlib(i.env).map(|l| format!("cargo::rustc-link-lib={l}")));
-    if mk.on("VM_TRACE_FST") {
-        // verilated.mk: `LDLIBS += -llz4 -lz` for FST.
-        d.extend([
-            "cargo::rustc-link-lib=lz4".to_owned(),
-            "cargo::rustc-link-lib=z".to_owned(),
-        ]);
+    let natives = native_libs(i.env, &mk);
+    let mut extras = Vec::new();
+    for class in mk.extras() {
+        let src = i.verilator.include_dir.join(format!("{class}.cpp"));
+        let includes: Vec<PathBuf> = natives.iter().filter_map(NativeLib::include_dir).collect();
+        extras.push(tc.cached_archive(class, &[src], &model_defines, &includes)?);
     }
+
+    let mut runtime_defines: Vec<(String, Option<String>)> = RUNTIME_SWITCHES
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), Some((*v).to_owned())))
+        .collect();
+    runtime_defines.extend(i.recipe.defines.iter().cloned());
+    let mut sources: Vec<PathBuf> = BASE_RUNTIME
+        .iter()
+        .map(|c| i.verilator.include_dir.join(format!("{c}.cpp")))
+        .collect();
+    sources.push(runtime.source());
+    sources.extend(i.recipe.global_sources.iter().cloned());
+    let shared = tc.cached_archive("verilated", &sources, &runtime_defines, &[])?;
+
+    let mut d = Vec::new();
+    for a in std::iter::once(&model).chain(&extras).chain([&shared]) {
+        d.push(format!(
+            "cargo::rustc-link-search=native={}",
+            a.dir.display()
+        ));
+        d.push(format!("cargo::rustc-link-lib=static={}", a.name));
+    }
+    for n in &natives {
+        d.extend(n.directives());
+    }
+    d.extend(cxx_stdlib(i.env).map(|l| format!("cargo::rustc-link-lib={l}")));
     Ok(d)
 }
 
-/// Returns the configured build and the real compiler (before any ccache wrapping), which
-/// identifies the toolchain in the libverilated key.
-fn base_build(
+fn compile_model(
     i: &Inputs<'_>,
-    std: &str,
+    base: &cc::Build,
+    mk: &ClassesMk,
     defines: &[(String, Option<String>)],
-) -> Result<(cc::Build, cc::Tool), Error> {
+) -> Result<Archive, Error> {
+    let name = format!("simjig_model_{}", i.prefix);
+    let dir = i.env.out_dir.join(format!("simjig-{}", i.prefix));
+    std::fs::create_dir_all(&dir).map_err(Error::io("creating", &dir))?;
+    let mut b = base.clone();
+    b.out_dir(&dir).include(i.obj_dir);
+    for (k, v) in defines {
+        b.define(k, v.as_deref());
+    }
+    b.files(mk.model.iter().map(|c| i.obj_dir.join(format!("{c}.cpp"))));
+    b.files(i.model_sources);
+    b.files(&i.recipe.model_sources);
+    b.try_compile(&name).map_err(|source| Error::Compile {
+        what: format!("the `{}` model", i.prefix),
+        source,
+    })?;
+    Ok(Archive { dir, name })
+}
+
+/// The configured base build (the flags every translation unit shares) and the real
+/// compiler (before any ccache wrapping), which identifies the toolchain in cache keys.
+fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool), Error> {
     let env = i.env;
     let mut b = cc::Build::new();
     b.cpp(true)
-        .std(std)
+        .std(CXX_STD)
         .target(&env.target)
         .host(&env.host)
-        .opt_level_str(&env.opt_level)
+        .opt_level_str(&env.cxx_opt)
         .debug(env.debug)
         // simjig-build prints its own `cargo::` lines (see `Built::directives`).
         .cargo_metadata(false)
-        // Warnings in generated code are not actionable for the user.
+        // Warnings in generated code are not actionable for the user (`-w`).
         .warnings(false)
         .extra_warnings(false)
         .cargo_warnings(false)
+        .cargo_debug(false)
+        .flag("-include")
+        .flag(runtime.config_header().display().to_string())
+        .include(runtime.dir())
         .include(&i.verilator.include_dir)
         .include(i.verilator.include_dir.join("vltstd"))
         .includes(&i.recipe.include_dirs)
         .flags(&i.recipe.flags);
-    for (k, v) in defines {
-        b.define(k, v.as_deref());
-    }
     let compiler = b.try_get_compiler().map_err(|source| Error::Compile {
         what: "the model (finding the C++ compiler)".to_owned(),
         source,
@@ -224,65 +302,130 @@ fn base_build(
     Ok((b, compiler))
 }
 
-/// Builds libverilated into the cache unless it is there; returns (dir, link name).
-fn libverilated(
-    i: &Inputs<'_>,
-    base: &cc::Build,
-    compiler: &cc::Tool,
-    mk: &ClassesMk,
-    defines: &[(String, Option<String>)],
-    std: &str,
-) -> Result<(PathBuf, String), Error> {
-    let mut h = KeyHasher::new("simjig-libverilated-v1");
-    // The simjig-build version covers the fixed flags set in `base_build`.
-    h.str(&ABI_VERSION.to_string())
-        .str(env!("CARGO_PKG_VERSION"))
-        .str(&i.verilator.version_line)
-        .path(&i.verilator.include_dir)
-        .path(compiler.path())
-        .str(&i.env.target)
-        .str(&i.env.opt_level)
-        .field(&[u8::from(i.env.debug)])
-        .str(std);
-    for c in &mk.global {
-        h.str(c);
+/// What identifies a runtime archive besides its own sources and defines.
+struct Toolchain<'a> {
+    i: &'a Inputs<'a>,
+    base: &'a cc::Build,
+    compiler: &'a cc::Tool,
+}
+
+impl Toolchain<'_> {
+    /// Builds `simjig_<what>_<key>` from `sources` into the cache unless it is there.
+    fn cached_archive(
+        &self,
+        what: &str,
+        sources: &[PathBuf],
+        defines: &[(String, Option<String>)],
+        includes: &[PathBuf],
+    ) -> Result<Archive, Error> {
+        let i = self.i;
+        let mut h = KeyHasher::new("simjig-libverilated-v2");
+        // The simjig-build version covers the fixed flags set in `base_build`; the
+        // runtime directory is content-addressed, so its path covers its headers.
+        h.str(&ABI_VERSION.to_string())
+            .str(env!("CARGO_PKG_VERSION"))
+            .str(&i.verilator.version_line)
+            .path(&i.verilator.include_dir)
+            .path(self.compiler.path())
+            .str(&i.env.target)
+            .str(&i.env.cxx_opt)
+            .field(&[u8::from(i.env.debug)])
+            .str(what);
+        for f in self.compiler.args() {
+            h.field(f.as_encoded_bytes());
+        }
+        for (k, v) in defines {
+            h.str(k).str(v.as_deref().unwrap_or("\0none"));
+        }
+        for s in sources {
+            h.file(s)?;
+        }
+        for d in includes {
+            h.path(d);
+        }
+        let key = h.finish();
+        let name = format!("simjig_{what}_{}", &key[..16]);
+        let dir = i.cache.root().join("libverilated").join(&key);
+        if dir.join(format!("lib{name}.a")).is_file() {
+            return Ok(Archive { dir, name });
+        }
+        let work = i.cache.work_dir()?;
+        let mut b = self.base.clone();
+        b.out_dir(&work).includes(includes).files(sources);
+        for (k, v) in defines {
+            b.define(k, v.as_deref());
+        }
+        if let Err(source) = b.try_compile(&name) {
+            cache::remove_best_effort(&work);
+            return Err(Error::Compile {
+                what: format!("the Verilator runtime (`{what}`)"),
+                source,
+            });
+        }
+        Cache::publish(&work, &dir)?;
+        Ok(Archive { dir, name })
     }
-    for (k, v) in defines {
-        h.str(k).str(v.as_deref().unwrap_or("\0none"));
+}
+
+/// A native library a runtime extra links against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeLib {
+    name: &'static str,
+    /// Where it was found; `None` leaves the search to the linker's default paths.
+    dir: Option<PathBuf>,
+}
+
+impl NativeLib {
+    /// `<prefix>/include` next to `<prefix>/lib`, for the library's headers.
+    fn include_dir(&self) -> Option<PathBuf> {
+        let inc = self.dir.as_ref()?.parent()?.join("include");
+        inc.is_dir().then_some(inc)
     }
-    for s in &i.recipe.global_sources {
-        h.file(s)?;
+
+    /// The link directives. A library found outside the default paths also gets an
+    /// rpath: linkers prefer the shared library when both kinds are there (conda ships
+    /// lz4 only as a shared library), and the test binary must find it at run time.
+    /// `rustc-link-arg` reaches only the binaries and tests of the package whose build
+    /// script calls simjig-build, which is where simjig models are linked.
+    fn directives(&self) -> Vec<String> {
+        let mut d = Vec::new();
+        if let Some(dir) = &self.dir {
+            d.push(format!("cargo::rustc-link-search=native={}", dir.display()));
+        }
+        d.push(format!("cargo::rustc-link-lib={}", self.name));
+        if let Some(dir) = &self.dir {
+            d.push(format!(
+                "cargo::rustc-link-arg=-Wl,-rpath,{}",
+                dir.display()
+            ));
+        }
+        d
     }
-    for d in &i.recipe.include_dirs {
-        h.path(d);
+}
+
+/// The native libraries the model's runtime extras need: `verilated.mk` adds
+/// `-llz4 -lz` for FST (5.052's `fstcpp` writer compresses with both).
+fn native_libs(env: &BuildEnv, mk: &ClassesMk) -> Vec<NativeLib> {
+    if !mk.on("VM_TRACE_FST") {
+        return Vec::new();
     }
-    for f in &i.recipe.flags {
-        h.str(f);
-    }
-    let key = h.finish();
-    let name = format!("simjig_verilated_{}", &key[..16]);
-    let dir = i.cache.root().join("libverilated").join(&key);
-    if dir.join(format!("lib{name}.a")).is_file() {
-        return Ok((dir, name));
-    }
-    let work = i.cache.work_dir()?;
-    let mut b = base.clone();
-    b.out_dir(&work);
-    b.files(
-        mk.global
-            .iter()
-            .map(|c| i.verilator.include_dir.join(format!("{c}.cpp"))),
-    );
-    b.files(&i.recipe.global_sources);
-    if let Err(source) = b.try_compile(&name) {
-        cache::remove_best_effort(&work);
-        return Err(Error::Compile {
-            what: "libverilated".to_owned(),
-            source,
-        });
-    }
-    Cache::publish(&work, &dir)?;
-    Ok((dir, name))
+    ["lz4", "z"]
+        .into_iter()
+        .map(|name| find_native(env, name))
+        .collect()
+}
+
+fn find_native(env: &BuildEnv, name: &'static str) -> NativeLib {
+    let files = [
+        format!("lib{name}.dylib"),
+        format!("lib{name}.so"),
+        format!("lib{name}.a"),
+    ];
+    let dir = env
+        .lib_dirs()
+        .into_iter()
+        .find(|d| files.iter().any(|f| d.join(f).is_file()));
+    NativeLib { name, dir }
 }
 
 /// The C++ standard library to link, following the `cc` crate's rules: `CXXSTDLIB` when
@@ -395,9 +538,60 @@ mod tests {
             .collect();
         assert_eq!(
             defines.join(" "),
-            "VERILATOR=1 VM_SC=0 VL_TIME_CONTEXT= VM_COVERAGE=1 VM_TIMING=0 VM_TRACE=1 VM_TRACE_FST=1 \
+            "VERILATOR=1 VM_SC=0 VM_COVERAGE=1 VM_TIMING=0 VM_TRACE=1 VM_TRACE_FST=1 \
              VM_TRACE_VCD=0 VM_TRACE_SAIF=0 VM_VPI=0"
         );
+    }
+
+    #[test]
+    fn extras_are_the_runtime_classes_beyond_the_base() {
+        let mk = ClassesMk::parse(Path::new("Vx_classes.mk"), MK).unwrap();
+        assert_eq!(
+            mk.extras().collect::<Vec<_>>(),
+            ["verilated_cov", "verilated_fst_c"]
+        );
+    }
+
+    #[test]
+    fn fst_needs_lz4_and_zlib_found_on_the_lib_dirs() {
+        let t = tempfile::tempdir().unwrap();
+        let lib = t.path().join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::create_dir_all(t.path().join("include")).unwrap();
+        std::fs::write(lib.join("liblz4.dylib"), "").unwrap();
+        let env = BuildEnv {
+            out_dir: t.path().into(),
+            target: "aarch64-apple-darwin".into(),
+            host: String::new(),
+            cxx_opt: "2".into(),
+            debug: false,
+            path: None,
+            verilator_root: None,
+            simjig_verilator: None,
+            simjig_cache_dir: None,
+            simjig_ccache: None,
+            cxx: None,
+            cxxstdlib: None,
+            cargo_target_dir: None,
+            conda_prefix: Some(t.path().into()),
+            ldflags: None,
+        };
+        let mk = ClassesMk::parse(Path::new("Vx_classes.mk"), MK).unwrap();
+        let libs = native_libs(&env, &mk);
+        assert_eq!(
+            libs[0].directives(),
+            [
+                format!("cargo::rustc-link-search=native={}", lib.display()),
+                "cargo::rustc-link-lib=lz4".to_owned(),
+                format!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib.display()),
+            ]
+        );
+        assert_eq!(libs[0].include_dir(), Some(t.path().join("include")));
+        // Not found: left to the linker's default paths.
+        assert_eq!(libs[1].directives(), ["cargo::rustc-link-lib=z"]);
+        let plain = MK.replace("VM_TRACE_FST = 1", "VM_TRACE_FST = 0");
+        let mk = ClassesMk::parse(Path::new("Vx_classes.mk"), &plain).unwrap();
+        assert_eq!(native_libs(&env, &mk), []);
     }
 
     #[test]

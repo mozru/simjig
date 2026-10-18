@@ -48,34 +48,65 @@ impl fmt::Display for Signature {
     }
 }
 
-/// Replaces every number in `text` with `#`: words that start with a digit (`42`,
-/// `0x1f`, `10ns`, `1_000`) and words made only of hex digits that contain a digit
-/// (`dead1234`). Other words (`u8`, `main.t3`) are kept.
+/// Replaces every number in `text` with `#`, so the values a failure prints do not split
+/// its triage bucket. A number is:
+/// - a word that starts with a digit (`42`, `0x1f`, `10ns`, `1_000`);
+/// - a sized SystemVerilog literal, `<digits>'[s]<base><digits>` with base `d b h o` in
+///   either case (`8'h08`, `4'sb1x0z`): how `simjig_bits` values print;
+/// - a word made only of hex digits that contains a digit (`dead1234`).
+///
+/// Other words (`u8`, `main.t3`, `beef`) are kept.
 #[must_use]
 pub(crate) fn mask_numbers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut out = String::with_capacity(text.len());
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut String| {
-        let starts_with_digit = word.starts_with(|c: char| c.is_ascii_digit());
-        let hexlike =
-            word.chars().all(|c| c.is_ascii_hexdigit()) && word.chars().any(|c| c.is_ascii_digit());
-        if starts_with_digit || hexlike {
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_word(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+        if chars[start].is_ascii_digit() {
+            i = sv_literal_end(&chars, i).unwrap_or(i);
+            out.push('#');
+            continue;
+        }
+        let word = &chars[start..i];
+        if word.iter().all(char::is_ascii_hexdigit) && word.iter().any(char::is_ascii_digit) {
             out.push('#');
         } else {
-            out.push_str(word);
-        }
-        word.clear();
-    };
-    for c in text.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            word.push(c);
-        } else {
-            flush(&mut word, &mut out);
-            out.push(c);
+            out.extend(word);
         }
     }
-    flush(&mut word, &mut out);
     out
+}
+
+/// If `chars[at..]` continues a size (`8`) into a SystemVerilog literal (`'h08`, `'sd5`),
+/// the index just past the literal.
+fn sv_literal_end(chars: &[char], at: usize) -> Option<usize> {
+    let mut i = at;
+    if chars.get(i) != Some(&'\'') {
+        return None;
+    }
+    i += 1;
+    if matches!(chars.get(i), Some('s' | 'S')) {
+        i += 1;
+    }
+    if !matches!(chars.get(i), Some('d' | 'b' | 'h' | 'o' | 'D' | 'B' | 'H' | 'O')) {
+        return None;
+    }
+    i += 1;
+    let digits = chars[i..]
+        .iter()
+        .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+        .count();
+    (digits > 0).then_some(i + digits)
 }
 
 /// Which test run a report belongs to.
@@ -276,6 +307,10 @@ mod tests {
         assert_eq!(
             mask_numbers("got 0x1f at 10ns (1_000 cycles), u8 main.t3 dead1234 beef"),
             "got # at # (# cycles), u8 main.t3 # beef"
+        );
+        assert_eq!(
+            mask_numbers("8'h08 != 8'hff, 4'sb1x0z 32'D7 9'h0_05; 3' 2'q it's"),
+            "# != #, # # #; #' #'q it's"
         );
     }
 

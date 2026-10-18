@@ -314,3 +314,26 @@ fn a_passing_run_writes_a_passing_summary() {
     assert_eq!(summary["failure"], Value::Null);
     assert_eq!(summary["seed_source"], "test-name");
 }
+
+/// Compares a random byte with a fixed one, the way a scoreboard assertion would.
+async fn compare_bits(ctx: TestCtx) {
+    yield_now().await;
+    let got = simjig_bits::Bits::<8>::new_truncating(u128::from(ctx.rng("stim").below(200)));
+    let want = simjig_bits::Bits::<8>::new_truncating(0xff);
+    assert_eq!(got, want, "beat {} mismatched", ctx.seed().value() % 7);
+}
+
+#[test]
+fn bits_values_do_not_change_the_signature() {
+    let report = |seed| {
+        run::<(), _, _>(&meta("bits"), &env(Some(seed), "bits"), |ctx, ()| {
+            compare_bits(ctx)
+        })
+        .failure
+        .expect("never 0xff")
+    };
+    let (a, b) = (report(1), report(2));
+    assert_ne!(a.message, b.message, "the values differ");
+    assert!(a.message.contains("8'h"), "{}", a.message);
+    assert_eq!(a.signature, b.signature, "{}\n{}", a.message, b.message);
+}

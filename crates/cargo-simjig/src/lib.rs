@@ -7,6 +7,8 @@
 //!   and pinned, and says how to fix each problem.
 //! - [`waves`] runs one test with `SIMJIG_WAVES`, so its harness writes waves from a
 //!   deterministic replay.
+//! - [`show`] prints the Rust module simjig-build generated for a DUT (what
+//!   `simjig::include_dut!` includes), or its path.
 //!
 //! The supported Verilator versions are `svtypes::version::SUPPORTED`, the table every
 //! build-time crate shares.
@@ -15,4 +17,5 @@
 
 pub mod doctor;
 mod json;
+pub mod show;
 pub mod waves;

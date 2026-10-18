@@ -1,7 +1,10 @@
-//! Minimal JSON string writing for `--json` output.
+//! Minimal JSON: string writing for `--json` output, and reading one string field of
+//! Cargo's JSON messages.
 //!
 //! The output is a fixed shape of strings, booleans and arrays, so escaping strings per
 //! RFC 8259 §7 is the only non-trivial part; that does not justify a serde dependency.
+//! Reading needs only top-level string fields of Cargo's one-line messages
+//! (`"out_dir":"..."`), which Cargo prints without whitespace between tokens.
 
 /// Appends `text` to `out` as a quoted JSON string.
 pub(crate) fn push_str(out: &mut String, text: &str) {
@@ -26,9 +29,51 @@ pub(crate) fn push_str(out: &mut String, text: &str) {
     out.push('"');
 }
 
+/// The value of the first string field `key` in the one-line JSON object `line`, unescaped
+/// (RFC 8259 §7). `None` when there is no such field, or its value is not a string.
+///
+/// A field of a nested object counts too; Cargo's `build-script-executed` messages have
+/// no nested `reason` or `out_dir`.
+pub(crate) fn find_str(line: &str, key: &str) -> Option<String> {
+    let start = line.find(&format!("\"{key}\":\""))? + key.len() + 4;
+    let mut out = String::new();
+    let mut chars = line[start..].chars();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{c}'),
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                }
+                c => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_and_unescapes_a_string_field() {
+        let line = r#"{"reason":"build-script-executed","out_dir":"/a \"b\"\\c\u0041","n":1}"#;
+        assert_eq!(
+            find_str(line, "reason").as_deref(),
+            Some("build-script-executed")
+        );
+        assert_eq!(find_str(line, "out_dir").as_deref(), Some("/a \"b\"\\cA"));
+        assert_eq!(find_str(line, "n"), None, "not a string");
+        assert_eq!(find_str(line, "missing"), None);
+        assert_eq!(find_str(r#"{"out_dir":"/unterminated"#, "out_dir"), None);
+    }
 
     #[test]
     fn escapes_per_rfc_8259() {

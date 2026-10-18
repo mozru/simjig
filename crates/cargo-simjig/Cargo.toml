@@ -1,6 +1,6 @@
 [package]
 name = "cargo-simjig"
-description = "The `cargo simjig` command: `doctor` checks that the Verilator toolchain is usable."
+description = "The `cargo simjig` command: `doctor` checks that the Verilator toolchain is usable, `waves` reruns a test with waves, `show` prints a DUT's generated module."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

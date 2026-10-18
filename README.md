@@ -66,6 +66,41 @@ Every `#[simjig::test]` has a simulation-time budget: 10 ms unless it sets
 the quickstart's `.config/nextest.toml` sets a wall-clock `slow-timeout` with
 `terminate-after`.
 
+## The generated module
+`simjig::include_dut!(fifo)` includes the Rust module that the build script generated
+for the DUT `fifo`, under a hashed directory of `target/`. To read it (the names of its
+types, constants and fields), print it:
+
+```sh
+pixi run cargo simjig show fifo            # the module, after a `//` line with its path
+pixi run cargo simjig show fifo --path     # only the path
+pixi run cargo simjig show fifo -p mycrate # the DUT of one package of a workspace
+```
+
+`show` runs `cargo check --tests` first (which runs the build scripts), so the file is
+current; run it in the crate whose `build.rs` builds the DUT, or name that crate with `-p`.
+
+### Generated names
+Each SystemVerilog name becomes a Rust name by these rules (`codegen::names`,
+`codegen::lower::types`):
+
+| SystemVerilog | Rust |
+|---|---|
+| port or struct field `data_in`, `dataIn`, `DATA_IN` | field `data_in` (`snake_case`) |
+| a name that is a Rust keyword: `in`, `type` | `r#in`, `r#type` (`dut.r#in.set(1)`); `self`, `super`, `crate` become `self_`, ... |
+| a name starting with a digit: `2nd` | `_2nd` |
+| typedef `status_t`, `op_e`, `item_s`, `word_u` | type `Status`, `Op`, `Item`, `Word`: one `_t`/`_e`/`_s`/`_u` suffix is dropped, then `CamelCase` |
+| two typedefs that would get one name (`a::state_t`, `b::state_t`) | both keep the suffix (`StateT`), then add the scope (`AStateT`, `BStateT`), then a number |
+| an anonymous struct or enum, first used by port `in_anon` | `InAnon`, named after its first use |
+| enum `status_t` with `ST_EMPTY`, `ST_FULL` | `Status::EMPTY`, `Status::FULL`: a `WORD_` prefix that every variant shares is dropped (unless a remainder would start with a digit: `MODE_1` stays `MODE_1`) |
+
+An enum type is a newtype over its bits, so it also holds values outside its variants:
+`Status::EMPTY` is a constant, `s.variant()` returns `Ok(StatusVariant::Empty)` (a Rust
+`enum` you can `match`, `CamelCase` variants) or `Err(InvalidEnum)`, and
+`Status::from_bits`/`to_bits` convert. A packed struct is a Rust struct with public fields
+(`Item { tag, data }`); a packed union has a getter and a constructor per view
+(`w.bytes()`, `Word::from_bytes(..)`).
+
 ## Coming from cocotb
 
 simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded cocotb runs

@@ -444,6 +444,43 @@ mod tests {
         assert_eq!(named_candidates("pkg::_t"), ["T", "PkgT"]);
     }
 
+    /// The examples of the README's "Generated names" section, so it cannot drift from the
+    /// code generator.
+    #[test]
+    fn the_readme_naming_examples_hold() {
+        for (typedef, item) in [
+            ("pkg::status_t", "Status"),
+            ("pkg::op_e", "Op"),
+            ("pkg::item_s", "Item"),
+            ("pkg::word_u", "Word"),
+            ("pkg::rgb", "Rgb"),
+        ] {
+            assert_eq!(named_candidates(typedef)[0], item, "{typedef}");
+        }
+        assert_eq!(
+            named_candidates("a::state_t"),
+            ["State", "StateT", "AStateT"]
+        );
+        let variants = ["ST_EMPTY", "ST_FULL"];
+        let stem = &variants[0][common_prefix(&variants)..];
+        assert_eq!(
+            (screaming(stem), camel(stem)),
+            ("EMPTY".into(), "Empty".into())
+        );
+        assert_eq!(common_prefix(&["MODE_1", "MODE_2"]), 0, "`1` is not a name");
+        for (port, field) in [
+            ("in", "r#in"),
+            ("type", "r#type"),
+            ("self", "self_"),
+            ("dataIn", "data_in"),
+            ("DATA_OUT", "data_out"),
+            ("2nd", "_2nd"),
+        ] {
+            assert_eq!(snake(port), field, "{port}");
+        }
+        assert_eq!(camel("in_anon"), "InAnon");
+    }
+
     #[test]
     fn collisions_fall_back_for_every_member() {
         let cands = vec![

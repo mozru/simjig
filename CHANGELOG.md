@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `cargo simjig show <dut> [-p <package>] [--path]` prints the module that
+  `include_dut!(<dut>)` includes, or its path under `target/`. The README has a section
+  on the generated names (suffixes, enum prefixes, keywords, collisions).
 - An integer compares equal to a `Bits<N>`, `WideBits` or `Bit` from the left too
   (`PartialEq<Bits<N>> for u8 ... u128, i8 ... i128, usize, isize`, and `bool == Bit`),
   so `assert_eq!(4, x.get())` compiles. A negative integer equals no value.

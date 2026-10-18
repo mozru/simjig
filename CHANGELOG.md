@@ -12,6 +12,9 @@ the public API, the generated code or simulation semantics.
   field by field instead of through their `Debug` form (`simjig-prefix-v3`), so every
   model prefix changes and every model is verilated and compiled again once. Within one
   build script, a DUT name rebuilt with another `dpi_in_c` is still refused.
+- A DUT's model prefix is claimed in the cache after the front end's checks (the JSON
+  pass, `dpi_in_c`, the emitters, the layout check), so a build that fails them leaves no
+  claim behind.
 - `fork::run_from_checkpoint` inside an operand of a `join!`, `first!` or `with_timeout`
   of the main task returns the new `ForkError::InCombinator`. It forked: the other
   operands ran on inside every branch, and an operand that won a `first!` in the child

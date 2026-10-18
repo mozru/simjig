@@ -3,8 +3,7 @@
 //! [`Dut`] records configuration only. [`Dut::build_in`] then runs the pipeline in a
 //! fixed order:
 //! 1. locate and version-check Verilator;
-//! 2. claim the prefix (see `pipeline::claim_prefix`): two configurations must never
-//!    share one;
+//! 2. claim the DUT name in this build script (`script::claim_name`);
 //! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
 //!    `-G`, extra arguments and `--timing` setting (one builder, `DutConfig::design`),
 //!    giving the type IR. A DUT with
@@ -12,7 +11,8 @@
 //!    The IR is cached (`front`): a rerun that changes nothing runs no JSON pass;
 //! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
-//!    is linted, unless it passed for the same IR before (`front`);
+//!    is linted, unless it passed for the same IR before (`front`); then claim the prefix
+//!    in the cache (`pipeline::claim_prefix`): two configurations must never share one;
 //! 5. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
 //! 6. cross-check the header's ports against the IR's (or the emitter's), each probe
 //!    against Verilator's scope table (`syms`), the DPI-C prototypes in `V<prefix>__Dpi.h`
@@ -718,8 +718,10 @@ impl Dut {
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
         script::claim_name(env, &self.config, &prefix)?;
-        pipeline::claim_prefix(&cache, &self.config, &prefix)?;
         let (front, ir, placed) = self.front_end(env, &cache, &verilator, top)?;
+        // After the front end's checks (the JSON pass, `dpi_in_c`, the emitters, the
+        // layout check): a build they fail leaves no claim in the shared cache.
+        pipeline::claim_prefix(&cache, &self.config, &prefix)?;
         let mut generated = ir.wrapper.iter().cloned().collect::<Vec<_>>();
         for g in placed.inputs.iter().chain(&self.config.generated) {
             generated.push(cache.store_input(g)?);

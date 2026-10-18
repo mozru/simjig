@@ -306,3 +306,27 @@ fn a_dut_name_rebuilt_with_another_dpi_in_c_is_refused() {
         "{err}"
     );
 }
+
+/// A build that fails a check of the front end (here `dpi_in_c` naming an import the
+/// design lacks) records no prefix claim in the shared cache.
+#[test]
+fn a_build_that_fails_its_checks_leaves_no_prefix_claim() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    std::fs::write(rtl.join("imp.sv"), IMPORTS_F).unwrap();
+    let dut = Dut::new("imp")
+        .sources([rtl.join("imp.sv")])
+        .top("imp")
+        .dpi_in_c(["g"]);
+    let prefix = dut.config().prefix();
+    let err = dut.build_in(&s.env()).unwrap_err();
+    assert!(err.to_string().contains("`dpi_in_c` names `g`"), "{err}");
+    let prefixes = s.path().join("cache/prefixes");
+    let claims: Vec<_> = std::fs::read_dir(&prefixes)
+        .into_iter()
+        .flatten()
+        .map(|scheme| scheme.unwrap().path().join(&prefix))
+        .filter(|claim| claim.is_file())
+        .collect();
+    assert!(claims.is_empty(), "{claims:?}");
+}

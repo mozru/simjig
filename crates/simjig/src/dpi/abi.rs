@@ -517,6 +517,7 @@ mod tests {
             ol: &mut Bits<33>,
         ) -> Bits<16>;
         fn task(&mut self, x: i8, n: &mut u64);
+        fn add(&mut self, x: i32, y: i32) -> i32;
     }
 
     struct Impl;
@@ -546,6 +547,10 @@ mod tests {
         fn task(&mut self, x: i8, n: &mut u64) {
             *n += u64::from(x.unsigned_abs());
         }
+
+        fn add(&mut self, x: i32, y: i32) -> i32 {
+            x.wrapping_add(y)
+        }
     }
 
     crate::__dpi_import! {
@@ -567,6 +572,56 @@ mod tests {
             x: InArg crate::__private::dpi::I8,
             n: InOutArg crate::__private::dpi::U64,
         )
+    }
+
+    crate::__dpi_import! {
+        prefix = "Vabi", imp = dyn Shapes,
+        fn simjig_abi_bench_add => add(
+            x: InArg crate::__private::dpi::I32,
+            y: InArg crate::__private::dpi::I32,
+        ) -> crate::__private::dpi::I32
+    }
+
+    /// The same function with no dispatch: the floor of an `extern "C"` call.
+    extern "C" fn plain_add(x: i32, y: i32) -> i32 {
+        x.wrapping_add(y)
+    }
+
+    /// Cost of one call through a trampoline: the C ABI call, the thread-local current
+    /// model, the downcast, `catch_unwind` and the dynamic call. Not a correctness test:
+    /// `cargo test --release -p simjig --lib -- --ignored --nocapture measure_trampoline`.
+    #[test]
+    #[ignore = "measurement; run explicitly in release mode"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "wall-clock measurement, not simulation"
+    )]
+    fn measure_trampoline() {
+        const N: i32 = 20_000_000;
+        let imp: Box<dyn Shapes> = Box::new(Impl);
+        let mut model = bound("Vabi", Some(imp));
+        let time = |f: extern "C" fn(i32, i32) -> i32| {
+            let f = std::hint::black_box(f);
+            let start = std::time::Instant::now();
+            let mut acc = 0i32;
+            for i in 0..N {
+                acc = f(acc, i);
+            }
+            std::hint::black_box(acc);
+            start.elapsed().as_secs_f64() * 1e9 / f64::from(N)
+        };
+        let ((plain, dpi), failure) = model.scope(|| (time(plain_add), time(simjig_abi_bench_add)));
+        assert_eq!(failure, None);
+        // What every eval of every model pays for DPI support, calls or not.
+        let start = std::time::Instant::now();
+        for i in 0..N {
+            std::hint::black_box(model.scope(|| std::hint::black_box(i)));
+        }
+        let scope = start.elapsed().as_secs_f64() * 1e9 / f64::from(N);
+        println!(
+            "DPI trampoline: {dpi:.2} ns per call (plain extern \"C\" call {plain:.2} ns); \
+             scope around one eval {scope:.2} ns"
+        );
     }
 
     #[test]

@@ -117,6 +117,8 @@ struct Slot {
     imp: RefCell<Option<Box<dyn Any>>>,
     /// The first failure since the backend last asked.
     failure: RefCell<Option<String>>,
+    /// Whether `failure` is set; checked on every call, so kept apart from it.
+    failed: Cell<bool>,
     /// Whether a model backend uses this slot (at most one may).
     claimed: Cell<bool>,
     /// For a model whose (simulation, prefix) slot another model already uses: calls fail,
@@ -130,6 +132,7 @@ impl Slot {
             prefix,
             imp: RefCell::new(None),
             failure: RefCell::new(None),
+            failed: Cell::new(false),
             claimed: Cell::new(false),
             ambiguous,
         })
@@ -138,18 +141,31 @@ impl Slot {
     /// Records `message` unless an earlier failure is pending.
     fn fail(&self, message: String) {
         self.failure.borrow_mut().get_or_insert(message);
+        self.failed.set(true);
     }
 
-    fn failed(&self) -> bool {
-        self.failure.borrow().is_some()
+    /// The pending failure, clearing it.
+    fn take_failure(&self) -> Option<String> {
+        self.failed.set(false);
+        self.failure.take()
     }
 }
 
-thread_local! {
-    /// The slot of the model being evaluated on this thread; taken out while a call runs.
-    static CURRENT: Cell<Option<Rc<Slot>>> = const { Cell::new(None) };
+/// The DPI state of one thread, in one thread-local so that a call costs one access.
+struct Thread {
+    /// The slot of the model being evaluated; taken out while a call runs.
+    current: Cell<Option<Rc<Slot>>>,
     /// The C name of the import whose implementation is running.
-    static IN_CALL: Cell<Option<&'static str>> = const { Cell::new(None) };
+    in_call: Cell<Option<&'static str>>,
+}
+
+thread_local! {
+    static THREAD: Thread = const {
+        Thread {
+            current: Cell::new(None),
+            in_call: Cell::new(None),
+        }
+    };
     /// Slots by (simulation id, model prefix).
     static SLOTS: RefCell<BTreeMap<(u32, &'static str), Rc<Slot>>> =
         const { RefCell::new(BTreeMap::new()) };
@@ -215,24 +231,34 @@ pub fn call<T: ?Sized + 'static, R>(
     default: R,
     f: impl FnOnce(&mut T) -> R,
 ) -> R {
-    let Some(slot) = CURRENT.try_with(Cell::take).ok().flatten() else {
-        orphan(name);
-        return default;
-    };
-    let result = dispatch(&slot, prefix, name, default, f);
-    // An error means the thread is exiting, when no eval can follow.
-    CURRENT.try_with(|c| c.set(Some(slot))).ok();
-    result
+    let mut default = Some(default);
+    let mut f = Some(f);
+    let result = THREAD.try_with(|t| {
+        let slot = t.current.take()?;
+        let result = dispatch(t, &slot, prefix, name, default.take()?, f.take()?);
+        t.current.set(Some(slot));
+        Some(result)
+    });
+    match (result, default) {
+        (Ok(Some(result)), _) => result,
+        // No current model (or the thread is exiting).
+        (_, Some(default)) => {
+            orphan(name);
+            default
+        }
+        (_, None) => unreachable!("invariant: `default` is taken only when a slot is current"),
+    }
 }
 
 fn dispatch<T: ?Sized + 'static, R>(
+    thread: &Thread,
     slot: &Slot,
     prefix: &'static str,
     name: &'static str,
     default: R,
     f: impl FnOnce(&mut T) -> R,
 ) -> R {
-    if slot.failed() {
+    if slot.failed.get() {
         return default;
     }
     if slot.ambiguous {
@@ -242,7 +268,8 @@ fn dispatch<T: ?Sized + 'static, R>(
         ));
         return default;
     }
-    if slot.prefix != prefix {
+    // Equal literals are usually merged, so the pointer test settles almost every call.
+    if !std::ptr::eq(slot.prefix, prefix) && slot.prefix != prefix {
         slot.fail(format!(
             "model `{}` called DPI-C import `{name}`, but the `{name}` linked into this binary \
              is the one generated for model `{prefix}`; a DPI-C import is one C symbol per \
@@ -260,9 +287,9 @@ fn dispatch<T: ?Sized + 'static, R>(
         ));
         return default;
     };
-    IN_CALL.set(Some(name));
+    thread.in_call.set(Some(name));
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| f(&mut **imp)));
-    IN_CALL.set(None);
+    thread.in_call.set(None);
     match outcome {
         Ok(value) => value,
         Err(payload) => {
@@ -316,7 +343,7 @@ fn drop_payload(payload: Box<dyn Any + Send>) {
 /// Inside a DPI call.
 #[track_caller]
 pub(crate) fn forbid_in_call(what: &str) {
-    if let Some(name) = IN_CALL.try_with(Cell::get).ok().flatten() {
+    if let Some(name) = THREAD.try_with(|t| t.in_call.get()).ok().flatten() {
         panic!(
             "DPI-C import `{name}` {what}: DPI functions run inside eval; they can't access \
              signals or await"
@@ -355,12 +382,11 @@ impl ModelDpi {
     /// Returns its result and the DPI failure it raised, if any.
     pub(crate) fn scope<R>(&mut self, f: impl FnOnce() -> R) -> (R, Option<String>) {
         let slot = self.slot();
-        let previous = CURRENT.replace(Some(Rc::clone(&slot)));
+        let previous = THREAD.with(|t| t.current.replace(Some(Rc::clone(&slot))));
         let restore = Restore(previous);
         let result = f();
         drop(restore);
-        let failure = slot.failure.take();
-        (result, failure)
+        (result, slot.take_failure())
     }
 
     /// This model's slot: bound to the running simulation on the first eval inside a run,
@@ -407,7 +433,7 @@ struct Restore(Option<Rc<Slot>>);
 
 impl Drop for Restore {
     fn drop(&mut self) {
-        CURRENT.try_with(|c| c.set(self.0.take())).ok();
+        THREAD.try_with(|t| t.current.set(self.0.take())).ok();
     }
 }
 

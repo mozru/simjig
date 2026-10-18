@@ -10,6 +10,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use svtypes::toolchain::{self, Search};
+
 /// What running one probe command produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Probe {
@@ -43,8 +45,11 @@ pub(super) struct EnvRoot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Facts {
     pub(super) cwd: PathBuf,
-    /// The `verilator` program found on `PATH`.
+    /// The `verilator` program `svtypes::toolchain::locate` selects (`SIMJIG_VERILATOR`,
+    /// `$VERILATOR_ROOT/bin`, `PATH`: the build's rule).
     pub(super) verilator: Option<PathBuf>,
+    /// Where it looked, when it found none.
+    pub(super) verilator_searched: Vec<PathBuf>,
     /// `verilator --version`.
     pub(super) verilator_version: Probe,
     /// `verilator --getenv VERILATOR_ROOT`: the root the binary itself uses.
@@ -73,7 +78,10 @@ pub(super) const DEFAULT_CXX: &str = "c++";
 
 impl Facts {
     pub(super) fn gather() -> Self {
-        let verilator = find_on_path("verilator");
+        let (verilator, verilator_searched) = match toolchain::locate(&Search::from_env()) {
+            Ok(exe) => (Some(exe), Vec::new()),
+            Err(e) => (None, e.searched),
+        };
         let verilator_probe = |args: &[&str]| match &verilator {
             Some(path) => probe(Command::new(path).args(args).env_remove("VERILATOR_ROOT")),
             None => Probe::NotFound,
@@ -85,6 +93,7 @@ impl Facts {
             verilator_version: verilator_probe(&["--version"]),
             verilator_root: verilator_probe(&["--getenv", "VERILATOR_ROOT"]),
             verilator,
+            verilator_searched,
             env_root: env_string("VERILATOR_ROOT").map(|raw| EnvRoot {
                 canonical: Path::new(&raw).canonicalize().ok(),
                 raw,
@@ -96,7 +105,9 @@ impl Facts {
             make: find_on_path("make"),
             pixi_environment: env_string("PIXI_ENVIRONMENT_NAME"),
             conda_prefix: env_string("CONDA_PREFIX"),
-            allow_untested: env::var_os("SIMJIG_UNTESTED_VERILATOR").is_some_and(|v| v == "1"),
+            allow_untested: toolchain::allows_untested(
+                env::var_os(toolchain::UNTESTED_VAR).as_deref(),
+            ),
         }
     }
 }
@@ -146,16 +157,8 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
         .find(|candidate| is_executable(candidate))
 }
 
-#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    path.metadata()
-        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file() || path.with_extension("exe").is_file()
+    toolchain::is_executable(path)
 }
 
 #[cfg(test)]

@@ -653,6 +653,7 @@ mod tests {
             debug: false,
             path: None,
             verilator_root: None,
+            untested_verilator: false,
             simjig_verilator: None,
             simjig_cache_dir: None,
             simjig_ccache: None,

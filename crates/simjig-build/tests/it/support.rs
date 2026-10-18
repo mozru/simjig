@@ -117,6 +117,7 @@ exit 1
             debug: false,
             path: std::env::var_os("PATH"),
             verilator_root: None,
+            untested_verilator: false,
             simjig_verilator: Some(self.wrapper()),
             simjig_cache_dir: Some(self.path().join("cache")),
             simjig_ccache: None,

@@ -624,6 +624,14 @@ impl Dut {
             model_sources: &placed.model_sources,
         })?;
         directives.extend(rerun_directives(&verilator, &model.deps, &self.recipe));
+        if verilator.untested {
+            directives.push(format!(
+                "cargo::warning=simjig: {} is not a supported Verilator (supported: {}); \
+                 building anyway because SIMJIG_UNTESTED_VERILATOR=1",
+                verilator.version_line,
+                svtypes::version::supported_list()
+            ));
+        }
         Ok(Built {
             prefix,
             obj_dir: model.obj_dir,
@@ -685,6 +693,7 @@ mod tests {
             version_line: "Verilator 5.052".into(),
             include_dir: PathBuf::from("/opt/v/share/verilator/include"),
             verilator_root: None,
+            untested: false,
         };
         let reruns = rerun_directives(&verilator, &[], &CppRecipe::default());
         assert!(reruns.contains(&"cargo::rerun-if-changed=/opt/v/bin/verilator".to_owned()));

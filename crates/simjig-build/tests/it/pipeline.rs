@@ -310,3 +310,22 @@ fn covergroup_models_with_mixed_coverage_fail() {
         "{err}"
     );
 }
+
+/// Coverage switched on where simjig cannot see it (an option file) builds a model whose
+/// `VM_COVERAGE` disagrees with the shim; the build stops and says so.
+#[test]
+fn an_option_file_that_changes_coverage_fails_the_build() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let opts = s.path().join("cov.f");
+    std::fs::write(&opts, "--coverage-line\n").unwrap();
+    let err = counter(&rtl)
+        .verilator_args(["-f".to_owned(), opts.display().to_string()])
+        .build_in(&s.env())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("VM_COVERAGE = 1") && err.contains("option file"),
+        "{err}"
+    );
+}

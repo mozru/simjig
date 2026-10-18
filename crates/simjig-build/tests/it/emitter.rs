@@ -188,3 +188,30 @@ fn ir_ports_rejects_a_zero_width_port() {
         "{err}"
     );
 }
+
+/// The shim's `kCoverage` is the coverage Verilator builds: a coverage kind among the
+/// extra arguments turns it on, an option that only tunes coverage does not (its model has
+/// no counters and its link would need `verilated_cov.cpp` for nothing).
+#[test]
+fn shim_coverage_follows_the_extra_arguments() {
+    let rtl = crate::support::fixtures().join("rtl");
+    let design = json_pass(&JsonPassOpts {
+        sources: vec![rtl.join("counter.sv")],
+        include_dirs: vec![rtl.clone()],
+        top: "counter".into(),
+        ..JsonPassOpts::default()
+    })
+    .unwrap();
+    let shim = |args: &[&str]| {
+        let config = Dut::new("counter")
+            .sources([rtl.join("counter.sv")])
+            .top("counter")
+            .verilator_args(args.iter().copied())
+            .config()
+            .clone();
+        codegen_emitter(&design, &config).unwrap().shim_cpp.unwrap()
+    };
+    assert!(shim(&["--coverage-line"]).contains("kCoverage = true;"));
+    assert!(shim(&["--coverage-max-width", "8"]).contains("kCoverage = false;"));
+    assert!(shim(&["--coverage", "--no-coverage"]).contains("kCoverage = false;"));
+}

@@ -9,6 +9,11 @@
 //!   `Drop` cleanup write signals or cancel other tasks from inside the kernel.
 //! - Every simulation gets a process-wide unique `sim_gen`, so a handle or waker from
 //!   another simulation is detected rather than silently aliased.
+//! - While a DPI-C import implemented in Rust runs ([`enter_dpi_call`]), the model is in
+//!   the middle of an eval: there is no settled value to read and no time at which a write
+//!   or a wake could apply. Every entry point into the kernel ([`with_current`],
+//!   [`try_current`]: signal access, triggers, `spawn`, `now()`) panics then, naming the
+//!   import.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -99,6 +104,60 @@ type NameTables = VecDeque<(u32, Rc<[Box<str>]>, Rc<[u32]>)>;
 thread_local! {
     static CURRENT: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
     static NAMES: RefCell<NameTables> = const { RefCell::new(VecDeque::new()) };
+    /// The DPI-C import running on this thread, if any.
+    static DPI_CALL: Cell<Option<&'static str>> = const { Cell::new(None) };
+}
+
+/// Marks a DPI-C call to `import` in progress on this thread until dropped; see the
+/// module docs.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the dpi module (branch w3/dpi) makes it once merged"
+    )
+)]
+#[derive(Debug)]
+pub(crate) struct DpiCallGuard {
+    previous: Option<&'static str>,
+}
+
+/// Starts a DPI-C call to `import`: kernel entry points refuse to run until the guard
+/// drops (it restores the previous state, so nesting is harmless).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the dpi module (branch w3/dpi) calls it once merged"
+    )
+)]
+#[must_use = "the call ends when the guard drops"]
+pub(crate) fn enter_dpi_call(import: &'static str) -> DpiCallGuard {
+    DpiCallGuard {
+        previous: DPI_CALL.replace(Some(import)),
+    }
+}
+
+impl Drop for DpiCallGuard {
+    fn drop(&mut self) {
+        DPI_CALL.set(self.previous);
+    }
+}
+
+/// The DPI-C import running on this thread, if one is.
+pub(crate) fn in_dpi_call() -> Option<&'static str> {
+    DPI_CALL.try_with(Cell::get).ok().flatten()
+}
+
+/// Panics if a DPI-C call is in progress; `what` names the attempted operation.
+#[track_caller]
+fn refuse_in_dpi_call(what: &str) {
+    if let Some(import) = in_dpi_call() {
+        panic!(
+            "DPI-C import `{import}` used {what}: DPI functions run inside eval; they can't \
+             access signals or await"
+        );
+    }
 }
 
 impl Kernel {
@@ -208,9 +267,11 @@ impl Drop for Kernel {
 /// Runs `f` on the current kernel.
 ///
 /// # Panics
-/// If no simulation is running on this thread; `what` names the operation in the message.
+/// If no simulation is running on this thread, or inside a DPI-C call; `what` names the
+/// operation in the message.
 #[track_caller]
 pub(crate) fn with_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> R {
+    refuse_in_dpi_call(what);
     CURRENT.with_borrow(|k| match k {
         Some(k) => f(k),
         None => panic!("{what} needs a running simulation; call it inside Sim::run"),
@@ -218,7 +279,12 @@ pub(crate) fn with_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> R {
 }
 
 /// Runs `f` on the current kernel, if one is installed.
-pub(crate) fn try_current<R>(f: impl FnOnce(&Kernel) -> R) -> Option<R> {
+///
+/// # Panics
+/// Inside a DPI-C call; `what` names the operation in the message.
+#[track_caller]
+pub(crate) fn try_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> Option<R> {
+    refuse_in_dpi_call(what);
     CURRENT
         .try_with(|c| c.borrow().as_deref().map(f))
         .ok()
@@ -299,4 +365,49 @@ pub(crate) fn wake_task(sim_gen: u32, index: u32, gen16: u16) {
         "a simjig waker for simulation #{sim_gen} was woken from another thread; the \
          kernel is single-threaded, so keep futures and wakers on the thread running Sim::run"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::fake::FakeModel;
+    use super::super::signal::RawSig;
+    use super::super::sim::Sim;
+    use super::super::tasks::spawn;
+    use super::super::trigger::{now, rising};
+    use super::*;
+
+    #[test]
+    fn kernel_entry_points_refuse_to_run_inside_a_dpi_call() {
+        type Case = fn(RawSig);
+        let cases: [(&str, Case); 4] = [
+            ("now", |_| {
+                std::hint::black_box(now());
+            }),
+            ("spawn", |_| spawn("x", async {}).detach()),
+            ("read", |clk| {
+                std::hint::black_box(clk.read_u64());
+            }),
+            ("rising", |clk| drop(rising(clk))),
+        ];
+        for (name, case) in cases {
+            let mut model = FakeModel::new(Precision::NS);
+            model.signal("clk", 1);
+            let mut sim = Sim::from_fake(model);
+            let clk = sim.signal("clk").unwrap();
+            let failure = sim
+                .run(async move {
+                    let _call = enter_dpi_call("dpi_tick");
+                    case(clk);
+                })
+                .unwrap_err();
+            assert!(
+                failure.message.contains("DPI-C import `dpi_tick` used")
+                    && failure.message.contains(
+                        "DPI functions run inside eval; they can't access signals or await"
+                    ),
+                "{name}: {failure}"
+            );
+            assert_eq!(in_dpi_call(), None, "the guard ended the call");
+        }
+    }
 }

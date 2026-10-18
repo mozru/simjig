@@ -93,7 +93,7 @@ impl RawSig {
     /// Outside a running simulation, or in a different simulation than the handle's.
     #[track_caller]
     pub(crate) fn with<R>(self, f: impl FnOnce(&Kernel, u32) -> R) -> R {
-        let resolved = state::try_current(|k| {
+        let resolved = state::try_current("a signal", |k| {
             let flat = state::flat_slot(&k.starts, self.model(), self.slot);
             match flat {
                 Some(flat) if k.sim_gen == self.sim_gen => Some(f(k, flat)),

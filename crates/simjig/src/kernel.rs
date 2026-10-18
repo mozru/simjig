@@ -9,7 +9,7 @@
 //! - `clock`: kernel-owned clocks; `time`: ticks and checked durations;
 //! - `sync`: `Event`, `Lock`, `Queue`; `combinator`: `join!`, `first!`;
 //! - `failure`, `recorder`: failures as data and the flight recorder; `panics`: where a
-//!   task panicked;
+//!   task (or, through `panics::take`, a DPI-C import) panicked;
 //! - `state`: the kernel struct and the thread-local current kernel;
 //! - `waker`: the only `unsafe` in the kernel;
 //! - `backend`, `fake`: the model interface and its pure-Rust implementation; `models`:
@@ -24,7 +24,7 @@ pub(crate) mod combinator;
 pub(crate) mod failure;
 pub(crate) mod fake;
 pub(crate) mod models;
-mod panics;
+pub(crate) mod panics;
 pub(crate) mod recorder;
 pub(crate) mod sched;
 pub(crate) mod signal;

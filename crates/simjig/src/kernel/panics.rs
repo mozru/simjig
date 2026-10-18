@@ -82,6 +82,9 @@ pub(crate) fn restore(location: Option<&'static SourceLocation>) {
 
 /// The location of the panic that `catch_unwind` just caught, if the hook saw one (a
 /// `resume_unwind` skips the hook).
+///
+/// Any code running user code under `catch_unwind` during a run can use it (a DPI-C
+/// dispatcher, to name the panicking line): call [`forget`] before, `take` after.
 pub(crate) fn take() -> Option<&'static SourceLocation> {
     LAST.take()
 }

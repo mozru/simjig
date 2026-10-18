@@ -46,7 +46,7 @@ fn poll_registered(
 ) -> Poll<()> {
     match reg {
         None => {
-            let registered = state::try_current(|k| {
+            let registered = state::try_current(what, |k| {
                 register(k).map(|on| Registration::new(k, on, cx, Some(at)))
             });
             match registered {

@@ -243,8 +243,9 @@ impl DutConfig {
     }
 
     /// The Verilator `--prefix`: `V<name>_<hash8>`, unique per configuration so several
-    /// variants of one design can link into one binary. The hash is the start of
-    /// [`model_digest`](Self::model_digest).
+    /// variants of one design can link into one binary. The hash is the first 8 hex
+    /// digits of a digest of every setting that changes the model's C++ (all but
+    /// [`Dut::dpi_in_c`], which changes only the generated Rust).
     pub fn prefix(&self) -> String {
         format!("V{}_{}", self.name, &self.model_digest()[..8])
     }

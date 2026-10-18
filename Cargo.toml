@@ -13,13 +13,17 @@ publish = false
 svtypes = { path = "crates/svtypes" }
 simjig-bits = { path = "crates/simjig-bits" }
 simjig-build = { path = "crates/simjig-build" }
-simjig-macros = { path = "crates/simjig-macros" }
+simjig-macros = { path = "crates/simjig-macros", version = "=0.0.0" }
 cargo-simjig = { path = "crates/cargo-simjig", version = "0.0.0" }
 insta = { version = "1.49.0", default-features = false }
 proptest = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 cc = "1.8.0"
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "3.0.9", features = ["full"] }
+prettyplease = "0.3.0"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

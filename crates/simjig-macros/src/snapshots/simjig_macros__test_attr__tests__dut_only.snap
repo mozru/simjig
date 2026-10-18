@@ -1,0 +1,23 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(), quote! { async fn a(dut: Counter) {} })"
+---
+#[::core::prelude::v1::test]
+fn a() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn a(dut: Counter) {}
+    ::simjig::__private::run_test::<
+        Counter,
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(a),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::core::option::Option::None,
+            ignored: false,
+        },
+        |_, __simjig_dut| async move { a(__simjig_dut).await },
+    );
+}

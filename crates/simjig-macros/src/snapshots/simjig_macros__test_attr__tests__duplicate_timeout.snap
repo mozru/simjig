@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(timeout = \"1ns\", timeout = \"2ns\"), quote! { async fn t() {} })"
+---
+error: `timeout` is given twice

@@ -1,0 +1,33 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(timeout = \"2ms\"), quote!\n{\n    #[doc = r\" Docs stay on the test.\"] #[ignore] async fn\n    backpressure(sim: &TestCtx, dut: fifo::Dut) -> simjig::Result\n    { dut.go(sim).await }\n})"
+---
+#[::core::prelude::v1::test]
+/// Docs stay on the test.
+#[ignore]
+fn backpressure() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn backpressure(sim: &TestCtx, dut: fifo::Dut) -> simjig::Result {
+        dut.go(sim).await
+    }
+    ::simjig::__private::assert_test_output::<simjig::Result>();
+    ::simjig::__private::run_test::<
+        fifo::Dut,
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(backpressure),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::core::option::Option::Some(::simjig::__private::Timeout {
+                value: 2u64,
+                unit: ::simjig::TimeUnit::Ms,
+            }),
+            ignored: true,
+        },
+        |__simjig_sim, __simjig_dut| async move {
+            backpressure(&__simjig_sim, __simjig_dut).await
+        },
+    );
+}

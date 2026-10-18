@@ -267,3 +267,40 @@ fn shim_coverage_follows_the_extra_arguments() {
     assert!(shim(&["--coverage-max-width", "8"]).contains("kCoverage = false;"));
     assert!(shim(&["--coverage", "--no-coverage"]).contains("kCoverage = false;"));
 }
+
+/// s3c7m: the waived wrapper must not change the design's precision, whatever the user's.
+#[test]
+fn s3c7m_the_waived_wrapper_keeps_the_users_precision() {
+    for (unit, want) in [
+        ("  timeunit 1ns; timeprecision 1ns;", "1ns"),
+        ("  timeunit 1us; timeprecision 100ps;", "100ps"),
+        ("  timeunit 10ns; timeprecision 10ns;", "10ns"),
+    ] {
+        let s = Sandbox::new();
+        let src = dut("iface_top");
+        let timed = tempfile::tempdir().unwrap();
+        for (file, after) in [
+            ("iface_pkg.sv", "package iface_pkg;"),
+            ("bus_if.sv", "interface bus_if;"),
+            ("iface_top.sv", ");"),
+        ] {
+            let text = std::fs::read_to_string(src.join(file)).unwrap();
+            let (head, tail) = text.split_once(&format!("\n{after}\n")).unwrap();
+            let text = format!("{head}\n{after}\n{unit}\n{tail}");
+            std::fs::write(timed.path().join(file), text).unwrap();
+        }
+        let d = timed.path();
+        let built = Dut::new("iface_timed")
+            .sources([
+                d.join("iface_pkg.sv"),
+                d.join("bus_if.sv"),
+                d.join("iface_top.sv"),
+            ])
+            .top("iface_top")
+            .bind_iface("in_bus", "bus_if")
+            .bind_iface("out_bus", "bus_if")
+            .build_in(&s.env())
+            .unwrap();
+        assert_eq!(built.design.time_precision.to_string(), want, "{unit}");
+    }
+}

@@ -46,6 +46,10 @@ the public API, the generated code or simulation semantics.
   more than an hour old.
 - An interface port whose declaration cannot be read no longer hides the friendly
   unbound-port message for the other ports; it gets a line of its own.
+- A `bind_iface` naming a port the DUT does not have ("no interface port `rq` on `ifdut`;
+  did you mean `req`?"), an interface no source declares, or an interface other than the
+  port's is an `Error::Config` naming the call to fix, instead of a dump of the generated
+  top.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

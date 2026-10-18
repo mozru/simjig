@@ -87,6 +87,7 @@ pub(crate) fn design_ir(
         svtypes::verilator::json_pass(&config.json_pass_opts(top, generated, extra, verilator))
             .map_err(|e| {
                 iface_diag::unbound_iface_ports(config, &e)
+                    .or_else(|| iface_diag::binding_mistakes(config, &e))
                     .unwrap_or_else(|| Error::json_pass(&config.name, e))
             })
     };

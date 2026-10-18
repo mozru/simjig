@@ -95,6 +95,86 @@ pub(crate) fn unbound_iface_ports(config: &DutConfig, e: &svtypes::error::Error)
     })
 }
 
+/// Verilator's diagnostics for a binding the generated elaboration top gets wrong
+/// (5.052 `V3LinkCells.cpp`, `V3LinkDot.cpp`, `V3Width.cpp`; checked for each): a port the
+/// DUT does not have (`PINNOTFOUND`), an interface the sources do not declare, and an
+/// interface other than the port's.
+const PIN_NOT_FOUND: &str = ": Pin not found: '";
+const NO_INTERFACE: &str = ": Cannot find file containing interface: '";
+const WRONG_INTERFACE: (&str, &str, &str) =
+    (": Port '", "' expects '", "' interface but pin connects '");
+
+/// When the JSON pass failed on a [`crate::Dut::bind_iface`] mistake, the error that says
+/// which call to fix and how, instead of Verilator's dump of the generated top.
+pub(crate) fn binding_mistakes(config: &DutConfig, e: &svtypes::error::Error) -> Option<Error> {
+    let svtypes::error::Error::Tool { stderr, .. } = e else {
+        return None;
+    };
+    let top = config.top.as_deref().unwrap_or_default();
+    let call = |port: &str| {
+        let b = config.ifaces.iter().find(|b| b.port == port)?;
+        let spec = match &b.modport {
+            Some(m) => format!("{}.{m}", b.interface),
+            None => b.interface.clone(),
+        };
+        Some(format!("`.bind_iface(\"{port}\", \"{spec}\")`"))
+    };
+    // The DUT's ports the generated top left unconnected: what a mistyped port meant.
+    let missing: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| l.split_once(MISSING_PIN)?.1.strip_suffix('\''))
+        .collect();
+    let mut lines: Vec<String> = Vec::new();
+    for diag in stderr.lines() {
+        let line = if let Some(pin) = quoted_after(diag, PIN_NOT_FOUND) {
+            call(pin).map(|_| {
+                let hint = crate::codegen::closest(pin, missing.iter().copied())
+                    .map(|c| format!("; did you mean `{c}`?"))
+                    .unwrap_or_default();
+                format!("no interface port `{pin}` on `{top}`{hint}")
+            })
+        } else if let Some(name) = quoted_after(diag, NO_INTERFACE) {
+            let b = config.ifaces.iter().find(|b| b.interface == name);
+            b.and_then(|b| call(&b.port)).map(|call| {
+                format!(
+                    "{call} names the interface `{name}`, which no source declares; add its \
+                     source with `.sources([..])`"
+                )
+            })
+        } else if let Some((port, want, got)) = wrong_interface(diag) {
+            call(port).map(|call| {
+                format!(
+                    "port `{port}` of `{top}` is a `{want}` interface port, but {call} \
+                     connects `{got}`; bind it as `{want}.<modport>`"
+                )
+            })
+        } else {
+            None
+        };
+        if let Some(line) = line.filter(|l| !lines.contains(l)) {
+            lines.push(line);
+        }
+    }
+    (!lines.is_empty()).then(|| Error::Config {
+        dut: config.name.clone(),
+        msg: lines.join("\n"),
+    })
+}
+
+/// The `'quoted'` name right after `marker` at the end of `diag`.
+fn quoted_after<'d>(diag: &'d str, marker: &str) -> Option<&'d str> {
+    diag.split_once(marker)?.1.strip_suffix('\'')
+}
+
+/// (port, expected interface, connected interface) of a wrong-interface diagnostic.
+fn wrong_interface(diag: &str) -> Option<(&str, &str, &str)> {
+    let (pre, expects, connects) = WRONG_INTERFACE;
+    let rest = diag.split_once(pre)?.1;
+    let (port, rest) = rest.split_once(expects)?;
+    let (want, rest) = rest.split_once(connects)?;
+    Some((port, want, rest.strip_suffix("' interface")?))
+}
+
 /// The port named at `file:line:col` and, when the declaration has the usual
 /// `interface[.modport] name` shape on that line, its `interface[.modport]`.
 fn iface_port_at(loc: &str) -> Option<(String, Option<String>)> {

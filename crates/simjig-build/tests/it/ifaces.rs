@@ -1,5 +1,6 @@
-//! An interface-ported DUT without a `.bind_iface` for every interface port fails with one
-//! line per unbound port and the call that binds it, not Verilator's dump.
+//! An interface-ported DUT without a `.bind_iface` for every interface port, or with a
+//! wrong one, fails with one line per mistake and the call that fixes it, not Verilator's
+//! dump.
 
 use simjig_build::Dut;
 
@@ -43,4 +44,48 @@ fn a_partial_binding_lists_the_unbound_ports() {
          port `out_bus` of `iface_top` is an interface port (`bus_if.src`); add \
          `.bind_iface(\"out_bus\", \"bus_if.src\")`"
     );
+}
+
+/// A binding mistake Verilator catches while elaborating the generated top reads as the
+/// `bind_iface` call to fix, not as a dump of the generated file.
+#[test]
+fn binding_mistakes_name_the_bind_iface_to_fix() {
+    for (port, iface, want) in [
+        (
+            "in_bs",
+            "bus_if.dst",
+            "invalid DUT `iface_top` configuration: no interface port `in_bs` on \
+             `iface_top`; did you mean `in_bus`?",
+        ),
+        (
+            "in_bus",
+            "other_if.dst",
+            "invalid DUT `iface_top` configuration: port `in_bus` of `iface_top` is a \
+             `bus_if` interface port, but `.bind_iface(\"in_bus\", \"other_if.dst\")` \
+             connects `other_if`; bind it as `bus_if.<modport>`",
+        ),
+        (
+            "in_bus",
+            "nope_if.dst",
+            "invalid DUT `iface_top` configuration: `.bind_iface(\"in_bus\", \
+             \"nope_if.dst\")` names the interface `nope_if`, which no source declares; add \
+             its source with `.sources([..])`",
+        ),
+    ] {
+        // One sandbox each: a build script may build one DUT name in one configuration.
+        let s = Sandbox::new();
+        let other = s.path().join("other_if.sv");
+        std::fs::write(
+            &other,
+            "interface other_if;\n  logic x;\n  modport dst(input x);\nendinterface\n",
+        )
+        .unwrap();
+        let err = iface_top()
+            .sources([other])
+            .bind_iface(port, iface)
+            .bind_iface("out_bus", "bus_if.src")
+            .build_in(&s.env())
+            .unwrap_err();
+        assert_eq!(format!("{err:?}"), want, "{port} {iface}");
+    }
 }

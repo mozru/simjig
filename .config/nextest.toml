@@ -40,3 +40,13 @@ test(=probes::a_probe_through_a_generate_for_iteration_builds)
 | test(/^optional::/)
 '''
 slow-timeout = { period = "60s", terminate-after = 6 }
+
+# Every test of simjig-build's `it` binary builds in its own sandbox, so each compiles
+# libverilated and its models from a cold cache: about 25 CPU-seconds each, with the
+# compiles of one test in parallel. On a 4-CPU machine (the Lima VM of ci/lima, or a
+# GitHub-hosted runner) the gate runs four of them at once beside other builds, and
+# several took 60-120 s; four passed 2 minutes. They get 6 minutes too. Trade-off:
+# a hang in one of them is reported after 6 minutes instead of 2.
+[[profile.default.overrides]]
+filter = 'binary_id(simjig-build::it)'
+slow-timeout = { period = "60s", terminate-after = 6 }

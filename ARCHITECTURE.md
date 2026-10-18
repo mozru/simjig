@@ -47,6 +47,7 @@ listed here with what keeps the copies equal.
 | Supported Verilator versions; which Verilator to run and accept | `svtypes::version`; `svtypes::toolchain::{locate, judge}` |
 | Widths and packed storage at build time | `svtypes::width` |
 | The design's Verilator arguments (JSON pass, layout check, model) | `DutConfig::design` (`svtypes::verilator::JsonPassOpts::design_args`) |
+| Reading Verilator option files (`-f`/`-F`, nested) and resolving their paths | `simjig_build::optfile::traverse` (visited by `find` and `inputs`); `Dut::file_list` passes through `DutConfig::option_args` |
 | Naming, slot, storage and access decisions | `codegen::lower` |
 | The "did you mean" hint | `codegen::names::did_you_mean` |
 | Two-step cache keys | `cache.rs` (Verilator output), `front.rs` (IR), `archive.rs` (archives), over the manifests of `manifest.rs` |

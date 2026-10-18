@@ -180,8 +180,12 @@ fn a_real_error_under_wall_is_not_buried_by_the_generated_top() {
     .unwrap();
     let (mut outs, mut assigns) = (String::new(), String::new());
     for i in 0..12 {
-        outs += &format!(", output logic o{i}");
-        assigns += &format!("  assign o{i} = in.v;\n");
+        let o = format!("o{i}");
+        outs.push_str(", output logic ");
+        outs.push_str(&o);
+        assigns.push_str("  assign ");
+        assigns.push_str(&o);
+        assigns.push_str(" = in.v;\n");
     }
     std::fs::write(
         &top,

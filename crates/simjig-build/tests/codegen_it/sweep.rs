@@ -183,6 +183,16 @@ fn a_struct_that_differs_gets_one_type_and_a_fields_trait() {
         names,
         [
             ("PeekIn", &AssocBound::Vector, vec!["peek_in", "peek_out"]),
+            (
+                "Up",
+                &AssocBound::Trait("BeatIfSinkPorts".into()),
+                vec!["up"]
+            ),
+            (
+                "Down",
+                &AssocBound::Trait("BeatIfSourcePorts".into()),
+                vec!["down"]
+            ),
             ("Beat", &fields, vec!["up.beat", "down.beat"]),
             (
                 "Data",
@@ -194,24 +204,15 @@ fn a_struct_that_differs_gets_one_type_and_a_fields_trait() {
                 &AssocBound::Vector,
                 vec!["up.beat.tag", "down.beat.tag"]
             ),
-            (
-                "Up",
-                &AssocBound::Trait("BeatIfSinkPorts".into()),
-                vec!["up"]
-            ),
-            (
-                "Down",
-                &AssocBound::Trait("BeatIfSourcePorts".into()),
-                vec!["down"]
-            ),
-        ]
+        ],
+        "the ports' own types first, then the types their bundles and structs bring"
     );
     // The bundle traits' and the fields trait's types are `Ports`' (indices into `names`).
-    let fixed = [("Data".to_owned(), 2), ("Tag".to_owned(), 3)];
-    assert_eq!(t.types[1].equals, fixed);
-    let bundle = [("Beat".to_owned(), 1), fixed[0].clone(), fixed[1].clone()];
-    assert_eq!(t.types[4].equals, bundle);
-    assert_eq!(t.types[5].equals, bundle);
+    let fixed = [("Data".to_owned(), 4), ("Tag".to_owned(), 5)];
+    assert_eq!(t.types[3].equals, fixed);
+    let bundle = [("Beat".to_owned(), 3), fixed[0].clone(), fixed[1].clone()];
+    assert_eq!(t.types[1].equals, bundle);
+    assert_eq!(t.types[2].equals, bundle);
     let [beat] = sweep.fields_traits.as_slice() else {
         panic!("{:?}", sweep.fields_traits)
     };
@@ -626,13 +627,16 @@ mod deep_body {
         use super::dq::*;
         let _: In<D::Top> = dut.top();
         let _: Out<D::Leaf> = dut.lf();
-        let _: In<D::A> = dut.din();
-        let _: Out<D::B> = dut.bout();
+        // The flat ports name their types (`Din`, `Bout`), though `top`, declared first,
+        // reaches the same types through its fields (`top.m.x.a`, `top.m.b`): a field
+        // added to a struct cannot rename a port's type.
+        let _: In<D::Din> = dut.din();
+        let _: Out<D::Bout> = dut.bout();
         let top = D::Top::default();
-        let deep: D::A = top.m().x().a();
-        let b: D::B = top.m().b();
+        let deep: D::Din = top.m().x().a();
+        let b: D::Bout = top.m().b();
         let leaf: D::Leaf = top.l();
-        top.a2() == deep && leaf == top.m().y() && leaf.a() == deep && b == D::B::default()
+        top.a2() == deep && leaf == top.m().y() && leaf.a() == deep && b == D::Bout::default()
     }
 
     pub(super) fn dp<D: super::dp::Ports>(dut: D) -> bool {

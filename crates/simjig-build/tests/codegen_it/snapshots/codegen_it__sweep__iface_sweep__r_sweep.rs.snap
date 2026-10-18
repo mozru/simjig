@@ -20,10 +20,10 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     const K: ::core::primitive::i32;
     /// The type of `q`: `Bits<3>` in `r_k3`, `Bits<5>` in `r_k5`.
     type Q: ::simjig::__private::Vector;
-    /// The type of `bus.d`: `Bits<4>` in `r_k3`, `Bits<8>` in `r_k5`.
-    type D: ::simjig::__private::Vector;
     /// The type of `bus`: `r_k3::RIfM` in `r_k3`, `r_k5::RIfM` in `r_k5`.
     type Bus: RIfMPorts<D = Self::D>;
+    /// The type of `bus.d`: `Bits<4>` in `r_k3`, `Bits<8>` in `r_k5`.
+    type D: ::simjig::__private::Vector;
     /// `r_dut.q`: output.
     fn q(self) -> ::simjig::__private::Out<Self::Q>;
     /// `r_if.m`: interface port.
@@ -51,8 +51,8 @@ pub mod r_k3 {
 impl Ports for r_k3::Dut {
     const K: ::core::primitive::i32 = r_k3::Dut::K;
     type Q = ::simjig::__private::bits::Bits<3>;
-    type D = ::simjig::__private::bits::Bits<4>;
     type Bus = r_k3::RIfM;
+    type D = ::simjig::__private::bits::Bits<4>;
     fn q(self) -> ::simjig::__private::Out<Self::Q> { self.q }
     fn bus(self) -> Self::Bus { self.bus }
 }
@@ -71,8 +71,8 @@ pub mod r_k5 {
 impl Ports for r_k5::Dut {
     const K: ::core::primitive::i32 = r_k5::Dut::K;
     type Q = ::simjig::__private::bits::Bits<5>;
-    type D = ::simjig::__private::bits::Bits<8>;
     type Bus = r_k5::RIfM;
+    type D = ::simjig::__private::bits::Bits<8>;
     fn q(self) -> ::simjig::__private::Out<Self::Q> { self.q }
     fn bus(self) -> Self::Bus { self.bus }
 }

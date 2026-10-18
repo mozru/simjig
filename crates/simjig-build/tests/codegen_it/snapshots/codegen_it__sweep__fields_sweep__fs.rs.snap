@@ -20,16 +20,16 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     const W: ::core::primitive::i32;
     /// The type of `din`, `dout`, `pa.beat.data`, `pb.beat.x`: `Bits<8>` in `fs_a`, `Bits<16>` in `fs_b`.
     type Din: ::simjig::__private::Vector;
+    /// The type of `pa`: `fs_a::AIfSink` in `fs_a`, `fs_b::AIfSink` in `fs_b`.
+    type Pa: AIfSinkPorts<AIfBeatT = Self::AIfBeatT, Data = Self::Din, Tag = Self::Tag>;
+    /// The type of `pb`: `fs_a::BIfSink` in `fs_a`, `fs_b::BIfSink` in `fs_b`.
+    type Pb: BIfSinkPorts<BIfBeatT = Self::BIfBeatT, X = Self::Din>;
     /// The type of `pa.beat`: `fs_a::AIfBeatT` in `fs_a`, `fs_b::AIfBeatT` in `fs_b`.
     type AIfBeatT: AIfBeatTFields<Data = Self::Din, Tag = Self::Tag>;
     /// The type of `pa.beat.tag`: `Bits<9>` in `fs_a`, `Bits<17>` in `fs_b`.
     type Tag: ::simjig::__private::Vector;
-    /// The type of `pa`: `fs_a::AIfSink` in `fs_a`, `fs_b::AIfSink` in `fs_b`.
-    type Pa: AIfSinkPorts<AIfBeatT = Self::AIfBeatT, Data = Self::Din, Tag = Self::Tag>;
     /// The type of `pb.beat`: `fs_a::BIfBeatT` in `fs_a`, `fs_b::BIfBeatT` in `fs_b`.
     type BIfBeatT: BIfBeatTFields<X = Self::Din>;
-    /// The type of `pb`: `fs_a::BIfSink` in `fs_a`, `fs_b::BIfSink` in `fs_b`.
-    type Pb: BIfSinkPorts<BIfBeatT = Self::BIfBeatT, X = Self::Din>;
     /// `fs_top.din`: input.
     fn din(self) -> ::simjig::__private::In<Self::Din>;
     /// `fs_top.dout`: output.
@@ -120,11 +120,11 @@ pub mod fs_a {
 impl Ports for fs_a::Dut {
     const W: ::core::primitive::i32 = fs_a::Dut::W;
     type Din = ::simjig::__private::bits::Bits<8>;
+    type Pa = fs_a::AIfSink;
+    type Pb = fs_a::BIfSink;
     type AIfBeatT = fs_a::AIfBeatT;
     type Tag = ::simjig::__private::bits::Bits<9>;
-    type Pa = fs_a::AIfSink;
     type BIfBeatT = fs_a::BIfBeatT;
-    type Pb = fs_a::BIfSink;
     fn din(self) -> ::simjig::__private::In<Self::Din> { self.din }
     fn dout(self) -> ::simjig::__private::Out<Self::Din> { self.dout }
     fn pa(self) -> Self::Pa { self.pa }
@@ -171,11 +171,11 @@ pub mod fs_b {
 impl Ports for fs_b::Dut {
     const W: ::core::primitive::i32 = fs_b::Dut::W;
     type Din = ::simjig::__private::bits::Bits<16>;
+    type Pa = fs_b::AIfSink;
+    type Pb = fs_b::BIfSink;
     type AIfBeatT = fs_b::AIfBeatT;
     type Tag = ::simjig::__private::bits::Bits<17>;
-    type Pa = fs_b::AIfSink;
     type BIfBeatT = fs_b::BIfBeatT;
-    type Pb = fs_b::BIfSink;
     fn din(self) -> ::simjig::__private::In<Self::Din> { self.din }
     fn dout(self) -> ::simjig::__private::Out<Self::Din> { self.dout }
     fn pa(self) -> Self::Pa { self.pa }

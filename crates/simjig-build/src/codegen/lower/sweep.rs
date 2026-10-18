@@ -14,7 +14,9 @@
 //!   per-member types, so ports that agree in every member (`wr_data` and `rd_data`, both
 //!   `WIDTH` bits) share it and a generic body can move a value between them. It is
 //!   named after the generated type it is in every member (`Word`), else after its first
-//!   port (`WrData`), and bounded by `simjig::Vector` (bit vectors everywhere),
+//!   port (`WrData`); the ports' own types claim their names first, and then the types
+//!   their structs' fields and bundles bring, so adding a struct field never renames a
+//!   port's type. It is bounded by `simjig::Vector` (bit vectors everywhere),
 //!   `simjig::Value` (packed values) or nothing (unpacked arrays). The DUT parameters
 //!   every member has with one Rust type are associated consts;
 //! - **bundle traits**: an interface port whose bundle differs between members gets an
@@ -360,6 +362,23 @@ fn method_name(field: &str, taken: &[&str]) -> String {
     }
 }
 
+/// The associated types an associated type of a trait brings into that trait, added by
+/// [`Builder::expand`] after every port's own type is named.
+enum Nested {
+    /// The fields trait's types of the struct type at `at`, whose first user is `user`.
+    Fields {
+        at: usize,
+        user: String,
+        inner: Vec<AssocType>,
+    },
+    /// The bundle trait's types of the interface port `port`, whose type is at `at`.
+    Bundle {
+        at: usize,
+        port: String,
+        inner: Vec<AssocType>,
+    },
+}
+
 /// Builds the traits, claiming their names in the sweep module's type namespace.
 struct Builder<'a> {
     members: &'a [(String, Lowered)],
@@ -426,6 +445,9 @@ impl<'a> Builder<'a> {
         let owners: Vec<(&'a str, &'a Lowered)> =
             columns.iter().map(|c| (c.member, c.lowered)).collect();
         let mut assoc = Namespace::default();
+        // The types the ports' structs and bundles bring, named once every port's own type
+        // has its name.
+        let mut nested = Vec::new();
         for entry in &columns[0].entries {
             let same: Option<Vec<&Entry<'a>>> = columns
                 .iter()
@@ -440,34 +462,18 @@ impl<'a> Builder<'a> {
                 t.omitted.push(entry.name.to_owned());
                 continue;
             };
-            let kind = match &entry.kind {
+            let (kind, inner) = match &entry.kind {
                 EntryKind::Signal { access, .. } => {
-                    let raw: Vec<&'a RustType> = same
-                        .iter()
-                        .map(|e| match e.kind {
-                            EntryKind::Signal { ty, .. } => ty,
-                            EntryKind::Bundle(_) => unreachable!("`alike` keeps kinds equal"),
-                        })
-                        .collect();
-                    let ty = match self.typed(&owners, &raw, entry.name) {
-                        Typed::Concrete(ty) => TraitType::Concrete(ty),
-                        Typed::Assoc {
-                            name,
-                            bound,
-                            per_impl,
-                        } => {
-                            self.place(&mut t.types, &mut assoc, &name, bound, per_impl, entry.name)
-                        }
-                    };
-                    MethodKind::Signal {
-                        access: *access,
-                        ty,
-                    }
+                    let (ty, inner) = self.signal_type(&mut t.types, &mut assoc, &owners, &same);
+                    let access = *access;
+                    (MethodKind::Signal { access, ty }, inner)
                 }
                 EntryKind::Bundle(_) => {
-                    MethodKind::Bundle(self.bundle_type(&mut t, &mut assoc, columns, &same))
+                    let (ty, inner) = self.bundle_type(&mut t, columns, &same, &mut assoc);
+                    (MethodKind::Bundle(ty), inner)
                 }
             };
+            nested.extend(inner);
             t.methods.push(TraitMethod {
                 name: method_name(entry.name, HANDLE_METHODS),
                 field: entry.name.to_owned(),
@@ -475,7 +481,36 @@ impl<'a> Builder<'a> {
                 kind,
             });
         }
+        for n in nested {
+            self.expand(&mut t.types, &mut assoc, n);
+        }
         t
+    }
+
+    /// The type of the signal `same[i]` of each member, in a trait over all of them.
+    fn signal_type(
+        &mut self,
+        types: &mut Vec<AssocType>,
+        assoc: &mut Namespace,
+        owners: &Owners<'a>,
+        same: &[&Entry<'a>],
+    ) -> (TraitType, Option<Nested>) {
+        let raw: Vec<&'a RustType> = same
+            .iter()
+            .map(|e| match e.kind {
+                EntryKind::Signal { ty, .. } => ty,
+                EntryKind::Bundle(_) => unreachable!("`alike` keeps kinds equal"),
+            })
+            .collect();
+        let user = same[0].name;
+        match self.typed(owners, &raw, user) {
+            Typed::Concrete(ty) => (TraitType::Concrete(ty), None),
+            Typed::Assoc {
+                name,
+                bound,
+                per_impl,
+            } => self.place(types, assoc, &name, bound, per_impl, user),
+        }
     }
 
     /// The type `raw[i]` of member `owners[i]`, in a trait over all of them: concrete if
@@ -598,15 +633,16 @@ impl<'a> Builder<'a> {
 
     /// An interface port's type: the shared bundle, or an associated type bounded by a
     /// bundle trait over the members' bundles. The bundle trait's own associated types
-    /// are associated types of `t` too, which the bound fixes them to, so ports of two
-    /// bundle traits carrying one type (`up.beat`, `down.beat`) share it in `t`.
+    /// become associated types of `t` too ([`Nested::Bundle`], for [`Builder::expand`]),
+    /// which the bound fixes them to, so ports of two bundle traits carrying one type
+    /// (`up.beat`, `down.beat`) share it in `t`.
     fn bundle_type(
         &mut self,
         t: &mut PortsTrait,
-        assoc: &mut Namespace,
         columns: &[Column<'a>],
         same: &[&Entry<'a>],
-    ) -> TraitType {
+        assoc: &mut Namespace,
+    ) -> (TraitType, Option<Nested>) {
         let bundles: Vec<&'a Bundle> = same
             .iter()
             .map(|e| match e.kind {
@@ -615,7 +651,10 @@ impl<'a> Builder<'a> {
             })
             .collect();
         if bundles.iter().all(|b| *b == bundles[0]) && self.shared.has_bundle(bundles[0]) {
-            return TraitType::Concrete(RustType::Named(bundles[0].name.clone()));
+            return (
+                TraitType::Concrete(RustType::Named(bundles[0].name.clone())),
+                None,
+            );
         }
         let per_impl: Vec<RustType> = columns
             .iter()
@@ -646,23 +685,23 @@ impl<'a> Builder<'a> {
         });
         let port = same[0].name;
         let inner = self.bundle_traits[index].types.clone();
-        let equals = lift(&mut t.types, assoc, inner, port);
         let name = camel(port.trim_start_matches("r#"));
         let bound = AssocBound::Trait(self.bundle_traits[index].name.clone());
         let ty = assoc_type(&mut t.types, assoc, &name, bound, per_impl, port);
-        if let TraitType::Assoc(i) = ty {
-            t.types[i].equals = equals;
-        }
-        ty
+        let TraitType::Assoc(at) = ty else {
+            unreachable!("`assoc_type` makes an associated type")
+        };
+        let nested = Nested::Bundle {
+            at,
+            port: port.to_owned(),
+            inner,
+        };
+        (ty, Some(nested))
     }
 
     /// The associated type of a `Ports` or bundle trait with these per-implementation types,
     /// as [`assoc_type`] makes it. One bounded by a [`FieldsTrait`] also brings that trait's
-    /// associated types into `types`, recursively, and the bound fixes them
-    /// (`type Outer: OuterFields<Inner = Self::Inner>`), as a bundle trait's are: so a port
-    /// and a struct field of one type in every member (`dout`, `beat.data`) are one type in
-    /// a generic body. A fields trait's own types stay its fields' only: a body generic
-    /// over the fields trait alone does not need the nested ones.
+    /// associated types, which [`Builder::expand`] adds ([`Nested::Fields`]).
     fn place(
         &self,
         types: &mut Vec<AssocType>,
@@ -671,39 +710,64 @@ impl<'a> Builder<'a> {
         bound: AssocBound,
         per_impl: Vec<RustType>,
         user: &str,
-    ) -> TraitType {
+    ) -> (TraitType, Option<Nested>) {
         let fields = match &bound {
             AssocBound::Trait(n) => self.fields_traits.iter().find(|f| f.name == *n),
             _ => None,
         }
         .map(|f| f.types.clone());
         let ty = assoc_type(types, assoc, name, bound, per_impl, user);
-        let (Some(inner), TraitType::Assoc(i)) = (fields, &ty) else {
-            return ty;
+        let nested = match (fields, &ty) {
+            (Some(inner), TraitType::Assoc(at)) => Some(Nested::Fields {
+                at: *at,
+                user: user.to_owned(),
+                inner,
+            }),
+            _ => None,
         };
-        let mut equals = Vec::new();
-        for a in inner {
-            // Each user of the field's type is a user here (`o.i`, and `io` elsewhere).
-            let mut placed = None;
-            for u in &a.users {
-                let at = format!("{user}.{u}");
-                let ty = self.place(
-                    types,
-                    assoc,
-                    &a.name,
-                    a.bound.clone(),
-                    a.per_impl.clone(),
-                    &at,
-                );
-                placed = Some(ty);
+        (ty, nested)
+    }
+
+    /// Adds the types a struct's fields trait or a bundle trait brings to `types`, and
+    /// fixes them in the bound of the type at `at` (`type Outer: OuterFields<Inner =
+    /// Self::Inner>`, `type Up: BeatIfSinkPorts<Beat = Self::Beat>`): so a port and a
+    /// struct field of one type in every member (`dout`, `beat.data`) are one type in a
+    /// generic body. A struct's fields go in recursively, through nested structs. A fields
+    /// trait's own types stay its fields' only: a body generic over the fields trait
+    /// alone does not need the nested ones.
+    fn expand(&self, types: &mut Vec<AssocType>, assoc: &mut Namespace, nested: Nested) {
+        let (at, equals) = match nested {
+            Nested::Bundle { at, port, inner } => (at, lift(types, assoc, inner, &port)),
+            Nested::Fields { at, user, inner } => {
+                let mut equals = Vec::new();
+                for a in inner {
+                    // Each user of the field's type is a user here (`o.i`, and `io`
+                    // elsewhere).
+                    let mut placed = None;
+                    for u in &a.users {
+                        let user = format!("{user}.{u}");
+                        let (ty, deeper) = self.place(
+                            types,
+                            assoc,
+                            &a.name,
+                            a.bound.clone(),
+                            a.per_impl.clone(),
+                            &user,
+                        );
+                        if let Some(deeper) = deeper {
+                            self.expand(types, assoc, deeper);
+                        }
+                        placed = Some(ty);
+                    }
+                    let Some(TraitType::Assoc(j)) = placed else {
+                        unreachable!("an associated type has a user, and `place` makes one")
+                    };
+                    equals.push((a.name, j));
+                }
+                (at, equals)
             }
-            let Some(TraitType::Assoc(j)) = placed else {
-                unreachable!("an associated type has a user, and `place` makes one")
-            };
-            equals.push((a.name, j));
-        }
-        types[*i].equals = equals;
-        ty
+        };
+        types[at].equals = equals;
     }
 
     /// `ty` as named from the sweep module: a shared type by its name, a member's own

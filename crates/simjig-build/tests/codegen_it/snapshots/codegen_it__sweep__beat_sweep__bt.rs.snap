@@ -22,16 +22,16 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     const T: ::core::primitive::i32;
     /// The type of `peek_in`, `peek_out`: `Bits<10>` in `bt_a`, `Bits<20>` in `bt_b`.
     type PeekIn: ::simjig::__private::Vector;
+    /// The type of `up`: `bt_a::BeatIfSink` in `bt_a`, `bt_b::BeatIfSink` in `bt_b`.
+    type Up: BeatIfSinkPorts<Beat = Self::Beat, Data = Self::Data, Tag = Self::Tag>;
+    /// The type of `down`: `bt_a::BeatIfSource` in `bt_a`, `bt_b::BeatIfSource` in `bt_b`.
+    type Down: BeatIfSourcePorts<Beat = Self::Beat, Data = Self::Data, Tag = Self::Tag>;
     /// The type of `up.beat`, `down.beat`: `bt_a::Beat` in `bt_a`, `bt_b::Beat` in `bt_b`.
     type Beat: BeatFields<Data = Self::Data, Tag = Self::Tag>;
     /// The type of `up.beat.data`, `down.beat.data`: `Bits<8>` in `bt_a`, `Bits<16>` in `bt_b`.
     type Data: ::simjig::__private::Vector;
     /// The type of `up.beat.tag`, `down.beat.tag`: `Bits<2>` in `bt_a`, `Bits<4>` in `bt_b`.
     type Tag: ::simjig::__private::Vector;
-    /// The type of `up`: `bt_a::BeatIfSink` in `bt_a`, `bt_b::BeatIfSink` in `bt_b`.
-    type Up: BeatIfSinkPorts<Beat = Self::Beat, Data = Self::Data, Tag = Self::Tag>;
-    /// The type of `down`: `bt_a::BeatIfSource` in `bt_a`, `bt_b::BeatIfSource` in `bt_b`.
-    type Down: BeatIfSourcePorts<Beat = Self::Beat, Data = Self::Data, Tag = Self::Tag>;
     /// `beat_pipe.clk`: input.
     fn clk(self) -> ::simjig::__private::In<::simjig::__private::bits::Bit>;
     /// `beat_pipe.peek_in`: input.
@@ -114,11 +114,11 @@ impl Ports for bt_a::Dut {
     const W: ::core::primitive::i32 = bt_a::Dut::W;
     const T: ::core::primitive::i32 = bt_a::Dut::T;
     type PeekIn = ::simjig::__private::bits::Bits<10>;
+    type Up = bt_a::BeatIfSink;
+    type Down = bt_a::BeatIfSource;
     type Beat = bt_a::Beat;
     type Data = ::simjig::__private::bits::Bits<8>;
     type Tag = ::simjig::__private::bits::Bits<2>;
-    type Up = bt_a::BeatIfSink;
-    type Down = bt_a::BeatIfSource;
     fn clk(self) -> ::simjig::__private::In<::simjig::__private::bits::Bit> { self.clk }
     fn peek_in(self) -> ::simjig::__private::In<Self::PeekIn> { self.peek_in }
     fn peek_out(self) -> ::simjig::__private::Out<Self::PeekIn> { self.peek_out }
@@ -163,11 +163,11 @@ impl Ports for bt_b::Dut {
     const W: ::core::primitive::i32 = bt_b::Dut::W;
     const T: ::core::primitive::i32 = bt_b::Dut::T;
     type PeekIn = ::simjig::__private::bits::Bits<20>;
+    type Up = bt_b::BeatIfSink;
+    type Down = bt_b::BeatIfSource;
     type Beat = bt_b::Beat;
     type Data = ::simjig::__private::bits::Bits<16>;
     type Tag = ::simjig::__private::bits::Bits<4>;
-    type Up = bt_b::BeatIfSink;
-    type Down = bt_b::BeatIfSource;
     fn clk(self) -> ::simjig::__private::In<::simjig::__private::bits::Bit> { self.clk }
     fn peek_in(self) -> ::simjig::__private::In<Self::PeekIn> { self.peek_in }
     fn peek_out(self) -> ::simjig::__private::Out<Self::PeekIn> { self.peek_out }

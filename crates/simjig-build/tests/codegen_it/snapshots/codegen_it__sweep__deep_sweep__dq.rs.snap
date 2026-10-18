@@ -19,23 +19,23 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     /// Parameter `W` of `dq_top`.
     const W: ::core::primitive::i32;
     /// The type of `top`: `dq_a::Top` in `dq_a`, `dq_b::Top` in `dq_b`.
-    type Top: TopFields<Mid = Self::Mid, Leaf = Self::Leaf, A2 = Self::A>;
+    type Top: TopFields<Mid = Self::Mid, Leaf = Self::Leaf, A2 = Self::Din>;
+    /// The type of `lf`, `top.m.x`, `top.m.y`, `top.l`: `dq_a::Leaf` in `dq_a`, `dq_b::Leaf` in `dq_b`.
+    type Leaf: LeafFields<A = Self::Din>;
+    /// The type of `din`, `top.m.x.a`, `top.m.y.a`, `top.l.a`, `top.a2`, `lf.a`: `Bits<8>` in `dq_a`, `Bits<16>` in `dq_b`.
+    type Din: ::simjig::__private::Vector;
+    /// The type of `bout`, `top.m.b`: `Bits<9>` in `dq_a`, `Bits<17>` in `dq_b`.
+    type Bout: ::simjig::__private::Vector;
     /// The type of `top.m`: `dq_a::Mid` in `dq_a`, `dq_b::Mid` in `dq_b`.
-    type Mid: MidFields<Leaf = Self::Leaf, B = Self::B>;
-    /// The type of `top.m.x`, `top.m.y`, `top.l`, `lf`: `dq_a::Leaf` in `dq_a`, `dq_b::Leaf` in `dq_b`.
-    type Leaf: LeafFields<A = Self::A>;
-    /// The type of `top.m.x.a`, `top.m.y.a`, `top.l.a`, `top.a2`, `lf.a`, `din`: `Bits<8>` in `dq_a`, `Bits<16>` in `dq_b`.
-    type A: ::simjig::__private::Vector;
-    /// The type of `top.m.b`, `bout`: `Bits<9>` in `dq_a`, `Bits<17>` in `dq_b`.
-    type B: ::simjig::__private::Vector;
+    type Mid: MidFields<Leaf = Self::Leaf, B = Self::Bout>;
     /// `dq_top.top`: input.
     fn top(self) -> ::simjig::__private::In<Self::Top>;
     /// `dq_top.lf`: output.
     fn lf(self) -> ::simjig::__private::Out<Self::Leaf>;
     /// `dq_top.din`: input.
-    fn din(self) -> ::simjig::__private::In<Self::A>;
+    fn din(self) -> ::simjig::__private::In<Self::Din>;
     /// `dq_top.bout`: output.
-    fn bout(self) -> ::simjig::__private::Out<Self::B>;
+    fn bout(self) -> ::simjig::__private::Out<Self::Bout>;
 }
 
 /// The fields of SystemVerilog `dq_top.leaf_t`, a packed struct whose field types differ between
@@ -125,14 +125,14 @@ pub mod dq_a {
 impl Ports for dq_a::Dut {
     const W: ::core::primitive::i32 = dq_a::Dut::W;
     type Top = dq_a::Top;
-    type Mid = dq_a::Mid;
     type Leaf = dq_a::Leaf;
-    type A = ::simjig::__private::bits::Bits<8>;
-    type B = ::simjig::__private::bits::Bits<9>;
+    type Din = ::simjig::__private::bits::Bits<8>;
+    type Bout = ::simjig::__private::bits::Bits<9>;
+    type Mid = dq_a::Mid;
     fn top(self) -> ::simjig::__private::In<Self::Top> { self.top }
     fn lf(self) -> ::simjig::__private::Out<Self::Leaf> { self.lf }
-    fn din(self) -> ::simjig::__private::In<Self::A> { self.din }
-    fn bout(self) -> ::simjig::__private::Out<Self::B> { self.bout }
+    fn din(self) -> ::simjig::__private::In<Self::Din> { self.din }
+    fn bout(self) -> ::simjig::__private::Out<Self::Bout> { self.bout }
 }
 
 impl LeafFields for dq_a::Leaf {
@@ -177,14 +177,14 @@ pub mod dq_b {
 impl Ports for dq_b::Dut {
     const W: ::core::primitive::i32 = dq_b::Dut::W;
     type Top = dq_b::Top;
-    type Mid = dq_b::Mid;
     type Leaf = dq_b::Leaf;
-    type A = ::simjig::__private::bits::Bits<16>;
-    type B = ::simjig::__private::bits::Bits<17>;
+    type Din = ::simjig::__private::bits::Bits<16>;
+    type Bout = ::simjig::__private::bits::Bits<17>;
+    type Mid = dq_b::Mid;
     fn top(self) -> ::simjig::__private::In<Self::Top> { self.top }
     fn lf(self) -> ::simjig::__private::Out<Self::Leaf> { self.lf }
-    fn din(self) -> ::simjig::__private::In<Self::A> { self.din }
-    fn bout(self) -> ::simjig::__private::Out<Self::B> { self.bout }
+    fn din(self) -> ::simjig::__private::In<Self::Din> { self.din }
+    fn bout(self) -> ::simjig::__private::Out<Self::Bout> { self.bout }
 }
 
 impl LeafFields for dq_b::Leaf {

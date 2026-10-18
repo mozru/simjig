@@ -20,12 +20,12 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     const W: ::core::primitive::i32;
     /// The type of `o`: `fn_a::Outer` in `fn_a`, `fn_b::Outer` in `fn_b`.
     type Outer: OuterFields<Inner = Self::Inner>;
-    /// The type of `o.i`, `io`: `fn_a::Inner` in `fn_a`, `fn_b::Inner` in `fn_b`.
+    /// The type of `io`, `o.i`: `fn_a::Inner` in `fn_a`, `fn_b::Inner` in `fn_b`.
     type Inner: InnerFields<A = Self::A>;
-    /// The type of `o.i.a`, `io.a`, `rw.raw`: `Bits<8>` in `fn_a`, `Bits<16>` in `fn_b`.
-    type A: ::simjig::__private::Vector;
     /// The type of `rw`: `fn_a::Rw` in `fn_a`, `fn_b::Rw` in `fn_b`.
     type Rw: RwFields<Raw2 = Self::A, Other = Self::Other>;
+    /// The type of `o.i.a`, `io.a`, `rw.raw`: `Bits<8>` in `fn_a`, `Bits<16>` in `fn_b`.
+    type A: ::simjig::__private::Vector;
     /// The type of `rw.other`: `Bits<9>` in `fn_a`, `Bits<17>` in `fn_b`.
     type Other: ::simjig::__private::Vector;
     /// `fn_top.o`: output.
@@ -112,8 +112,8 @@ impl Ports for fn_a::Dut {
     const W: ::core::primitive::i32 = fn_a::Dut::W;
     type Outer = fn_a::Outer;
     type Inner = fn_a::Inner;
-    type A = ::simjig::__private::bits::Bits<8>;
     type Rw = fn_a::Rw;
+    type A = ::simjig::__private::bits::Bits<8>;
     type Other = ::simjig::__private::bits::Bits<9>;
     fn o(self) -> ::simjig::__private::Out<Self::Outer> { self.o }
     fn io(self) -> ::simjig::__private::Out<Self::Inner> { self.io }
@@ -158,8 +158,8 @@ impl Ports for fn_b::Dut {
     const W: ::core::primitive::i32 = fn_b::Dut::W;
     type Outer = fn_b::Outer;
     type Inner = fn_b::Inner;
-    type A = ::simjig::__private::bits::Bits<16>;
     type Rw = fn_b::Rw;
+    type A = ::simjig::__private::bits::Bits<16>;
     type Other = ::simjig::__private::bits::Bits<17>;
     fn o(self) -> ::simjig::__private::Out<Self::Outer> { self.o }
     fn io(self) -> ::simjig::__private::Out<Self::Inner> { self.io }

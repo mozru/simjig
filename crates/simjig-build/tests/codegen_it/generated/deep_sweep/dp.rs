@@ -14,16 +14,16 @@ pub use ::simjig::__private::{Value, Vector, bits::Packed};
 pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     /// Parameter `W` of `dp_top`.
     const W: ::core::primitive::i32;
-    /// The type of `din`, `p.beat.x.a`, `p.beat.y.a`, `p.side`, `q.beat.x.a`, `q.beat.y.a`, `q.side`: `Bits<8>` in `dp_a`, `Bits<16>` in `dp_b`.
+    /// The type of `din`, `p.side`, `p.beat.x.a`, `p.beat.y.a`, `q.side`, `q.beat.x.a`, `q.beat.y.a`: `Bits<8>` in `dp_a`, `Bits<16>` in `dp_b`.
     type Din: ::simjig::__private::Vector;
     /// The type of `bout`, `p.beat.b`, `q.beat.b`: `Bits<9>` in `dp_a`, `Bits<17>` in `dp_b`.
     type Bout: ::simjig::__private::Vector;
+    /// The type of `p`, `q`: `dp_a::DpIfSink` in `dp_a`, `dp_b::DpIfSink` in `dp_b`.
+    type P: DpIfSinkPorts<Mid = Self::Mid, Side = Self::Din, MidX = Self::MidX, B = Self::Bout>;
     /// The type of `p.beat`, `q.beat`: `dp_a::Mid` in `dp_a`, `dp_b::Mid` in `dp_b`.
     type Mid: MidFields<MidX = Self::MidX, B = Self::Bout>;
     /// The type of `p.beat.x`, `p.beat.y`, `q.beat.x`, `q.beat.y`: `dp_a::MidX` in `dp_a`, `dp_b::MidX` in `dp_b`.
     type MidX: MidXFields<A = Self::Din>;
-    /// The type of `p`, `q`: `dp_a::DpIfSink` in `dp_a`, `dp_b::DpIfSink` in `dp_b`.
-    type P: DpIfSinkPorts<Mid = Self::Mid, MidX = Self::MidX, A = Self::Din, B = Self::Bout>;
     /// `dp_top.din`: input.
     fn din(self) -> ::simjig::__private::In<Self::Din>;
     /// `dp_top.bout`: output.
@@ -41,16 +41,16 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
 pub trait DpIfSinkPorts: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     /// The type of `beat`: `dp_a::Mid` in `dp_a`, `dp_b::Mid` in `dp_b`.
     type Mid: MidFields<MidX = Self::MidX, B = Self::B>;
+    /// The type of `side`, `beat.x.a`, `beat.y.a`: `Bits<8>` in `dp_a`, `Bits<16>` in `dp_b`.
+    type Side: ::simjig::__private::Vector;
     /// The type of `beat.x`, `beat.y`: `dp_a::MidX` in `dp_a`, `dp_b::MidX` in `dp_b`.
-    type MidX: MidXFields<A = Self::A>;
-    /// The type of `beat.x.a`, `beat.y.a`, `side`: `Bits<8>` in `dp_a`, `Bits<16>` in `dp_b`.
-    type A: ::simjig::__private::Vector;
+    type MidX: MidXFields<A = Self::Side>;
     /// The type of `beat.b`: `Bits<9>` in `dp_a`, `Bits<17>` in `dp_b`.
     type B: ::simjig::__private::Vector;
     /// `beat`: input.
     fn beat(self) -> ::simjig::__private::In<Self::Mid>;
     /// `side`: input.
-    fn side(self) -> ::simjig::__private::In<Self::A>;
+    fn side(self) -> ::simjig::__private::In<Self::Side>;
 }
 
 /// The fields of SystemVerilog `dp_if::mid_t.x`, a packed struct whose field types differ between
@@ -111,9 +111,9 @@ impl Ports for dp_a::Dut {
     const W: ::core::primitive::i32 = dp_a::Dut::W;
     type Din = ::simjig::__private::bits::Bits<8>;
     type Bout = ::simjig::__private::bits::Bits<9>;
+    type P = dp_a::DpIfSink;
     type Mid = dp_a::Mid;
     type MidX = dp_a::MidX;
-    type P = dp_a::DpIfSink;
     fn din(self) -> ::simjig::__private::In<Self::Din> { self.din }
     fn bout(self) -> ::simjig::__private::Out<Self::Bout> { self.bout }
     fn p(self) -> Self::P { self.p }
@@ -122,11 +122,11 @@ impl Ports for dp_a::Dut {
 
 impl DpIfSinkPorts for dp_a::DpIfSink {
     type Mid = dp_a::Mid;
+    type Side = ::simjig::__private::bits::Bits<8>;
     type MidX = dp_a::MidX;
-    type A = ::simjig::__private::bits::Bits<8>;
     type B = ::simjig::__private::bits::Bits<9>;
     fn beat(self) -> ::simjig::__private::In<Self::Mid> { self.beat }
-    fn side(self) -> ::simjig::__private::In<Self::A> { self.side }
+    fn side(self) -> ::simjig::__private::In<Self::Side> { self.side }
 }
 
 impl MidXFields for dp_a::MidX {
@@ -159,9 +159,9 @@ impl Ports for dp_b::Dut {
     const W: ::core::primitive::i32 = dp_b::Dut::W;
     type Din = ::simjig::__private::bits::Bits<16>;
     type Bout = ::simjig::__private::bits::Bits<17>;
+    type P = dp_b::DpIfSink;
     type Mid = dp_b::Mid;
     type MidX = dp_b::MidX;
-    type P = dp_b::DpIfSink;
     fn din(self) -> ::simjig::__private::In<Self::Din> { self.din }
     fn bout(self) -> ::simjig::__private::Out<Self::Bout> { self.bout }
     fn p(self) -> Self::P { self.p }
@@ -170,11 +170,11 @@ impl Ports for dp_b::Dut {
 
 impl DpIfSinkPorts for dp_b::DpIfSink {
     type Mid = dp_b::Mid;
+    type Side = ::simjig::__private::bits::Bits<16>;
     type MidX = dp_b::MidX;
-    type A = ::simjig::__private::bits::Bits<16>;
     type B = ::simjig::__private::bits::Bits<17>;
     fn beat(self) -> ::simjig::__private::In<Self::Mid> { self.beat }
-    fn side(self) -> ::simjig::__private::In<Self::A> { self.side }
+    fn side(self) -> ::simjig::__private::In<Self::Side> { self.side }
 }
 
 impl MidXFields for dp_b::MidX {

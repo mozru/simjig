@@ -4,6 +4,13 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Sweep modules (generated code, reviewed snapshots `codegen_it::sweep`): the ports' own
+  associated types are named before the types their structs' fields and bundles bring,
+  so adding a field to a struct port can no longer rename a flat port's type. Renamed:
+  a flat port whose type a struct port declared before it also has in a field (`dq`:
+  `din`'s `A` is now `Din`, `bout`'s `B` now `Bout`; a bundle's flat `side` gets `Side`,
+  not its struct field's `A`). In the other snapshots only the declaration order of the
+  associated types changed. `examples/lib` and the README's sweeps are unaffected.
 - Build-script reruns (`archive::toolchain_from`): the parent of the compiler's
   `-print-file-name=include` answer counts as a toolchain directory only when that
   `include` is in the compiler's `-v` search list, and a search-list directory with a

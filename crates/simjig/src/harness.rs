@@ -59,6 +59,12 @@ pub type Result<T = (), E = crate::Failure> = core::result::Result<T, E>;
 /// The `@from <dir>` form reads `<dir>/<name>.rs` instead; simjig's own tests use it
 /// with hand-written files.
 ///
+/// # An optional DUT
+/// After a failed `Dut::build` the file is a stub whose expansion is a `compile_error!`
+/// naming the DUT (simjig-build's `emit.rs`), so this macro fails to compile rather than
+/// the test failing to link. Gate the uses of a DUT that may fail to build on
+/// `#[cfg(simjig_dut_<name>)]`, which the build sets only when it built.
+///
 /// # Reading the generated module
 /// `cargo simjig show <name>` prints the file (`--path`: only its path), so the generated
 /// names (`Status::EMPTY`, `StatusVariant`, `r#in`) can be looked up; the README's

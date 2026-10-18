@@ -1,0 +1,18 @@
+# A user crate with an optional DUT, `opt` (the inverter), whose failure the build script
+# handles. The integration test (tests/it/optional.rs) copies it with the DUT, points the
+# paths at the crates under test, and breaks `opt` with `FIXTURE_BREAK=1`. No library
+# target: the link directives then reach the integration tests (see the quickstart).
+[package]
+name = "simjig-fixture-optional"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+simjig = { path = "../../../../simjig" }
+
+[build-dependencies]
+simjig-build = { path = "../../.." }
+
+# Not part of the simjig workspace.
+[workspace]

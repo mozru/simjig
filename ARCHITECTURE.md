@@ -51,7 +51,8 @@ listed here with what keeps the copies equal.
 | The "did you mean" hint | `codegen::names::did_you_mean` |
 | Two-step cache keys | `cache.rs` (Verilator output), `front.rs` (IR), `archive.rs` (archives), over the manifests of `manifest.rs` |
 | An input edited during a run | `manifest::{Snapshot, Manifest::record}`, `cache::keep_unpublished` |
-| What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`); the path `OUT_DIR/simjig/<name>.rs` is read back by `simjig::include_dut!` and by `cargo-simjig`'s `show` (which may not depend on `simjig-build`), kept equal by their docs naming `emit.rs` |
+| What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`); the path `OUT_DIR/simjig/<name>.rs` is read back by `simjig::include_dut!` and by `cargo-simjig`'s `show` (which may not depend on `simjig-build`), kept equal by their docs naming `emit.rs`; after a failed build that file is a `compile_error!` stub (`emit::stub_failed`) |
+| The optional-DUT gate `cfg(simjig_dut_<name>)` | `emit::cfg_directives` |
 | Environment variables that rerun the build script | `BuildEnv::TRACKED_VARS` |
 | Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |
 | Rendering a failure | `Display` of `kernel::failure::Failure` and of `BlockedTask` (one blocked task); the harness's report (`harness::report::FailureReport`) builds on them |

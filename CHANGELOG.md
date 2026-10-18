@@ -4,6 +4,13 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A failed `Dut::build` (or `build_in`) replaces `OUT_DIR/simjig/<name>.rs` with a stub
+  whose expansion is `compile_error!("DUT `<name>` failed to build ...")`: a module left
+  by an earlier good build (or written before a later step failed) compiled, and the
+  test then failed to link (`Undefined symbols: _simjig_vtable_V<dut>_...`). A built
+  DUT sets the `cfg` `simjig_dut_<name>` (new directives `cargo::rustc-cfg` and
+  `cargo::rustc-check-cfg`; a failed one prints only the `rustc-check-cfg`), the gate for
+  an optional DUT: `#[cfg(simjig_dut_<name>)]`.
 - The generated wrapper of a DUT with interface ports (`simjig_wrap_<dut>`), and its
   elaboration-only top, waive `TIMESCALEMOD` for themselves (`// verilator lint_off`
   around the module) and take the design's time unit: a design whose units all declare

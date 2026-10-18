@@ -429,13 +429,7 @@ impl DutConfig {
                 msg,
             })
         };
-        let is_ident = !self.name.is_empty()
-            && !self.name.starts_with(|c: char| c.is_ascii_digit())
-            && self
-                .name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !is_ident {
+        if !is_c_ident(&self.name) {
             return fail("the name must be a C identifier (letters, digits, `_`)".to_owned());
         }
         if self.sources.is_empty() {
@@ -718,19 +712,35 @@ impl Dut {
     /// Builds from a Cargo build script: reads the environment Cargo provides, runs
     /// [`Dut::build_in`], and prints the `cargo::` directives.
     ///
+    /// On success the directives include `cargo::rustc-cfg=simjig_dut_<name>` (with its
+    /// `rustc-check-cfg`), so code can be gated on the model: `#[cfg(simjig_dut_<name>)]`.
+    ///
     /// On failure it returns the error, and prints only `rerun-if-changed` and
     /// `rerun-if-env-changed` lines for the inputs the configuration names (sources,
     /// include directories, `-f`/`-F` option files, the recipe's files) and the variables
-    /// that locate Verilator: the script decides. Returned from `main` with `?` (or
-    /// unwrapped), the error is printed on stderr, which Cargo shows last, after its dump
-    /// of the script's stdout. A script that handles the error (an optional model) and
-    /// exits 0 builds, and reruns when the failed DUT's inputs change: without those lines
-    /// Cargo would rerun it only for the other DUTs' inputs. No `cargo::error=` line: it
-    /// would fail the build even when the script handles the error.
+    /// that locate Verilator, and the `rustc-check-cfg` line (no `rustc-cfg`): the script
+    /// decides. Returned from `main` with `?` (or unwrapped), the error is printed on
+    /// stderr, which Cargo shows last, after its dump of the script's stdout. A script
+    /// that handles the error (an optional model) and exits 0 builds, and reruns when the
+    /// failed DUT's inputs change: without those lines Cargo would rerun it only for the
+    /// other DUTs' inputs. No `cargo::error=` line: it would fail the build even when the
+    /// script handles the error. The generated module is replaced by a stub (see
+    /// [`Dut::build_in`]), so an ungated `include_dut!` fails to compile, naming the DUT.
     #[expect(clippy::print_stdout, reason = "build scripts talk to Cargo on stdout")]
     pub fn build(self) -> Result<Built, Error> {
         let reruns = failed_reruns(&self.config, &self.recipe);
+        let name = self.config.name.clone();
         let built = BuildEnv::from_cargo()
+            .inspect_err(|e| {
+                // No environment, so `build_in` cannot stub the module; `OUT_DIR` may
+                // still be set (the error was another variable).
+                if let Some(out_dir) = std::env::var_os("OUT_DIR")
+                    && is_c_ident(&name)
+                    && !script::claimed(Path::new(&out_dir), &name)
+                {
+                    emit::stub_failed(Path::new(&out_dir), &name, e);
+                }
+            })
             .and_then(|env| self.build_in(&env))
             .inspect_err(|_| {
                 for line in &reruns {
@@ -745,7 +755,27 @@ impl Dut {
 
     /// Runs the whole pipeline (see the module docs) in an explicit environment and
     /// returns the directives instead of printing them.
+    ///
+    /// On failure, `OUT_DIR/simjig/<name>.rs` (the generated module, which may be left
+    /// from an earlier build, or written by this one before a later step failed) is
+    /// replaced by a stub whose expansion is a `compile_error!` naming the DUT and the
+    /// error, so an `include_dut!` of a model that is not linked fails to compile instead
+    /// of failing to link. Not when an earlier DUT of this build script has the name (that
+    /// one owns the file), nor when the name is not an identifier (nothing includes it).
     pub fn build_in(self, env: &BuildEnv) -> Result<Built, Error> {
+        let name = self.config.name.clone();
+        let owns_file = is_c_ident(&name) && !script::claimed(&env.out_dir, &name);
+        let mut built = self.run(env).inspect_err(|e| {
+            if owns_file {
+                emit::stub_failed(&env.out_dir, &name, e);
+            }
+        })?;
+        built.directives.extend(emit::cfg_directives(&name, true));
+        Ok(built)
+    }
+
+    /// [`Dut::build_in`] without the stub on failure and the `cfg` on success.
+    fn run(self, env: &BuildEnv) -> Result<Built, Error> {
         let top = self.config.validate()?;
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
@@ -933,9 +963,18 @@ fn rerun_directives(
     out
 }
 
+/// Whether `name` is a C identifier (letters, digits, `_`; not starting with a digit),
+/// which a DUT name must be: it names a Rust module, a C++ class and a `cfg`.
+fn is_c_ident(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// The reruns of a failed build: every input the configuration names (sources,
 /// `` `include `` directories, option files, the recipe's files) and the tracked
-/// variables (which locate Verilator).
+/// variables (which locate Verilator); then the `rustc-check-cfg` of the DUT's gate, so
+/// `#[cfg(simjig_dut_<name>)]` compiles without an `unexpected_cfgs` warning.
 ///
 /// Coarser than [`rerun_directives`], which lists what Verilator read: a failed build may
 /// not have run Verilator, so the configuration is all there is. A named file that does
@@ -959,6 +998,9 @@ fn failed_reruns(config: &DutConfig, recipe: &CppRecipe) -> Vec<String> {
             .iter()
             .map(|v| format!("cargo::rerun-if-env-changed={v}")),
     );
+    if is_c_ident(&config.name) {
+        out.extend(emit::cfg_directives(&config.name, false));
+    }
     out
 }
 
@@ -995,6 +1037,14 @@ mod tests {
             );
         }
         assert!(reruns.contains(&"cargo::rerun-if-env-changed=SIMJIG_VERILATOR".to_owned()));
+        assert!(
+            reruns.contains(&"cargo::rustc-check-cfg=cfg(simjig_dut_fifo)".to_owned()),
+            "the gate is declared: {reruns:?}"
+        );
+        assert!(
+            !reruns.iter().any(|l| l.starts_with("cargo::rustc-cfg=")),
+            "{reruns:?}"
+        );
         assert!(
             !reruns.iter().any(|l| l.starts_with("cargo::error")),
             "{reruns:?}"

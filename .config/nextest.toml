@@ -37,5 +37,6 @@ test(=probes::a_probe_through_a_generate_for_iteration_builds)
 | test(=probes::probes_are_checked_in_a_split_scope_table)
 | test(=recipe::a_new_compiler_version_recompiles_every_archive)
 | test(/^fixture_crate::/)
+| test(/^optional::/)
 '''
 slow-timeout = { period = "60s", terminate-after = 6 }

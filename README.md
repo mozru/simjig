@@ -189,6 +189,31 @@ simjig_build::Dut::new("core")
     .build()?;
 ```
 
+A DUT the crate can do without (one that needs a tool not every machine has, say) is
+optional: handle its error instead of returning it, and gate its uses on the `cfg` that
+`Dut::build` sets only when the DUT built, `simjig_dut_<name>` (declared either way, so
+it raises no `unexpected_cfgs` warning):
+
+```rust
+// build.rs
+if let Err(e) = simjig_build::Dut::new("fast_model").sources(["rtl/big.sv"]).top("big").build() {
+    println!("cargo::warning=fast_model skipped: {}", e.to_string().lines().next().unwrap_or(""));
+}
+```
+
+```rust
+// tests/fast.rs
+#[cfg(simjig_dut_fast_model)]
+simjig::include_dut!(fast_model);
+#[cfg(simjig_dut_fast_model)]
+#[simjig::test]
+async fn big_works(dut: fast_model::Dut) { /* ... */ }
+```
+
+An ungated `include_dut!` of a DUT that failed is a compile error naming the DUT and
+its error: a failed build replaces its generated module with a `compile_error!` stub,
+so a module left by an earlier build cannot compile against a model that is not linked.
+
 If any source declares a `timeunit` (or `` `timescale ``), every module, interface and
 package must, a package included: Verilator stops on a mix with `%Warning-TIMESCALEMOD`
 (IEEE 1800-2023 §3.14.2.3). Add the `timeunit`, or give the rest a default with

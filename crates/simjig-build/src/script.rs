@@ -102,6 +102,14 @@ pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Re
     }
 }
 
+/// Whether this build script (its `OUT_DIR`, `out_dir`) already claimed the DUT name
+/// `name`.
+pub(crate) fn claimed(out_dir: &Path, name: &str) -> bool {
+    built()
+        .iter()
+        .any(|m| m.out_dir == out_dir && m.name == name)
+}
+
 /// The other models of this build script (not `prefix` itself).
 fn others<'a>(
     built: &'a mut [Model],

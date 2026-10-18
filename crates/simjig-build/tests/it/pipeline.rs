@@ -401,3 +401,83 @@ fn generated_sv_inputs_reach_every_verilator_run() {
     // A DUT without interface ports: one JSON pass, the layout check, the model build.
     assert_eq!(runs, 3, "{calls}");
 }
+
+/// The generated module of the DUT `name` in `s`'s `OUT_DIR`.
+fn generated(s: &Sandbox, name: &str) -> String {
+    std::fs::read_to_string(s.path().join(format!("out/simjig/{name}.rs"))).unwrap()
+}
+
+/// A built DUT sets its gate; a failed one replaces the module an earlier build left
+/// (here copied in, as a new build-script process finds it) with a `compile_error!` stub
+/// naming the DUT, so an `include_dut!` of it cannot compile against a model that is not
+/// linked.
+#[test]
+fn a_failed_build_stubs_the_module_an_earlier_build_left() {
+    let good = Sandbox::new();
+    let built = counter(&good.rtl()).build_in(&good.env()).unwrap();
+    for line in [
+        "cargo::rustc-check-cfg=cfg(simjig_dut_counter)",
+        "cargo::rustc-cfg=simjig_dut_counter",
+    ] {
+        assert!(built.directives.iter().any(|d| d == line), "{line}");
+    }
+    let s = Sandbox::new();
+    std::fs::create_dir_all(s.path().join("out/simjig")).unwrap();
+    std::fs::write(
+        s.path().join("out/simjig/counter.rs"),
+        generated(&good, "counter"),
+    )
+    .unwrap();
+    let missing = s.path().join("missing.sv");
+    let err = Dut::new("counter")
+        .sources([&missing])
+        .top("counter")
+        .build_in(&s.env())
+        .unwrap_err();
+    let stub = generated(&s, "counter");
+    assert!(
+        stub.contains("::core::compile_error!(\"DUT `counter` failed to build"),
+        "{stub}"
+    );
+    assert!(
+        stub.contains("missing.sv"),
+        "the stub carries the error: {stub}\n{err}"
+    );
+    assert!(!stub.contains("simjig_vtable"), "{stub}");
+}
+
+/// The module this build wrote before a later step failed (here the layout check) is
+/// stubbed too.
+#[test]
+fn a_build_failing_after_codegen_stubs_its_own_module() {
+    fn codegen_then_fail(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
+        Ok(Emitted {
+            layout_check: failing_layout_check(design, config)?.layout_check,
+            ..codegen_emitter(design, config)?
+        })
+    }
+    let s = Sandbox::new();
+    counter(&s.rtl())
+        .emitter(codegen_then_fail)
+        .build_in(&s.env())
+        .unwrap_err();
+    let stub = generated(&s, "counter");
+    assert!(
+        stub.contains("compile_error!(\"DUT `counter` failed"),
+        "{stub}"
+    );
+}
+
+/// A failed DUT whose name an earlier DUT of the same build script built keeps that
+/// DUT's module: the file is the earlier one's.
+#[test]
+fn a_failed_duplicate_name_keeps_the_built_module() {
+    let s = Sandbox::new();
+    counter(&s.rtl()).build_in(&s.env()).unwrap();
+    let before = generated(&s, "counter");
+    Dut::new("counter")
+        .top("counter")
+        .build_in(&s.env())
+        .unwrap_err();
+    assert_eq!(generated(&s, "counter"), before);
+}

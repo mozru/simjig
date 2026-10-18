@@ -12,6 +12,16 @@
 //! A generated Verilator model is loaded by its generated `Dut` type, which returns a
 //! [`Sim`] plus one typed handle per signal (or a [`LoadError`] if the model and the
 //! generated Rust disagree).
+//!
+//! Signal values are the bit-vector types of the `simjig-bits` crate, re-exported as
+//! [`simjig::bits`](bits), so a testbench needs no direct dependency on it:
+//!
+//! ```
+//! use simjig::bits::{Bit, Bits};
+//!
+//! let data = Bits::<8>::new(0x5a);
+//! assert_eq!(data.bit(1), Bit::new(true));
+//! ```
 #![deny(unsafe_code)]
 
 mod harness;
@@ -46,6 +56,10 @@ pub use kernel::trigger::{
 pub use model::meta::LoadError;
 pub use model::values::{FieldDiff, InvalidEnum};
 pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
+
+/// Bit-vector values with SystemVerilog semantics (`Bit`, `Bits<N>`, `WideBits`, the
+/// `Packed` trait): the `simjig-bits` crate.
+pub use simjig_bits as bits;
 
 /// Marks an `async fn` as a simjig test; see the attribute's own documentation.
 pub use simjig_macros::test;

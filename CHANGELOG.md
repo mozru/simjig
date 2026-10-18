@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A parameter override (`-G`, `-pvalue+`) inside an option file (`-f`, `-F`, nested ones
+  too) among the extra Verilator arguments is refused like one among the arguments, with
+  the `.param(name, value)` hint. It failed later, in the layout check.
 - An input edited while Verilator, the JSON pass or the C++ compiler read it no longer
   poisons the cache. Each run snapshots its start (and the digests of the inputs a
   previous run listed); when a file it read has a modification or change time not

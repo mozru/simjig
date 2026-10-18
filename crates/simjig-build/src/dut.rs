@@ -91,17 +91,23 @@ fn coverage_after(builder: bool, args: &[String]) -> bool {
     kinds.contains(&true)
 }
 
+/// Why a parameter override (`-G`, `-pvalue+`) is refused, among the arguments or in an
+/// option file.
+const PARAM_HINT: &str = "pass parameters with `.param(name, value)`: a raw override \
+     reaches every Verilator run, and the layout check, whose top has no such parameter, \
+     fails (`Parameters from the command line were not found in the design`)";
+
+fn is_param_override(arg: &str) -> bool {
+    option_name(arg).is_some_and(|name| name.starts_with('G') || name.starts_with("pvalue+"))
+}
+
 /// Why a raw Verilator argument is refused, if it is: each has a builder switch (or a
 /// fixed value) that every Verilator run and the generated code must agree on, or is set
 /// by the pipeline itself.
 fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
     let name = option_name(arg)?;
-    if name.starts_with('G') || name.starts_with("pvalue+") {
-        return Some(
-            "pass parameters with `.param(name, value)`: a raw override reaches every \
-             Verilator run, and the layout check, whose top has no such parameter, fails \
-             (`Parameters from the command line were not found in the design`)",
-        );
+    if is_param_override(arg) {
+        return Some(PARAM_HINT);
     }
     // `--prefix=Vx` is `--prefix Vx`.
     let name = name.split_once('=').map_or(name, |(n, _)| n);
@@ -375,6 +381,12 @@ impl DutConfig {
             if let Some(why) = refused_arg(arg, args.get(i + 1).map(String::as_str)) {
                 return fail(format!("Verilator argument `{arg}`: {why}"));
             }
+        }
+        if let Some((file, word)) = crate::optfile::find(args, is_param_override) {
+            return fail(format!(
+                "Verilator option file `{}` has `{word}`: {PARAM_HINT}",
+                file.display()
+            ));
         }
         if self
             .sources
@@ -1112,6 +1124,32 @@ mod tests {
         ] {
             assert!(with_args(ok).validate().is_ok(), "{ok:?}");
         }
+    }
+
+    /// A parameter override inside an option file reaches every Verilator run like one
+    /// among the arguments, so it is refused the same way.
+    #[test]
+    fn parameter_overrides_in_option_files_are_rejected() {
+        let t = tempfile::tempdir().unwrap();
+        let opts = t.path().join("opts.f");
+        let path = opts.display().to_string();
+        for (text, word) in [
+            ("-Wall\n-GDEPTH=4\n", "-GDEPTH=4"),
+            ("-pvalue+W=2", "-pvalue+W=2"),
+        ] {
+            std::fs::write(&opts, text).unwrap();
+            let m = with_args(&["-f", &path])
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                m.contains(&format!("option file `{path}` has `{word}`"))
+                    && m.contains("`.param(name, value)`"),
+                "{m}"
+            );
+        }
+        std::fs::write(&opts, "// -GDEPTH=4\n-Wall\n").unwrap();
+        assert!(with_args(&["-f", &path]).validate().is_ok());
     }
 
     #[test]

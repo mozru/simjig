@@ -174,11 +174,11 @@ mod tests {
         // Pinned: the hash is compiled into generated Rust and C++ and compared at load,
         // so it must not depend on the Rust release (as `Debug` output may). Changing it
         // needs a CHANGELOG entry. Reference value from Python: sha256 over (u64 LE length,
-        // bytes) of the domain, the IR JSON (schema 4), a zero probe count and
+        // bytes) of the domain, the IR JSON (schema 5), a zero probe count and
         // "no-iface-top"; the first 8 bytes, big-endian.
         assert_eq!(
             ir_hash(&design("t"), &CodegenConfig::default()),
-            0x03ff_3895_c6a0_2744
+            0xd1f7_e0b6_9e42_5109
         );
     }
 

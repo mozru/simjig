@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- IR schema 5: no new fields; it marks the DPI fields stage 3 added under schema 4
+  (`Design::dpi_imports`, `Design::dpi_exports`), so schema 4 no longer has two JSON forms
+  and a front-cache entry from a build without them is not served. Every `IR_HASH` (and
+  so every generated binding and shim) changes, and every DUT's JSON pass runs once more.
 - `Dut::dpi_in_c` is no longer part of a DUT's identity: moving a DPI-C import from Rust
   to C (it changes only the generated Rust, not the model) failed the next build with
   "model prefix ... is already used by a different configuration; rename the DUT" until

@@ -14,7 +14,7 @@ constexpr uint8_t kReadWrite = SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE;
 struct Traits {
     using Model = Vstruct_pipe;
     static constexpr const char* kPrefix = "Vstruct_pipe";
-    static constexpr uint64_t kIrHash = 0xc62c9851f8801d1eull;
+    static constexpr uint64_t kIrHash = 0x4a0065eafa944c1cull;
     static constexpr bool kTiming = false;
     static constexpr bool kTraceFst = false;
     static constexpr bool kCoverage = false;

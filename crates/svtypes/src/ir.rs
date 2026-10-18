@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::literal::Literal;
 
 /// Version of the serialized IR. Bumped on every change to the JSON form.
-pub const SCHEMA: u32 = 4;
+pub const SCHEMA: u32 = 5;
 
 /// An elaborated design: types, modules and packages, as seen by one producer run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

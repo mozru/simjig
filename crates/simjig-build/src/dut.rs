@@ -755,8 +755,10 @@ impl Dut {
 
     /// Binds an interface port like [`Dut::bind_iface`], overriding parameters of the
     /// interface the wrapper instantiates, with values written like [`Dut::param`]'s:
-    /// `.bind_iface_with_params("up", "beat_if.sink", [("WIDTH", 8)])`. A module
-    /// parameter the interface also has (`WIDTH` of both) is set in each separately.
+    /// `.bind_iface_with_params("up", "beat_if.sink", [("WIDTH", 8)])`. A [`Dut::param`]
+    /// the interface also declares (`WIDTH` of both) reaches the interface without being
+    /// repeated here, and setting it here to another value is an error: a module and its
+    /// interface port must agree on it.
     pub fn bind_iface_with_params<N: Into<String>, V: Display>(
         self,
         port: impl Into<String>,

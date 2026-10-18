@@ -53,16 +53,15 @@ const SKID_WIDTH: u32 = 16;
 
 /// `skid_buffer` with 16-bit beats. Its ports are `stream_if` modports, which a Verilator
 /// top cannot have, so the generated wrapper instantiates one `stream_if` per port. The
-/// interface's `WIDTH` is its own parameter: `.param` sets only the module's, so each
-/// binding passes it too (`bind_iface` alone would give the interface its default, 8).
+/// interface's `WIDTH` follows the module's `.param("WIDTH", ..)`, which simjig passes to
+/// each bound interface that declares a parameter of that name.
 fn skid_buffer() -> Result<(), Error> {
-    let width = [("WIDTH", SKID_WIDTH)];
     Dut::new("skid_buffer")
         .sources(["rtl/stream_if.sv", "rtl/skid_buffer.sv"])
         .top("skid_buffer")
         .param("WIDTH", SKID_WIDTH)
-        .bind_iface_with_params("up", "stream_if.sink", width)
-        .bind_iface_with_params("down", "stream_if.source", width)
+        .bind_iface("up", "stream_if.sink")
+        .bind_iface("down", "stream_if.source")
         .trace_fst(true)
         .verilator_args(LINT)
         .build()?;

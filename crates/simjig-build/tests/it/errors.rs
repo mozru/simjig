@@ -328,3 +328,53 @@ fn overriding_a_localparam_says_it_is_one() {
          parameter `K`: `K` is a localparam and cannot be overridden (it has W)"
     );
 }
+
+/// The widths of the built top's ports, by name.
+fn port_widths(b: &simjig_build::Built) -> Vec<(String, Option<u32>)> {
+    let d = &b.design;
+    d.top_module()
+        .ports
+        .iter()
+        .map(|p| (p.name.clone(), d.types[p.ty.0 as usize].width))
+        .collect()
+}
+
+/// A module parameter and the same-named parameter of an interface it is bound to are
+/// one quantity: a binding that leaves it unset takes the `.param` value, and one that
+/// sets another value is refused, even under `-Wno-fatal`, where the 8-bit interface fed
+/// the 12-bit `q` silently (checked against 5.052 before this rule).
+#[test]
+fn an_interface_parameter_follows_the_modules() {
+    let s = Sandbox::new();
+    let built = acc(&s, "acc_tied", true)
+        .param("W", 12)
+        .bind_iface("up", "acc_if.sink")
+        .verilator_args(["-Wno-fatal"])
+        .build_in(&s.env())
+        .unwrap();
+    assert_eq!(
+        port_widths(&built),
+        [("q".to_owned(), Some(12)), ("up_d".to_owned(), Some(12))]
+    );
+    let s = Sandbox::new();
+    let same = acc(&s, "acc_same", true)
+        .param("W", 12)
+        .bind_iface_with_params("up", "acc_if.sink", [("W", "32'd12")])
+        .build_in(&s.env())
+        .unwrap();
+    assert_eq!(port_widths(&same)[1], ("up_d".to_owned(), Some(12)));
+    let s = Sandbox::new();
+    let err = acc(&s, "acc_apart", true)
+        .param("W", 12)
+        .bind_iface_with_params("up", "acc_if.sink", [("W", 8)])
+        .verilator_args(["-Wno-fatal"])
+        .build_in(&s.env())
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid DUT `acc_apart` configuration: interface `acc_if` (bound to `up`) has `W` \
+         = 8, but `.param(\"W\", 12)` makes module `acc`'s `W` 12; they must agree (a port \
+         of the wrong width is extended or truncated silently under `-Wno-fatal`): leave \
+         `W` out of the binding, which then takes the `.param` value"
+    );
+}

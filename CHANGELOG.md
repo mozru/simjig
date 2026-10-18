@@ -4,6 +4,14 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A `.param` that a bound interface also declares (`WIDTH` of `skid_buffer` and of its
+  `stream_if` ports) reaches the interface too: `.param("WIDTH", 16)` with
+  `.bind_iface("up", "stream_if.sink")` now gives the interface `WIDTH` 16, not its
+  default. A binding that sets the parameter to another value is refused (``interface
+  `acc_if` (bound to `up`) has `W` = 8, but `.param("W", 12)` makes module `acc`'s `W`
+  12; ..``): the mismatch was a port width mismatch that only lint reported, and under
+  `-Wno-fatal` the model built and extended or truncated it silently. This changes the
+  generated wrapper of a DUT that relied on the interface's default.
 - A misspelled interface parameter in `bind_iface_with_params("up", "acc_if.sink",
   [("WW", 12)])` fails like a misspelled `.param`: ``interface `acc_if` (bound to `up`)
   has no parameter `WW`; did you mean `W`? (it has W)``, instead of Verilator's

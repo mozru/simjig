@@ -109,25 +109,28 @@ while `rst` is high, so a source must share the buffer's reset (or ignore handsh
 during it); `rtl/skid_buffer.sv` says why.
 
 A Verilator top cannot have interface ports, so `build.rs` binds each port to an
-interface instance in the generated wrapper. `stream_if` has its own `WIDTH` parameter,
-which `.param("WIDTH", ..)` on the module does not reach, so the binding sets it:
+interface instance in the generated wrapper. `stream_if` has its own `WIDTH` parameter;
+`.param("WIDTH", ..)` reaches it too, because a module and the interfaces bound to it
+must agree on a parameter they both declare:
 
 ```rust
 Dut::new("skid_buffer")
     .sources(["rtl/stream_if.sv", "rtl/skid_buffer.sv"])
     .top("skid_buffer")
     .param("WIDTH", 16)
-    .bind_iface_with_params("up", "stream_if.sink", [("WIDTH", 16)])
-    .bind_iface_with_params("down", "stream_if.source", [("WIDTH", 16)])
+    .bind_iface("up", "stream_if.sink")
+    .bind_iface("down", "stream_if.source")
     .build()?;
 ```
+
+An interface parameter the module does not declare is set on its binding, with
+`.bind_iface_with_params(port, iface, [(name, value)])`.
 
 Every RTL unit here declares `timeunit 1ns; timeprecision 1ps;`. The wrapper simjig
 generates for the interface ports declares none and needs none: it takes the design's
 unit, so no `--timescale` is needed.
 
-For an interface without parameters, `.bind_iface("up", "stream_if.sink")` is enough. In
-the test, `dut.up` and `dut.down` are bundles typed from the modports: `dut.up.valid` is
+In the test, `dut.up` and `dut.down` are bundles typed from the modports: `dut.up.valid` is
 an `In<Bit>` the testbench writes, `dut.up.ready` an `Out<Bit>` it reads.
 
 | Test | Checks |

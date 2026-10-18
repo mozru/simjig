@@ -201,7 +201,7 @@ impl fmt::Display for PortProblem {
 }
 
 /// The header and the IR disagree; lists every problem, sorted by port name.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub struct PortMismatch {
     /// Every disagreement found.
     pub problems: Vec<PortProblem>,
@@ -222,6 +222,13 @@ impl fmt::Display for PortMismatch {
             "this is a simjig bug (IR and Verilator drifted apart); please report it with \
              the Verilator version and the port declarations above"
         )
+    }
+}
+
+/// The message: `Debug` is what `fn main() -> Result<..>` and `unwrap` print.
+impl fmt::Debug for PortMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::error::debug_chain(self, f)
     }
 }
 

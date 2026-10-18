@@ -3,14 +3,19 @@
 //! Every variant names what failed and the input that made it fail: the full command line
 //! of a failed tool, an excerpt of its stderr, and the file path it complained about, so a
 //! `build.rs` failure is actionable without rerunning anything by hand.
+//!
+//! A wrapped cause is the [`source`](std::error::Error::source), never part of the
+//! message, so a reporter that walks the chain prints it once. `Debug` is the message
+//! followed by that chain, because `fn main() -> Result<(), Error>` prints `Debug`.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use crate::header::PortMismatch;
 
 /// Errors from configuring, verilating or compiling a DUT.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// The `Dut` configuration is invalid (for example an empty source list).
@@ -75,16 +80,18 @@ pub enum Error {
         /// The source file the tool complained about, when it named one.
         path: Option<PathBuf>,
     },
-    /// An external tool could not be started.
-    #[error("could not run `{command}`: {source}")]
+    /// An external tool could not be started. The OS error is the
+    /// [`source`](std::error::Error::source), not part of the message.
+    #[error("could not run `{command}`")]
     Spawn {
         /// The full command line, shell-quoted.
         command: String,
         /// The OS error.
         source: std::io::Error,
     },
-    /// A filesystem operation failed.
-    #[error("{op} `{}`: {source}", path.display())]
+    /// A filesystem operation failed. The OS error is the
+    /// [`source`](std::error::Error::source), not part of the message.
+    #[error("{op} `{}`", path.display())]
     Io {
         /// What was being done (`"reading"`, `"renaming into"`, ...).
         op: &'static str,
@@ -103,8 +110,9 @@ pub enum Error {
         /// What was expected and what was found.
         msg: String,
     },
-    /// Compiling the Verilator output or libverilated failed.
-    #[error("compiling {what} failed: {source}")]
+    /// Compiling the Verilator output or libverilated failed. The `cc` error is the
+    /// [`source`](std::error::Error::source), not part of the message.
+    #[error("compiling {what} failed")]
     Compile {
         /// Which library was being built.
         what: String,
@@ -182,6 +190,27 @@ impl Error {
             stderr: excerpt(&stderr),
         }
     }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        debug_chain(self, f)
+    }
+}
+
+/// The `Debug` of every public error type: the message, then each cause on its own
+/// `Caused by:` line, so a `main` returning the error prints it readably.
+pub(crate) fn debug_chain(e: &dyn std::error::Error, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "{e}")?;
+    let mut cause = e.source();
+    if cause.is_some() {
+        write!(f, "\n\nCaused by:")?;
+    }
+    while let Some(c) = cause {
+        write!(f, "\n    {}", c.to_string().replace('\n', "\n    "))?;
+        cause = c.source();
+    }
+    Ok(())
 }
 
 /// At most this many stderr lines are kept; Verilator prints its errors first.
@@ -273,6 +302,56 @@ mod tests {
         assert_eq!(err.to_string(), "reading the type IR of DUT `d`");
         let source = std::error::Error::source(&err).map(ToString::to_string);
         assert!(source.is_some_and(|s| s.contains("Verilator 9.000")));
+    }
+
+    fn os_error() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no such thing")
+    }
+
+    #[test]
+    fn io_and_spawn_errors_keep_their_cause_out_of_the_message() {
+        let io = Error::io("reading", Path::new("/a/b.sv"))(os_error());
+        let spawn = Error::Spawn {
+            command: "verilator --version".into(),
+            source: os_error(),
+        };
+        for (err, msg) in [
+            (io, "reading `/a/b.sv`"),
+            (spawn, "could not run `verilator --version`"),
+        ] {
+            assert_eq!(err.to_string(), msg);
+            let source = std::error::Error::source(&err).map(ToString::to_string);
+            assert_eq!(source.as_deref(), Some("no such thing"));
+        }
+    }
+
+    #[test]
+    fn debug_is_the_message_and_its_causes_on_separate_lines() {
+        let err = Error::io("reading", Path::new("/a/b.sv"))(os_error());
+        assert_eq!(
+            format!("{err:?}"),
+            "reading `/a/b.sv`\n\nCaused by:\n    no such thing"
+        );
+        let codegen = crate::codegen::Error::Config {
+            item: "probe t.x".into(),
+            reason: "line one\nline two".into(),
+        };
+        assert_eq!(format!("{codegen:?}"), codegen.to_string());
+        let wrapped = Error::Codegen {
+            dut: "d".into(),
+            source: codegen,
+        };
+        assert_eq!(
+            format!("{wrapped:?}"),
+            "generating code for DUT `d`\n\nCaused by:\n    codegen: probe t.x: line one\n    \
+             line two"
+        );
+        let ports = Error::Ports(PortMismatch {
+            problems: Vec::new(),
+        });
+        let debug = format!("{ports:?}");
+        assert_eq!(debug, ports.to_string());
+        assert!(debug.contains('\n') && !debug.contains("\\n"), "{debug}");
     }
 
     #[test]

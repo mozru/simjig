@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use simjig::fork;
 use simjig::{
-    AppliedTimeout, BlockedTask, Failure, FailureKind, FailureReport, Precision, RunIdentity, Seed,
-    SeedSource, SimDuration, SimTime, Verdict, WavesFile, WavesReplay,
+    AppliedTimeout, BlockedTask, Failure, FailureKind, FailureReport, InitValues, Precision,
+    RunIdentity, Seed, SeedSource, SimDuration, SimTime, Verdict, WavesFile, WavesReplay,
 };
 
 fn run() -> RunIdentity {
@@ -13,6 +13,7 @@ fn run() -> RunIdentity {
         test: "fifo::backpressure".into(),
         package: "fifo_tb".into(),
         seed: Seed::new(0x9e37_79b9_7f4a_7c15, SeedSource::Env),
+        init: InitValues::Zero,
         ignored: false,
         launcher: None,
         binary: None,
@@ -217,6 +218,26 @@ fn the_repro_of_an_ignored_test_runs_ignored_tests() {
         run.repro(),
         "SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb --run-ignored all \
          -E 'test(=fifo::backpressure)'"
+    );
+}
+
+#[test]
+fn a_random_init_run_says_so_in_its_header_and_repro() {
+    let run = RunIdentity {
+        init: InitValues::Random,
+        ..run()
+    };
+    assert_eq!(
+        run.repro(),
+        "SIMJIG_INIT=random SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb \
+         -E 'test(=fifo::backpressure)'"
+    );
+    let failure = failure(FailureKind::DesignFinished, None, "the design ran $finish");
+    let report = FailureReport::new(&failure, run, None, None).to_string();
+    let header = report.lines().next().unwrap_or_default();
+    assert!(
+        header.starts_with("FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  init=random  t="),
+        "{header}"
     );
 }
 

@@ -19,27 +19,87 @@ use crate::{Failure, FailureKind, FakeModel, Precision, Sim, SimTime};
 
 use super::seed::Seed;
 
+/// The values a model's variables start from, before reset logic runs.
+///
+/// Verilator is 2-state: where a 4-state simulator starts every variable without an
+/// initializer at `X` (IEEE 1800-2017 §6.8), a Verilator model starts it at a value
+/// chosen when the model is constructed. [`Zero`](Self::Zero) is Verilator's default and
+/// hides a register that reset never clears; [`Random`](Self::Random) gives every such
+/// variable (inputs not yet driven included) a value drawn from the run's seed, so a
+/// missing reset shows up as a seed-dependent failure that the report's `repro:` line
+/// reproduces exactly.
+///
+/// Chosen per test with `#[simjig::test(init = random)]`, else by `SIMJIG_INIT=random`,
+/// else zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum InitValues {
+    /// Every variable without an initializer starts at 0 (Verilator's default).
+    #[default]
+    Zero,
+    /// Every variable without an initializer starts at a value drawn from
+    /// [`Seed::init_seed`] of its model, its scope and its name. Only the start differs:
+    /// `$urandom` and everything after construction draw as with [`Zero`](Self::Zero).
+    /// A model built with `--x-initial 0` or `fast` cannot do it and fails to load
+    /// (`LoadError::NoRandomInit`).
+    Random,
+}
+
+impl InitValues {
+    /// `"zero"` or `"random"`, as `SIMJIG_INIT` takes it and `summary.json` writes it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Zero => "zero",
+            Self::Random => "random",
+        }
+    }
+
+    /// Parses a `SIMJIG_INIT` value.
+    ///
+    /// # Errors
+    /// A message naming the rejected text and the accepted values.
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
+        match text.trim() {
+            "zero" => Ok(Self::Zero),
+            "random" => Ok(Self::Random),
+            _ => Err(format!(
+                "SIMJIG_INIT={text:?} is not an initial-value mode; use `zero` (Verilator's \
+                 default) or `random`"
+            )),
+        }
+    }
+}
+
 /// What the harness passes to a model when it builds one for a test run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ModelOptions {
     /// The run's root seed.
     pub seed: Seed,
-    /// The seed for Verilator's own random number generator (`$random`, `$urandom`,
-    /// randomized initial values), in `1..=i32::MAX`; see [`Seed::verilator_seed`].
+    /// The seed for Verilator's own random number generator (`$random`, `$urandom`), in
+    /// `1..=i32::MAX`; see [`Seed::verilator_seed`]. Every model of a simulation gets the
+    /// same one (`harness::multi`).
     pub verilator_seed: u32,
+    /// The values the model's variables start from.
+    pub init: InitValues,
+    /// The seed of this model's initial values with [`InitValues::Random`],
+    /// [`Seed::init_seed`] of its index: each model of a simulation has its own.
+    pub init_seed: u32,
     /// The FST waves a Verilator model records; `None` records none. Models that cannot
     /// trace (a [`FakeModel`]) ignore it.
     pub trace: Option<TraceOptions>,
 }
 
 impl ModelOptions {
-    /// The options of model `index` of a simulation with several: the same, except that a
+    /// The options of model `index` of a simulation with several: the same, except that
+    /// its initial values come from its own stream ([`Seed::init_seed`] of `index`), and a
     /// trace of model `index > 0` goes to `<stem>.model-<index>.fst` beside the given file
     /// (model 0 keeps it), since each model writes its own FST.
     #[must_use]
     pub fn for_model(&self, index: usize) -> Self {
         let mut options = self.clone();
+        options.init_seed = self.seed.init_seed(index);
         if index > 0
             && let Some(trace) = &mut options.trace
         {
@@ -62,8 +122,23 @@ impl ModelOptions {
         Self {
             seed,
             verilator_seed: seed.verilator_seed(),
+            init: InitValues::Zero,
+            init_seed: seed.init_seed(0),
             trace: None,
         }
+    }
+
+    /// These options, with the model's variables starting from `init`.
+    #[must_use]
+    pub fn with_init(mut self, init: InitValues) -> Self {
+        self.init = init;
+        self
+    }
+
+    /// The seed a model draws its initial values from, or `None` for zeros.
+    #[must_use]
+    pub fn random_init(&self) -> Option<u32> {
+        (self.init == InitValues::Random).then_some(self.init_seed)
     }
 
     /// These options, with the model recording the waves `trace` describes.
@@ -230,6 +305,33 @@ impl DutModel for () {
 mod tests {
     use super::*;
     use crate::SeedSource;
+
+    #[test]
+    fn each_model_draws_its_initial_values_from_its_own_stream() {
+        let seed = Seed::new(5, SeedSource::Env);
+        let zero = ModelOptions::new(seed);
+        assert_eq!(zero.random_init(), None);
+        let random = zero.clone().with_init(InitValues::Random);
+        assert_eq!(random.random_init(), Some(seed.init_seed(0)));
+        assert_eq!(random.for_model(0), random);
+        let second = random.for_model(1);
+        assert_eq!(second.random_init(), Some(seed.init_seed(1)));
+        assert_ne!(seed.init_seed(0), seed.init_seed(1));
+        // `$urandom` stays shared, so lockstep runs still draw alike.
+        assert_eq!(second.verilator_args(), random.verilator_args());
+    }
+
+    #[test]
+    fn init_values_parse_as_they_print() {
+        for init in [InitValues::Zero, InitValues::Random] {
+            assert_eq!(InitValues::parse(init.as_str()), Ok(init));
+        }
+        let err = InitValues::parse("x").unwrap_err();
+        assert!(
+            err.contains("SIMJIG_INIT=\"x\"") && err.contains("`random`"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn options_carry_the_verilator_seed_as_a_plusarg() {

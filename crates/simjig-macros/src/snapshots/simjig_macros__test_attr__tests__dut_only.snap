@@ -18,6 +18,7 @@ fn a() {
             timeout: ::simjig::__private::TimeoutArg::Default,
             ignored: false,
             should_panic: false,
+            init: ::core::option::Option::None,
         },
         |_, __simjig_dut| async move { a(__simjig_dut).await },
     );

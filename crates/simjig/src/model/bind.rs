@@ -131,7 +131,7 @@ pub fn load(meta: &'static ModelMeta, options: &ModelOptions) -> Result<LoadedMo
     let model = VerilatorModel::load(
         meta,
         &options.verilator_args(),
-        None,
+        options.random_init(),
         options.trace.as_ref(),
     )
     .map_err(|e| {

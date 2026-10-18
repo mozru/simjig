@@ -1,0 +1,25 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(init = random), quote! { async fn no_reset(dut: Counter) {} })"
+---
+#[::core::prelude::v1::test]
+fn no_reset() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn no_reset(dut: Counter) {}
+    ::simjig::__private::run_test::<
+        Counter,
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(no_reset),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::simjig::__private::TimeoutArg::Default,
+            ignored: false,
+            should_panic: false,
+            init: ::core::option::Option::Some(::simjig::InitValues::Random),
+        },
+        |_, __simjig_dut| async move { no_reset(__simjig_dut).await },
+    );
+}

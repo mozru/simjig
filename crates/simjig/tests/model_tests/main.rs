@@ -28,6 +28,10 @@ simjig::include_dut!(wide);
 simjig::include_dut!(timing_dut);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(hello);
+#[cfg(simjig_test_models)]
+simjig::include_dut!(no_reset);
+#[cfg(simjig_test_models)]
+simjig::include_dut!(no_reset_fast);
 
 #[cfg(simjig_test_models)]
 mod bench;
@@ -37,6 +41,8 @@ mod codegen;
 mod duts;
 #[cfg(simjig_test_models)]
 mod handles;
+#[cfg(simjig_test_models)]
+mod init;
 #[cfg(simjig_test_models)]
 mod messages;
 

@@ -5,6 +5,7 @@
 //! #[simjig::test]
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
 //! #[simjig::test(timeout = "none")]                 no time limit
+//! #[simjig::test(init = random)]                    random initial values (or `zero`)
 //! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
 //! ```
@@ -41,7 +42,13 @@ struct Args {
     timeout: Option<TimeoutArg>,
     /// The path the expansion reaches simjig by; `None` is `::simjig`.
     krate: Option<syn::Path>,
+    /// The `simjig::InitValues` variant name of an `init` argument; `None` without one
+    /// (`SIMJIG_INIT` decides at run time).
+    init: Option<&'static str>,
 }
+
+/// `init` values and their `simjig::InitValues` variants.
+const INITS: [(&str, &str); 2] = [("zero", "Zero"), ("random", "Random")];
 
 /// A `timeout` argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +94,20 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             };
             args.timeout = Some(parse_timeout(&lit)?);
             Ok(())
+        } else if meta.path.is_ident("init") {
+            if args.init.is_some() {
+                return Err(meta.error("`init` is given twice"));
+            }
+            let value: Ident = meta.value()?.parse()?;
+            let Some(&(_, variant)) = INITS.iter().find(|(name, _)| value == name) else {
+                return Err(syn::Error::new_spanned(
+                    value,
+                    "the initial values are `init = zero` (Verilator's default) or \
+                     `init = random`",
+                ));
+            };
+            args.init = Some(variant);
+            Ok(())
         } else if meta.path.is_ident("crate") {
             if args.krate.is_some() {
                 return Err(meta.error("`crate` is given twice"));
@@ -96,8 +117,8 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
         } else {
             Err(meta.error(
                 "unknown `#[simjig::test]` argument; the arguments are \
-                 `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`) and \
-                 `crate = <path to simjig>`",
+                 `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`), \
+                 `init = zero` or `init = random`, and `crate = <path to simjig>`",
             ))
         }
     });
@@ -328,6 +349,13 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
         .as_ref()
         .map_or_else(|| quote!(::simjig), |path| quote!(#path));
     let timeout = timeout_expr(&krate, args.timeout);
+    let init = match args.init {
+        None => quote!(::core::option::Option::None),
+        Some(variant) => {
+            let variant = format_ident!("{variant}");
+            quote!(::core::option::Option::Some(#krate::InitValues::#variant))
+        }
+    };
     // Whether these fire depends on user code, so this is `allow`, not `expect` (an
     // unfulfilled `expect` would warn instead): a body need not await, and the test's
     // `simjig::Result` carries the plain-data `Failure`, which is large by design.
@@ -355,6 +383,7 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
                     timeout: #timeout,
                     ignored: #ignored,
                     should_panic: #should_panic,
+                    init: #init,
                 },
                 |#sim_pat, #dut_pat| async move { #ident(#(#call_args),*).await },
             );
@@ -400,6 +429,14 @@ mod tests {
         insta::assert_snapshot!(render(
             quote!(crate = ::sj, timeout = "1us"),
             quote! { async fn renamed(dut: Counter) -> sj::Result { Ok(()) } }
+        ));
+    }
+
+    #[test]
+    fn expands_init_random() {
+        insta::assert_snapshot!(render(
+            quote!(init = random),
+            quote! { async fn no_reset(dut: Counter) {} }
         ));
     }
 
@@ -474,6 +511,10 @@ mod tests {
         insta::assert_snapshot!(
             "unknown_argument",
             render(quote!(seed = 1), quote! { async fn t() {} })
+        );
+        insta::assert_snapshot!(
+            "bad_init",
+            render(quote!(init = x), quote! { async fn t() {} })
         );
         insta::assert_snapshot!(
             "duplicate_timeout",

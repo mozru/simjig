@@ -10,7 +10,7 @@ error: the timeout is a string with a unit: `timeout = "2ms"`
 4 | #[simjig::test(timeout = 2)]
   |                          ^
 
-error: unknown `#[simjig::test]` argument; the arguments are `timeout = "<duration>"` (for example `timeout = "2ms"`) and `crate = <path to simjig>`
+error: unknown `#[simjig::test]` argument; the arguments are `timeout = "<duration>"` (for example `timeout = "2ms"`), `init = zero` or `init = random`, and `crate = <path to simjig>`
  --> tests/harness_ui/bad_timeout.rs:7:16
   |
 7 | #[simjig::test(seed = 1)]

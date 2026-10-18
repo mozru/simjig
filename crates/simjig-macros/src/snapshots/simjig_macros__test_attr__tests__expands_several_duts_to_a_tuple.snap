@@ -1,6 +1,5 @@
 ---
 source: crates/simjig-macros/src/test_attr.rs
-assertion_line: 444
 expression: "render(quote!(), quote!\n{ async fn pair(sim: &TestCtx, a: inv::Dut, b: flop::Dut) {} })"
 ---
 #[::core::prelude::v1::test]
@@ -19,6 +18,7 @@ fn pair() {
             timeout: ::simjig::__private::TimeoutArg::Default,
             ignored: false,
             should_panic: false,
+            init: ::core::option::Option::None,
         },
         |__simjig_sim, (__simjig_dut0, __simjig_dut1)| async move {
             pair(&__simjig_sim, __simjig_dut0, __simjig_dut1).await

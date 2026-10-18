@@ -2,20 +2,22 @@
 //!
 //! Every failed `#[simjig::test]` prints exactly one block (proposal C §7):
 //! ```text
-//! FAIL <test>  seed=<seed>  t=<time>  [<Kind> sig=<signature>]
+//! FAIL <test>  seed=<seed>  [init=random  ]t=<time>  [<Kind> sig=<signature>]
 //!   task:     <hierarchical task name>
 //!   at:       <file:line:col>
 //!   message:  <one line, continuation lines indented>
 //!   <kind-specific detail lines>
 //!   help:     <what to try>
-//!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package>
+//!   repro:    [SIMJIG_INIT=random ]SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package>
 //!             -E 'binary(=<binary>) & test(=<test>)'   (on one line)
 //!   waves:    SIMJIG_WAVES=1 <the repro command>
 //!             (or, after a replay with waves, the waves files and the replay's verdict;
 //!             or `none` when no model of the test can trace)
 //!   run dir:  <target>/simjig/runs/<package>/<binary>/<test>/<seed>/
 //! ```
-//! Lines without data (`task`, `at`, `run dir`) are left out. When a failed fork branch
+//! `init=random` and `SIMJIG_INIT=random` appear only for a run with random initial values
+//! ([`InitValues::Random`]), so a zero-initialized run's report is as before. Lines without
+//! data (`task`, `at`, `run dir`) are left out. When a failed fork branch
 //! failed the test (`Branches::into_values`), the header reads
 //! `t=<branch failure time> in fork branch <i> (checkpoint t=<time>)`, and the `help:`
 //! line is left out: each branch's own help is in the message.
@@ -31,6 +33,7 @@ use crate::fork::{BranchEnd, FailedBranch};
 use crate::kernel::recorder::Fnv;
 use crate::{BlockedTask, Failure, FailureKind, Precision, SimDuration, SimTime};
 
+use super::dut::InitValues;
 use super::seed::Seed;
 use super::waves::{WavesReplay, failing_signals};
 
@@ -130,6 +133,8 @@ pub struct RunIdentity {
     pub package: String,
     /// The run's root seed.
     pub seed: Seed,
+    /// The values the run's models started from.
+    pub init: InitValues,
     /// Whether the test is `#[ignore]`d, so the repro must ask nextest to run it.
     pub ignored: bool,
     /// What the repro runs `cargo` through (`pixi run`), when the test ran inside an
@@ -166,7 +171,13 @@ impl RunIdentity {
     /// The one-line command that reproduces this run.
     #[must_use]
     pub fn repro(&self) -> String {
-        format!("SIMJIG_SEED={} {}", self.seed, self.nextest())
+        // Named whenever it is random, even when the test's `init` argument asks for it:
+        // the line then also reproduces a run whose `SIMJIG_INIT` made it random.
+        let init = match self.init {
+            InitValues::Random => "SIMJIG_INIT=random ",
+            InitValues::Zero => "",
+        };
+        format!("{init}SIMJIG_SEED={} {}", self.seed, self.nextest())
     }
 
     /// The command that re-runs it and then replays it with waves into its run directory
@@ -352,9 +363,13 @@ impl fmt::Display for FailureReport {
             }
             None => format!("t={time}"),
         };
+        let init = match self.run.init {
+            InitValues::Random => "init=random  ",
+            InitValues::Zero => "",
+        };
         writeln!(
             f,
-            "FAIL {}  seed={}  {when}  [{} sig={}]",
+            "FAIL {}  seed={}  {init}{when}  [{} sig={}]",
             self.run.test, self.run.seed, self.kind, self.signature
         )?;
         if let Some(task) = &self.task {

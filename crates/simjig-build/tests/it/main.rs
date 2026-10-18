@@ -12,6 +12,7 @@ mod errors;
 mod fixture_crate;
 mod header;
 mod ifaces;
+mod noop;
 mod pipeline;
 mod probes;
 mod rebuild;

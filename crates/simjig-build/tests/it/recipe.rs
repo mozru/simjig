@@ -6,7 +6,7 @@ use simjig_build::{CppRecipe, Dut};
 use crate::support::{Sandbox, dut, logging_ccache};
 
 /// Every compile command of one build, as (source file, command line).
-fn compiles(log: &std::path::Path) -> Vec<(String, String)> {
+pub(crate) fn compiles(log: &std::path::Path) -> Vec<(String, String)> {
     let lines: Vec<String> = std::fs::read_dir(log)
         .unwrap()
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())

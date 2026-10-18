@@ -18,6 +18,9 @@
 //!    contents (read again only for files whose status changed, see `manifest`). The
 //!    entry for the full key is a hit.
 //!
+//! A Verilator runtime is looked up once per build script ([`RUNTIMES`]): every model of
+//! the script links the same one, and its sources do not change while the script runs.
+//!
 //! Invariants: an entry directory is published by an atomic rename of a complete work
 //! directory holding only the archive (the objects are inside it); an entry directory
 //! without its archive (from an interrupted older layout) is a miss, and is replaced.
@@ -32,6 +35,7 @@ use crate::manifest::Manifest;
 use crate::{ABI_VERSION, BuildEnv, Error, depfile};
 
 /// A static library, compiled or found in the cache.
+#[derive(Debug, Clone)]
 pub(crate) struct Archive {
     pub(crate) dir: PathBuf,
     pub(crate) name: String,
@@ -62,11 +66,45 @@ pub(crate) struct Spec<'a> {
 /// The domain of the full keys (see the module docs).
 const DEPS_DOMAIN: &str = "simjig-archive-deps-v2";
 
+/// The Verilator runtimes this process found, by (`OUT_DIR`, cache root, pre key). Keyed
+/// by `OUT_DIR` like `script`, so tests that stand for several build scripts in one
+/// process look again.
+static RUNTIMES: Mutex<Vec<(RuntimeKey, Archive)>> = Mutex::new(Vec::new());
+
+/// (`OUT_DIR`, cache root, pre key).
+type RuntimeKey = (PathBuf, PathBuf, String);
+
 impl Toolchain<'_> {
     /// Returns the archive of `spec` from the cache, compiling it on a miss.
     pub(crate) fn cached_archive(&self, spec: &Spec<'_>) -> Result<Archive, Error> {
         let pre = self.pre_key(spec)?;
-        let pre = pre.as_str();
+        if spec.kind != "libverilated" {
+            return self.cached_archive_keyed(spec, &pre);
+        }
+        let memo = (
+            self.i.env.out_dir.clone(),
+            self.i.cache.root().to_path_buf(),
+            pre,
+        );
+        // A panic while holding the lock leaves the list itself consistent.
+        let known = RUNTIMES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(k, _)| *k == memo)
+            .map(|(_, a)| a.clone());
+        if let Some(a) = known {
+            return Ok(a);
+        }
+        let a = self.cached_archive_keyed(spec, &memo.2)?;
+        RUNTIMES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((memo, a.clone()));
+        Ok(a)
+    }
+
+    fn cached_archive_keyed(&self, spec: &Spec<'_>, pre: &str) -> Result<Archive, Error> {
         let cache = self.i.cache;
         let manifest = cache.root().join("manifests").join(pre);
         if let Some(hit) = lookup(cache, spec, pre, &manifest) {

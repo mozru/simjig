@@ -18,6 +18,17 @@
 //!    contents (read again only for files whose status changed, see `manifest`). The
 //!    entry for the full key is a hit.
 //!
+//! The model's sources are Verilator's output, in the verilation's entry
+//! (`models/<full key>/obj/`), whose path is in the pre key. So any edit to a file
+//! Verilator read compiles the model again, even one that leaves the output the same (a
+//! comment in an included `.svh`). Accepted: keying on the output's contents instead would
+//! hash every generated source on every build, and ccache (when present) makes such a
+//! compile cheap. The shim is content-addressed (`emit`), so crates and target
+//! directories that build the same configuration share one model archive.
+//!
+//! An input edited while the compiler reads it leaves the archive out of the cache (see
+//! `manifest`): it is linked from `OUT_DIR/simjig-unpublished/` by that build alone.
+//!
 //! A Verilator runtime is looked up once per build script ([`RUNTIMES`]): every model of
 //! the script links the same one, and its sources do not change while the script runs.
 //!

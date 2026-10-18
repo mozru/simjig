@@ -128,6 +128,8 @@ pub(crate) struct WaitTable {
     group_of: Vec<[Option<u64>; 3]>,
     /// Snapshot buffers of unprimed groups, for reuse.
     spare: Vec<Vec<u32>>,
+    /// The value being compared, kept to avoid an allocation per walk step.
+    scratch: Vec<u32>,
     wheel: BTreeMap<SimTime, Vec<Key>>,
     next_step: Vec<Key>,
     read_write: Vec<Key>,
@@ -150,6 +152,7 @@ impl WaitTable {
             groups: Vec::new(),
             group_of: vec![[None; 3]; slots],
             spare: Vec::new(),
+            scratch: Vec::new(),
             wheel: BTreeMap::new(),
             next_step: Vec::new(),
             read_write: Vec::new(),
@@ -339,14 +342,14 @@ impl WaitTable {
         out: &mut Vec<Wake>,
     ) -> bool {
         let mut i = self.groups.partition_point(|g| g.primed <= *after);
-        let mut scratch = Vec::new();
+        let scratch = &mut self.scratch;
         while let Some(g) = self.groups.get_mut(i).filter(|g| g.primed <= until) {
             *after = g.primed;
             scratch.resize(g.snapshot.len(), 0);
-            model.read(g.slot, &mut scratch);
-            if scratch != g.snapshot {
+            model.read(g.slot, scratch);
+            if *scratch != g.snapshot {
                 let (old, new) = (g.snapshot[0] & 1, scratch[0] & 1);
-                g.snapshot.copy_from_slice(&scratch);
+                g.snapshot.copy_from_slice(scratch);
                 let hit = match g.edge {
                     EdgeKind::Changed => true,
                     EdgeKind::Rising => old == 0 && new == 1,

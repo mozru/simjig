@@ -189,6 +189,20 @@ fn the_repro_of_an_ignored_test_runs_ignored_tests() {
 }
 
 #[test]
+fn the_repro_names_the_test_binary() {
+    // `test(=...)` alone also matches a same-named test in another test file.
+    let run = RunIdentity {
+        binary: Some("fifo_tests".into()),
+        ..run()
+    };
+    assert_eq!(
+        run.repro(),
+        "SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb \
+         -E 'binary(=fifo_tests) & test(=fifo::backpressure)'"
+    );
+}
+
+#[test]
 fn the_signature_is_stable_across_seeds_and_values() {
     let at = |value: u32, time: u64| {
         let message = format!("expected 0x12, got {value:#x}");

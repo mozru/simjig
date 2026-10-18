@@ -74,7 +74,8 @@ fn a_fatal_is_a_failure_report_with_a_repro_line() {
     assert!(
         repro.starts_with(&format!("SIMJIG_SEED={seed} "))
             && repro.ends_with(
-                "cargo nextest run -p simjig --run-ignored all -E 'test(=fatal_tb::fatal_child)'"
+                "cargo nextest run -p simjig --run-ignored all \
+                 -E 'binary(=e2e_dut) & test(=fatal_tb::fatal_child)'"
             ),
         "unexpected repro line {repro:?} in:\n{report}"
     );

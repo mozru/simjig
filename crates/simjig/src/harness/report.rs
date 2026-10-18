@@ -8,7 +8,8 @@
 //!   message:  <one line, continuation lines indented>
 //!   <kind-specific detail lines>
 //!   help:     <what to try>
-//!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package> -E 'test(=<test>)'
+//!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package>
+//!             -E 'binary(=<binary>) & test(=<test>)'   (on one line)
 //!   waves:    <the same command with SIMJIG_WAVES=1>
 //!   run dir:  <target>/simjig/runs/<package>/<binary>/<test>/<seed>/
 //! ```
@@ -142,8 +143,14 @@ impl RunIdentity {
             .launcher
             .as_deref()
             .map_or_else(String::new, |l| format!("{l} "));
+        // `-p` limits the build; `binary(=...)` keeps a same-named test in another test
+        // file of the package out.
+        let binary = self
+            .binary
+            .as_deref()
+            .map_or_else(String::new, |b| format!("binary(={b}) & "));
         format!(
-            "{launcher}cargo nextest run -p {}{ignored} -E 'test(={})'",
+            "{launcher}cargo nextest run -p {}{ignored} -E '{binary}test(={})'",
             self.package, self.test
         )
     }

@@ -36,7 +36,7 @@ pub use lowered::{
     ItemKind, Layout, LayoutCheck, LayoutMember, LayoutValue, Lowered, RustType, Signal,
     SignalTarget, StructField, UnionView, Wrapper, WrapperIface, WrapperPort,
 };
-pub use rust::emit_rust;
+pub use rust::{RustOptions, emit_rust};
 pub use shim::{ShimOptions, emit_shim};
 pub use vlt::emit_vlt;
 pub use wrapper::{emit_elab_top, emit_wrapper};

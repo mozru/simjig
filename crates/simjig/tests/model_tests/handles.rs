@@ -9,7 +9,7 @@ use simjig::{
 };
 use simjig_bits::{Bit, Bits, WideBits};
 
-use super::duts::{counter, flop, inv, sim, timing, wide};
+use super::duts::{counter, flop, inv, sim, timing_dut as timing, wide};
 use super::ticks;
 
 /// A 200-bit value with every word distinct, and the top 8 bits (199..192) set.
@@ -157,11 +157,26 @@ fn model_events_advance_time() {
     assert_eq!(rose - fell, 23_000, "done rises 23 ns after it falls");
 }
 
-simjig::__private::link_model!(fn inv_vtable = "simjig_vtable_Vdut_inv");
+#[expect(
+    dead_code,
+    reason = "the constants of every test model; this test uses inv's"
+)]
+mod models {
+    include!(concat!(env!("OUT_DIR"), "/test_models.rs"));
+}
+
+mod inv_ffi {
+    use simjig::__private::Vtable;
+    include!(concat!(env!("OUT_DIR"), "/test_vtables/inv.rs"));
+}
+
+fn inv_vtable() -> &'static simjig::__private::Vtable {
+    inv_ffi::vtable()
+}
 
 const INV: ModelMeta = ModelMeta {
     vtable: inv_vtable,
-    prefix: "Vdut_inv",
+    prefix: models::INV_PREFIX,
     ir_hash: inv::Dut::IR_HASH,
     precision_exponent: -12,
     signals: inv::Dut::SIGNALS,
@@ -228,12 +243,16 @@ fn load_rejects_mismatched_metadata() {
     let options = ModelOptions::new(Seed::new(1, SeedSource::Env));
     assert!(instantiate(&GOOD, &options).is_ok());
     let text = load_error(&BAD_HASH);
-    assert!(
-        text.contains("`Vdut_inv` was built from IR 0x5eed000000000001, the generated Rust from 0x0000000000000bad"),
-        "{text}"
+    let want = format!(
+        "`{}` was built from IR {:#018x}, the generated Rust from 0x0000000000000bad",
+        models::INV_PREFIX,
+        models::INV_IR_HASH
     );
+    assert!(text.contains(&want), "{text}");
+    assert_eq!(models::INV_IR_HASH, inv::Dut::IR_HASH);
     let text = load_error(&BAD_PREFIX);
-    assert!(text.contains("belongs to model `Vdut_inv`"), "{text}");
+    let want = format!("belongs to model `{}`", models::INV_PREFIX);
+    assert!(text.contains(&want), "{text}");
     let text = load_error(&BAD_NAME);
     assert!(
         text.contains("slot 1: the model has `inv.y`, the Rust `inv.z`"),

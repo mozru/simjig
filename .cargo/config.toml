@@ -1,2 +1,7 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+[env]
+# Lets crates/simjig/build.rs build the Verilator models simjig's own tests use; a crate
+# that merely depends on simjig never sees this file, so it never builds them.
+SIMJIG_TEST_MODELS = "1"

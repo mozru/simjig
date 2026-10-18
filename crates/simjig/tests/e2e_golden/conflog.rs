@@ -1,15 +1,14 @@
 //! The conformance log of `tests/conformance/README.md` over typed handles, so a run against
-//! a real model can be diffed byte for byte with cocotb's golden. Mirrors
-//! `tests/kernel_tests/conflog.rs`; the signal label is the name without the top module
-//! (`flop.q` logs as `q`), as cocotb names `dut.q`.
+//! a real model diffs byte for byte with cocotb's golden. The signal label is the name
+//! without the top module (`flop.q` logs as `q`), as cocotb names `dut.q`.
 
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::rc::Rc;
 
-use simjig::{In, Out, PublicRd, now};
-use simjig_bits::{Bit, Bits};
+use simjig::{In, Out, PublicRd, RawWords, now};
+use simjig_bits::Packed;
 
 /// A handle whose value the log can record.
 pub(crate) trait Sample {
@@ -28,35 +27,31 @@ fn short(name: &str) -> String {
         .to_owned()
 }
 
+/// `value` as an unsigned integer (every logged signal is at most 128 bits).
+fn to_u128<T: Packed<Raw: RawWords>>(value: T) -> u128 {
+    let mut words = [0u32; 4];
+    value.to_raw().to_words(&mut words);
+    words
+        .iter()
+        .rev()
+        .fold(0, |acc, &w| (acc << 32) | u128::from(w))
+}
+
 macro_rules! sample {
-    ($($handle:ident<$ty:ty> => |$v:ident| $to:expr;)*) => {$(
-        impl Sample for $handle<$ty> {
+    ($($handle:ident)*) => {$(
+        impl<T: Packed<Raw: RawWords>> Sample for $handle<T> {
             fn label(&self) -> String {
                 short(&self.name())
             }
             fn sample(&self) -> u128 {
-                let $v = self.get();
-                $to
+                to_u128(self.get())
             }
         }
     )*};
 }
+sample!(In Out PublicRd);
 
-sample! {
-    In<Bit> => |v| u128::from(v.to_bool());
-    Out<Bit> => |v| u128::from(v.to_bool());
-    In<Bits<8>> => |v| v.to_u128();
-    Out<Bits<8>> => |v| v.to_u128();
-    PublicRd<Bits<8>> => |v| v.to_u128();
-}
-
-impl Drive for In<Bit> {
-    fn drive(&self, value: u128) {
-        self.set(value);
-    }
-}
-
-impl Drive for In<Bits<8>> {
+impl<T: Packed<Raw: RawWords> + From<u128>> Drive for In<T> {
     fn drive(&self, value: u128) {
         self.set(value);
     }
@@ -78,8 +73,28 @@ impl Log {
         }
     }
 
-    pub(crate) fn text(&self) -> String {
-        self.lines.borrow().clone()
+    /// Compares the log with the golden `name`; panics at the first differing line.
+    #[track_caller]
+    pub(crate) fn check(&self, name: &str) {
+        let path = format!(
+            "{}/../../tests/conformance/golden/{name}.jsonl",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let golden = std::fs::read_to_string(&path).unwrap();
+        let ours = self.lines.borrow();
+        if *ours != golden {
+            let first = ours
+                .lines()
+                .zip(golden.lines())
+                .position(|(a, b)| a != b)
+                .unwrap_or(ours.lines().count().min(golden.lines().count()));
+            panic!(
+                "{name} differs from the golden at line {}:\n  ours:   {}\n  golden: {}\n--- ours ---\n{ours}",
+                first + 1,
+                ours.lines().nth(first).unwrap_or("<end>"),
+                golden.lines().nth(first).unwrap_or("<end>"),
+            );
+        }
     }
 }
 

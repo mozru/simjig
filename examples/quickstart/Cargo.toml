@@ -1,0 +1,18 @@
+[package]
+name = "quickstart"
+description = "The smallest simjig project: two tiny designs, a build script and tests."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+simjig.workspace = true
+simjig-bits.workspace = true
+
+[build-dependencies]
+simjig-build.workspace = true

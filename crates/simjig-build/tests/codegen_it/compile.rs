@@ -11,7 +11,7 @@ use crate::cases;
 
 macro_rules! generated {
     ($($name:ident)*) => {$(
-        #[expect(dead_code, reason = "each test uses only part of the generated API")]
+        #[doc = concat!("The generated bindings of `", stringify!($name), "`.")]
         pub mod $name {
             include!(concat!("generated/", stringify!($name), ".rs"));
         }
@@ -19,6 +19,62 @@ macro_rules! generated {
 }
 generated!(arrays enums iface_top interface_modports package_params params_override producer
     scalar_vector_wide signed_ports struct_pipe structs time_precision typedef_chains wide);
+
+/// Generated code in a user module whose glob import shadows the names generated code
+/// could otherwise pick up from the prelude: the `write!` and `assert!` macros, the derive
+/// macros and the primitive types. Generated code spells all of them by absolute path, so it
+/// still compiles; any unqualified use would resolve to a stand-in below and fail to build.
+pub mod shadowed {
+    /// The stand-ins a user crate might glob-import.
+    #[expect(
+        non_camel_case_types,
+        unused_macros,
+        unused_imports,
+        missing_debug_implementations,
+        reason = "deliberately hostile names, used only to shadow"
+    )]
+    pub mod hostile {
+        macro_rules! write {
+            ($($t:tt)*) => {
+                ::core::compile_error!("generated code used an unqualified `write!`")
+            };
+        }
+        macro_rules! assert {
+            ($($t:tt)*) => {
+                ::core::compile_error!("generated code used an unqualified `assert!`")
+            };
+        }
+        macro_rules! Debug {
+            () => {};
+        }
+        macro_rules! Clone {
+            () => {};
+        }
+        pub(crate) use {Clone, Debug, assert, write};
+        /// Not the primitive.
+        pub struct u8;
+        /// Not the primitive.
+        pub struct u32;
+        /// Not the primitive.
+        pub struct u64;
+        /// Not the primitive.
+        pub struct u128;
+        /// Not the primitive.
+        pub struct bool;
+    }
+
+    macro_rules! shadowed {
+        ($($name:ident)*) => {$(
+            #[doc = concat!("`", stringify!($name), "` under the shadowing glob import.")]
+            pub mod $name {
+                #[expect(unused_imports, reason = "the glob import exists only to shadow")]
+                use super::hostile::*;
+                include!(concat!("generated/", stringify!($name), ".rs"));
+            }
+        )*};
+    }
+    shadowed!(enums package_params structs wide);
+}
 
 /// The fields of the struct named `sv_name` (as lowered from the IR).
 fn ir_fields(lowered: &Lowered, sv_name: &str) -> Vec<StructField> {

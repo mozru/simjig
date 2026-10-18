@@ -5,7 +5,7 @@
 /// An SV enum variable can hold values that name no variant (IEEE 1800-2023 §6.19), so
 /// this is a newtype over the bits: reading never fails, and [`Self::variant`] says
 /// whether the value is a member. `Default` is the all-zero value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct Mode(::simjig::__private::bits::Bits<3>);
 
 impl Mode {
@@ -43,23 +43,23 @@ impl ::core::fmt::Debug for Mode {
             ::core::result::Result::Ok(ModeVariant::Off) => "MODE_OFF",
             ::core::result::Result::Ok(ModeVariant::Run) => "MODE_RUN",
             ::core::result::Result::Ok(ModeVariant::Err) => "MODE_ERR",
-            ::core::result::Result::Err(_) => return write!(f, "Mode({:?})", self.0),
+            ::core::result::Result::Err(_) => return ::core::write!(f, "Mode({:?})", self.0),
         };
         f.write_str(name)
     }
 }
 
 impl ::simjig::__private::bits::Packed for Mode {
-    const WIDTH: u32 = 3;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 3;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> ::core::primitive::u8 { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: ::core::primitive::u8) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// The variants of [`Mode`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::fmt::Debug)]
 pub enum ModeVariant {
     /// `MODE_OFF`.
     Off,
@@ -80,7 +80,7 @@ impl ::core::convert::From<ModeVariant> for Mode {
 }
 
 /// SystemVerilog `wide_pkg::part_t`: a packed struct of 107 bits, first field most significant.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default, ::core::fmt::Debug)]
 pub struct PartT {
     /// `lo33`, bits `[106:74]`.
     pub lo33: ::simjig::__private::bits::Bits<33>,
@@ -93,18 +93,18 @@ pub struct PartT {
 }
 
 const _: () = {
-    assert!(<::simjig::__private::bits::Bits<33> as ::simjig::__private::bits::Packed>::WIDTH == 33, "wide_pkg::part_t.lo33 must be 33 bits wide");
-    assert!(<Mode as ::simjig::__private::bits::Packed>::WIDTH == 3, "wide_pkg::part_t.mode must be 3 bits wide");
-    assert!(<::simjig::__private::bits::Bits<70> as ::simjig::__private::bits::Packed>::WIDTH == 70, "wide_pkg::part_t.mid70 must be 70 bits wide");
-    assert!(<::simjig::__private::bits::Bit as ::simjig::__private::bits::Packed>::WIDTH == 1, "wide_pkg::part_t.self must be 1 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bits<33> as ::simjig::__private::bits::Packed>::WIDTH == 33, "wide_pkg::part_t.lo33 must be 33 bits wide");
+    ::core::assert!(<Mode as ::simjig::__private::bits::Packed>::WIDTH == 3, "wide_pkg::part_t.mode must be 3 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bits<70> as ::simjig::__private::bits::Packed>::WIDTH == 70, "wide_pkg::part_t.mid70 must be 70 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bit as ::simjig::__private::bits::Packed>::WIDTH == 1, "wide_pkg::part_t.self must be 1 bits wide");
 };
 
 impl ::simjig::__private::bits::Packed for PartT {
-    const WIDTH: u32 = 107;
-    type Raw = [u32; 4];
+    const WIDTH: ::core::primitive::u32 = 107;
+    type Raw = [::core::primitive::u32; 4];
 
-    fn to_raw(self) -> [u32; 4] {
-        let mut words = [0u32; 4];
+    fn to_raw(self) -> [::core::primitive::u32; 4] {
+        let mut words: [::core::primitive::u32; 4] = [0; 4];
         ::simjig::__private::pack_field(&mut words, 74, self.lo33);
         ::simjig::__private::pack_field(&mut words, 71, self.mode);
         ::simjig::__private::pack_field(&mut words, 1, self.mid70);
@@ -112,8 +112,8 @@ impl ::simjig::__private::bits::Packed for PartT {
         ::simjig::__private::RawWords::from_words(&words)
     }
 
-    fn from_raw(raw: [u32; 4]) -> Self {
-        let mut words = [0u32; 4];
+    fn from_raw(raw: [::core::primitive::u32; 4]) -> Self {
+        let mut words: [::core::primitive::u32; 4] = [0; 4];
         ::simjig::__private::RawWords::to_words(raw, &mut words);
         Self {
             lo33: ::simjig::__private::unpack_field(&words, 74),
@@ -147,7 +147,7 @@ impl PartT {
 }
 
 /// SystemVerilog `wide_pkg::big_t`: a packed struct of 307 bits, first field most significant.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default, ::core::fmt::Debug)]
 pub struct Big {
     /// `a`, bits `[306:200]`.
     pub a: PartT,
@@ -158,25 +158,25 @@ pub struct Big {
 }
 
 const _: () = {
-    assert!(<PartT as ::simjig::__private::bits::Packed>::WIDTH == 107, "wide_pkg::big_t.a must be 107 bits wide");
-    assert!(<::simjig::__private::bits::Bits<93> as ::simjig::__private::bits::Packed>::WIDTH == 93, "wide_pkg::big_t.loop must be 93 bits wide");
-    assert!(<PartT as ::simjig::__private::bits::Packed>::WIDTH == 107, "wide_pkg::big_t.b must be 107 bits wide");
+    ::core::assert!(<PartT as ::simjig::__private::bits::Packed>::WIDTH == 107, "wide_pkg::big_t.a must be 107 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bits<93> as ::simjig::__private::bits::Packed>::WIDTH == 93, "wide_pkg::big_t.loop must be 93 bits wide");
+    ::core::assert!(<PartT as ::simjig::__private::bits::Packed>::WIDTH == 107, "wide_pkg::big_t.b must be 107 bits wide");
 };
 
 impl ::simjig::__private::bits::Packed for Big {
-    const WIDTH: u32 = 307;
-    type Raw = [u32; 10];
+    const WIDTH: ::core::primitive::u32 = 307;
+    type Raw = [::core::primitive::u32; 10];
 
-    fn to_raw(self) -> [u32; 10] {
-        let mut words = [0u32; 10];
+    fn to_raw(self) -> [::core::primitive::u32; 10] {
+        let mut words: [::core::primitive::u32; 10] = [0; 10];
         ::simjig::__private::pack_field(&mut words, 200, self.a);
         ::simjig::__private::pack_field(&mut words, 107, self.r#loop);
         ::simjig::__private::pack_field(&mut words, 0, self.b);
         ::simjig::__private::RawWords::from_words(&words)
     }
 
-    fn from_raw(raw: [u32; 10]) -> Self {
-        let mut words = [0u32; 10];
+    fn from_raw(raw: [::core::primitive::u32; 10]) -> Self {
+        let mut words: [::core::primitive::u32; 10] = [0; 10];
         ::simjig::__private::RawWords::to_words(raw, &mut words);
         Self {
             a: ::simjig::__private::unpack_field(&words, 200),
@@ -202,7 +202,7 @@ impl Big {
 }
 
 /// SystemVerilog `wide_pkg::part_u`: a packed union of 107 bits; each member is a view of the same bits.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default)]
 pub struct PartU(::simjig::__private::bits::Bits<107>);
 
 impl PartU {
@@ -243,16 +243,16 @@ impl ::core::fmt::Debug for PartU {
 }
 
 impl ::simjig::__private::bits::Packed for PartU {
-    const WIDTH: u32 = 107;
-    type Raw = [u32; 4];
+    const WIDTH: ::core::primitive::u32 = 107;
+    type Raw = [::core::primitive::u32; 4];
 
-    fn to_raw(self) -> [u32; 4] { ::simjig::__private::bits::Packed::to_raw(self.0) }
+    fn to_raw(self) -> [::core::primitive::u32; 4] { ::simjig::__private::bits::Packed::to_raw(self.0) }
 
-    fn from_raw(raw: [u32; 4]) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
+    fn from_raw(raw: [::core::primitive::u32; 4]) -> Self { Self(::simjig::__private::bits::Packed::from_raw(raw)) }
 }
 
 /// SystemVerilog `wide_pkg::nib_t`: a packed struct of 8 bits, first field most significant.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default, ::core::fmt::Debug)]
 pub struct Nib {
     /// `hi`, bits `[7:4]`.
     pub hi: ::simjig::__private::bits::Bits<4>,
@@ -261,23 +261,23 @@ pub struct Nib {
 }
 
 const _: () = {
-    assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "wide_pkg::nib_t.hi must be 4 bits wide");
-    assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "wide_pkg::nib_t.lo must be 4 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "wide_pkg::nib_t.hi must be 4 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "wide_pkg::nib_t.lo must be 4 bits wide");
 };
 
 impl ::simjig::__private::bits::Packed for Nib {
-    const WIDTH: u32 = 8;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 8;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 {
-        let mut words = [0u32; 1];
+    fn to_raw(self) -> ::core::primitive::u8 {
+        let mut words: [::core::primitive::u32; 1] = [0; 1];
         ::simjig::__private::pack_field(&mut words, 4, self.hi);
         ::simjig::__private::pack_field(&mut words, 0, self.lo);
         ::simjig::__private::RawWords::from_words(&words)
     }
 
-    fn from_raw(raw: u8) -> Self {
-        let mut words = [0u32; 1];
+    fn from_raw(raw: ::core::primitive::u8) -> Self {
+        let mut words: [::core::primitive::u32; 1] = [0; 1];
         ::simjig::__private::RawWords::to_words(raw, &mut words);
         Self {
             hi: ::simjig::__private::unpack_field(&words, 4),
@@ -305,10 +305,11 @@ impl Nib {
 /// Parameters of SystemVerilog package `wide_pkg`.
 pub mod wide_pkg {
     /// `PAD_W`.
-    pub const PAD_W: u32 = 93;
+    pub const PAD_W: ::core::primitive::u32 = 93;
 }
 
 /// The signals of model `wide_top`: its ports in declaration order, then its probes.
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct Dut {
     /// `wide_top.clk`: input, 1 bit.
     pub clk: ::simjig::__private::In<::simjig::__private::bits::Bit>,
@@ -337,7 +338,7 @@ pub struct Dut {
 impl Dut {
     /// Hash of the IR and configuration this code was generated from; the model's
     /// vtable carries the same value.
-    pub const IR_HASH: u64 = 0x79eb_a16e_9960_3f1b;
+    pub const IR_HASH: ::core::primitive::u64 = 0x79eb_a16e_9960_3f1b;
 
     /// Every signal, indexed by slot.
     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[
@@ -437,3 +438,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vwide_top",
+    symbol = "simjig_vtable_Vwide_top",
+    precision_exponent = -12,
+);

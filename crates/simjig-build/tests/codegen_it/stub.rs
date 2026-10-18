@@ -50,6 +50,14 @@ macro_rules! handles {
             _value: PhantomData<T>,
         }
 
+        impl<T> Clone for $name<T> {
+            fn clone(&self) -> Self {
+                *self
+            }
+        }
+
+        impl<T> Copy for $name<T> {}
+
         impl<T> $name<T> {
             fn new(meta: &'static SignalMeta) -> Self {
                 Self { meta, _value: PhantomData }
@@ -215,3 +223,18 @@ where
     }
     T::from_raw(T::Raw::from_words(&dst))
 }
+
+/// The model glue. The real macro implements `DutModel` over the model's vtable; the stub
+/// only checks the shape of its arguments and that `Dut` binds.
+macro_rules! dut_model {
+    (
+        $dut:ident,
+        prefix = $prefix:literal,
+        symbol = $symbol:literal,
+        precision_exponent = $exp:literal $(,)?
+    ) => {
+        const _: (&str, &str, i8) = ($prefix, $symbol, $exp);
+        const _: fn(&mut $crate::__private::RecordingBinder) -> $dut = $dut::__bind;
+    };
+}
+pub(crate) use dut_model;

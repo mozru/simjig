@@ -7,7 +7,7 @@ pub type UnitWord = ::simjig::__private::bits::Bits<6>;
 pub type UnitAlias = UnitWord;
 
 /// SystemVerilog `pkg::base_t`: a packed struct of 8 bits, first field most significant.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default, ::core::fmt::Debug)]
 pub struct Base {
     /// `hi`, bits `[7:4]`.
     pub hi: ::simjig::__private::bits::Bits<4>,
@@ -16,23 +16,23 @@ pub struct Base {
 }
 
 const _: () = {
-    assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "pkg::base_t.hi must be 4 bits wide");
-    assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "pkg::base_t.lo must be 4 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "pkg::base_t.hi must be 4 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bits<4> as ::simjig::__private::bits::Packed>::WIDTH == 4, "pkg::base_t.lo must be 4 bits wide");
 };
 
 impl ::simjig::__private::bits::Packed for Base {
-    const WIDTH: u32 = 8;
-    type Raw = u8;
+    const WIDTH: ::core::primitive::u32 = 8;
+    type Raw = ::core::primitive::u8;
 
-    fn to_raw(self) -> u8 {
-        let mut words = [0u32; 1];
+    fn to_raw(self) -> ::core::primitive::u8 {
+        let mut words: [::core::primitive::u32; 1] = [0; 1];
         ::simjig::__private::pack_field(&mut words, 4, self.hi);
         ::simjig::__private::pack_field(&mut words, 0, self.lo);
         ::simjig::__private::RawWords::from_words(&words)
     }
 
-    fn from_raw(raw: u8) -> Self {
-        let mut words = [0u32; 1];
+    fn from_raw(raw: ::core::primitive::u8) -> Self {
+        let mut words: [::core::primitive::u32; 1] = [0; 1];
         ::simjig::__private::RawWords::to_words(raw, &mut words);
         Self {
             hi: ::simjig::__private::unpack_field(&words, 4),
@@ -70,6 +70,7 @@ pub type VecT = ::simjig::__private::bits::Bits<10>;
 pub type VecAlias = VecT;
 
 /// The signals of model `top`: its ports in declaration order, then its probes.
+#[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 pub struct Dut {
     /// `top.a2`: input, 8 bits.
     pub a2: ::simjig::__private::In<Alias2>,
@@ -88,7 +89,7 @@ pub struct Dut {
 impl Dut {
     /// Hash of the IR and configuration this code was generated from; the model's
     /// vtable carries the same value.
-    pub const IR_HASH: u64 = 0xd74a_dc31_e363_0533;
+    pub const IR_HASH: ::core::primitive::u64 = 0xd74a_dc31_e363_0533;
 
     /// Every signal, indexed by slot.
     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[
@@ -148,3 +149,10 @@ impl Dut {
         }
     }
 }
+
+::simjig::__private::dut_model!(
+    Dut,
+    prefix = "Vtop",
+    symbol = "simjig_vtable_Vtop",
+    precision_exponent = -12,
+);

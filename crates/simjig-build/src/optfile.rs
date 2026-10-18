@@ -18,17 +18,23 @@ const MAX_DEPTH: u32 = 16;
 /// The first word of the option files `args` name (nested ones too) that `refused`
 /// accepts, with the file it is in.
 pub(crate) fn find(args: &[String], refused: fn(&str) -> bool) -> Option<(PathBuf, String)> {
-    find_in(args, None, refused, 0)
+    walk(args, None, 0, &mut |path, words| {
+        let w = words.iter().find(|w| refused(w))?;
+        Some((path.to_path_buf(), w.clone()))
+    })
 }
 
+/// Calls `visit` on each option file `args` name, depth first in order, with its words
+/// (none for a file that cannot be read), until `visit` returns `Some`.
+///
 /// `base`: the directory relative paths are joined to (an `-F` file's), else the
 /// working directory.
-fn find_in(
+fn walk<T>(
     args: &[String],
     base: Option<&Path>,
-    refused: fn(&str) -> bool,
     depth: u32,
-) -> Option<(PathBuf, String)> {
+    visit: &mut impl FnMut(&Path, &[String]) -> Option<T>,
+) -> Option<T> {
     if depth > MAX_DEPTH {
         return None;
     }
@@ -41,15 +47,12 @@ fn find_in(
         };
         let named = Path::new(it.next()?);
         let path = base.map_or_else(|| named.to_path_buf(), |dir| dir.join(named));
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let words = words(&text);
-        if let Some(w) = words.iter().find(|w| refused(w)) {
-            return Some((path, w.clone()));
+        let words = std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words(&t));
+        if let Some(found) = visit(&path, &words) {
+            return Some(found);
         }
         let dir = if relative { path.parent() } else { base };
-        if let Some(found) = find_in(&words, dir, refused, depth + 1) {
+        if let Some(found) = walk(&words, dir, depth + 1, visit) {
             return Some(found);
         }
     }

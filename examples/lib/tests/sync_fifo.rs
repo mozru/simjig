@@ -1,6 +1,6 @@
-//! `sync_fifo` (`rtl/sync_fifo.sv`) in both read modes: the 8-bit `sync_fifo` model has a
-//! registered read, and `item_fifo` (the same FIFO over the packed struct `Item`) is
-//! first-word-fall-through.
+//! `sync_fifo` (`rtl/sync_fifo.sv`) in both read modes: the sweep `sync_fifo` (two raw
+//! FIFOs, 8 bits by 4 entries and 32 bits by 16) has a registered read, and `item_fifo`
+//! (the same FIFO over the packed struct `Item`) is first-word-fall-through.
 //!
 //! The testbench's shape:
 //! - **Timing.** Every task drives on the falling edge and samples on the rising edge. At a
@@ -9,6 +9,9 @@
 //! - **Reference model.** [`Model`] is the FIFO in plain Rust. A monitor task checks it
 //!   against the design on every edge (`count`, `full`, `empty`, `rd`), then applies the
 //!   edge's push and pop to it, so every test, directed or random, is checked the same way.
+//! - **Sweep.** A test of the raw FIFO is written once, generic over `sync_fifo::Ports`, and
+//!   runs on every configuration: `#[simjig::test(duts = [..])]` makes one test per
+//!   configuration (`random_traffic_matches_the_model::fifo_8x4`).
 //! - **Stimulus.** A producer and a consumer task draw from their own seeded streams
 //!   (`ctx.rng("producer")`), so the consumer's backpressure and the producer's bursts are
 //!   independent and replay exactly from the report's seed.
@@ -25,12 +28,12 @@ use std::fmt::Debug;
 use std::rc::Rc;
 
 use simjig::bits::{Bit, Bits, Packed};
-use simjig::with_timeout;
-use simjig::{In, Out, RawWords, ReadOnly, Rng, TestCtx, clock, cycles, fork, ns, spawn, us};
+use simjig::{In, Out, ReadOnly, Rng, TestCtx, Value, Vector, with_timeout};
+use simjig::{clock, cycles, fork, ns, spawn, us};
 
 mod common;
 
-simjig::include_dut!(sync_fifo);
+simjig::include_dut!(sync_fifo); // the sweep: sync_fifo::{Ports, fifo_8x4, fifo_32x16}
 simjig::include_dut!(item_fifo);
 
 use item_fifo::{Item, Kind};
@@ -43,23 +46,17 @@ const PHASE: u32 = 24;
 /// Rates (percent of cycles) a producer or consumer picks from for each phase.
 const RATES: [u64; 3] = [10, 50, 90];
 
-/// A value the generated handles can read and write (`In::set` and `Out::get` need
-/// `RawWords` storage). Its `Default` is the all-zero value
-/// (`Bits::ZERO`; every field zero for a generated struct): a registered `rd`'s reset
-/// value.
-trait Payload: Packed<Raw: RawWords> + PartialEq + Debug + Default {}
-impl<T: Packed<Raw: RawWords> + PartialEq + Debug + Default> Payload for T {}
-
-/// One FIFO's handles, whichever model they come from.
+/// One FIFO's handles, whichever model they come from: a configuration of the sweep, or
+/// `item_fifo`. A payload `T` is any [`Value`] (`Default` is the all-zero value, a
+/// registered `rd`'s reset value), and `count` any width ([`Vector`]).
 ///
-/// Why this struct exists: `build.rs` builds two models of `sync_fifo` (the raw 8-bit one
-/// and `item_fifo`), and every test here should run the same driver, monitor and
-/// [`Model`] on either. But each generated `Dut` is its own type, with no trait in common,
-/// and their payloads differ (`Bits<8>` and `Item`). Copying the handles into one
-/// `Fifo<T>` is the smallest code that lets the testbench be written once, generic only
-/// in the payload; the alternative is a second copy of every helper per model.
+/// Why this struct exists: the sweep's configurations share one trait,
+/// `sync_fifo::Ports`, but `item_fifo` is another module, and every test here should run
+/// the same driver, monitor and [`Model`] on all three. Copying the handles into one
+/// `Fifo<T, C>` is the smallest code that does it, generic only in the payload and the
+/// count; with the sweep alone, the helpers would take `D: sync_fifo::Ports` instead.
 #[derive(Clone, Copy, Debug)]
-struct Fifo<T: 'static> {
+struct Fifo<T: 'static, C: 'static> {
     clk: In<Bit>,
     rst: In<Bit>,
     push: In<Bit>,
@@ -68,30 +65,37 @@ struct Fifo<T: 'static> {
     rd: Out<T>,
     full: Out<Bit>,
     empty: Out<Bit>,
-    count: Out<Bits<3>>,
+    count: Out<C>,
     depth: usize,
     fwft: bool,
 }
 
-impl Fifo<Bits<8>> {
-    fn raw(dut: sync_fifo::Dut) -> Self {
+/// Any configuration of the sweep: `wr_data` and `rd_data` agree in every configuration,
+/// so they share one associated type, `D::WrData`.
+impl<D: sync_fifo::Ports> From<D> for Fifo<D::WrData, D::Count> {
+    fn from(dut: D) -> Self {
         Self {
-            clk: dut.clk,
-            rst: dut.rst,
-            push: dut.push,
-            wr: dut.wr_data,
-            pop: dut.pop,
-            rd: dut.rd_data,
-            full: dut.full,
-            empty: dut.empty,
-            count: dut.count,
-            depth: usize::try_from(sync_fifo::Dut::DEPTH).unwrap(),
-            fwft: sync_fifo::Dut::FWFT,
+            clk: dut.clk(),
+            rst: dut.rst(),
+            push: dut.push(),
+            wr: dut.wr_data(),
+            pop: dut.pop(),
+            rd: dut.rd_data(),
+            full: dut.full(),
+            empty: dut.empty(),
+            count: dut.count(),
+            depth: usize::try_from(D::DEPTH).unwrap(),
+            fwft: D::FWFT,
         }
     }
 }
 
-impl Fifo<Item> {
+/// `Fifo::from` of a sweep configuration, named for the call sites.
+fn raw<D: sync_fifo::Ports>(dut: D) -> Fifo<D::WrData, D::Count> {
+    Fifo::from(dut)
+}
+
+impl Fifo<Item, Bits<3>> {
     fn items(dut: item_fifo::Dut) -> Self {
         Self {
             clk: dut.clk,
@@ -123,7 +127,7 @@ struct Sample<T> {
     count: usize,
 }
 
-impl<T: Payload> Fifo<T> {
+impl<T: Value, C: Vector> Fifo<T, C> {
     fn sample(self) -> Sample<T> {
         Sample {
             rst: self.rst.get().to_bool(),
@@ -167,9 +171,9 @@ struct Model<T> {
     stats: Stats,
 }
 
-impl<T: Payload> Model<T> {
+impl<T: Value> Model<T> {
     /// A model of `fifo` holding `entries`, oldest first (none right after reset).
-    fn new(fifo: Fifo<T>, entries: &[T]) -> Self {
+    fn new<C: Vector>(fifo: Fifo<T, C>, entries: &[T]) -> Self {
         Self {
             depth: fifo.depth,
             fwft: fifo.fwft,
@@ -224,7 +228,7 @@ impl<T: Payload> Model<T> {
 
 /// Starts a monitor that checks `model` against `fifo` on every rising edge until the
 /// test ends, and returns the model for the test to inspect.
-fn monitor<T: Payload>(fifo: Fifo<T>, model: Model<T>) -> Rc<RefCell<Model<T>>> {
+fn monitor<T: Value, C: Vector>(fifo: Fifo<T, C>, model: Model<T>) -> Rc<RefCell<Model<T>>> {
     let board = Rc::new(RefCell::new(model));
     let shared = Rc::clone(&board);
     spawn("monitor", async move {
@@ -240,7 +244,7 @@ fn monitor<T: Payload>(fifo: Fifo<T>, model: Model<T>) -> Rc<RefCell<Model<T>>> 
 
 /// Holds reset for two cycles with every input idle, and releases it at the falling edge
 /// after the last reset edge, where it returns: the next edge is the first out of reset.
-async fn reset<T: Payload>(fifo: Fifo<T>) {
+async fn reset<T: Value, C: Vector>(fifo: Fifo<T, C>) {
     fifo.rst.set(1);
     fifo.push.set(0);
     fifo.pop.set(0);
@@ -250,7 +254,7 @@ async fn reset<T: Payload>(fifo: Fifo<T>) {
 }
 
 /// Starts the clock, resets, and starts the monitor on an empty model.
-async fn start<T: Payload>(fifo: Fifo<T>) -> Rc<RefCell<Model<T>>> {
+async fn start<T: Value, C: Vector>(fifo: Fifo<T, C>) -> Rc<RefCell<Model<T>>> {
     clock(fifo.clk, ns(10)).start();
     reset(fifo).await;
     monitor(fifo, Model::new(fifo, &[]))
@@ -258,7 +262,7 @@ async fn start<T: Payload>(fifo: Fifo<T>) -> Rc<RefCell<Model<T>>> {
 
 /// One directed cycle: sets the inputs at the falling edge, and returns the outputs after
 /// the next rising edge (in `ReadOnly`, once they settled).
-async fn cycle<T: Payload>(fifo: Fifo<T>, push: Option<T>, pop: bool) -> Sample<T> {
+async fn cycle<T: Value, C: Vector>(fifo: Fifo<T, C>, push: Option<T>, pop: bool) -> Sample<T> {
     fifo.clk.falling().await;
     fifo.push.set(push.is_some());
     if let Some(item) = push {
@@ -275,7 +279,12 @@ fn pick(rng: &mut Rng, rates: &[u64]) -> u64 {
 }
 
 /// Pushes random items for `cycles` cycles, in bursts (see [`PHASE`]), then goes idle.
-async fn produce<T: Payload>(fifo: Fifo<T>, mut rng: Rng, cycles: u32, item: fn(&mut Rng) -> T) {
+async fn produce<T: Value, C: Vector>(
+    fifo: Fifo<T, C>,
+    mut rng: Rng,
+    cycles: u32,
+    item: fn(&mut Rng) -> T,
+) {
     let mut rate = 0;
     for n in 0..cycles {
         if n % PHASE == 0 {
@@ -290,7 +299,7 @@ async fn produce<T: Payload>(fifo: Fifo<T>, mut rng: Rng, cycles: u32, item: fn(
 }
 
 /// Pops at a random rate for `cycles` cycles (the backpressure), then stops popping.
-async fn consume<T: Payload>(fifo: Fifo<T>, mut rng: Rng, cycles: u32) {
+async fn consume<T: Value, C: Vector>(fifo: Fifo<T, C>, mut rng: Rng, cycles: u32) {
     let mut rate = 0;
     for n in 0..cycles {
         if n % PHASE == 0 {
@@ -304,7 +313,7 @@ async fn consume<T: Payload>(fifo: Fifo<T>, mut rng: Rng, cycles: u32) {
 }
 
 /// Pops until the FIFO is empty, then lets the monitor check one more (empty) edge.
-async fn drain<T: Payload>(fifo: Fifo<T>) {
+async fn drain<T: Value, C: Vector>(fifo: Fifo<T, C>) {
     fifo.clk.falling().await;
     fifo.pop.set(1);
     while fifo.empty.get() == Bit::ZERO {
@@ -316,7 +325,12 @@ async fn drain<T: Payload>(fifo: Fifo<T>) {
 }
 
 /// Producer and consumer for `cycles` cycles, then a drain (at most 1 us).
-async fn traffic<T: Payload>(fifo: Fifo<T>, rng: [Rng; 2], cycles: u32, item: fn(&mut Rng) -> T) {
+async fn traffic<T: Value, C: Vector>(
+    fifo: Fifo<T, C>,
+    rng: [Rng; 2],
+    cycles: u32,
+    item: fn(&mut Rng) -> T,
+) {
     let [push_rng, pop_rng] = rng;
     let producer = spawn("producer", produce(fifo, push_rng, cycles, item));
     let consumer = spawn("consumer", consume(fifo, pop_rng, cycles));
@@ -329,7 +343,11 @@ async fn traffic<T: Payload>(fifo: Fifo<T>, rng: [Rng; 2], cycles: u32, item: fn
 
 /// Random traffic, then a drain: every pushed entry comes out once, in order (the
 /// monitor checks each against the model), and the traffic reached every corner.
-async fn random_traffic<T: Payload>(ctx: &TestCtx, fifo: Fifo<T>, item: fn(&mut Rng) -> T) {
+async fn random_traffic<T: Value, C: Vector>(
+    ctx: &TestCtx,
+    fifo: Fifo<T, C>,
+    item: fn(&mut Rng) -> T,
+) {
     let board = start(fifo).await;
     let rng = [ctx.rng("producer"), ctx.rng("consumer")];
     traffic(fifo, rng, CYCLES, item).await;
@@ -345,7 +363,11 @@ async fn random_traffic<T: Payload>(ctx: &TestCtx, fifo: Fifo<T>, item: fn(&mut 
 /// start never shows: entries inside and both pointers away from zero. Right after the
 /// reset edge the FIFO is empty (`count` 0, `rd` zero in registered mode); then traffic
 /// goes on against the model, which the reset restarted empty.
-async fn reset_during_traffic<T: Payload>(ctx: &TestCtx, fifo: Fifo<T>, item: fn(&mut Rng) -> T) {
+async fn reset_during_traffic<T: Value, C: Vector>(
+    ctx: &TestCtx,
+    fifo: Fifo<T, C>,
+    item: fn(&mut Rng) -> T,
+) {
     let board = start(fifo).await;
     let resetter = spawn("resetter", reset_when_busy(fifo, Rc::clone(&board)));
     let rng = [ctx.rng("producer"), ctx.rng("consumer")];
@@ -370,7 +392,10 @@ async fn reset_during_traffic<T: Payload>(ctx: &TestCtx, fifo: Fifo<T>, item: fn
 /// Waits, checking at each falling edge, until the FIFO holds two entries or more and
 /// neither pointer is at zero; then holds `rst` for one edge while the producer and
 /// consumer keep driving `push` and `pop`. Returns the outputs right after that edge.
-async fn reset_when_busy<T: Payload>(fifo: Fifo<T>, board: Rc<RefCell<Model<T>>>) -> Sample<T> {
+async fn reset_when_busy<T: Value, C: Vector>(
+    fifo: Fifo<T, C>,
+    board: Rc<RefCell<Model<T>>>,
+) -> Sample<T> {
     // The pointers count modulo 2 * DEPTH (one wrap bit above the index).
     let wrap = u32::try_from(2 * fifo.depth).unwrap();
     let busy = async {
@@ -404,7 +429,7 @@ async fn reset_when_busy<T: Payload>(fifo: Fifo<T>, board: Rc<RefCell<Model<T>>>
 /// `full` clear) and a registered `rd` is zero, not the entry the pop would have read;
 /// one push and pop then show it working again. Random traffic reaches this edge only on
 /// a lucky seed.
-async fn reset_beats_push_and_pop<T: Payload>(fifo: Fifo<T>, entries: [T; 4]) {
+async fn reset_beats_push_and_pop<T: Value, C: Vector>(fifo: Fifo<T, C>, entries: [T; 4]) {
     let board = start(fifo).await;
     let [a, b, c, d] = entries;
     for entry in [a, b, c] {
@@ -447,10 +472,10 @@ async fn reset_beats_push_and_pop<T: Payload>(fifo: Fifo<T>, entries: [T; 4]) {
     assert_eq!((st.resets, st.flushed), (1, 2), "{st:?}");
 }
 
-#[simjig::test(timeout = "2us")]
-async fn a_reset_beats_push_and_pop(dut: sync_fifo::Dut) {
-    let entries = [0x11, 0x22, 0x33, 0x44].map(Bits::new);
-    reset_beats_push_and_pop(Fifo::raw(dut), entries).await;
+#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+async fn a_reset_beats_push_and_pop<D: sync_fifo::Ports>(dut: D) {
+    let entries = [0x11, 0x22, 0x33, 0x44].map(D::WrData::from);
+    reset_beats_push_and_pop(raw(dut), entries).await;
 }
 
 #[simjig::test(timeout = "2us")]
@@ -459,9 +484,9 @@ async fn a_reset_beats_item_push_and_pop(dut: item_fifo::Dut) {
     reset_beats_push_and_pop(Fifo::items(dut), entries).await;
 }
 
-#[simjig::test(timeout = "100us")]
-async fn a_reset_during_traffic_empties_the_fifo(ctx: &TestCtx, dut: sync_fifo::Dut) {
-    reset_during_traffic(ctx, Fifo::raw(dut), random_bits).await;
+#[simjig::test(timeout = "100us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+async fn a_reset_during_traffic_empties_the_fifo<D: sync_fifo::Ports>(ctx: &TestCtx, dut: D) {
+    reset_during_traffic(ctx, raw(dut), random_word).await;
 }
 
 #[simjig::test(timeout = "100us")]
@@ -469,8 +494,14 @@ async fn a_reset_during_item_traffic_empties_the_fifo(ctx: &TestCtx, dut: item_f
     reset_during_traffic(ctx, Fifo::items(dut), random_item).await;
 }
 
-fn random_bits(rng: &mut Rng) -> Bits<8> {
-    Bits::new(u128::from(rng.below(1 << 8)))
+/// A random word of any width up to 64 bits.
+fn random_word<T: Vector>(rng: &mut Rng) -> T {
+    T::from(u128::from(rng.next_u64()) & low_bits(T::WIDTH))
+}
+
+/// The value with the `width` low bits set.
+fn low_bits(width: u32) -> u128 {
+    u128::MAX >> (128 - width)
 }
 
 fn random_item(rng: &mut Rng) -> Item {
@@ -489,9 +520,9 @@ fn item(kind: Kind, tag: u128, data: u128) -> Item {
     }
 }
 
-#[simjig::test(timeout = "100us")]
-async fn random_traffic_matches_the_model(ctx: &TestCtx, dut: sync_fifo::Dut) {
-    random_traffic(ctx, Fifo::raw(dut), random_bits).await;
+#[simjig::test(timeout = "100us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+async fn random_traffic_matches_the_model<D: sync_fifo::Ports>(ctx: &TestCtx, dut: D) {
+    random_traffic(ctx, raw(dut), random_word).await;
 }
 
 #[simjig::test(timeout = "100us")]
@@ -499,13 +530,16 @@ async fn random_items_match_the_model(ctx: &TestCtx, dut: item_fifo::Dut) {
     random_traffic(ctx, Fifo::items(dut), random_item).await;
 }
 
-/// Five pushes into four entries: `count` climbs to `full` and the fifth push is dropped;
-/// four pops return the first four in order, and a pop of an empty FIFO is ignored.
-#[simjig::test(timeout = "2us")]
-async fn fills_to_full_and_drains_to_empty(dut: sync_fifo::Dut) {
-    let fifo = Fifo::raw(dut);
+/// `DEPTH + 1` pushes: `count` climbs to `full` and the last push is dropped; `DEPTH`
+/// pops return the first `DEPTH` in order, and a pop of an empty FIFO is ignored.
+#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+async fn fills_to_full_and_drains_to_empty<D: sync_fifo::Ports>(dut: D) {
+    let fifo = raw(dut);
     let board = start(fifo).await;
-    let items: Vec<Bits<8>> = (1..=5).map(|i| Bits::new(0x11 * i)).collect();
+    let mask = low_bits(D::WrData::WIDTH);
+    let items: Vec<D::WrData> = (1..=u128::try_from(fifo.depth).unwrap() + 1)
+        .map(|i| D::WrData::from((0x11 * i) & mask))
+        .collect();
     for (n, &item) in items.iter().enumerate() {
         let s = cycle(fifo, Some(item), false).await;
         assert_eq!(s.count, (n + 1).min(fifo.depth));
@@ -531,9 +565,11 @@ async fn fills_to_full_and_drains_to_empty(dut: sync_fifo::Dut) {
 
 /// A push and a pop in one cycle: when empty only the push is taken; in between `count`
 /// holds; when full both are taken, so the FIFO stays full with the new entry last.
+///
+/// Written for one configuration, as a test of one `Dut` is: its values are `Bits<8>`.
 #[simjig::test(timeout = "2us")]
-async fn push_and_pop_in_one_cycle(dut: sync_fifo::Dut) {
-    let fifo = Fifo::raw(dut);
+async fn push_and_pop_in_one_cycle(dut: sync_fifo::fifo_8x4::Dut) {
+    let fifo = raw(dut);
     let board = start(fifo).await;
     let b = |v: u128| Bits::<8>::new(v);
     let s = cycle(fifo, Some(b(0xa0)), true).await;
@@ -556,17 +592,38 @@ async fn push_and_pop_in_one_cycle(dut: sync_fifo::Dut) {
 
 /// Registered read: a pushed entry stays off `rd` (which holds its reset value) until a
 /// pop, and appears on the edge of that pop.
-#[simjig::test(timeout = "2us")]
-async fn registered_read_waits_for_a_pop(dut: sync_fifo::Dut) {
-    let fifo = Fifo::raw(dut);
+#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+async fn registered_read_waits_for_a_pop<D: sync_fifo::Ports>(dut: D) {
+    let fifo = raw(dut);
     start(fifo).await;
-    cycle(fifo, Some(Bits::new(0x5a)), false).await;
+    cycle(fifo, Some(D::WrData::from(0x5a)), false).await;
     for _ in 0..3 {
         let s = cycle(fifo, None, false).await;
-        assert_eq!((s.empty, s.rd), (false, Bits::new(0)));
+        assert_eq!((s.empty, s.rd), (false, D::WrData::from(0)));
     }
     let s = cycle(fifo, None, true).await;
-    assert_eq!((s.empty, s.rd), (true, Bits::new(0x5a)));
+    assert_eq!((s.empty, s.rd), (true, D::WrData::from(0x5a)));
+}
+
+/// `count` climbs by one per push to `DEPTH`, where `full` rises: one body for every
+/// configuration of the sweep (the top README's "A parameter sweep").
+#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+async fn count_climbs_to_the_depth<D: sync_fifo::Ports>(dut: D) {
+    clock(dut.clk(), ns(10)).start();
+    dut.rst().set(1);
+    cycles(dut.clk(), 2).await;
+    dut.clk().falling().await;
+    dut.rst().set(0);
+    dut.push().set(1);
+    let depth = u128::from(D::DEPTH.unsigned_abs());
+    for n in 1..=depth {
+        dut.wr_data().set(n); // a `u128` that fits every configuration's `WIDTH`
+        dut.clk().rising().await;
+        ReadOnly::new().await;
+        assert_eq!(dut.count().get(), n, "after {n} pushes, DEPTH {depth}");
+        assert_eq!(dut.full().get(), n == depth);
+        dut.clk().falling().await;
+    }
 }
 
 /// First-word fall-through: the head is on `rd` the edge after its push, without a pop,
@@ -655,4 +712,30 @@ fn parameters_are_checked_at_elaboration() {
     );
     let bad_width: &[&[&str]] = &[&["WIDTH=0"]];
     common::assert_param_checks("sync_fifo", src, &[], bad_width, "WIDTH must be at least 1");
+}
+
+/// The top README's "A parameter sweep" shows this crate's code: each of its Rust blocks
+/// is, line for line (indentation aside), in `build.rs` or this file, so CI compiles and
+/// runs what the README shows.
+#[test]
+fn the_readme_sweep_is_this_crate_code() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let read = |p: &str| std::fs::read_to_string(format!("{root}/{p}")).unwrap();
+    let readme = read("../../README.md");
+    let (_, section) = readme.split_once("### A parameter sweep\n").unwrap();
+    let section = section.split("\n### ").next().unwrap();
+    let flat = |text: &str| -> String {
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        lines.join("\n")
+    };
+    let code = flat(&(read("build.rs") + &read("tests/sync_fifo.rs")));
+    let blocks: Vec<&str> = section
+        .split("```rust\n")
+        .skip(1)
+        .map(|b| b.split("```").next().unwrap())
+        .collect();
+    assert_eq!(blocks.len(), 2, "{section}");
+    for block in blocks {
+        assert!(code.contains(&flat(block)), "not in the crate:\n{block}");
+    }
 }

@@ -290,63 +290,71 @@ assignments (IEEE 1800-2017 §25.5), so nothing in the design says that a module
 through its port (`out.W`), which rule 1 allows.
 
 ### A parameter sweep
-Each build of one top is its own DUT (`Dut::new("pkt_small")...param("MAX_LEN", 4)`,
-`Dut::new("pkt_big")...param("MAX_LEN", 64)`), with its own generated module: its
-`Dut`, struct and enum types are distinct Rust types, even where they are equal in
-SystemVerilog. To write each test once, write it against a small trait of your own,
-implement the trait for each configuration's `Dut` (a short `macro_rules!` that holds
-only the impl), and keep one `#[simjig::test]` line per configuration. A failure then
-points at the generic test body, not at a macro call. Here `pkt_parser`'s `in` is an
-interface port (`beat_if.sink`, bound with `.bind_iface("in", "beat_if.sink")`), so its
-signals are a bundle, `self.r#in.valid`:
+To test several configurations of one module with one test body, build them as a
+`Sweep` in `build.rs`. Each configuration is still its own DUT (its own model and
+module), and the sweep adds one Rust module over them (`examples/lib`, `sync_fifo`):
 
 ```rust
-use simjig::bits::{Bit, Bits};
-use simjig::{In, Out};
-
-simjig::include_dut!(pkt_small);
-simjig::include_dut!(pkt_big);
-
-/// The signals whose types are the same in every configuration.
-#[derive(Clone, Copy)]
-struct Ports { clk: In<Bit>, valid: In<Bit>, data: In<Bits<8>>, hdr_valid: Out<Bit> }
-
-trait Parser: Copy + 'static {
-    const MAX_LEN: u32;
-    fn ports(self) -> Ports;
-    /// `hdr`'s struct type is generated per configuration: read it here.
-    fn hdr_len(self) -> u8;
-}
-
-macro_rules! parser {
-    ($m:ident) => {
-        impl Parser for $m::Dut {
-            const MAX_LEN: u32 = $m::Dut::MAX_LEN as u32;
-            fn ports(self) -> Ports {
-                Ports { clk: self.clk, valid: self.r#in.valid, data: self.r#in.data, hdr_valid: self.hdr_valid }
-            }
-            fn hdr_len(self) -> u8 { self.hdr.get().len.to_u128() as u8 }
-        }
-    };
-}
-parser!(pkt_small);
-parser!(pkt_big);
-
-async fn header_is_read<D: Parser>(dut: D) {
-    let p = dut.ports();
-    // ... drive p.valid and p.data on p.clk ...
-    assert_eq!(dut.hdr_len(), 3, "MAX_LEN {}", D::MAX_LEN); // a failure points here
-}
-
-#[simjig::test]
-async fn small_header(dut: pkt_small::Dut) { header_is_read(dut).await }
-#[simjig::test]
-async fn big_header(dut: pkt_big::Dut) { header_is_read(dut).await }
+let fifo = |name: &str, width: u32, depth: u32| {
+    Dut::new(name)
+        .sources(["rtl/sync_fifo.sv"])
+        .top("sync_fifo")
+        .param("WIDTH", width)
+        .param("DEPTH", depth)
+        .param("FWFT", 0)
+        .trace_fst(true)
+        .verilator_args(LINT)
+};
+Sweep::new("sync_fifo")
+    .dut(fifo("fifo_8x4", 8, 4))
+    .dut(fifo("fifo_32x16", 32, 16))
+    .build()?;
 ```
 
-A port whose width follows a parameter (`logic [N-1:0]`) has a different `Bits<N>` per
-configuration: read it in the trait too (`fn count(self) -> u128`), or give the trait an
-associated type.
+`simjig::include_dut!(sync_fifo)` includes the sweep: each configuration's module
+(`sync_fifo::fifo_8x4::Dut`), the generated types that are the same in every configuration
+(defined once, so `fifo_8x4::Item` is `sync_fifo::Item`), and the trait
+`sync_fifo::Ports`, which every configuration's `Dut` implements. Its methods return the
+`Dut`'s fields (`dut.clk()` for `dut.clk`) and its associated consts are the parameters
+(`D::DEPTH`). A test written once over `D: sync_fifo::Ports` runs on every configuration
+listed in `duts`, one test each (`count_climbs_to_the_depth::fifo_8x4`), and a failure
+points at the line in the body:
+
+```rust
+#[simjig::test(timeout = "2us", duts = [sync_fifo::fifo_8x4::Dut, sync_fifo::fifo_32x16::Dut])]
+async fn count_climbs_to_the_depth<D: sync_fifo::Ports>(dut: D) {
+    clock(dut.clk(), ns(10)).start();
+    dut.rst().set(1);
+    cycles(dut.clk(), 2).await;
+    dut.clk().falling().await;
+    dut.rst().set(0);
+    dut.push().set(1);
+    let depth = u128::from(D::DEPTH.unsigned_abs());
+    for n in 1..=depth {
+        dut.wr_data().set(n); // a `u128` that fits every configuration's `WIDTH`
+        dut.clk().rising().await;
+        ReadOnly::new().await;
+        assert_eq!(dut.count().get(), n, "after {n} pushes, DEPTH {depth}");
+        assert_eq!(dut.full().get(), n == depth);
+        dut.clk().falling().await;
+    }
+}
+```
+
+A signal whose type is the same in every configuration keeps it (`dut.clk()` is an
+`In<Bit>`). One whose width follows a parameter has an associated type instead:
+`dut.count()` is an `Out<D::Count>`, `D::Count` being `Bits<3>` in `fifo_8x4` and
+`Bits<5>` in `fifo_32x16`. Signals whose types agree in every configuration share one
+(`wr_data` and `rd_data` are both `D::WrData`), so a value moves between them. An
+associated type is bounded by `simjig::Vector` (a bit vector: `set(0x5a)`, `get() == 3`
+and `.to_u128()` work at any width) or by `simjig::Value` (a struct or enum of the
+configuration: `get`, `set`, `==`, `{:?}`, `Default`), so the body needs no `where`
+clause. A method or const of a bound needs its trait in scope (`use simjig::Vector;` for
+`.to_u128()`, `use simjig::bits::Packed;` for `D::WrData::WIDTH`), as an interface port
+whose bundle differs between configurations does (its bundle trait, `<Bundle>Ports` in
+the sweep's module). A signal that not every configuration has alike (a probe of one)
+is left out of `Ports`; the concrete `Dut` still has it. A test of one configuration
+takes its `Dut` as before (`dut: sync_fifo::fifo_8x4::Dut`).
 
 ### Waves on failure
 A run is never traced while it first runs. When waves are asked for, the harness replays

@@ -7,7 +7,7 @@
 //! (`SIMJIG_WAVES_ON_FAIL=1`, or the report's `waves:` line). Tracing costs only build
 //! time: a run is traced only when it is replayed for waves.
 
-use simjig_build::{Dut, Error};
+use simjig_build::{Dut, Error, Sweep};
 
 /// Verilator arguments shared by every DUT of this crate.
 const LINT: [&str; 1] = ["-Wall"];
@@ -22,18 +22,25 @@ fn main() -> Result<(), Error> {
 
 // ---- sync_fifo (rtl/sync_fifo.sv, rtl/item_fifo.sv, rtl/fifo_pkg.sv) --------------------
 
-/// `sync_fifo` twice: a raw 8-bit, 4-deep FIFO with a registered read (`sync_fifo`), and
-/// `item_fifo`, the same FIFO over the packed struct `fifo_pkg::item_t` in
-/// first-word-fall-through mode. Each parameter set is its own model.
+/// `sync_fifo` as a parameter sweep of two raw FIFOs with a registered read, 8 bits by 4
+/// entries and 32 bits by 16, so each test is written once for both
+/// (`simjig::include_dut!(sync_fifo)`, `sync_fifo::Ports`); and `item_fifo`, the same FIFO
+/// over the packed struct `fifo_pkg::item_t` in first-word-fall-through mode. Each
+/// parameter set is its own model.
 fn sync_fifo() -> Result<(), Error> {
-    Dut::new("sync_fifo")
-        .sources(["rtl/sync_fifo.sv"])
-        .top("sync_fifo")
-        .param("WIDTH", 8)
-        .param("DEPTH", 4)
-        .param("FWFT", 0)
-        .trace_fst(true)
-        .verilator_args(LINT)
+    let fifo = |name: &str, width: u32, depth: u32| {
+        Dut::new(name)
+            .sources(["rtl/sync_fifo.sv"])
+            .top("sync_fifo")
+            .param("WIDTH", width)
+            .param("DEPTH", depth)
+            .param("FWFT", 0)
+            .trace_fst(true)
+            .verilator_args(LINT)
+    };
+    Sweep::new("sync_fifo")
+        .dut(fifo("fifo_8x4", 8, 4))
+        .dut(fifo("fifo_32x16", 32, 16))
         .build()?;
     Dut::new("item_fifo")
         .sources(["rtl/fifo_pkg.sv", "rtl/sync_fifo.sv", "rtl/item_fifo.sv"])

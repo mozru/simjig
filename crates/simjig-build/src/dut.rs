@@ -4,10 +4,10 @@
 //! fixed order:
 //! 1. locate and version-check Verilator;
 //! 2. claim the DUT name in this build script (`script::claim_name`);
-//! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
-//!    `-G`, extra arguments and `--timing` setting (one builder, `DutConfig::design`),
-//!    giving the type IR. A DUT with
-//!    interface ports takes two passes through generated tops (`pipeline::design_ir`).
+//! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same file lists, sources,
+//!    `-I`, `-D`, `-G`, extra arguments and `--timing` setting (one builder,
+//!    `DutConfig::design`), giving the type IR. A DUT with interface ports takes two
+//!    passes through generated tops (`pipeline::design_ir`).
 //!    The IR is cached (`front`): a rerun that changes nothing runs no JSON pass;
 //! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
 //!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
@@ -26,6 +26,7 @@ use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
 use svtypes::ir::{Design, DpiImport};
+use svtypes::verilator::FileList;
 
 use crate::codegen::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 use crate::compile::{self, CppRecipe};
@@ -156,11 +157,40 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// Why a DUT has no sources, pointing an `-f`/`-F` among the extra arguments (read after
+/// the sources, so too late for a package) at [`Dut::file_list`].
+fn no_sources_message(args: &[String]) -> String {
+    let list = args.iter().zip(args.iter().skip(1)).find(|(a, _)| {
+        matches!(
+            a.strip_prefix("--").or_else(|| a.strip_prefix('-')),
+            Some("f" | "F")
+        )
+    });
+    match list {
+        Some((flag, path)) => {
+            let call = if flag.ends_with('F') {
+                "file_list_relative"
+            } else {
+                "file_list"
+            };
+            format!(
+                "no sources; `{flag} {path}` is among `verilator_args`, which Verilator \
+                 reads after the sources: use `.{call}(\"{path}\")`, whose files are sources"
+            )
+        }
+        None => {
+            "no sources; add them with `.sources([..])` or `.file_list(\"files.f\")`".to_owned()
+        }
+    }
+}
+
 /// Everything recorded about a DUT. Emitters read this.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DutConfig {
     /// Name given to [`Dut::new`]; a C identifier.
     pub name: String,
+    /// Verilator file lists ([`Dut::file_list`]), read in order before the sources.
+    pub file_lists: Vec<FileList>,
     /// Source files, in order.
     pub sources: Vec<PathBuf>,
     /// `` `include `` search directories (`-I`).
@@ -259,6 +289,7 @@ impl DutConfig {
         // No `..`: a new field must be placed in the digest, or out of it on purpose.
         let Self {
             name,
+            file_lists,
             sources,
             include_dirs,
             defines,
@@ -280,6 +311,11 @@ impl DutConfig {
         let mut h = KeyHasher::new("simjig-prefix-v3");
         h.str("name").str(name);
         h.str("top").str(top.as_deref().unwrap_or(""));
+        for l in file_lists {
+            h.str("file-list")
+                .field(&[u8::from(l.relative)])
+                .path(&l.path);
+        }
         for s in sources {
             h.str("source").path(s);
         }
@@ -351,6 +387,7 @@ impl DutConfig {
         params: bool,
     ) -> svtypes::verilator::JsonPassOpts {
         svtypes::verilator::JsonPassOpts {
+            file_lists: self.file_lists.clone(),
             sources,
             top: top.to_owned(),
             timing: self.features().timing,
@@ -411,6 +448,16 @@ impl DutConfig {
         }
     }
 
+    /// The arguments that may name option files, for `optfile`: the file lists as `-f`/`-F`
+    /// (where Verilator reads them, before the sources), then the extra arguments.
+    pub(crate) fn option_args(&self) -> Vec<String> {
+        self.file_lists
+            .iter()
+            .flat_map(FileList::args)
+            .chain(self.verilator_args.iter().cloned())
+            .collect()
+    }
+
     /// The user-generated inputs ([`Dut::verilator_input`]) that are design sources, not
     /// control files: every Verilator run needs them, while a `.vlt` only shapes the model.
     pub(crate) fn sv_inputs(&self) -> impl Iterator<Item = &GeneratedInput> {
@@ -432,8 +479,14 @@ impl DutConfig {
         if !is_c_ident(&self.name) {
             return fail("the name must be a C identifier (letters, digits, `_`)".to_owned());
         }
-        if self.sources.is_empty() {
-            return fail("no sources; add them with `.sources([..])`".to_owned());
+        if self.sources.is_empty() && self.file_lists.is_empty() {
+            return fail(no_sources_message(&self.verilator_args));
+        }
+        if let Some(list) = self.file_lists.iter().find(|l| !l.path.is_file()) {
+            return fail(format!(
+                "file list `{}` does not exist",
+                list.path.display()
+            ));
         }
         let args = &self.verilator_args;
         for (i, arg) in args.iter().enumerate() {
@@ -441,7 +494,7 @@ impl DutConfig {
                 return fail(format!("Verilator argument `{arg}`: {why}"));
             }
         }
-        if let Some((file, word)) = crate::optfile::find(args, is_param_override) {
+        if let Some((file, word)) = crate::optfile::find(&self.option_args(), is_param_override) {
             return fail(format!(
                 "Verilator option file `{}` has `{word}`: {PARAM_HINT}",
                 file.display()
@@ -564,6 +617,30 @@ impl Dut {
     /// same before and during the build.
     pub fn sources(mut self, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Self {
         self.config.sources.extend(paths.into_iter().map(absolute));
+        self
+    }
+
+    /// Adds a Verilator file list (`-f`): a file of sources and options, one per word,
+    /// whose relative paths resolve against the working directory (in a build script, the
+    /// package root). Its files are sources: the file lists are read in order, before
+    /// [`Dut::sources`], by every Verilator run (the JSON pass, the model build), so a
+    /// package in one is declared before the sources that import it. The path is made
+    /// absolute like [`Dut::sources`]. A DUT needs sources or a file list.
+    pub fn file_list(mut self, path: impl AsRef<Path>) -> Self {
+        self.config.file_lists.push(FileList {
+            path: absolute(path),
+            relative: false,
+        });
+        self
+    }
+
+    /// Adds a Verilator file list read with `-F`: like [`Dut::file_list`], but relative
+    /// paths inside it resolve against the file's own directory.
+    pub fn file_list_relative(mut self, path: impl AsRef<Path>) -> Self {
+        self.config.file_lists.push(FileList {
+            path: absolute(path),
+            relative: true,
+        });
         self
     }
 
@@ -984,7 +1061,7 @@ fn is_c_ident(name: &str) -> bool {
 /// not exist reruns the script on every build until it does, which a failed DUT is
 /// waiting for anyway. A directory is tracked by its files ([`tracked_files`]).
 fn failed_reruns(config: &DutConfig, recipe: &CppRecipe, out_dir: Option<&Path>) -> Vec<String> {
-    let option_inputs = crate::optfile::inputs(&config.verilator_args);
+    let option_inputs = crate::optfile::inputs(&config.option_args());
     let named = config
         .sources
         .iter()
@@ -1060,13 +1137,20 @@ mod tests {
             .sources(["/r/fifo.sv"])
             .include_dirs(["/r/inc"])
             .verilator_args(["-f", "/r/opts.f"])
+            .file_list("/r/files.f")
             .config;
         let recipe = CppRecipe {
             model_sources: vec![PathBuf::from("/r/glue.cpp")],
             ..CppRecipe::default()
         };
         let reruns = failed_reruns(&config, &recipe, None);
-        for path in ["/r/fifo.sv", "/r/inc", "/r/opts.f", "/r/glue.cpp"] {
+        for path in [
+            "/r/fifo.sv",
+            "/r/inc",
+            "/r/opts.f",
+            "/r/files.f",
+            "/r/glue.cpp",
+        ] {
             assert!(
                 reruns.contains(&format!("cargo::rerun-if-changed={path}")),
                 "{path}: {reruns:?}"
@@ -1175,6 +1259,16 @@ mod tests {
         );
     }
 
+    fn list_variant(relative: bool) -> DutConfig {
+        DutConfig {
+            file_lists: vec![FileList {
+                path: "/r/files.f".into(),
+                relative,
+            }],
+            ..cfg()
+        }
+    }
+
     /// One config per setting, each differing from `cfg()` in that setting only.
     fn variants() -> Vec<DutConfig> {
         vec![
@@ -1207,6 +1301,8 @@ mod tests {
                 verilator_args: vec!["-O0".into()],
                 ..cfg()
             },
+            list_variant(false),
+            list_variant(true),
             DutConfig {
                 probes: vec![Probe {
                     path: "fifo.u.s".into(),
@@ -1300,6 +1396,14 @@ mod tests {
             ..empty.clone()
         };
         assert_ne!(source.prefix(), include.prefix());
+        let list = DutConfig {
+            file_lists: vec![FileList {
+                path: "/r/a".into(),
+                relative: false,
+            }],
+            ..empty.clone()
+        };
+        assert_ne!(source.prefix(), list.prefix());
         let arg = DutConfig {
             verilator_args: vec!["x".into()],
             ..empty.clone()
@@ -1467,6 +1571,21 @@ mod tests {
                 "{m}"
             );
         }
+        let listed = DutConfig {
+            file_lists: vec![FileList {
+                path: opts.clone(),
+                relative: false,
+            }],
+            ..cfg()
+        };
+        assert!(
+            listed
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains(&format!("option file `{path}` has `-pvalue+W=2`")),
+            "a file list is searched like an `-f` among the arguments"
+        );
         std::fs::write(&opts, "// -GDEPTH=4\n-Wall\n").unwrap();
         assert!(with_args(&["-f", &path]).validate().is_ok());
     }
@@ -1486,7 +1605,34 @@ mod tests {
                 sources: vec![],
                 ..cfg()
             }),
-            "invalid DUT `fifo` configuration: no sources; add them with `.sources([..])`"
+            "invalid DUT `fifo` configuration: no sources; add them with `.sources([..])` \
+             or `.file_list(\"files.f\")`"
+        );
+        assert_eq!(
+            msg(DutConfig {
+                sources: vec![],
+                ..with_args(&["-Wall", "-f", "rtl/files.f"])
+            }),
+            "invalid DUT `fifo` configuration: no sources; `-f rtl/files.f` is among \
+             `verilator_args`, which Verilator reads after the sources: use \
+             `.file_list(\"rtl/files.f\")`, whose files are sources"
+        );
+        assert!(
+            msg(DutConfig {
+                sources: vec![],
+                ..with_args(&["-F", "x.F"])
+            })
+            .contains("`.file_list_relative(\"x.F\")`")
+        );
+        assert_eq!(
+            msg(DutConfig {
+                file_lists: vec![FileList {
+                    path: "/nonexistent/files.f".into(),
+                    relative: false,
+                }],
+                ..cfg()
+            }),
+            "invalid DUT `fifo` configuration: file list `/nonexistent/files.f` does not exist"
         );
         assert_eq!(
             msg(DutConfig { top: None, ..cfg() }),

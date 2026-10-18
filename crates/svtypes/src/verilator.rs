@@ -26,6 +26,11 @@ pub struct JsonPassOpts {
     /// Environment variables set for the Verilator process (for example
     /// `VERILATOR_ROOT`), on top of the inherited environment.
     pub env: Vec<(OsString, OsString)>,
+    /// Verilator file lists (`-f`/`-F`), read in order before [`sources`](Self::sources):
+    /// the files they name come first, so a package listed in one is parsed before the
+    /// sources that import it (Verilator reads files in order and stops on a reference
+    /// to a package it has not read yet).
+    pub file_lists: Vec<FileList>,
     /// SystemVerilog source files.
     pub sources: Vec<PathBuf>,
     /// Top module name (`--top-module`).
@@ -47,8 +52,8 @@ pub struct JsonPassOpts {
 
 impl JsonPassOpts {
     /// The arguments that describe the design: `--timing` or `--no-timing`,
-    /// `--top-module`, `-I`, `-D`, `-G`, the sources and the extra arguments, in that
-    /// order.
+    /// `--top-module`, `-I`, `-D`, `-G`, the file lists, the sources and the extra
+    /// arguments, in that order.
     ///
     /// This is the one place these are spelled: the JSON pass uses it, and so does any
     /// other Verilator run that must elaborate the same design (simjig-build's model
@@ -76,9 +81,30 @@ impl JsonPassOpts {
             None => format!("-D{name}"),
         }));
         a.extend(self.params.iter().map(|(n, v)| format!("-G{n}={v}")));
+        a.extend(self.file_lists.iter().flat_map(FileList::args));
         a.extend(self.sources.iter().map(|p| p.display().to_string()));
         a.extend(self.extra_args.iter().cloned());
         a
+    }
+}
+
+/// A Verilator file list: an option file read in place, whose words are sources and
+/// options, one per whitespace-separated word.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FileList {
+    /// The file.
+    pub path: PathBuf,
+    /// `-F` instead of `-f`: relative paths inside it resolve against its own directory,
+    /// not the working directory.
+    pub relative: bool,
+}
+
+impl FileList {
+    /// `-f <path>` or `-F <path>`.
+    #[must_use]
+    pub fn args(&self) -> [String; 2] {
+        let flag = if self.relative { "-F" } else { "-f" };
+        [flag.to_owned(), self.path.display().to_string()]
     }
 }
 
@@ -87,6 +113,7 @@ impl Default for JsonPassOpts {
         Self {
             exe: PathBuf::from("verilator"),
             env: Vec::new(),
+            file_lists: Vec::new(),
             sources: Vec::new(),
             top: String::new(),
             timing: false,
@@ -323,5 +350,31 @@ mod tests {
             ..opts
         };
         assert_eq!(timed.design_args()[0], "--timing");
+    }
+
+    /// File lists come before the sources, so a package in one is read before a source
+    /// that imports it.
+    #[test]
+    fn file_lists_precede_the_sources() {
+        let opts = JsonPassOpts {
+            top: "t".into(),
+            file_lists: vec![
+                FileList {
+                    path: "a.f".into(),
+                    relative: false,
+                },
+                FileList {
+                    path: "d/b.F".into(),
+                    relative: true,
+                },
+            ],
+            sources: vec!["s.sv".into()],
+            extra_args: vec!["-Wall".into()],
+            ..JsonPassOpts::default()
+        };
+        assert_eq!(
+            opts.design_args().join(" "),
+            "--no-timing --top-module t -f a.f -F d/b.F s.sv -Wall"
+        );
     }
 }

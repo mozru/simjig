@@ -402,6 +402,73 @@ fn generated_sv_inputs_reach_every_verilator_run() {
     assert_eq!(runs, 3, "{calls}");
 }
 
+/// A DUT whose sources are all in a file list: the package, an interface and the module
+/// importing the package, in the list's order, which every Verilator run keeps (the list
+/// comes before the generated elaboration top and wrapper), and whose files are tracked.
+#[test]
+fn a_dut_from_a_file_list_reads_it_in_order() {
+    let s = Sandbox::new();
+    let rtl = s.path().join("fl");
+    std::fs::create_dir_all(&rtl).unwrap();
+    std::fs::write(
+        rtl.join("fl_pkg.sv"),
+        "package fl_pkg;\n  typedef struct packed { logic [2:0] kind; logic [4:0] len; } hdr_t;\nendpackage\n",
+    )
+    .unwrap();
+    std::fs::write(
+        rtl.join("fl_if.sv"),
+        "interface fl_if;\n  logic v;\n  modport sink (input v);\nendinterface\n",
+    )
+    .unwrap();
+    std::fs::write(
+        rtl.join("fl_top.sv"),
+        "module fl_top import fl_pkg::*; (input logic clk, fl_if.sink in, output hdr_t h);\n  \
+         always_ff @(posedge clk) h <= in.v ? '1 : '0;\nendmodule\n",
+    )
+    .unwrap();
+    let list = rtl.join("files.F");
+    let dut = |name: &str| {
+        Dut::new(name)
+            .file_list_relative(&list)
+            .top("fl_top")
+            .bind_iface("in", "fl_if.sink")
+            .verilator_args(["-Wall"])
+    };
+    std::fs::write(&list, "fl_pkg.sv\nfl_if.sv\nfl_top.sv\n").unwrap();
+    let built = dut("fl").build_in(&s.env()).unwrap();
+    let h = built
+        .design
+        .top_module()
+        .ports
+        .iter()
+        .find(|p| p.name == "h")
+        .unwrap();
+    assert_eq!(built.design.ty(h.ty).width, Some(8));
+    let calls = s.verilator_calls();
+    let with_list = calls.lines().filter(|l| l.contains(" -F ")).count();
+    // Two JSON passes (interface ports), the layout check, the model build.
+    assert_eq!(with_list, 4, "{calls}");
+    for line in calls.lines() {
+        let at = |needle: &str| line.find(needle);
+        if let (Some(l), Some(g)) = (at(" -F "), at("/simjig_")) {
+            assert!(l < g, "the list precedes the generated tops: {line}");
+        }
+    }
+    for f in ["files.F", "fl_pkg.sv", "fl_if.sv", "fl_top.sv"] {
+        let rerun = format!("cargo::rerun-if-changed={}", rtl.join(f).display());
+        assert!(
+            built.directives.contains(&rerun),
+            "{f}: {:?}",
+            built.directives
+        );
+    }
+
+    // The list's order is the user's: the module before its package fails.
+    std::fs::write(&list, "fl_top.sv\nfl_if.sv\nfl_pkg.sv\n").unwrap();
+    let e = dut("fl_rev").build_in(&s.env()).unwrap_err().to_string();
+    assert!(e.contains("fl_pkg"), "{e}");
+}
+
 /// The generated module of the DUT `name` in `s`'s `OUT_DIR`.
 fn generated(s: &Sandbox, name: &str) -> String {
     std::fs::read_to_string(s.path().join(format!("out/simjig/{name}.rs"))).unwrap()

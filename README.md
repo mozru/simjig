@@ -198,6 +198,13 @@ simjig_build::Dut::new("core")
     .build()?;
 ```
 
+Sources kept in a Verilator file list go in with `.file_list("rtl/files.f")` (`-f`:
+paths relative to the package root) or `.file_list_relative("rtl/files.F")` (`-F`:
+relative to the list). The lists are read in order, before `.sources([..])`, by every
+Verilator run, so a package listed first is declared before the modules importing it; a
+DUT may have a file list and no `.sources`. An `-f` among `verilator_args` is read after
+the sources instead, which is too late for a package and does not count as sources.
+
 A DUT the crate can do without (one that needs a tool not every machine has, say) is
 optional: handle its error instead of returning it, and gate its uses on the `cfg` that
 `Dut::build` sets only when the DUT built, `simjig_dut_<name>` (declared either way, so

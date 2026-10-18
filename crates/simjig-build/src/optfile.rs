@@ -243,7 +243,11 @@ mod tests {
         let outer = vec!["-F".to_owned(), sub.join("outer.F").display().to_string()];
         assert_eq!(
             inputs(&outer),
-            [sub.join("outer.F"), sub.join("inner.f"), PathBuf::from("top.sv")]
+            [
+                sub.join("outer.F"),
+                sub.join("inner.f"),
+                PathBuf::from("top.sv")
+            ]
         );
         assert_eq!(
             find(&outer, |w| w.starts_with("-G")),

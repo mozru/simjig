@@ -4,6 +4,16 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `Dut::file_list(path)` (`-f`) and `Dut::file_list_relative(path)` (`-F`) add a
+  Verilator file list whose files are the DUT's sources: read in order before
+  `.sources`, by the JSON passes, the layout check and the model build, and part of the
+  prefix, the cache keys (the list's contents and, through Verilator's dependencies,
+  the files in it) and the failed-build reruns. A DUT may have file lists and no
+  `.sources`; a missing list fails the configuration check. New public API:
+  `DutConfig::file_lists`, `svtypes::verilator::FileList` and
+  `JsonPassOpts::file_lists` (passed after `-G`, before the sources), all additive but
+  breaking for a struct literal without `..`. A DUT with no sources whose `-f` is among
+  `verilator_args` is told to use `.file_list`.
 - A failed `Dut::build` tracks a directory it names (`+incdir+`, `-I`, `-y`,
   `.include_dirs`) by the files directly in it, and never an ancestor of `OUT_DIR`: Cargo
   scans a tracked directory recursively, so a handled DUT naming the package directory

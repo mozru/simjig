@@ -11,6 +11,7 @@
 //!
 //! Type names are decided in [`types`], identifier rules in [`names`](super::names).
 
+mod inlining;
 mod sv;
 mod types;
 mod wrapper;
@@ -39,6 +40,7 @@ use super::{
 /// ports, enums above 128 bits, ...); [`Error::Config`] when probes or interface bindings
 /// do not match the design.
 pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> {
+    inlining::check(config)?;
     let top = design.top_module();
     let wrapper = config
         .iface_top
@@ -87,12 +89,19 @@ pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> 
     })
 }
 
-/// FNV-1a 64 over the IR's JSON form and the configuration's `Debug` form; both are
-/// deterministic (the IR holds no maps, the configuration only vectors).
+/// FNV-1a 64 over the IR's JSON form and the `Debug` form of the configuration fields that
+/// shape the generated code; both are deterministic (the IR holds no maps, the
+/// configuration only vectors).
 fn ir_hash(design: &Design, config: &CodegenConfig) -> u64 {
     // Serialising plain derived structs to a Vec cannot fail.
     let json = serde_json::to_vec(design).unwrap_or_default();
-    let config = format!("{config:?}");
+    // The derived `Debug` text of a configuration with only these two fields, so adding
+    // fields that can only reject a configuration (`verilator_args`, `control_files`)
+    // changes no hash.
+    let config = format!(
+        "CodegenConfig {{ probes: {:?}, iface_top: {:?} }}",
+        config.probes, config.iface_top
+    );
     json.iter()
         .chain(config.as_bytes())
         .fold(0xcbf2_9ce4_8422_2325, |h, &b| {

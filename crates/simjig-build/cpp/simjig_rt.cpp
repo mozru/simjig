@@ -251,12 +251,9 @@ void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scop
              + " bits wide, but it is bound as " + std::to_string(width) + " bits");
     }
     // verilated_sym_props.h: the storage class Verilator chose for the variable.
-    const VerilatedVarType expected = width <= 8    ? VLVT_UINT8
-                                      : width <= 16 ? VLVT_UINT16
-                                      : width <= 32 ? VLVT_UINT32
-                                      : width <= 64 ? VLVT_UINT64
-                                                    : VLVT_WDATA;
-    if (v->vltype() != expected) fail("the model's variable is not stored as a packed vector");
+    if (v->vltype() != vltype_for_width(width)) {
+        fail("the model's variable is not stored as a packed vector");
+    }
     if (v->datap() == nullptr) fail("the model's variable has no address");
     return v->datap();
 }

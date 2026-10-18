@@ -11,9 +11,9 @@
 //!    and [`CppRecipe::model_sources`]. Its `VM_*` defines are the model's own switches
 //!    from `_classes.mk`, exactly as `verilated.mk` passes them. Cached in the shared
 //!    cache like the runtime (`archives/<key>/`), keyed on the Verilator output directory
-//!    (content-addressed), the shim's and recipe sources' contents and the toolchain: a
-//!    build script reruns for any edit to any of its DUTs, and only the edited DUT's model
-//!    is compiled again.
+//!    (content-addressed), the shim's and recipe sources' contents, every header they
+//!    read and the toolchain: a build script reruns for any edit to any of its DUTs, and
+//!    only the edited DUT's model is compiled again.
 //! 2. **runtime extras**: runtime classes that only some models need (`verilated_fst_c`
 //!    for `--trace-fst`, `verilated_cov` for `--coverage`, `verilated_covergroup` for
 //!    covergroups), one cached archive per class and set of switches, compiled with the

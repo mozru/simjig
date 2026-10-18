@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
+  `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
+  refused; `--threads 2147483648` is negative and left to Verilator's own error.
 - A NUL byte in an option file ends its line, as in 5.052, which walks each line as a C
   string: the checks no longer see (and refuse) words after it.
 - A `Starved` failure's help names the way out for a combinational design: ``start a

@@ -174,8 +174,15 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
 
 /// C's `atoi`, which Verilator 5.052 reads `--threads` with: leading whitespace, a sign
 /// and the digits up to the first other character (`01` and `1x` are 1, `x` is 0).
-/// Saturates where C would overflow.
-fn c_atoi(text: &str) -> i64 {
+/// Out of range, C leaves it undefined; macOS's libc and glibc both compute
+/// `(int)strtol(..)`, which clamps to the 64-bit `long` range and then keeps the low 32
+/// bits: `4294967297` is 1 and `2147483648` negative (checked against 5.052: one thread,
+/// and its own `--threads must be >= 0`).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "C's conversion of `long` to `int`"
+)]
+fn c_atoi(text: &str) -> i32 {
     let t = text.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
     let (negative, digits) = match t.as_bytes().first() {
         Some(b'-') => (true, &t[1..]),
@@ -186,9 +193,14 @@ fn c_atoi(text: &str) -> i64 {
         .bytes()
         .take_while(u8::is_ascii_digit)
         .fold(0_i64, |n, d| {
-            n.saturating_mul(10).saturating_add(i64::from(d - b'0'))
+            let d = i64::from(d - b'0');
+            if negative {
+                n.saturating_mul(10).saturating_sub(d)
+            } else {
+                n.saturating_mul(10).saturating_add(d)
+            }
         });
-    if negative { -n } else { n }
+    n as i32
 }
 
 /// Why a DUT has no sources, pointing an `-f`/`-F` among the extra arguments (read after
@@ -1687,6 +1699,7 @@ mod tests {
             (&["--hierarchical"], "one model per DUT"),
             (&["--threads", "2"], "one thread"),
             (&["--threads", " +12x"], "one thread"),
+            (&["--threads", "4294967298"], "one thread"),
         ] {
             let m = msg(args);
             assert!(m.contains(hint) && m.contains(args[0]), "{args:?}: {m}");
@@ -1700,6 +1713,10 @@ mod tests {
             &["--threads", "0"],
             &["--threads", "1x"],
             &["--threads", "-3"],
+            &["--threads", "4294967297"],
+            &["--threads", "2147483648"],
+            &["--threads", "99999999999999999999"],
+            &["--threads", "-99999999999999999999"],
             &["--threads"],
             &["--prefix=Vx"],
             &["--top-module=x"],

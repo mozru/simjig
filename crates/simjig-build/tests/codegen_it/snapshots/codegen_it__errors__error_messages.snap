@@ -1,0 +1,16 @@
+---
+source: crates/simjig-build/tests/codegen_it/errors.rs
+expression: "out.join(\"\\n\")"
+---
+codegen: probe other.u.x: the path must start with the top module, e.g. `top.u_core.state`
+codegen: probe top.u.x: no module `nope` in the design
+codegen: probe top.x: no type named `pkg::nope_t` in the IR
+codegen: probe top.x: width must be at least 1
+codegen: probe top.a$b: `a$b` is not a plain identifier
+codegen: iface top `producer`: no such module in the design; elaborate it under the elaboration top first
+codegen: interface port `producer.bus`: not bound; add `.bind_iface("bus", "bus_if")`
+codegen: bind_iface(bus): a generic interface port needs a modport; one of: src, snk
+codegen: bind_iface(bus): `producer.bus` is a `bus_if` port, not `other_if`
+codegen: bind_iface(bus): the port declares modport `src`, not `snk`
+codegen: bind_iface(nope): `producer` has no interface port of that name
+codegen: iface top `absent`: no such module in the design; elaborate it under the elaboration top first

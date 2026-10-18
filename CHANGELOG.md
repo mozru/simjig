@@ -36,6 +36,9 @@ the public API, the generated code or simulation semantics.
   to a recipe source, in an include directory or `-I` flag, or in the toolchain), plus
   the file names in each such directory. The build script also reruns on those files
   (except the ones under the cache and `OUT_DIR`). Every archive is compiled again once.
+- Every archive key (models and Verilator runtimes) covers the compiler's identity: the
+  executable its path resolves to, with size and modification time, and its `--version`
+  output (run once per build script). Every archive is compiled again once.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

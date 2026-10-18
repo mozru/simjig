@@ -48,7 +48,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::archive::{Archive, Spec, Toolchain};
+use crate::archive::{self, Archive, Spec, Toolchain};
 use crate::cache::Cache;
 use crate::dut::DutConfig;
 use crate::runtime::Runtime;
@@ -256,6 +256,7 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
         i,
         base: &base,
         compiler: &compiler,
+        identity: archive::compiler_identity(i.env, &compiler),
     };
 
     let mut model_defines = mk.defines();

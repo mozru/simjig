@@ -7,8 +7,8 @@
 //! direct mode:
 //! 1. the *pre key* hashes what is known up front: the kind, [`crate::ABI_VERSION`], the
 //!    `simjig-build` version (which covers the fixed flags of `compile::base_build`), the
-//!    Verilator version and include directory, the compiler's path and arguments,
-//!    the target, optimisation and debug settings, the defines,
+//!    Verilator version and include directory, the compiler (its path and arguments, and
+//!    [`compiler_identity`]), the target, optimisation and debug settings, the defines,
 //!    every source (path and contents), the include paths, and the file names in every
 //!    directory a quoted include may be found in ([`search_dirs`]), so a new file that
 //!    would shadow a header changes the key;
@@ -21,11 +21,12 @@
 //! without its archive (from an interrupted older layout) is a miss, and is replaced.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use crate::cache::{self, Cache};
 use crate::compile::Inputs;
 use crate::hash::KeyHasher;
-use crate::{ABI_VERSION, Error, depfile};
+use crate::{ABI_VERSION, BuildEnv, Error, depfile};
 
 /// A static library, compiled or found in the cache.
 pub(crate) struct Archive {
@@ -41,6 +42,8 @@ pub(crate) struct Toolchain<'a> {
     pub(crate) i: &'a Inputs<'a>,
     pub(crate) base: &'a cc::Build,
     pub(crate) compiler: &'a cc::Tool,
+    /// [`compiler_identity`] of `compiler`.
+    pub(crate) identity: String,
 }
 
 /// One archive to build: `simjig_<what>_<key>` from `sources` into `<cache>/<kind>/`.
@@ -104,6 +107,7 @@ impl Toolchain<'_> {
             .str(&i.verilator.version_line)
             .path(&i.verilator.include_dir)
             .path(self.compiler.path())
+            .str(&self.identity)
             .str(&i.env.target)
             .str(&i.env.cxx_opt)
             .field(&[u8::from(i.env.debug)])
@@ -147,6 +151,62 @@ impl Toolchain<'_> {
         }
         let deps = compiler_deps(work)?;
         Ok((work.join(format!("lib{provisional}.a")), deps))
+    }
+}
+
+/// What identifies the C++ compiler beyond its path: the executable the path resolves to
+/// (through `PATH` and symlinks) with its size and modification time, and the output of
+/// `<compiler> --version`. An upgrade in place keeps the path but changes these, and with
+/// them the system headers and code generation.
+///
+/// `--version` runs once per build script (`OUT_DIR`) and executable: a build script
+/// compiles several archives per DUT, and the answer does not change while it runs.
+pub(crate) fn compiler_identity(env: &BuildEnv, tool: &cc::Tool) -> String {
+    static VERSIONS: Mutex<Vec<(PathBuf, PathBuf, String)>> = Mutex::new(Vec::new());
+    let named = tool.path();
+    let found = if named.components().count() == 1 {
+        env.find_on_path(&named.to_string_lossy())
+    } else {
+        None
+    };
+    let exe = found.as_deref().unwrap_or(named);
+    let exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let file = match std::fs::metadata(&exe) {
+        Ok(m) => {
+            let mtime = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{} {} {mtime}", exe.display(), m.len())
+        }
+        Err(e) => format!("{} unreadable: {e}", exe.display()),
+    };
+    // A panic while holding the lock leaves the list itself consistent.
+    let mut versions = VERSIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let known = versions
+        .iter()
+        .find(|(out, path, _)| *out == env.out_dir && *path == exe)
+        .map(|(_, _, v)| v.clone());
+    let version = known.unwrap_or_else(|| {
+        let v = version_output(&exe);
+        versions.push((env.out_dir.clone(), exe.clone(), v.clone()));
+        v
+    });
+    format!("{file}\n{version}")
+}
+
+/// `<exe> --version`, with its status and both streams. A compiler that cannot answer
+/// (MSVC has no `--version`) is identified by the failure instead.
+fn version_output(exe: &Path) -> String {
+    match std::process::Command::new(exe).arg("--version").output() {
+        Ok(o) => format!(
+            "{}\n{}{}",
+            o.status,
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        ),
+        Err(e) => format!("could not run: {e}"),
     }
 }
 

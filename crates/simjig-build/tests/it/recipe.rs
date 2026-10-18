@@ -274,3 +274,53 @@ fn editing_a_header_next_to_a_recipe_source_recompiles_the_model() {
     let (edited, _) = build_inv(&s, &env, &log, recipe);
     assert!(edited.contains(&"uses_near.cpp".to_owned()), "{edited:?}");
 }
+
+/// The compiler's identity is part of every archive key: a compiler whose `--version`
+/// changes (an upgrade in place, same path) compiles the model and the runtime again.
+#[test]
+fn a_new_compiler_version_recompiles_every_archive() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    // The compiler `cc` would pick: `CXX` (pixi sets it), else `c++`, found on PATH.
+    let name = std::env::var("CXX").unwrap_or_else(|_| "c++".to_owned());
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join(&name))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| std::path::PathBuf::from(&name));
+    let version = s.path().join("cxx-version");
+    std::fs::write(&version, "fake c++ 1.0\n").unwrap();
+    let cxx = s.path().join("fake-cxx");
+    crate::support::write_script(
+        &cxx,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then cat '{}'; exit 0; fi\nexec '{}' \"$@\"\n",
+            version.display(),
+            real.display()
+        ),
+    );
+    // SAFETY: nextest runs every test in its own process, and nothing else runs yet.
+    unsafe { std::env::set_var("CXX", &cxx) };
+    // Each build stands for one build-script run (one OUT_DIR), which asks the compiler
+    // for its version once.
+    let env_in = |out: &str| {
+        let mut env = s.env();
+        env.out_dir = s.path().join(out);
+        env.simjig_ccache = Some(ccache.clone().into());
+        env
+    };
+    let (first, _) = build_inv(&s, &env_in("out1"), &log, CppRecipe::default());
+    assert!(first.contains(&"verilated.cpp".to_owned()), "{first:?}");
+    let (same, _) = build_inv(&s, &env_in("out2"), &log, CppRecipe::default());
+    // The model's key has the shim's path, which is under OUT_DIR; the runtime's has not.
+    assert!(
+        !same.contains(&"verilated.cpp".to_owned()),
+        "the same compiler: {same:?}"
+    );
+    std::fs::write(&version, "fake c++ 1.1\n").unwrap();
+    let (upgraded, _) = build_inv(&s, &env_in("out3"), &log, CppRecipe::default());
+    assert!(
+        upgraded.contains(&"verilated.cpp".to_owned())
+            && upgraded.iter().any(|n| n.starts_with('V')),
+        "{upgraded:?}"
+    );
+}

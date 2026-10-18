@@ -129,15 +129,27 @@ pub struct ModelMeta {
     pub precision_exponent: i8,
     /// Every signal, in slot order (`Dut::SIGNALS`).
     pub signals: &'static [SignalMeta],
+    /// The `module_path!()` of the generated module; its last segment is the DUT's name
+    /// (the `simjig_build::Dut::new` name, as `include_dut!` names the module).
+    pub module: &'static str,
     /// C names of the model's DPI-C imports implemented in Rust. A model without any
     /// evaluates without a DPI scope (see `crate::dpi`).
     pub dpi_imports: &'static [&'static str],
+}
+
+impl ModelMeta {
+    /// The DUT's name: the last segment of [`module`](Self::module).
+    #[must_use]
+    pub fn dut_name(&self) -> &'static str {
+        self.module.rsplit("::").next().unwrap_or(self.module)
+    }
 }
 
 impl fmt::Debug for ModelMeta {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModelMeta")
             .field("prefix", &self.prefix)
+            .field("module", &self.module)
             .field("ir_hash", &format_args!("{:#018x}", self.ir_hash))
             .field("precision_exponent", &self.precision_exponent)
             .field("signals", &self.signals.len())
@@ -147,6 +159,9 @@ impl fmt::Debug for ModelMeta {
 }
 
 /// Why a generated model could not be loaded.
+///
+/// Its `Display` states the problem; [`help`](Self::help) says what to change (the
+/// harness's report prints both, so neither repeats the other).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoadError {
     /// The model was compiled against another version of the simjig C ABI.
@@ -298,9 +313,6 @@ pub(crate) fn row_problem(e: &AbiError) -> String {
     }
 }
 
-const REBUILD: &str = "the model and the generated Rust come from different builds; rebuild \
-                       both (cargo clean -p for the crate that builds the model)";
-
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -311,7 +323,7 @@ impl fmt::Display for LoadError {
             } => write!(
                 f,
                 "model `{prefix}` uses simjig C ABI version {model}, this runtime version \
-                 {runtime}; {REBUILD}"
+                 {runtime}"
             ),
             Self::VtableSize {
                 prefix,
@@ -319,8 +331,7 @@ impl fmt::Display for LoadError {
                 runtime,
             } => write!(
                 f,
-                "model `{prefix}` has a {model}-byte vtable, this runtime needs {runtime}; \
-                 {REBUILD}"
+                "model `{prefix}` has a {model}-byte vtable, this runtime needs {runtime}"
             ),
             Self::IrHash {
                 prefix,
@@ -329,11 +340,11 @@ impl fmt::Display for LoadError {
             } => write!(
                 f,
                 "model `{prefix}` was built from IR {model:#018x}, the generated Rust from \
-                 {expected:#018x}; {REBUILD}"
+                 {expected:#018x}"
             ),
             Self::Prefix { expected, found } => write!(
                 f,
-                "the vtable linked for model `{expected}` belongs to model `{found}`; {REBUILD}"
+                "the vtable linked for model `{expected}` belongs to model `{found}`"
             ),
             Self::Precision { prefix, exponent } => write!(
                 f,
@@ -344,17 +355,13 @@ impl fmt::Display for LoadError {
                 prefix,
                 slot,
                 problem,
-            } => write!(
-                f,
-                "model `{prefix}`, signal slot {slot}: {problem}; {REBUILD}"
-            ),
+            } => write!(f, "model `{prefix}`, signal slot {slot}: {problem}"),
             Self::Create { prefix, reason } => {
                 write!(f, "model `{prefix}` failed while being created: {reason}")
             }
             Self::NoTrace { prefix } => write!(
                 f,
-                "model `{prefix}` was built without FST tracing, so it cannot write waves; \
-                 build it with `.trace_fst(true)` on its `simjig_build::Dut` in build.rs"
+                "model `{prefix}` was built without FST tracing, so it cannot write waves"
             ),
             Self::TraceOpen {
                 prefix,
@@ -409,9 +416,24 @@ mod tests {
             expected: 2,
         };
         let text = e.to_string();
-        assert!(
-            text.contains("`Vcounter`") && text.contains("rebuild"),
-            "{text}"
-        );
+        assert!(text.contains("`Vcounter`"), "{text}");
+        let help = e.help().expect("a setup error");
+        assert!(help.starts_with("rebuild"), "{help}");
+        assert!(!text.contains("rebuild"), "the advice is the help's: {text}");
+    }
+
+    #[test]
+    fn the_dut_name_is_the_generated_modules_name() {
+        let meta = |module| ModelMeta {
+            vtable: || unreachable!("not loaded"),
+            prefix: "Vcounter_0123abcd",
+            ir_hash: 0,
+            precision_exponent: -12,
+            signals: &[],
+            module,
+            dpi_imports: &[],
+        };
+        assert_eq!(meta("waves_tests::counter").dut_name(), "counter");
+        assert_eq!(meta("counter").dut_name(), "counter");
     }
 }

@@ -140,15 +140,19 @@ fn a_model_built_without_fst_says_how_to_enable_it() {
     let trace = TraceOptions::new(waves_path("plain"));
     let error = counter::Dut::instantiate(&options().with_trace(trace)).expect_err("no FST");
     assert!(
-        error.message.contains("was built without FST tracing")
-            && error.message.contains(".trace_fst(true)"),
+        error.message.starts_with("DUT `counter`: model `Vcounter_")
+            && error.message.contains("was built without FST tracing"),
         "{}",
         error.message
     );
-    assert_eq!(
-        error.kind.name(),
-        "Setup",
-        "a build option, not the design, is wrong"
+    let simjig::FailureKind::Setup { help, .. } = &error.kind else {
+        panic!("a build option, not the design, is wrong: {error}");
+    };
+    assert!(help.contains(".trace_fst(true)"), "{help}");
+    assert!(
+        !error.message.contains(".trace_fst(true)"),
+        "the help is not repeated in the message: {}",
+        error.message
     );
     let text = error.to_string();
     let (prefix_start, prefix_end) = (

@@ -180,6 +180,7 @@ const INV: ModelMeta = ModelMeta {
     ir_hash: inv::Dut::IR_HASH,
     precision_exponent: -12,
     signals: inv::Dut::SIGNALS,
+    module: "model_tests::inv",
     dpi_imports: &[],
 };
 

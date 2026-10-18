@@ -490,6 +490,7 @@ mod tests {
     static FAKE: ModelMeta = ModelMeta {
         vtable: fake_vtable,
         prefix: "Vfake",
+        module: "tests::fake",
         ir_hash: 7,
         precision_exponent: -9,
         signals: &[
@@ -795,7 +796,8 @@ mod tests {
         fake::reset();
         let err = VerilatorModel::load(&FAKE, &[], Some(&TraceOptions::new("w.fst"))).unwrap_err();
         assert_eq!(err, LoadError::NoTrace { prefix: "Vfake" });
-        assert!(err.to_string().contains(".trace_fst(true)"), "{err}");
+        let help = err.help().expect("a setup error");
+        assert!(help.contains(".trace_fst(true)"), "{help}");
         let optional = TraceOptions::new("w.fst").if_supported();
         let model = VerilatorModel::load(&FAKE, &[], Some(&optional)).unwrap();
         assert!(model.tracer.is_none());

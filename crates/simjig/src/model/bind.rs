@@ -132,7 +132,7 @@ pub fn load(meta: &'static ModelMeta, options: &ModelOptions) -> Result<LoadedMo
         .map_err(|e| {
             let precision =
                 Precision::from_exponent(meta.precision_exponent).unwrap_or(Precision::PS);
-            load_failure(&e, precision)
+            load_failure(meta, &e, precision)
         })?;
     Ok(LoadedModel::from_backend(Box::new(model)))
 }
@@ -179,7 +179,7 @@ pub fn create_in<D>(
                     slot: s.slot as usize,
                     problem: format!("the simulation has no `{}` in this slot", s.name),
                 };
-                return Err(load_failure(&error, sim.precision()));
+                return Err(load_failure(meta, &error, sim.precision()));
             }
         }
     }
@@ -193,8 +193,10 @@ pub fn create_in<D>(
     Ok(bind(&mut binder))
 }
 
-fn load_failure(error: &LoadError, precision: Precision) -> Failure {
-    let message = error.to_string();
+/// The failure of loading the model of DUT `meta`: its message names the DUT, then the
+/// problem; a setup problem's advice goes in its help, not its message.
+fn load_failure(meta: &ModelMeta, error: &LoadError, precision: Precision) -> Failure {
+    let message = format!("DUT `{}`: {error}", meta.dut_name());
     let kind = match error.help() {
         Some(help) => FailureKind::Setup {
             message: message.clone(),
@@ -235,6 +237,7 @@ macro_rules! __dut_model {
                 ir_hash: $dut::IR_HASH,
                 precision_exponent: $exp,
                 signals: $dut::SIGNALS,
+                module: ::core::module_path!(),
                 dpi_imports: &[$($($dpi),*)?],
             };
 

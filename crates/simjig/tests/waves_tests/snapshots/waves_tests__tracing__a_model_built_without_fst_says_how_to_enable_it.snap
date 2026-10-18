@@ -2,5 +2,5 @@
 source: crates/simjig/tests/waves_tests/tracing.rs
 expression: text
 ---
-simjig Setup at t=0 ps: model `Vcounter_<hash>` was built without FST tracing, so it cannot write waves; build it with `.trace_fst(true)` on its `simjig_build::Dut` in build.rs
+simjig Setup at t=0 ps: DUT `counter`: model `Vcounter_<hash>` was built without FST tracing, so it cannot write waves
   help: build the model with `.trace_fst(true)` on its `simjig_build::Dut` in build.rs, or ask for optional waves (`TraceOptions::if_supported`)

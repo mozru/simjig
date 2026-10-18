@@ -12,14 +12,14 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::panic::Location;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread::{self, ThreadId};
 
-use super::backend::ModelBackend;
-use super::failure::{Failure, FailureKind};
+use super::clock::ClockEntry;
+use super::failure::{Failure, FailureKind, SourceLocation};
+use super::models::Models;
 use super::recorder::{Recorder, TraceKind, TraceRecord};
 use super::signal::WriteLog;
 use super::slab::Key;
@@ -60,10 +60,12 @@ pub struct KernelStats {
 pub(crate) struct Kernel {
     pub(crate) sim_gen: u32,
     pub(crate) precision: Precision,
-    /// Slot names, shared with the retired-names registry for stale-handle messages.
+    /// Flat slot names, shared with the retired-names registry for stale-handle messages.
     pub(crate) names: Rc<[Box<str>]>,
+    /// Each model's first flat slot, then the total; also shared with the registry.
+    pub(crate) starts: Rc<[u32]>,
     pub(crate) widths: Box<[u32]>,
-    pub(crate) model: RefCell<Box<dyn ModelBackend>>,
+    pub(crate) models: RefCell<Models>,
     pub(crate) now: Cell<SimTime>,
     pub(crate) phase: Cell<Phase>,
     pub(crate) tasks: RefCell<TaskTable>,
@@ -74,6 +76,8 @@ pub(crate) struct Kernel {
     pub(crate) main_done: Cell<bool>,
     pub(crate) waits: RefCell<WaitTable>,
     pub(crate) log: RefCell<WriteLog>,
+    /// Kernel clocks, in declaration order (the order coincident edges are logged in).
+    pub(crate) clocks: RefCell<Vec<ClockEntry>>,
     pub(crate) failure: RefCell<Option<Failure>>,
     pub(crate) recorder: RefCell<Recorder>,
     pub(crate) counters: Cell<KernelStats>,
@@ -89,8 +93,8 @@ static LIVE_SIMS: Mutex<Vec<(u32, ThreadId)>> = Mutex::new(Vec::new());
 /// name its signal after its simulation is gone.
 const RETIRED_NAMES: usize = 64;
 
-/// Slot-name tables by simulation id.
-type NameTables = VecDeque<(u32, Rc<[Box<str>]>)>;
+/// Slot-name tables (names, model starts) by simulation id.
+type NameTables = VecDeque<(u32, Rc<[Box<str>]>, Rc<[u32]>)>;
 
 thread_local! {
     static CURRENT: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
@@ -98,11 +102,12 @@ thread_local! {
 }
 
 impl Kernel {
-    pub(crate) fn new(model: Box<dyn ModelBackend>) -> Self {
+    pub(crate) fn new(models: Models) -> Self {
         let sim_gen = NEXT_SIM_GEN.fetch_add(1, Ordering::Relaxed);
-        let count = model.slot_count();
-        let names: Rc<[Box<str>]> = (0..count).map(|s| model.slot_name(s).into()).collect();
-        let widths = (0..count).map(|s| model.slot_width(s)).collect();
+        let count = models.slot_count();
+        let names: Rc<[Box<str>]> = (0..count).map(|s| models.slot_name(s).into()).collect();
+        let starts: Rc<[u32]> = models.starts().into();
+        let widths = (0..count).map(|s| models.slot_width(s)).collect();
         LIVE_SIMS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -111,16 +116,18 @@ impl Kernel {
             if n.len() == RETIRED_NAMES {
                 n.pop_front();
             }
-            n.push_back((sim_gen, Rc::clone(&names)));
+            n.push_back((sim_gen, Rc::clone(&names), Rc::clone(&starts)));
         });
         Self {
             sim_gen,
-            precision: model.precision(),
+            precision: models.precision(),
             waits: RefCell::new(WaitTable::new(count as usize)),
             log: RefCell::new(WriteLog::new(count as usize)),
+            clocks: RefCell::new(Vec::new()),
             names,
+            starts,
             widths,
-            model: RefCell::new(model),
+            models: RefCell::new(models),
             now: Cell::new(SimTime::ZERO),
             phase: Cell::new(Phase::Active),
             tasks: RefCell::new(TaskTable::default()),
@@ -162,7 +169,7 @@ impl Kernel {
         &self,
         kind: FailureKind,
         task: Option<Key>,
-        location: Option<&'static Location<'static>>,
+        location: Option<&'static SourceLocation>,
         message: String,
     ) {
         if self.failed() || self.phase.get() == Phase::Ended {
@@ -230,12 +237,20 @@ pub(crate) fn with_sim<R>(sim_gen: u32, f: impl FnOnce(&Kernel) -> R) -> Option<
         .flatten()
 }
 
-/// The slot name of a signal of simulation `sim_gen`, if this thread still remembers it.
-pub(crate) fn retired_name(sim_gen: u32, slot: u32) -> Option<Box<str>> {
+/// The flat slot of `model`'s own `slot`, given each model's first flat slot.
+#[inline]
+pub(crate) fn flat_slot(starts: &[u32], model: usize, slot: u32) -> Option<u32> {
+    let (start, end) = (*starts.get(model)?, *starts.get(model + 1)?);
+    let flat = start.checked_add(slot)?;
+    (flat < end).then_some(flat)
+}
+
+/// The name of `model`'s `slot` in simulation `sim_gen`, if this thread still remembers it.
+pub(crate) fn retired_name(sim_gen: u32, model: usize, slot: u32) -> Option<Box<str>> {
     NAMES.with_borrow(|n| {
-        n.iter()
-            .find(|(g, _)| *g == sim_gen)
-            .and_then(|(_, names)| names.get(slot as usize).cloned())
+        let (_, names, starts) = n.iter().find(|(g, _, _)| *g == sim_gen)?;
+        let flat = flat_slot(starts, model, slot)?;
+        names.get(flat as usize).cloned()
     })
 }
 

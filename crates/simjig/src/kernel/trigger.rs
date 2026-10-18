@@ -69,7 +69,7 @@ pub struct Edge {
 
 #[track_caller]
 fn edge(sig: RawSig, edge: EdgeKind, what: &str) -> Edge {
-    sig.with(|k, slot| {
+    let slot = sig.with(|k, slot| {
         let width = k.widths[slot as usize];
         assert!(
             edge == EdgeKind::Changed || width == 1,
@@ -77,9 +77,10 @@ fn edge(sig: RawSig, edge: EdgeKind, what: &str) -> Edge {
              use changed()",
             k.names[slot as usize]
         );
+        slot
     });
     Edge {
-        slot: sig.slot(),
+        slot,
         kind: edge,
         reg: None,
     }

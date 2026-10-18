@@ -7,9 +7,11 @@ use std::rc::Rc;
 
 use super::OrInvariant;
 use super::backend::ModelBackend;
-use super::clock::{Clock, ClockError, ClockState};
+use super::clock::{Clock, ClockEntry, ClockError, ClockHandle, ClockState};
 use super::failure::Failure;
 use super::fake::FakeModel;
+use super::models::{ModelSetError, Models};
+use super::panics;
 use super::recorder::TraceRecord;
 use super::sched;
 use super::signal::RawSig;
@@ -42,7 +44,6 @@ use super::time::{Precision, SimTime};
 /// ```
 pub struct Sim {
     kernel: Rc<Kernel>,
-    clocks: Vec<ClockState>,
     time_limit: Option<SimTime>,
     ran: bool,
 }
@@ -52,7 +53,7 @@ impl fmt::Debug for Sim {
         f.debug_struct("Sim")
             .field("sim", &self.kernel.sim_gen)
             .field("now", &self.kernel.now.get())
-            .field("clocks", &self.clocks.len())
+            .field("clocks", &self.kernel.clocks.borrow().len())
             .finish_non_exhaustive()
     }
 }
@@ -64,24 +65,67 @@ impl Sim {
         Self::from_backend(Box::new(model))
     }
 
-    pub(crate) fn from_backend(model: Box<dyn ModelBackend>) -> Self {
-        Self {
-            kernel: Rc::new(Kernel::new(model)),
-            clocks: Vec::new(),
-            time_limit: None,
-            ran: false,
-        }
+    /// A simulation of several [`FakeModel`]s sharing time and one scheduler loop,
+    /// numbered in the order given ([`signal_in`](Self::signal_in) takes the number).
+    ///
+    /// Every delta evaluates all of them, in that order, before the write log is applied,
+    /// so a testbench that forwards one model's output to another's input sees it land one
+    /// delta later whatever the task order. Watched-signal changes are compared across all
+    /// models, and the next timestep is the earliest of every model's pending event (and
+    /// the timers and clocks).
+    ///
+    /// # Errors
+    /// See [`ModelSetError`].
+    pub fn from_fakes(models: impl IntoIterator<Item = FakeModel>) -> Result<Self, ModelSetError> {
+        let backends = models
+            .into_iter()
+            .map(|m| Box::new(m) as Box<dyn ModelBackend>)
+            .collect();
+        Self::from_backends(backends)
     }
 
-    /// The handle of the signal named `name`, if the model has one.
+    pub(crate) fn from_backend(model: Box<dyn ModelBackend>) -> Self {
+        Self::from_backends(vec![model])
+            .or_invariant("invariant: a single model always forms a valid set")
+    }
+
+    /// A simulation of `models`, numbered in the order given; see
+    /// [`from_fakes`](Self::from_fakes) for how they run.
+    pub(crate) fn from_backends(models: Vec<Box<dyn ModelBackend>>) -> Result<Self, ModelSetError> {
+        Ok(Self {
+            kernel: Rc::new(Kernel::new(Models::new(models)?)),
+            time_limit: None,
+            ran: false,
+        })
+    }
+
+    /// The handle of the first model's signal named `name`, if it has one; with several
+    /// models, [`signal_in`](Self::signal_in) picks the model.
+    #[must_use]
+    pub fn signal(&self, name: &str) -> Option<RawSig> {
+        self.signal_in(0, name)
+    }
+
+    /// The handle of the signal named `name` of model `model` (0 for the first, in the
+    /// order the models were given), if there is one.
     ///
     /// # Panics
     /// Never in practice: slot numbers fit `u32` by construction.
     #[must_use]
-    pub fn signal(&self, name: &str) -> Option<RawSig> {
-        let slot = self.kernel.names.iter().position(|n| &**n == name)?;
+    pub fn signal_in(&self, model: usize, name: &str) -> Option<RawSig> {
+        let starts = &self.kernel.starts;
+        let (start, end) = (*starts.get(model)?, *starts.get(model + 1)?);
+        let names = &self.kernel.names[start as usize..end as usize];
+        let slot = names.iter().position(|n| &**n == name)?;
         let slot = u32::try_from(slot).or_invariant("invariant: slots are numbered by u32");
-        Some(RawSig::new(self.kernel.sim_gen, slot))
+        let model = u32::try_from(model).or_invariant("invariant: model was found by index");
+        Some(RawSig::in_model(self.kernel.sim_gen, model, slot))
+    }
+
+    /// How many models the simulation drives.
+    #[must_use]
+    pub fn model_count(&self) -> usize {
+        self.kernel.starts.len() - 1
     }
 
     /// The length of one tick.
@@ -90,30 +134,38 @@ impl Sim {
         self.kernel.precision
     }
 
-    /// Adds a kernel-driven clock. Clocks start at time 0, in the order they are added.
+    /// Adds a kernel-driven clock, running from time 0. Coincident edges are applied in
+    /// the order clocks are added. The handle stops and restarts it from inside the run.
     ///
     /// # Errors
     /// See [`ClockError`].
     ///
     /// # Panics
     /// If the signal belongs to another simulation.
-    pub fn add_clock(&mut self, clock: Clock) -> Result<(), ClockError> {
+    pub fn add_clock(&mut self, clock: Clock) -> Result<ClockHandle, ClockError> {
         let sig = clock.sig();
         assert_eq!(
             sig.sim_gen(),
             self.kernel.sim_gen,
             "add_clock: the signal belongs to another simulation"
         );
-        let slot = sig.slot() as usize;
+        let flat = state::flat_slot(&self.kernel.starts, sig.model(), sig.local_slot())
+            .or_invariant("invariant: a handle of this simulation names one of its slots");
+        let slot = flat as usize;
         let name = &self.kernel.names[slot];
-        if self.clocks.iter().any(|c| c.slot == sig.slot()) {
+        let mut clocks = self.kernel.clocks.borrow_mut();
+        if clocks.iter().any(|c| c.slot == flat) {
             return Err(ClockError::AlreadyClocked {
                 signal: name.to_string(),
             });
         }
-        let state = ClockState::new(&clock, self.kernel.widths[slot], name)?;
-        self.clocks.push(state);
-        Ok(())
+        let state = ClockState::new(&clock, self.kernel.widths[slot], name, SimTime::ZERO)?;
+        clocks.push(ClockEntry {
+            config: clock,
+            slot: flat,
+            running: Some(state),
+        });
+        Ok(ClockHandle::new(self.kernel.sim_gen, clocks.len() - 1))
     }
 
     /// Fails the run with [`FailureKind::TimeLimit`](crate::FailureKind::TimeLimit) instead
@@ -144,13 +196,15 @@ impl Sim {
         self.ran = true;
         let k = Rc::clone(&self.kernel);
         let guard = state::install(Rc::clone(&k));
+        let capture = panics::capture();
         let mut main = tasks::spawn_in(&k, None, "main", main);
         k.main.set(main.key());
-        sched::run_loop(&k, &mut self.clocks, self.time_limit);
+        sched::run_loop(&k, self.time_limit);
         let result = main.take_result(&k);
         k.phase.set(Phase::Ended);
         drop(main);
         tasks::drop_all(&k);
+        drop(capture);
         drop(guard);
         match (k.failure.borrow_mut().take(), result) {
             (Some(failure), _) => Err(failure),

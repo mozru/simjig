@@ -9,9 +9,15 @@
 //! eval as their source. Writing `d` and raising `clk` in the same eval captures the new
 //! `d`, as in Verilator.
 //!
-//! Timed closures ([`FakeModel::at`]) stand in for `--timing` delays: they make
-//! `events_pending`/`next_time_slot` report their time, and run in the first eval at or
-//! after it.
+//! Timed closures ([`FakeModel::at`], and [`FakeState::schedule`] from inside model code)
+//! stand in for `--timing` delays: they make `events_pending`/`next_time_slot` report
+//! their time and run at the start of the first eval at that time. The fake is as strict
+//! as Verilator 5.052 (docs/notes/spikes.md §4), so kernel mistakes fail tests:
+//! - `next_time_slot` without a pending event panics (Verilator exits the process);
+//! - an eval with a pending event *before* the current time fails ("missed a time slot";
+//!   Verilator's fatal for a time set past a pending slot);
+//! - an event scheduled during an eval for the current time (a `#0`) stays pending, so
+//!   `next_time_slot` reports the current time and the next eval runs it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,6 +34,7 @@ const SETTLE_LIMIT: u32 = 100;
 pub struct FakeSig(u32);
 
 type Logic = Box<dyn FnMut(&mut FakeState)>;
+type TimedLogic = Box<dyn FnOnce(&mut FakeState)>;
 
 struct SlotDesc {
     name: String,
@@ -44,7 +51,6 @@ pub struct FakeModel {
     comb: Vec<Logic>,
     /// Each flop: its clock, the clock level it last saw, its logic.
     flops: Vec<(FakeSig, u32, Logic)>,
-    timed: BTreeMap<SimTime, Vec<Logic>>,
 }
 
 impl fmt::Debug for FakeModel {
@@ -69,7 +75,6 @@ impl FakeModel {
             state: FakeState::default(),
             comb: Vec::new(),
             flops: Vec::new(),
-            timed: BTreeMap::new(),
         }
     }
 
@@ -109,8 +114,8 @@ impl FakeModel {
     }
 
     /// Adds a timed event (a stand-in for a `--timing` delay) that runs at `time`.
-    pub fn at(&mut self, time: SimTime, logic: impl FnMut(&mut FakeState) + 'static) {
-        self.timed.entry(time).or_default().push(Box::new(logic));
+    pub fn at(&mut self, time: SimTime, logic: impl FnOnce(&mut FakeState) + 'static) {
+        self.state.schedule(time, logic);
     }
 
     fn settle(&mut self) -> Result<(), ModelError> {
@@ -130,16 +135,28 @@ impl FakeModel {
         })
     }
 
-    fn run_due_timed(&mut self) {
+    /// Runs the events due now, oldest first; events they schedule for now wait for the
+    /// next eval.
+    fn run_due_timed(&mut self) -> Result<(), ModelError> {
         let now = self.state.now;
-        while let Some(entry) = self.timed.first_entry() {
-            if *entry.key() > now {
-                break;
-            }
-            for mut logic in entry.remove() {
+        let Some(entry) = self.state.timed.first_entry() else {
+            return Ok(());
+        };
+        if *entry.key() < now {
+            return Err(ModelError {
+                message: format!(
+                    "fake model: an event due at t={} was not run before t={}; missed a time slot",
+                    entry.key().ticks(),
+                    now.ticks()
+                ),
+            });
+        }
+        if *entry.key() == now {
+            for logic in entry.remove() {
                 logic(&mut self.state);
             }
         }
+        Ok(())
     }
 
     /// Runs the flops whose clock rose since they last looked; returns whether any did.
@@ -198,7 +215,7 @@ impl ModelBackend for FakeModel {
     }
 
     fn eval(&mut self) -> Result<EvalStatus, ModelError> {
-        self.run_due_timed();
+        self.run_due_timed()?;
         self.settle()?;
         let mut passes = 0;
         while self.run_flops() {
@@ -221,11 +238,12 @@ impl ModelBackend for FakeModel {
     }
 
     fn events_pending(&self) -> bool {
-        !self.timed.is_empty()
+        !self.state.timed.is_empty()
     }
 
     fn next_time_slot(&self) -> SimTime {
         *self
+            .state
             .timed
             .keys()
             .next()
@@ -237,7 +255,7 @@ impl ModelBackend for FakeModel {
 ///
 /// Inside an [`on_rising`](FakeModel::on_rising) closure, reads see the values before the
 /// edge and writes land after every triggered flop has run.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct FakeState {
     values: Vec<u32>,
     /// `(offset, width)` per slot.
@@ -246,6 +264,18 @@ pub struct FakeState {
     now: SimTime,
     fatal: Option<String>,
     finished: bool,
+    /// Pending timed events, by time, in scheduling order.
+    timed: BTreeMap<SimTime, Vec<TimedLogic>>,
+}
+
+impl fmt::Debug for FakeState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FakeState")
+            .field("now", &self.now)
+            .field("values", &self.values)
+            .field("timed", &self.timed.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 impl FakeState {
@@ -321,6 +351,13 @@ impl FakeState {
         self.now
     }
 
+    /// Schedules `logic` to run at `time`, like a `#delay` in the design: at the start of
+    /// the first eval at `time`, or of the next eval if `time` is the current time (a
+    /// `#0`). Scheduling into the past makes the next eval fail, as a missed time slot.
+    pub fn schedule(&mut self, time: SimTime, logic: impl FnOnce(&mut FakeState) + 'static) {
+        self.timed.entry(time).or_default().push(Box::new(logic));
+    }
+
     /// Makes the current eval fail with `message`, like `$fatal`.
     pub fn fatal(&mut self, message: &str) {
         self.fatal = Some(message.to_owned());
@@ -382,6 +419,39 @@ mod tests {
         let a = m.signal("a", 1);
         m.comb(move |s| s.set(a, s.get(a) ^ 1));
         assert!(m.eval().is_err());
+    }
+
+    #[test]
+    fn timed_events_are_as_strict_as_verilator() {
+        let mut m = FakeModel::new(Precision::PS);
+        let x = m.signal("x", 8);
+        m.at(SimTime(5), move |s| {
+            s.set(x, 1);
+            // A `#0`: pending at 5 until the next eval.
+            s.schedule(SimTime(5), move |s| s.set(x, 2));
+        });
+        m.at(SimTime(9), move |s| s.set(x, 3));
+        assert_eq!(m.next_time_slot(), SimTime(5));
+        m.set_time(SimTime(5));
+        m.eval().unwrap();
+        let mut out = [0];
+        m.read(x.0, &mut out);
+        assert_eq!((out, m.next_time_slot()), ([1], SimTime(5)));
+        m.eval().unwrap();
+        m.read(x.0, &mut out);
+        assert_eq!((out, m.next_time_slot()), ([2], SimTime(9)));
+        // Skipping past the event at 9 is fatal, like Verilator's "Missed a time slot?".
+        m.set_time(SimTime(10));
+        let err = m.eval().unwrap_err();
+        assert!(err.message.contains("missed a time slot"), "{err}");
+    }
+
+    #[test]
+    fn next_time_slot_without_a_pending_event_panics() {
+        let m = FakeModel::new(Precision::PS);
+        assert!(!m.events_pending());
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.next_time_slot()));
+        assert!(caught.is_err());
     }
 
     #[test]

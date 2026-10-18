@@ -16,15 +16,25 @@
 //!    design-driven signals change in an eval, so their waiters see post-eval values.
 //! 3. **`ReadWrite` region.** Wake `ReadWrite` waiters, run tasks, apply the log, compare and
 //!    wake; if anything was applied, go back to 2.
+//!    Before leaving the deltas, a model whose next event is *now* (a `#0` still pending
+//!    after its eval) is evaluated again, as another delta of the same timestep.
 //! 4. **`ReadOnly` region.** Wake `ReadOnly` waiters and run tasks; any write fails the run.
-//! 5. **Advance** to the earliest of: the timer wheel, the next clock edge, and the model's
-//!    `next_time_slot()` if it has `events_pending()`. If there is none and the main task
-//!    is still blocked, the run fails as `Starved` or `Deadlock`.
+//! 5. **Advance** to the earliest of: the timer wheel, the next clock edge, and every
+//!    model's `next_time_slot()` among those with `events_pending()`. If there is none and
+//!    the main task is still blocked, the run fails as `Starved` or `Deadlock`.
 //!
 //! More than [`DELTA_MAX`] evals in one timestep is a `DeltaLimit` failure.
+//!
+//! # `--timing` safety (Verilator 5.052, docs/notes/spikes.md §4)
+//! Verilator exits the process if `nextTimeSlot()` is called while `eventsPending()` is
+//! false, or if the time is set past a pending slot. So `next_time_slot` is asked only of
+//! models with events pending, the next timestep is never later than any model's next
+//! slot (it is the minimum), and the kernel asserts that time strictly increases between
+//! timesteps (Verilator does not check). A model reporting a slot before now is a
+//! `ModelFatal` failure.
 
 use super::backend::EvalStatus;
-use super::clock::ClockState;
+use super::clock::ClockEntry;
 use super::failure::{BlockedTask, FailureKind};
 use super::recorder::TraceKind;
 use super::signal::{self, Writer};
@@ -48,13 +58,13 @@ fn wake_from(k: &Kernel, fire: impl FnOnce(&mut WaitTable, &mut Vec<Wake>)) {
 
 /// Runs timesteps until the main task completes, a failure is recorded, or time cannot
 /// advance.
-pub(crate) fn run_loop(k: &Kernel, clocks: &mut [ClockState], limit: Option<SimTime>) {
+pub(crate) fn run_loop(k: &Kernel, limit: Option<SimTime>) {
     loop {
-        step(k, clocks);
+        step(k);
         if stopped(k) {
             return;
         }
-        let Some(next) = next_time(k, clocks) else {
+        let Some(next) = next_time(k) else {
             if !k.failed() {
                 report_blocked(k);
             }
@@ -70,22 +80,43 @@ pub(crate) fn run_loop(k: &Kernel, clocks: &mut [ClockState], limit: Option<SimT
             k.fail(FailureKind::TimeLimit { limit }, None, None, message);
             return;
         }
+        // Verilator does not check that time moves forward; the kernel must.
+        assert!(
+            next > k.now.get(),
+            "invariant: time moves forward (from t={} to t={})",
+            k.now.get().ticks(),
+            next.ticks()
+        );
         k.now.set(next);
     }
 }
 
-fn step(k: &Kernel, clocks: &mut [ClockState]) {
+/// Whether a model has an event due at the current time (a pending `#0`).
+fn model_event_now(k: &Kernel) -> bool {
+    let next = k.models.borrow().next_event();
+    next.is_some_and(|(_, t)| t == k.now.get())
+}
+
+fn step(k: &Kernel) {
     let t = k.now.get();
-    k.model.borrow_mut().set_time(t);
+    k.models.borrow_mut().set_time(t);
     k.record(TraceKind::Step, None, 0, 0);
     k.bump(|c| c.steps += 1);
 
     wake_from(k, WaitTable::fire_next_step);
     run_ready(k);
     wake_from(k, |w, out| w.fire_time(t, out));
-    for clock in clocks.iter_mut().filter(|c| c.next_time == t) {
-        let level = clock.take_edge();
-        signal::write(k, clock.slot, &[level], Writer::Clock, None);
+    let edges: Vec<(u32, u32)> = k
+        .clocks
+        .borrow_mut()
+        .iter_mut()
+        .filter_map(|c| {
+            let schedule = c.running.as_mut().filter(|r| r.next_time == t)?;
+            Some((c.slot, schedule.take_edge()))
+        })
+        .collect();
+    for (slot, level) in edges {
+        signal::write(k, slot, &[level], Writer::Clock, None);
     }
     run_ready(k);
 
@@ -111,7 +142,7 @@ fn step(k: &Kernel, clocks: &mut [ClockState]) {
         }
         let applied = apply_and_compare(k);
         run_ready(k);
-        if !applied {
+        if !applied && !model_event_now(k) {
             break;
         }
     }
@@ -154,78 +185,89 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         );
         return false;
     }
-    let status = k.model.borrow_mut().eval();
+    let status = k.models.borrow_mut().eval();
     k.record(TraceKind::Eval, None, u64::from(*evals), 0);
     k.bump(|c| c.evals += 1);
     *evals += 1;
+    let Err((model, status)) = status else {
+        return true;
+    };
+    // With one model, messages stay as they were; with several, they name the model.
+    let which = if k.models.borrow().len() > 1 {
+        format!("model {model}: ")
+    } else {
+        String::new()
+    };
     match status {
-        Ok(EvalStatus::Running) => true,
-        Ok(EvalStatus::Finished) => {
-            k.fail(
-                FailureKind::DesignFinished,
-                None,
-                None,
-                "the design executed $finish before the main task returned".to_owned(),
-            );
-            false
-        }
+        Ok(EvalStatus::Running) => unreachable!("invariant: Models::eval stops on non-Running"),
+        Ok(EvalStatus::Finished) => k.fail(
+            FailureKind::DesignFinished,
+            None,
+            None,
+            format!("{which}the design executed $finish before the main task returned"),
+        ),
         Err(e) => {
+            let message = format!("{which}{}", e.message);
             k.fail(
                 FailureKind::ModelFatal {
-                    message: e.message.clone(),
+                    message: message.clone(),
                 },
                 None,
                 None,
-                e.message,
+                message,
             );
-            false
         }
     }
+    false
 }
 
 /// Applies the write log, then wakes waiters of watched slots that changed since the
 /// previous comparison. Returns whether any write was applied.
 fn apply_and_compare(k: &Kernel) -> bool {
-    let writes = k.log.borrow_mut().drain();
+    let writes = k.log.borrow_mut().take();
     {
-        let mut model = k.model.borrow_mut();
-        for (slot, value) in &writes {
-            model.write(*slot, value);
+        let mut model = k.models.borrow_mut();
+        for (slot, value) in writes.iter() {
+            model.write(slot, value);
         }
     }
-    for (slot, value) in &writes {
+    for (slot, value) in writes.iter() {
         let low = value
             .iter()
             .take(2)
             .rev()
             .fold(0u64, |a, &w| a << 32 | u64::from(w));
-        k.record(TraceKind::Write, None, u64::from(*slot), low);
+        k.record(TraceKind::Write, None, u64::from(slot), low);
     }
+    let applied = !writes.is_empty();
+    k.log.borrow_mut().recycle(writes);
     let mut wakes = Vec::new();
     {
-        let model = k.model.borrow();
-        k.waits.borrow_mut().compare(&**model, &mut wakes);
+        let model = k.models.borrow();
+        k.waits.borrow_mut().compare(&model, &mut wakes);
     }
     wake_sorted(wakes);
-    !writes.is_empty()
+    applied
 }
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next
 /// event at or before now is a failure (and also yields `None`).
-fn next_time(k: &Kernel, clocks: &[ClockState]) -> Option<SimTime> {
+fn next_time(k: &Kernel) -> Option<SimTime> {
     let now = k.now.get();
     let mut next = k.waits.borrow().next_timer();
-    for clock in clocks {
-        next = Some(next.map_or(clock.next_time, |n| n.min(clock.next_time)));
+    for edge in k.clocks.borrow().iter().filter_map(ClockEntry::next_edge) {
+        next = Some(next.map_or(edge, |n| n.min(edge)));
     }
-    let model_next = {
-        let model = k.model.borrow();
-        model.events_pending().then(|| model.next_time_slot())
-    };
-    if let Some(m) = model_next {
-        if m <= now {
+    let model_next = k.models.borrow().next_event();
+    if let Some((model, m)) = model_next {
+        if m < now {
+            let which = if k.models.borrow().len() > 1 {
+                format!("model {model}")
+            } else {
+                "the model".to_owned()
+            };
             let message = format!(
-                "the model reported its next event at t={}, not after now",
+                "{which} reported its next event at t={}, before now; it missed a time slot",
                 m.display(k.precision)
             );
             k.fail(

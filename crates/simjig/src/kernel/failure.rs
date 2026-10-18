@@ -6,8 +6,80 @@
 
 use std::fmt;
 use std::panic::Location;
+use std::sync::{Mutex, PoisonError};
 
 use super::time::{Precision, SimTime};
+
+/// A source position (`file:line:column`) that a failure points at: the user's call that
+/// broke a rule, or the line that panicked.
+///
+/// Locations are interned for the life of the process, so a [`Failure`] can hold one as a
+/// `&'static` reference whether it came from `#[track_caller]` (already `'static`) or from
+/// a panic hook (whose location borrows the panic). Interning leaks one small record per
+/// distinct position, which is bounded by the program's source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SourceLocation {
+    file: &'static str,
+    line: u32,
+    column: u32,
+}
+
+/// Every location interned so far; searched linearly, since only failures intern.
+static INTERNED: Mutex<Vec<&'static SourceLocation>> = Mutex::new(Vec::new());
+
+impl SourceLocation {
+    /// The source file, as the compiler names it.
+    #[must_use]
+    pub const fn file(&self) -> &'static str {
+        self.file
+    }
+
+    /// The 1-based line.
+    #[must_use]
+    pub const fn line(&self) -> u32 {
+        self.line
+    }
+
+    /// The 1-based column.
+    #[must_use]
+    pub const fn column(&self) -> u32 {
+        self.column
+    }
+
+    /// The interned copy of `location`.
+    pub(crate) fn intern(location: &Location<'_>) -> &'static Self {
+        let mut interned = INTERNED.lock().unwrap_or_else(PoisonError::into_inner);
+        let same = |l: &&&'static Self| {
+            l.file == location.file() && l.line == location.line() && l.column == location.column()
+        };
+        if let Some(found) = interned.iter().find(same) {
+            return found;
+        }
+        let file = match interned.iter().find(|l| l.file == location.file()) {
+            Some(l) => l.file,
+            None => Box::leak(location.file().into()),
+        };
+        let new: &'static Self = Box::leak(Box::new(Self {
+            file,
+            line: location.line(),
+            column: location.column(),
+        }));
+        interned.push(new);
+        new
+    }
+}
+
+impl From<&'static Location<'static>> for &'static SourceLocation {
+    fn from(location: &'static Location<'static>) -> Self {
+        SourceLocation::intern(location)
+    }
+}
+
+impl fmt::Display for SourceLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.file, self.line, self.column)
+    }
+}
 
 /// A task that could not make progress, and what it was waiting for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,8 +204,8 @@ pub struct Failure {
     pub precision: Precision,
     /// Hierarchical name of the task that caused it, if one did.
     pub task: Option<String>,
-    /// Source location of the offending call, if known.
-    pub location: Option<&'static Location<'static>>,
+    /// Source location of the offending call or of the panic, if known.
+    pub location: Option<&'static SourceLocation>,
     /// One-line description.
     pub message: String,
 }
@@ -166,7 +238,19 @@ impl fmt::Display for Failure {
                 }
             }
         }
-        write!(f, "\n  help: {}", self.kind.help())
+        if let Some(help) = self.help() {
+            write!(f, "\n  help: {help}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Failure {
+    /// What to do about the failure: one line of advice, the `help:` line of the
+    /// `Display`. Every kind has one today; `None` leaves room for kinds without advice.
+    #[must_use]
+    pub fn help(&self) -> Option<&str> {
+        Some(self.kind.help())
     }
 }
 
@@ -175,6 +259,19 @@ impl std::error::Error for Failure {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interned_locations_print_like_std_and_are_shared() {
+        let here = Location::caller();
+        let a: &'static SourceLocation = here.into();
+        let b = SourceLocation::intern(here);
+        assert!(std::ptr::eq(a, b));
+        assert_eq!(a.to_string(), here.to_string());
+        assert_eq!(
+            (a.file(), a.line(), a.column()),
+            (here.file(), here.line(), here.column())
+        );
+    }
 
     #[test]
     fn display_names_kind_time_task_and_waits() {
@@ -197,6 +294,11 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("task `main.a` awaits Lock `bus`"), "{text}");
-        assert!(text.contains("help: "), "{text}");
+        let help = failure.help().unwrap();
+        assert!(
+            help.starts_with("each listed task waits on another"),
+            "{help}"
+        );
+        assert!(text.ends_with(&format!("\n  help: {help}")), "{text}");
     }
 }

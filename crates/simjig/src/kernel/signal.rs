@@ -1,8 +1,9 @@
 //! [`RawSig`] handles and the write log.
 //!
-//! A `RawSig` is a `Copy` id (simulation, slot) resolved through the current kernel on
-//! every access; no Rust reference to model memory ever exists. A handle used outside its
-//! own running simulation panics, naming the signal.
+//! A `RawSig` is a `Copy` id (simulation, model, slot) resolved through the current kernel
+//! on every access; no Rust reference to model memory ever exists. A handle used outside
+//! its own running simulation panics, naming the signal. The model index says which of
+//! the simulation's models (in declaration order) the slot belongs to.
 //!
 //! **Reads** return the model's current value: a write is never visible before it is
 //! applied. **Writes** are deposits (VPI inertial puts, as cocotb 2.1 uses on Verilator):
@@ -31,15 +32,17 @@ use super::state::{self, Kernel, Phase};
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RawSig {
     sim_gen: u32,
+    model: u32,
     slot: u32,
     _single_thread: PhantomData<*const ()>,
 }
 
 impl fmt::Debug for RawSig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = state::retired_name(self.sim_gen, self.slot);
+        let name = state::retired_name(self.sim_gen, self.model(), self.slot);
         f.debug_struct("RawSig")
             .field("sim", &self.sim_gen)
+            .field("model", &self.model)
             .field("slot", &self.slot)
             .field("name", &name)
             .finish()
@@ -47,40 +50,54 @@ impl fmt::Debug for RawSig {
 }
 
 impl RawSig {
-    pub(crate) const fn new(sim_gen: u32, slot: u32) -> Self {
+    /// The handle of slot `slot` of model `model` (declaration order).
+    pub(crate) const fn in_model(sim_gen: u32, model: u32, slot: u32) -> Self {
         Self {
             sim_gen,
+            model,
             slot,
             _single_thread: PhantomData,
         }
-    }
-
-    pub(crate) const fn slot(self) -> u32 {
-        self.slot
     }
 
     pub(crate) const fn sim_gen(self) -> u32 {
         self.sim_gen
     }
 
+    /// The slot within its own model (not the kernel's flat slot).
+    pub(crate) const fn local_slot(self) -> u32 {
+        self.slot
+    }
+
+    /// Which of its simulation's models the signal belongs to (0 for the first).
+    #[must_use]
+    pub const fn model(self) -> usize {
+        self.model as usize
+    }
+
     fn label(self) -> String {
-        state::retired_name(self.sim_gen, self.slot).map_or_else(
-            || format!("slot {} of simulation #{}", self.slot, self.sim_gen),
+        state::retired_name(self.sim_gen, self.model(), self.slot).map_or_else(
+            || {
+                format!(
+                    "slot {} of model {} of simulation #{}",
+                    self.slot, self.model, self.sim_gen
+                )
+            },
             |n| format!("`{n}`"),
         )
     }
 
-    /// Resolves the handle on the current kernel.
+    /// Resolves the handle on the current kernel, passing its flat slot to `f`.
     ///
     /// # Panics
     /// Outside a running simulation, or in a different simulation than the handle's.
     #[track_caller]
     pub(crate) fn with<R>(self, f: impl FnOnce(&Kernel, u32) -> R) -> R {
         let resolved = state::try_current(|k| {
-            if k.sim_gen == self.sim_gen && (self.slot as usize) < k.widths.len() {
-                Some(f(k, self.slot))
-            } else {
-                None
+            let flat = state::flat_slot(&k.starts, self.model(), self.slot);
+            match flat {
+                Some(flat) if k.sim_gen == self.sim_gen => Some(f(k, flat)),
+                _ => None,
             }
         });
         match resolved {
@@ -133,7 +150,7 @@ impl RawSig {
                 "signal `{}` needs a {n}-word buffer",
                 k.names[slot as usize]
             );
-            k.model.borrow().read(slot, out);
+            k.models.borrow().read(slot, out);
         });
     }
 
@@ -153,7 +170,7 @@ impl RawSig {
             );
             let mut buf = [0u32; 2];
             let buf = &mut buf[..words(width)];
-            k.model.borrow().read(slot, buf);
+            k.models.borrow().read(slot, buf);
             buf.iter()
                 .rev()
                 .fold(0u64, |acc, &w| acc << 32 | u64::from(w))
@@ -198,13 +215,14 @@ impl RawSig {
             );
             let low = u32::try_from(value & 0xffff_ffff).or_invariant("invariant: masked");
             let high = u32::try_from(value >> 32).or_invariant("invariant: shifted");
-            let n = words(width);
-            let mut buf = vec![0u32; n];
-            buf[0] = low;
-            if n > 1 {
-                buf[1] = high;
-            }
-            write(k, slot, &buf, Writer::current(k), Some(location));
+            let buf = [low, high];
+            write(
+                k,
+                slot,
+                &buf[..words(width)],
+                Writer::current(k),
+                Some(location),
+            );
         });
     }
 }
@@ -219,6 +237,7 @@ pub(crate) enum Writer {
 }
 
 impl Writer {
+    #[inline]
     fn current(k: &Kernel) -> Self {
         k.current.get().map_or(Self::Kernel, Self::Task)
     }
@@ -232,24 +251,92 @@ impl Writer {
     }
 }
 
+/// Values of at most this many words are stored in the entry itself.
+const INLINE: usize = 2;
+
 #[derive(Debug)]
 struct Entry {
     slot: u32,
-    /// Everyone who wrote the entry's current value this delta.
-    writers: Vec<Writer>,
-    start: usize,
-    len: usize,
+    len: u32,
+    /// The first writer of the entry's current value this delta; writers that agreed with
+    /// it are in [`WriteLog::agreeing`].
+    writer: Writer,
+    /// The value if it fits (`len <= INLINE`); else `[start in WriteLog::words, 0]`.
+    value: [u32; INLINE],
+}
+
+impl Entry {
+    fn value<'a>(&'a self, words: &'a [u32]) -> &'a [u32] {
+        let len = self.len as usize;
+        if len <= INLINE {
+            &self.value[..len]
+        } else {
+            let start = self.value[0] as usize;
+            &words[start..start + len]
+        }
+    }
+
+    fn value_mut<'a>(&'a mut self, words: &'a mut [u32]) -> &'a mut [u32] {
+        let len = self.len as usize;
+        if len <= INLINE {
+            &mut self.value[..len]
+        } else {
+            let start = self.value[0] as usize;
+            &mut words[start..start + len]
+        }
+    }
+}
+
+/// `dst.copy_from_slice(src)`, without a `memcpy` call for the usual one or two words.
+#[inline]
+fn copy_small(dst: &mut [u32], src: &[u32]) {
+    match (dst, src) {
+        ([d], [s]) => *d = *s,
+        ([d0, d1], [s0, s1]) => {
+            *d0 = *s0;
+            *d1 = *s1;
+        }
+        (dst, src) => dst.copy_from_slice(src),
+    }
 }
 
 /// Writes waiting for the next eval, in write order.
+///
+/// The hot path (one write of a slot not yet written this delta) allocates nothing once
+/// the buffers have grown: entries and words are reused across deltas, see
+/// [`take`](Self::take) and [`recycle`](Self::recycle).
 #[derive(Debug)]
 pub(crate) struct WriteLog {
     entries: Vec<Entry>,
     words: Vec<u32>,
-    /// Current delta number; bumped by every `drain`.
-    epoch: u64,
-    /// Per slot: (epoch of its last write, index into `entries`).
-    last: Vec<(u64, usize)>,
+    /// Current delta number, never 0; bumped by every `take`.
+    epoch: u32,
+    /// Per slot: (epoch of its last write, index into `entries`). Eight bytes, so the
+    /// lookup is one load; `take` clears it when the epoch wraps.
+    last: Vec<(u32, u32)>,
+    /// `(entry index, writer)` of every further writer that wrote an entry's current
+    /// value this delta; rare (agreeing writers), so kept out of the entries.
+    agreeing: Vec<(usize, Writer)>,
+    /// Emptied buffers of the last batch, kept for their capacity.
+    spare: Option<Batch>,
+}
+
+/// The writes of one delta, in write order; see [`WriteLog::take`].
+#[derive(Debug, Default)]
+pub(crate) struct Batch {
+    entries: Vec<Entry>,
+    words: Vec<u32>,
+}
+
+impl Batch {
+    /// `(slot, value)` of every write, in write order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &[u32])> {
+        self.entries.iter().map(|e| (e.slot, e.value(&self.words)))
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 impl WriteLog {
@@ -259,36 +346,85 @@ impl WriteLog {
             words: Vec::new(),
             epoch: 1,
             last: vec![(0, 0); slots],
+            agreeing: Vec::new(),
+            spare: None,
         }
     }
 
     /// Appends a write. Returns another writer of `slot` this delta if it wrote a
     /// different value.
+    ///
+    /// The two common cases (the first write of a slot this delta, and its only writer
+    /// writing it again) are inline and short; agreeing and conflicting writers take the
+    /// out-of-line [`push_shared`](Self::push_shared).
+    #[inline]
     fn push(&mut self, slot: u32, value: &[u32], writer: Writer) -> Result<(), Writer> {
         let (epoch, index) = self.last[slot as usize];
-        if epoch == self.epoch {
-            let entry = &mut self.entries[index];
-            let current = &mut self.words[entry.start..entry.start + entry.len];
-            if current == value {
-                if !entry.writers.contains(&writer) {
-                    entry.writers.push(writer);
-                }
-                return Ok(());
-            }
-            if let Some(&other) = entry.writers.iter().find(|&&w| w != writer) {
-                return Err(other);
-            }
-            current.copy_from_slice(value);
+        if epoch != self.epoch {
+            self.push_new(slot, value, writer);
             return Ok(());
         }
-        self.last[slot as usize] = (self.epoch, self.entries.len());
+        let entry = &mut self.entries[index as usize];
+        if entry.writer == writer && self.agreeing.is_empty() {
+            // The last write wins; there is no one to conflict with.
+            copy_small(entry.value_mut(&mut self.words), value);
+            return Ok(());
+        }
+        self.push_shared(index as usize, value, writer)
+    }
+
+    #[inline]
+    fn push_new(&mut self, slot: u32, value: &[u32], writer: Writer) {
+        let entry = u32::try_from(self.entries.len()).or_invariant("invariant: < 2^32 writes");
+        self.last[slot as usize] = (self.epoch, entry);
+        let len = u32::try_from(value.len()).or_invariant("invariant: < 2^32 words");
+        // Most signals fit in the entry, which saves a second buffer and a `memcpy`.
+        let inline = match *value {
+            [w] => [w, 0],
+            [w0, w1] => [w0, w1],
+            _ => self.spill(value),
+        };
         self.entries.push(Entry {
             slot,
-            writers: vec![writer],
-            start: self.words.len(),
-            len: value.len(),
+            len,
+            writer,
+            value: inline,
         });
+    }
+
+    /// Stores a value too wide for an entry; returns the entry's `value` field.
+    #[cold]
+    fn spill(&mut self, value: &[u32]) -> [u32; INLINE] {
+        let start = u32::try_from(self.words.len()).or_invariant("invariant: < 2^32 words");
         self.words.extend_from_slice(value);
+        [start, 0]
+    }
+
+    /// A write of an entry that another writer wrote, or that agreeing writers share.
+    #[cold]
+    #[inline(never)]
+    fn push_shared(&mut self, index: usize, value: &[u32], writer: Writer) -> Result<(), Writer> {
+        let entry = &mut self.entries[index];
+        let first = entry.writer;
+        let current = entry.value_mut(&mut self.words);
+        let mut others = self
+            .agreeing
+            .iter()
+            .filter(|(i, _)| *i == index)
+            .map(|&(_, w)| w);
+        if current == value {
+            if first != writer && !others.any(|w| w == writer) {
+                self.agreeing.push((index, writer));
+            }
+            return Ok(());
+        }
+        if first != writer {
+            return Err(first);
+        }
+        if let Some(other) = others.find(|&w| w != writer) {
+            return Err(other);
+        }
+        copy_small(current, value);
         Ok(())
     }
 
@@ -297,18 +433,35 @@ impl WriteLog {
         self.entries.iter().map(|e| e.slot).collect()
     }
 
-    /// Takes every logged write as `(slot, value)` in write order and starts a new delta.
-    pub(crate) fn drain(&mut self) -> Vec<(u32, Vec<u32>)> {
-        self.epoch += 1;
-        let words = std::mem::take(&mut self.words);
-        self.entries
-            .drain(..)
-            .map(|e| (e.slot, words[e.start..e.start + e.len].to_vec()))
-            .collect()
+    /// Takes every logged write and starts a new delta; hand the batch back with
+    /// [`recycle`](Self::recycle) once applied.
+    pub(crate) fn take(&mut self) -> Batch {
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            // Wrapped: forget every slot's epoch so no stale one can match.
+            self.last.fill((0, 0));
+            self.epoch = 1;
+        }
+        self.agreeing.clear();
+        let mut spare = self.spare.take().unwrap_or_default();
+        std::mem::swap(&mut spare.entries, &mut self.entries);
+        std::mem::swap(&mut spare.words, &mut self.words);
+        spare
+    }
+
+    /// Keeps an applied batch's buffers for the next delta.
+    pub(crate) fn recycle(&mut self, mut batch: Batch) {
+        batch.entries.clear();
+        batch.words.clear();
+        self.spare = Some(batch);
     }
 }
 
 /// Logs a write by `writer`, enforcing the phase and conflict rules.
+///
+/// `#[inline]` here and on the log's `push`: the hot path is a few loads and two vector
+/// pushes, and the call is made from `RawSig` methods inlined into the user's crate.
+#[inline]
 pub(crate) fn write(
     k: &Kernel,
     slot: u32,
@@ -316,41 +469,97 @@ pub(crate) fn write(
     writer: Writer,
     location: Option<&'static Location<'static>>,
 ) {
-    let task = match writer {
-        Writer::Task(key) => Some(key),
-        Writer::Clock | Writer::Kernel => None,
-    };
-    let name = &k.names[slot as usize];
     match k.phase.get() {
-        Phase::Ended => return,
-        Phase::ReadOnly => {
-            k.fail(
-                FailureKind::WriteInReadOnly {
-                    signal: name.to_string(),
-                },
-                task,
-                location,
-                format!("signal `{name}` written during the ReadOnly phase"),
-            );
-            return;
-        }
         Phase::Active => {}
+        Phase::Ended => return,
+        Phase::ReadOnly => return write_in_read_only(k, slot, writer, location),
     }
     let pushed = k.log.borrow_mut().push(slot, value, writer);
     if let Err(first) = pushed {
-        let (first, second) = (first.label(k, slot), writer.label(k, slot));
-        k.fail(
-            FailureKind::WriteConflict {
-                signal: name.to_string(),
-                first: first.clone(),
-                second: second.clone(),
-            },
-            task,
-            location,
-            format!(
-                "signal `{name}` written with different values by {first} and by {second} \
-                 in the same delta"
-            ),
+        conflict(k, slot, first, writer, location);
+    }
+}
+
+const fn task_of(writer: Writer) -> Option<Key> {
+    match writer {
+        Writer::Task(key) => Some(key),
+        Writer::Clock | Writer::Kernel => None,
+    }
+}
+
+#[cold]
+fn write_in_read_only(
+    k: &Kernel,
+    slot: u32,
+    writer: Writer,
+    location: Option<&'static Location<'static>>,
+) {
+    let name = &k.names[slot as usize];
+    k.fail(
+        FailureKind::WriteInReadOnly {
+            signal: name.to_string(),
+        },
+        task_of(writer),
+        location.map(Into::into),
+        format!("signal `{name}` written during the ReadOnly phase"),
+    );
+}
+
+#[cold]
+fn conflict(
+    k: &Kernel,
+    slot: u32,
+    first: Writer,
+    second: Writer,
+    location: Option<&'static Location<'static>>,
+) {
+    let name = &k.names[slot as usize];
+    let (first, second_label) = (first.label(k, slot), second.label(k, slot));
+    k.fail(
+        FailureKind::WriteConflict {
+            signal: name.to_string(),
+            first: first.clone(),
+            second: second_label.clone(),
+        },
+        task_of(second),
+        location.map(Into::into),
+        format!(
+            "signal `{name}` written with different values by {first} and by {second_label} \
+             in the same delta"
+        ),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(index: u32) -> Writer {
+        Writer::Task(Key { index, gen_: 0 })
+    }
+
+    #[test]
+    fn the_log_keeps_the_last_value_and_names_a_disagreeing_writer() {
+        let (a, b, c) = (task(1), task(2), task(3));
+        let mut log = WriteLog::new(2);
+        assert_eq!(log.push(0, &[5], a), Ok(()));
+        assert_eq!(log.push(0, &[6], a), Ok(()), "one writer: last write wins");
+        assert_eq!(
+            log.push(0, &[6], b),
+            Ok(()),
+            "agreeing writers are accepted"
         );
+        // `a` changing its value now conflicts with `b`, who agreed on 6.
+        assert_eq!(log.push(0, &[7], a), Err(b));
+        assert_eq!(log.push(0, &[7], b), Err(a));
+        assert_eq!(log.push(0, &[8], c), Err(a));
+        assert_eq!(log.push(1, &[1], Writer::Clock), Ok(()));
+        let batch = log.take();
+        let applied: Vec<(u32, Vec<u32>)> = batch.iter().map(|(s, v)| (s, v.to_vec())).collect();
+        assert_eq!(applied, [(0, vec![6]), (1, vec![1])]);
+        log.recycle(batch);
+        // A new delta: the old writers no longer count.
+        assert_eq!(log.push(0, &[9], c), Ok(()));
+        assert_eq!(log.take().iter().count(), 1);
     }
 }

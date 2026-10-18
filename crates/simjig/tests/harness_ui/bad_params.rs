@@ -1,7 +1,7 @@
 struct Dut;
 
 #[simjig::test]
-async fn two_duts(a: Dut, b: Dut) {}
+async fn five_duts(a: Dut, b: Dut, c: Dut, d: Dut, e: Dut) {}
 
 #[simjig::test]
 async fn mutable_context(sim: &mut simjig::TestCtx) {}

@@ -11,7 +11,9 @@
 //!
 //! A generated Verilator model is loaded by its generated `Dut` type, which returns a
 //! [`Sim`] plus one typed handle per signal (or a [`LoadError`] if the model and the
-//! generated Rust disagree).
+//! generated Rust disagree). A test may take several DUTs, each its own model in one
+//! simulation ([`Lockstep`] compares two of them per cycle), and [`fork`] runs several
+//! branches of a test from one checkpoint (Unix, under nextest).
 //!
 //! Signal values are the bit-vector types of the `simjig-bits` crate, re-exported as
 //! [`simjig::bits`](bits), so a testbench needs no direct dependency on it:
@@ -25,6 +27,7 @@
 #![deny(unsafe_code)]
 
 mod dpi;
+pub mod fork;
 mod harness;
 mod kernel;
 mod model;
@@ -33,7 +36,8 @@ mod signal;
 pub use dpi::Chandle;
 pub use harness::Result;
 pub use harness::ctx::TestCtx;
-pub use harness::dut::{DutModel, ModelOptions};
+pub use harness::dut::{DutModel, LoadedModel, ModelOptions};
+pub use harness::multi::{Divergence, Lockstep, Mirror};
 pub use harness::report::{AppliedTimeout, FailureReport, RunIdentity, Signature};
 pub use harness::runner::TestOutput;
 pub use harness::seed::{Rng, Seed, SeedSource};
@@ -80,7 +84,7 @@ pub mod __private {
 
     // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,
     // "The `__private` contract", and `model::bind` for the model glue.
-    pub use crate::model::bind::{Binder, ModelBinder, create, instantiate};
+    pub use crate::model::bind::{Binder, ModelBinder, create, create_in, instantiate, load};
     pub use crate::model::meta::{Access, ModelMeta, SignalMeta, Storage, Vtable};
     pub use crate::model::values::{FieldDiff, InvalidEnum, pack_field, unpack_field};
     pub use crate::signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};

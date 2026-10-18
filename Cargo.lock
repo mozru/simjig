@@ -521,6 +521,7 @@ name = "simjig"
 version = "0.0.0"
 dependencies = [
  "insta",
+ "libc",
  "miniz_oxide",
  "proptest",
  "serde_json",

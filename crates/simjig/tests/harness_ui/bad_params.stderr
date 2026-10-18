@@ -1,8 +1,8 @@
-error: a simjig test takes at most one DUT parameter; group several models in one type that implements `simjig::DutModel`
- --> tests/harness_ui/bad_params.rs:4:30
+error: a simjig test takes at most 4 DUT parameters; group more models in one type that implements `simjig::DutModel`
+ --> tests/harness_ui/bad_params.rs:4:55
   |
-4 | async fn two_duts(a: Dut, b: Dut) {}
-  |                              ^^^
+4 | async fn five_duts(a: Dut, b: Dut, c: Dut, d: Dut, e: Dut) {}
+  |                                                       ^^^
 
 error: the test context is shared: take `&simjig::TestCtx`, not `&mut`
  --> tests/harness_ui/bad_params.rs:7:32

@@ -18,11 +18,12 @@
 //! which expands to the vtable link ([`link_model!`](crate::__link_model)), a `static`
 //! [`ModelMeta`] and `impl DutModel for Dut` calling [`instantiate`] and [`create`]. The
 //! harness calls `instantiate` (model construction and every load check) and then `create`
-//! (handle binding) once per test.
+//! (handle binding) once per test; a test with several DUTs calls [`load`] and
+//! [`create_in`] for each instead.
 
 use super::meta::{Access, LoadError, ModelMeta, SignalMeta};
 use super::verilator::VerilatorModel;
-use crate::harness::dut::ModelOptions;
+use crate::harness::dut::{LoadedModel, ModelOptions};
 use crate::kernel::failure::{Failure, FailureKind};
 use crate::kernel::signal::RawSig;
 use crate::kernel::sim::Sim;
@@ -48,6 +49,8 @@ pub trait Binder {
 #[derive(Debug)]
 pub struct ModelBinder {
     sim_gen: u32,
+    /// The model's index in its simulation.
+    model: u32,
     signals: &'static [SignalMeta],
 }
 
@@ -69,7 +72,7 @@ impl ModelBinder {
             meta.name,
             meta.access
         );
-        RawSig::in_model(self.sim_gen, 0, meta.slot)
+        RawSig::in_model(self.sim_gen, self.model, meta.slot)
     }
 }
 
@@ -111,13 +114,27 @@ impl Binder for ModelBinder {
     reason = "the DutModel signature; called once per test"
 )]
 pub fn instantiate(meta: &'static ModelMeta, options: &ModelOptions) -> Result<Sim, Failure> {
+    let model = load(meta, options)?;
+    Ok(Sim::from_backend(model.into_backend()))
+}
+
+/// Loads the model `meta` describes on its own, to share a [`Sim`] with other models (the
+/// `DutModel::load` of a generated `Dut`).
+///
+/// # Errors
+/// As [`instantiate`].
+#[expect(
+    clippy::result_large_err,
+    reason = "the DutModel signature; called once per test"
+)]
+pub fn load(meta: &'static ModelMeta, options: &ModelOptions) -> Result<LoadedModel, Failure> {
     let model = VerilatorModel::load(meta, &options.verilator_args(), options.trace.as_ref())
         .map_err(|e| {
             let precision =
                 Precision::from_exponent(meta.precision_exponent).unwrap_or(Precision::PS);
             load_failure(&e, precision)
         })?;
-    Ok(Sim::from_backend(Box::new(model)))
+    Ok(LoadedModel::from_backend(Box::new(model)))
 }
 
 /// Binds a generated `Dut` to `sim` with its `__bind` (the `DutModel::create` of a generated
@@ -134,9 +151,27 @@ pub fn create<D>(
     meta: &'static ModelMeta,
     bind: fn(&mut ModelBinder) -> D,
 ) -> Result<D, Failure> {
+    create_in(sim, 0, meta, bind)
+}
+
+/// Binds a generated `Dut` to model number `model` of `sim` (the `DutModel::bind` of a
+/// generated `Dut`).
+///
+/// # Errors
+/// A `ModelFatal` [`Failure`] if model `model` of `sim` is not the model `meta` describes.
+#[expect(
+    clippy::result_large_err,
+    reason = "the DutModel signature; called once per test"
+)]
+pub fn create_in<D>(
+    sim: &Sim,
+    model: usize,
+    meta: &'static ModelMeta,
+    bind: fn(&mut ModelBinder) -> D,
+) -> Result<D, Failure> {
     let mut sim_gen = None;
     for s in meta.signals {
-        match sim.signal(s.name) {
+        match sim.signal_in(model, s.name) {
             Some(raw) if raw.local_slot() == s.slot => sim_gen = Some(raw.sim_gen()),
             _ => {
                 let error = LoadError::SignalTable {
@@ -151,6 +186,8 @@ pub fn create<D>(
     let mut binder = ModelBinder {
         // A model without signals binds nothing, so its id is never used.
         sim_gen: sim_gen.unwrap_or(0),
+        // A model index past u32 has no signals either (the lookup above found none).
+        model: u32::try_from(model).unwrap_or(u32::MAX),
         signals: meta.signals,
     };
     Ok(bind(&mut binder))
@@ -201,6 +238,19 @@ macro_rules! __dut_model {
 
                 fn create(sim: &mut $crate::Sim) -> ::core::result::Result<Self, $crate::Failure> {
                     $crate::__private::create(sim, &MODEL, $dut::__bind)
+                }
+
+                fn load(
+                    options: &$crate::ModelOptions,
+                ) -> ::core::result::Result<$crate::LoadedModel, $crate::Failure> {
+                    $crate::__private::load(&MODEL, options)
+                }
+
+                fn bind(
+                    sim: &mut $crate::Sim,
+                    model: usize,
+                ) -> ::core::result::Result<Self, $crate::Failure> {
+                    $crate::__private::create_in(sim, model, &MODEL, $dut::__bind)
                 }
             }
         };

@@ -6,7 +6,7 @@
 //!   C ABI. `OUT_DIR/test_models.rs` gives every model's prefix and IR hash, and
 //!   `OUT_DIR/test_vtables/<name>.rs` declares its vtable symbol as `vtable()` (a
 //!   `link_name` must be a literal), returning the includer's `Vtable` type (a pointer).
-//! - `tests/model_tests` and `tests/e2e_*` include the generated bindings with
+//! - `tests/model_tests`, `tests/e2e_*`, `tests/multi_dut` and `tests/fork_checkpoints` include the generated bindings with
 //!   `simjig::include_dut!` (`OUT_DIR/simjig/<name>.rs`).
 //! - `tests/dpi_tests` adds the DPI-C models `dpi` (`tests/duts/dpi`) and `dpi_types`
 //!   (every DPI type simjig implements), whose generated code includes the `Dpi` trait and
@@ -79,6 +79,11 @@ fn duts() -> Vec<Dut> {
         shared("inv", &["inv.sv"]),
         shared("flop", &["flop.sv"]),
         shared("counter", &["counter.sv"]),
+        // A second revision of `counter` (same top, different RTL) for the lockstep tests.
+        Dut::new("counter_rev2")
+            .sources(["tests/multi_dut/counter_rev2.sv"])
+            .top("counter")
+            .verilator_args(TIMESCALE),
         probes(
             shared("comb_chain", &["comb_chain.sv"]),
             "comb_chain",

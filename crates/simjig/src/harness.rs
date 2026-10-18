@@ -25,6 +25,7 @@
 
 pub(crate) mod ctx;
 pub(crate) mod dut;
+pub(crate) mod multi;
 pub(crate) mod replay;
 pub(crate) mod report;
 pub(crate) mod rundir;

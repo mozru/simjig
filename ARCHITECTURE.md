@@ -13,7 +13,7 @@ projects built on top of simjig.
 | `svtypes` | Versioned type IR built from Verilator `--json-only`: widths, offsets, enums, params, ports, interfaces. Python/cocotb emitter. Its `version` module is the single table of supported Verilator versions (`VerilatorVersion`, `SUPPORTED`) for every build-time crate, and its `toolchain` module the single rule for which Verilator to run and whether to accept it (`locate`, `judge`), used by `simjig-build` and `cargo simjig doctor`. |
 | `simjig-bits` | Bit-vector values with SystemVerilog semantics (`Bits<N>`, `WideBits`, `Packed`). |
 | `simjig-build` | Build time: one lowering feeding every emitter (Rust, C++ vtable, `.vlt`, wrapper SV, layout check), Verilator invocation, cache. |
-| `simjig` | Runtime: `kernel` (scheduler, triggers, tasks, failures, recorder), `model` (Verilator backend over the C ABI), `signal` (typed handles), `dpi` (DPI-C imports implemented in Rust, per model instance), `harness` (`#[simjig::test]` support, seeds, reports, run dirs). |
+| `simjig` | Runtime: `kernel` (scheduler, triggers, tasks, failures, recorder), `model` (Verilator backend over the C ABI, FST tracing), `signal` (typed handles), `dpi` (DPI-C imports implemented in Rust, per model instance), `harness` (`#[simjig::test]` support, seeds, reports, run dirs, waves on failure by replay, several DUTs per test and `Lockstep`), `fork` (`fork()` checkpoints). |
 | `simjig-macros` | `#[simjig::test]` attribute (thin; logic unit-tested). |
 | `cargo-simjig` | User CLI: `cargo simjig doctor` (environment checks with fixes). Depends on `svtypes` for the version table. |
 | `xtask` | Repository automation: `cargo xtask ci`, `setup` (pinned tools), `doctor`. |

@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The dashless `no` forms of on/off options are read like the dashed ones, as 5.052's
+  option parser does: `--notiming` and `--notrace` are refused like `--no-timing` and
+  `--no-trace`, and `--nocoverage-line` turns line coverage off in
+  `DutConfig::features`.
 - The generated `Dut` docs of an interface-ported DUT name the user's module
   (`` `iface_top.clk`: input, 1 bit ``), not the generated wrapper
   (`simjig_wrap_iface_top.clk`). Docs only: the signal names the runtime reports are

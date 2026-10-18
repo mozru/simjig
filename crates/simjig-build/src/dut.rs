@@ -76,14 +76,23 @@ fn option_name(arg: &str) -> Option<&str> {
         .filter(|name| !name.is_empty())
 }
 
+/// An on/off option's polarity and base name. 5.052's `V3OptionParser::find` takes both
+/// `-no-<opt>` and `-no<opt>` (no dash) for every on/off option, after an exact match
+/// fails: `--notiming` is `--no-timing` and `--nocoverage-line` is `--no-coverage-line`
+/// (checked against 5.052). Callers match only on/off base names, so an exact option that
+/// starts with `no` (`-no-trace-top`) is not mistaken for one.
+fn on_off(name: &str) -> (bool, &str) {
+    match name.strip_prefix("no-").or_else(|| name.strip_prefix("no")) {
+        Some(base) => (false, base),
+        None => (true, name),
+    }
+}
+
 /// Coverage after the builder switch and then `args`, last word winning per kind.
 fn coverage_after(builder: bool, args: &[String]) -> bool {
     let mut kinds = [builder; COVERAGE_KINDS.len()];
     for name in args.iter().filter_map(|a| option_name(a)) {
-        let (on, rest) = match name.strip_prefix("no-") {
-            Some(rest) => (false, rest),
-            None => (true, name),
-        };
+        let (on, rest) = on_off(name);
         if rest == "coverage" {
             kinds = [on; COVERAGE_KINDS.len()];
         } else if let Some(kind) = rest.strip_prefix("coverage-")
@@ -113,13 +122,19 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
     if is_param_override(arg) {
         return Some(PARAM_HINT);
     }
+    // Either polarity of the on/off switches simjig owns is refused; the others' `no`
+    // forms (`--no-exe`) only turn off what simjig never turns on.
+    let name = match on_off(name) {
+        (false, base @ ("timing" | "trace")) => base,
+        _ => name,
+    };
     // No `=` form: 5.052 rejects `--prefix=Vx` itself (`Invalid option`).
     match name {
-        "timing" | "no-timing" => Some(
+        "timing" => Some(
             "use `.timing(true)` or `.timing(false)`: the JSON pass, the layout check and \
              the shim (which must know whether the model runs coroutines) all follow it",
         ),
-        "trace" | "no-trace" | "trace-fst" | "trace-vcd" | "trace-saif" | "trace-threads"
+        "trace" | "trace-fst" | "trace-vcd" | "trace-saif" | "trace-threads"
         | "trace-fst-thread" => Some(
             "use `.trace_fst(true)`: simjig writes FST waves through the shim, which must \
              know the model is traced, and on the testbench's one thread",
@@ -1622,6 +1637,21 @@ mod tests {
         );
     }
 
+    /// 5.052's `V3OptionParser::find` accepts `-no<opt>` for every on/off option,
+    /// without the dash: `--notiming` turns timing off (checked: `STMTDLY ... due to
+    /// --no-timing`) and `--nocoverage-line` turns line coverage off.
+    #[test]
+    fn the_dashless_no_forms_are_seen() {
+        for arg in ["--notiming", "-notiming", "--notrace"] {
+            assert!(with_args(&[arg]).validate().is_err(), "{arg} is not refused");
+        }
+        assert!(
+            !with_args(&["--coverage-line", "--nocoverage-line"])
+                .features()
+                .coverage
+        );
+    }
+
     #[test]
     fn raw_flags_that_have_a_builder_switch_are_rejected() {
         let msg = |args: &[&str]| with_args(args).validate().unwrap_err().to_string();
@@ -1670,6 +1700,7 @@ mod tests {
             &["--Mdir=obj"],
             &["--trace-depth", "3"],
             &["--trace-structs"],
+            &["--no-trace-top"],
             &["--coverage-line"],
             &["-Wno-WIDTH"],
             &["-O3"],

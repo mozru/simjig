@@ -124,6 +124,27 @@ fn a_rerun_compiles_only_the_edited_model() {
     assert!(build(&krate, &target, &envs));
     assert_eq!(model_archives(&cache), 4, "no change compiles nothing");
 }
+/// A build script that handles `Dut::build`'s error (an optional model) and exits 0
+/// builds: `Dut::build` printed the error as `cargo::error=`, which fails the build even
+/// then.
+#[test]
+fn a_handled_build_error_does_not_fail_the_build() {
+    let (krate, target, _lock) = fixture();
+    let envs = [
+        (
+            "SIMJIG_CACHE_DIR",
+            krate.parent().unwrap().join("cache").into_os_string(),
+        ),
+        ("SIMJIG_CCACHE", "0".into()),
+    ];
+    // `cargo_with` checks that the build succeeded.
+    let (_, stderr) = cargo_with(&krate, &target, &["build", "--offline", "-vv"], &envs);
+    assert!(
+        stderr.contains("optional DUT skipped: invalid DUT `optional` configuration"),
+        "{stderr}"
+    );
+}
+
 /// An upgrade of the compiler in place (same `CXX`, same `PATH`) reruns the build script:
 /// it reruns on the executable `CXX` resolves to, here a script behind a symlink found on
 /// `PATH`.

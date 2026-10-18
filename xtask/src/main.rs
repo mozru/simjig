@@ -73,20 +73,22 @@ const CI: &[Step] = &[
     },
 ];
 
-fn run(step: &Step) -> Result<(), String> {
-    let line = std::iter::once(step.program)
-        .chain(step.args.iter().copied())
-        .collect::<Vec<_>>();
-    eprintln!("==> {}", line.join(" "));
-    let status = Command::new(step.program)
-        .args(step.args)
-        .envs(step.env.iter().copied())
+/// Runs `program` with `args` and extra `env`, echoing the command line first.
+fn run(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<(), String> {
+    let line = std::iter::once(program)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!("==> {line}");
+    let status = Command::new(program)
+        .args(args)
+        .envs(env.iter().copied())
         .status()
-        .map_err(|e| format!("could not start `{}`: {e} (is it installed?)", step.program))?;
+        .map_err(|e| format!("could not start `{program}`: {e} (is it installed?)"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("`{}` failed with {status}", line.join(" ")))
+        Err(format!("`{line}` failed with {status}"))
     }
 }
 
@@ -98,7 +100,7 @@ fn main() -> ExitCode {
     };
     let steps = CI;
     for step in steps {
-        if let Err(msg) = run(step) {
+        if let Err(msg) = run(step.program, step.args, step.env) {
             eprintln!("error: {msg}");
             return ExitCode::FAILURE;
         }

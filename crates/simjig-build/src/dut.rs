@@ -113,8 +113,7 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
     if is_param_override(arg) {
         return Some(PARAM_HINT);
     }
-    // `--prefix=Vx` is `--prefix Vx`.
-    let name = name.split_once('=').map_or(name, |(n, _)| n);
+    // No `=` form: 5.052 rejects `--prefix=Vx` itself (`Invalid option`).
     match name {
         "timing" | "no-timing" => Some(
             "use `.timing(true)` or `.timing(false)`: the JSON pass, the layout check and \
@@ -125,7 +124,7 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
             "use `.trace_fst(true)`: simjig writes FST waves through the shim, which must \
              know the model is traced, and on the testbench's one thread",
         ),
-        "threads" if next != Some("1") => Some(
+        "threads" if next.is_some_and(|n| c_atoi(n) > 1) => Some(
             "simjig runs each model on one thread (its context has `threads(1)`, so runs \
              are deterministic and the testbench owns the only thread); a model built for \
              more needs a thread pool",
@@ -156,6 +155,25 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
         ),
         _ => None,
     }
+}
+
+/// C's `atoi`, which Verilator 5.052 reads `--threads` with: leading whitespace, a sign
+/// and the digits up to the first other character (`01` and `1x` are 1, `x` is 0).
+/// Saturates where C would overflow.
+fn c_atoi(text: &str) -> i64 {
+    let t = text.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
+    let (negative, digits) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let n = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0_i64, |n, d| {
+            n.saturating_mul(10).saturating_add(i64::from(d - b'0'))
+        });
+    if negative { -n } else { n }
 }
 
 /// Why a DUT has no sources, pointing an `-f`/`-F` among the extra arguments (read after
@@ -1626,17 +1644,25 @@ mod tests {
             (&["-o", "x"], "`.recipe(CppRecipe"),
             (&["--sc"], "C++ (`--cc`)"),
             (&["--hierarchical"], "one model per DUT"),
-            (&["--prefix=Vx"], "`Dut::new(name)`"),
-            (&["--Mdir=obj"], "`SIMJIG_CACHE_DIR`"),
-            (&["--top=x"], "`.top(\"module\")`"),
-            (&["--top-module=x"], "`.top(\"module\")`"),
+            (&["--threads", "2"], "one thread"),
+            (&["--threads", " +12x"], "one thread"),
         ] {
             let m = msg(args);
             assert!(m.contains(hint) && m.contains(args[0]), "{args:?}: {m}");
             assert!(!m.contains("  "), "one space between words: {m}");
         }
+        // 5.052 reads `--threads` with `atoi` (0 is a deprecated 1, a negative count is its
+        // own fatal error), and has no `=` forms: `--prefix=Vx` is its `Invalid option`.
         for ok in [
             &["--threads", "1"][..],
+            &["--threads", "01"],
+            &["--threads", "0"],
+            &["--threads", "1x"],
+            &["--threads", "-3"],
+            &["--threads"],
+            &["--prefix=Vx"],
+            &["--top-module=x"],
+            &["--Mdir=obj"],
             &["--trace-depth", "3"],
             &["--trace-structs"],
             &["--coverage-line"],
@@ -1712,7 +1738,7 @@ mod tests {
                 "`.recipe(CppRecipe",
             ),
             ("--threads 1\n--threads 4", "--threads", 2, "one thread"),
-            ("--prefix=Vx", "--prefix=Vx", 1, "`Dut::new(name)`"),
+            ("--prefix Vx", "--prefix", 1, "`Dut::new(name)`"),
             ("\"--Mdir\" obj", "--Mdir", 1, "`SIMJIG_CACHE_DIR`"),
         ] {
             std::fs::write(&opts, text).unwrap();

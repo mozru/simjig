@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `--threads N` is refused only when Verilator would run more than one thread: it
+  reads `N` with C's `atoi`, so `--threads 01` (and the deprecated `0`) are one thread
+  and pass. `--prefix=Vx`, `--top-module=x` and the other `=` forms are no longer
+  refused as if they were `--prefix Vx`: 5.052 has no `=` forms and reports them as an
+  `Invalid option` itself.
 - Option files (`-f`, `-F`, file lists) are read as bytes, as Verilator 5.052 reads
   them: a file that is not UTF-8 (a Latin-1 `// Author: J\xf6rg`) was skipped whole by
   the configuration checks, so its `--top-module` silently built another top. A CRLF

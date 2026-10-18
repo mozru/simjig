@@ -136,6 +136,17 @@ impl TestCtx {
         self.seed.rng(path)
     }
 
+    /// The length of one tick of the running simulation (the design's `timeprecision`), to
+    /// print a time: `now().display(ctx.precision())` prints `1250 ns`.
+    ///
+    /// # Panics
+    /// Outside the test's run (or inside a DPI-C call).
+    #[must_use]
+    #[track_caller]
+    pub fn precision(&self) -> crate::Precision {
+        state::with_current("TestCtx::precision", |k| k.precision)
+    }
+
     /// The coverage counters of model `model` of the running simulation (0 for the first
     /// DUT): [`Sim::coverage`](crate::Sim::coverage), while the test runs.
     ///

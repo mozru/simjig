@@ -143,6 +143,20 @@ impl fmt::Display for Precision {
 }
 
 /// An instant of simulation time, in ticks since time 0.
+///
+/// A tick count means nothing without the design's precision, so `SimTime` has no
+/// `Display`: print it with [`display`](Self::display) and the precision, which
+/// [`Sim::precision`](crate::Sim::precision) gives, or, inside a `#[simjig::test]`,
+/// [`TestCtx::precision`](crate::TestCtx::precision). `Debug` shows the ticks.
+///
+/// ```
+/// use simjig::{Precision, SimTime};
+///
+/// let t = SimTime(1_250_000);
+/// assert_eq!(t.display(Precision::PS).to_string(), "1250 ns");
+/// assert_eq!(format!("{t:?}"), "SimTime(1250000)");
+/// // In a test body: println!("at {}", now().display(ctx.precision()));
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SimTime(pub u64);
 

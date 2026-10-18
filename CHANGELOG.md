@@ -105,6 +105,8 @@ the public API, the generated code or simulation semantics.
 - New `Sim::zero_coverage(model)` (the ABI's `cov_zero`) and
   `Sim::write_coverage(model, path)` (`cov_write`: Verilator's `coverage.dat`, which names
   every point), both returning `Result<(), CoverageError>` (new `simjig::CoverageError`).
+- New `TestCtx::precision()`, to print a time in a test body
+  (`now().display(ctx.precision())`); `SimTime` documents why it has no `Display`.
 - New `TestCtx::{coverage, zero_coverage, write_coverage}`: the same, on the running
   simulation of a `#[simjig::test]`.
 

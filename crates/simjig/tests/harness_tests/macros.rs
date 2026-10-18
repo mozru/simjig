@@ -29,6 +29,13 @@ async fn drives_the_dut(dut: counter::Dut) -> simjig::Result {
 }
 
 #[simjig::test]
+async fn context_gives_the_precision_to_print_times(ctx: &TestCtx) {
+    Timer::new(ns(1250)).await;
+    assert_eq!(ctx.precision(), Precision::PS, "no DUT: 1 ps");
+    assert_eq!(now().display(ctx.precision()).to_string(), "1250 ns");
+}
+
+#[simjig::test]
 async fn context_names_the_test_and_its_seeds(sim: &TestCtx, _dut: counter::Dut) {
     assert_eq!(
         sim.test_name(),

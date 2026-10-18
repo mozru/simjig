@@ -12,8 +12,10 @@
 //!   scope; the kernel turns it into a `ModelFatal` failure.
 //! - **Poisoning.** After FATAL or EXCEPTION (the C++ side unwound out of model code), no
 //!   further eval reaches C++: every later eval returns the original error.
-//! - **Teardown.** `Drop` runs `final` blocks (unless poisoned), prints their output, then
-//!   destroys the model.
+//! - **Waves.** With [`TraceOptions`], the model's FST trace is opened at load, sampled at the
+//!   end of every timestep and closed on drop (see `model::trace`).
+//! - **Teardown.** `Drop` dumps the last timestep, runs `final` blocks (unless poisoned),
+//!   prints their output, closes the trace, then destroys the model.
 //!
 //! `$finish` is reported as [`EvalStatus::Finished`]; `$error` stops the run at Verilator's
 //! default error limit of 1, as in cocotb on Verilator.
@@ -21,6 +23,7 @@
 use super::abi::{ACCESS_WRITE, Dir, MsgKind, OwnedMsg, Status};
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
+use super::trace::{TraceOptions, Tracer};
 use crate::kernel::backend::{EvalStatus, ModelBackend, ModelError};
 use crate::kernel::time::{Precision, SimTime};
 
@@ -33,12 +36,21 @@ pub(crate) struct VerilatorModel {
     poisoned: Option<String>,
     /// Scratch buffer for drained messages, reused across evals.
     msgs: Vec<OwnedMsg>,
+    /// The open FST trace, if any.
+    tracer: Option<Tracer>,
+    /// The time of the current timestep (the last `set_time`).
+    now: SimTime,
 }
 
 impl VerilatorModel {
     /// Creates the model described by `meta`, passing `args` (plusargs such as
-    /// `+verilator+seed+N`) to its context, and checks it against the generated Rust.
-    pub(crate) fn load(meta: &ModelMeta, args: &[String]) -> Result<Self, LoadError> {
+    /// `+verilator+seed+N`) to its context, checks it against the generated Rust, and opens
+    /// the trace `trace` asks for.
+    pub(crate) fn load(
+        meta: &ModelMeta,
+        args: &[String],
+        trace: Option<&TraceOptions>,
+    ) -> Result<Self, LoadError> {
         // The version and size are checked before anything else is read from the table.
         let vt = check_vtable((meta.vtable)(), meta.ir_hash)
             .map_err(|e| LoadError::from_abi(meta.prefix, &e))?;
@@ -76,6 +88,8 @@ impl VerilatorModel {
             precision,
             poisoned: None,
             msgs: Vec::new(),
+            tracer: None,
+            now: SimTime::ZERO,
         };
         if let Err(e) = model.outcome(status) {
             // A model that failed to construct runs no final blocks when dropped.
@@ -86,6 +100,9 @@ impl VerilatorModel {
             });
         }
         model.check_table(meta)?;
+        if let Some(options) = trace {
+            model.tracer = Tracer::open(&mut model.raw, meta.prefix, options)?;
+        }
         Ok(model)
     }
 
@@ -222,6 +239,15 @@ impl ModelBackend for VerilatorModel {
     }
 
     fn set_time(&mut self, time: SimTime) {
+        // The kernel sets the time once per timestep, before applying any of its writes, so
+        // the model still holds the previous timestep's final state (`model::trace`).
+        if time != self.now
+            && self.poisoned.is_none()
+            && let Some(tracer) = &mut self.tracer
+        {
+            tracer.end_timestep(&mut self.raw);
+        }
+        self.now = time;
         self.raw.set_time(time.ticks());
     }
 
@@ -232,7 +258,16 @@ impl ModelBackend for VerilatorModel {
             });
         }
         let status = self.raw.eval();
-        self.outcome(status)
+        let result = self.outcome(status);
+        if self.poisoned.is_none()
+            && let Some(tracer) = &mut self.tracer
+        {
+            tracer.evaluated(self.now);
+            if result.is_err() {
+                tracer.on_failure(&mut self.raw);
+            }
+        }
+        result
     }
 
     fn events_pending(&self) -> bool {
@@ -247,11 +282,20 @@ impl ModelBackend for VerilatorModel {
 impl Drop for VerilatorModel {
     fn drop(&mut self) {
         if self.poisoned.is_none() {
+            if let Some(tracer) = &mut self.tracer {
+                tracer.end_timestep(&mut self.raw);
+            }
             let status = self.raw.final_blocks();
             // A failure in a final block has no run left to fail; its message is printed.
             if let Err(e) = self.outcome(status) {
                 print_line(&format!("simjig: in final blocks: {}", e.message));
             }
+        }
+        // A poisoned model refuses trace calls; `destroy` closes its trace instead.
+        if self.poisoned.is_none()
+            && let Some(tracer) = &mut self.tracer
+        {
+            tracer.close(&mut self.raw);
         }
     }
 }
@@ -378,7 +422,7 @@ mod tests {
     #[test]
     fn a_fatal_poisons_the_model() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
         STATE.with_borrow_mut(|s| {
             s.statuses.push_back(Status::Fatal);
             s.pending.push_back((MsgKind::Fatal as u32, c"boom"));
@@ -403,7 +447,7 @@ mod tests {
     #[test]
     fn a_clean_model_runs_final_blocks_then_is_destroyed() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
         drop(model);
         assert_eq!(counts(), (1, 1, 1));
@@ -412,7 +456,7 @@ mod tests {
     #[test]
     fn an_error_record_fails_the_eval_without_poisoning() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
         STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Error as u32, c"bad")));
         assert!(model.eval().is_err());
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
@@ -437,7 +481,7 @@ mod tests {
             ..FAKE
         };
         fake::reset();
-        let err = VerilatorModel::load(&SHORT, &[]).unwrap_err();
+        let err = VerilatorModel::load(&SHORT, &[], None).unwrap_err();
         assert_eq!(
             err,
             LoadError::VtableSize {
@@ -453,7 +497,7 @@ mod tests {
     fn a_failure_while_creating_fails_the_load() {
         fake::reset();
         STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Fatal as u32, c"init")));
-        let err = VerilatorModel::load(&FAKE, &[]).unwrap_err();
+        let err = VerilatorModel::load(&FAKE, &[], None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("failed while being created: $fatal"),
@@ -469,7 +513,7 @@ mod tests {
     #[test]
     fn writes_are_masked_and_outputs_are_read_only() {
         fake::reset();
-        let mut model = VerilatorModel::load(&FAKE, &[]).unwrap();
+        let mut model = VerilatorModel::load(&FAKE, &[], None).unwrap();
         model.write(0, &[0xff]);
         assert_eq!(STATE.with_borrow(|s| s.members[0]), 0x0f);
         let mut out = [0];
@@ -480,6 +524,119 @@ mod tests {
         }));
         assert!(write.is_err(), "writing an output must panic");
         assert_eq!(STATE.with_borrow(|s| s.members[1]), 0);
+    }
+
+    fn traced_vtable() -> Vtable {
+        thread_local! {
+            static VT: Vtable = Vtable::leak(fake::traced_vtable());
+        }
+        VT.with(|vt| *vt)
+    }
+
+    static TRACED: ModelMeta = ModelMeta {
+        vtable: traced_vtable,
+        ..FAKE
+    };
+
+    fn calls() -> Vec<String> {
+        STATE.with_borrow_mut(|s| std::mem::take(&mut s.calls))
+    }
+
+    fn traced(options: &TraceOptions) -> VerilatorModel {
+        fake::reset();
+        let model = VerilatorModel::load(&TRACED, &[], Some(options)).unwrap();
+        let open = calls();
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert!(open[0].starts_with("open w.fst "), "{open:?}");
+        model
+    }
+
+    /// Runs timesteps at `times`, two evals each.
+    fn steps(model: &mut VerilatorModel, times: &[u64]) {
+        for &t in times {
+            model.set_time(SimTime(t));
+            assert_eq!(model.eval(), Ok(EvalStatus::Running));
+            assert_eq!(model.eval(), Ok(EvalStatus::Running));
+        }
+    }
+
+    #[test]
+    fn each_timestep_is_dumped_once_at_its_end_with_its_time() {
+        let mut model = traced(&TraceOptions::new("w.fst").depth(3).start(SimTime(7)));
+        steps(&mut model, &[0, 10, 25]);
+        drop(model);
+        assert_eq!(
+            calls(),
+            [
+                "eval", "eval", "dump 0", "eval", "eval", "dump 10", "eval", "eval", "dump 25",
+                "final", "close", "destroy"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_trace_is_opened_with_its_depth_and_start() {
+        fake::reset();
+        let options = TraceOptions::new("w.fst").depth(3).start(SimTime(7));
+        let _model = VerilatorModel::load(&TRACED, &[], Some(&options)).unwrap();
+        assert_eq!(calls(), ["open w.fst depth=3 start=7"]);
+    }
+
+    #[test]
+    fn a_failing_eval_dumps_and_flushes_at_once() {
+        let mut model = traced(&TraceOptions::new("w.fst"));
+        steps(&mut model, &[0]);
+        model.set_time(SimTime(5));
+        STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Error as u32, c"bad")));
+        assert!(model.eval().is_err());
+        assert_eq!(
+            calls(),
+            ["eval", "eval", "dump 0", "eval", "dump 5", "flush"]
+        );
+        drop(model);
+        assert_eq!(calls(), ["final", "close", "destroy"]);
+    }
+
+    #[test]
+    fn a_poisoned_model_gets_no_trace_calls() {
+        let mut model = traced(&TraceOptions::new("w.fst"));
+        steps(&mut model, &[0]);
+        model.set_time(SimTime(5));
+        STATE.with_borrow_mut(|s| s.statuses.push_back(Status::Fatal));
+        assert!(model.eval().is_err());
+        model.set_time(SimTime(6));
+        drop(model);
+        assert_eq!(calls(), ["eval", "eval", "dump 0", "eval", "destroy"]);
+    }
+
+    #[test]
+    fn the_trace_closes_after_its_end_time() {
+        let mut model = traced(&TraceOptions::new("w.fst").end(SimTime(10)));
+        steps(&mut model, &[0, 10, 20, 30]);
+        drop(model);
+        let calls: Vec<String> = calls().into_iter().filter(|c| c != "eval").collect();
+        assert_eq!(calls, ["dump 0", "dump 10", "close", "final", "destroy"]);
+    }
+
+    #[test]
+    fn a_failed_dump_stops_the_trace_but_not_the_run() {
+        let mut model = traced(&TraceOptions::new("w.fst"));
+        STATE.with_borrow_mut(|s| s.trace_statuses.push_back(Status::Exception));
+        steps(&mut model, &[0, 10, 20]);
+        drop(model);
+        let calls: Vec<String> = calls().into_iter().filter(|c| c != "eval").collect();
+        assert_eq!(calls, ["dump 0", "final", "destroy"]);
+    }
+
+    #[test]
+    fn a_model_without_fst_rejects_waves_unless_they_are_optional() {
+        fake::reset();
+        let err = VerilatorModel::load(&FAKE, &[], Some(&TraceOptions::new("w.fst"))).unwrap_err();
+        assert_eq!(err, LoadError::NoTrace { prefix: "Vfake" });
+        assert!(err.to_string().contains(".trace_fst(true)"), "{err}");
+        let optional = TraceOptions::new("w.fst").if_supported();
+        let model = VerilatorModel::load(&FAKE, &[], Some(&optional)).unwrap();
+        assert!(model.tracer.is_none());
     }
 
     fn record(kind: MsgKind, hier: &str, msg: &str) -> OwnedMsg {

@@ -7,6 +7,7 @@
 //!   `link_model!`) and `LoadError`;
 //! - `bind`: loading a model for the harness and binding its handles (`Binder`,
 //!   `dut_model!`);
+//! - `trace`: FST waves (`TraceOptions`, and when the backend samples);
 //! - `values`: support for generated value types (`pack_field`, `InvalidEnum`, `FieldDiff`).
 
 #[expect(
@@ -21,5 +22,6 @@ pub(crate) mod abi;
 pub(crate) mod bind;
 pub(crate) mod meta;
 mod raw;
+pub(crate) mod trace;
 pub(crate) mod values;
 mod verilator;

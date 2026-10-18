@@ -111,10 +111,12 @@ impl Binder for ModelBinder {
     reason = "the DutModel signature; called once per test"
 )]
 pub fn instantiate(meta: &'static ModelMeta, options: &ModelOptions) -> Result<Sim, Failure> {
-    let model = VerilatorModel::load(meta, &options.verilator_args()).map_err(|e| {
-        let precision = Precision::from_exponent(meta.precision_exponent).unwrap_or(Precision::PS);
-        load_failure(&e, precision)
-    })?;
+    let model = VerilatorModel::load(meta, &options.verilator_args(), options.trace.as_ref())
+        .map_err(|e| {
+            let precision =
+                Precision::from_exponent(meta.precision_exponent).unwrap_or(Precision::PS);
+            load_failure(&e, precision)
+        })?;
     Ok(Sim::from_backend(Box::new(model)))
 }
 

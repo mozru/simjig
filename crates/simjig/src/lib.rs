@@ -44,6 +44,7 @@ pub use kernel::trigger::{
     now, rising, with_timeout, yield_now,
 };
 pub use model::meta::LoadError;
+pub use model::trace::TraceOptions;
 pub use model::values::{FieldDiff, InvalidEnum};
 pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};
 

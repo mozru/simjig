@@ -56,3 +56,5 @@ One place per concept (constitution rule 6); everything else calls it.
 | Seeds and random streams | `harness::seed`: `Seed` (root seed, test-name seed, Verilator seed), `Seed::rng` (named streams), `Rng` (xoshiro256**) |
 | Stable hashing (FNV-1a 64) | `kernel::recorder::Fnv`: the trace hash, seeds, stream seeds, failure signatures |
 | Checking a model's C vtable before use | `simjig::model::raw::check_vtable` |
+| Trace file names: `<stem>.fst` for the first model, `<stem>.model-<i>.fst` for model `i`, then `.branch-<j>` per fork level (`<stem>[.model-<i>].branch-<j>.fst`) | Built by `harness::dut::ModelOptions::for_model` (`.model-<i>`) and `model::trace::branch_path` (`.branch-<j>`); parsed back only by `harness::replay::trace_identity` |
+| The time grammar of a waves window (`<t0>..<t1>`) | `simjig::harness::waves::parse_window` (`SIMJIG_WAVES=window:`, whole numbers of a unit). `cargo-simjig`'s `waves::parse_window` is a deliberate second copy, since `cargo-simjig` may not depend on `simjig`: it also takes decimals (`1.5us`) and turns them into the harness's form, so it accepts a superset and emits only what the harness parses |

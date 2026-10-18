@@ -14,6 +14,7 @@ mod header;
 mod ifaces;
 mod pipeline;
 mod probes;
+mod rebuild;
 mod recipe;
 mod support;
 mod ui;

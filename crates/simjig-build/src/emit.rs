@@ -10,9 +10,13 @@
 //! | Output | Written to | Used as |
 //! |---|---|---|
 //! | [`Emitted::rust`] | `OUT_DIR/simjig/<name>.rs` | `include!`d by the user crate |
-//! | [`Emitted::shim_cpp`] | `OUT_DIR/simjig/<prefix>_shim.cpp` | compiled into the model archive |
+//! | [`Emitted::shim_cpp`] | `OUT_DIR/simjig/<name>/<prefix>_shim.cpp` | compiled into the model archive |
 //! | [`Emitted::vlt`] | cache `inputs/<hash>/<prefix>.vlt` | Verilator control file |
 //! | [`Emitted::layout_check`] | cache `inputs/<hash>/<module>.sv` | `--lint-only` run before verilating |
+//!
+//! Each DUT's shim has a directory of its own, holding only the shim of its current
+//! configuration (an earlier configuration's shim is removed), so the directory a
+//! model's sources are in changes only with that model.
 //!
 //! The header cross-check compares the generated header with [`Emitted::ports`] when the
 //! emitter supplies them, else with the IR top module's ports ([`ir_ports`]).
@@ -208,23 +212,25 @@ pub(crate) fn place(
     out_dir: &Path,
 ) -> Result<Placed, Error> {
     let prefix = config.prefix();
-    let dir = out_dir.join("simjig");
-    let write = |name: String, text: &str| -> Result<PathBuf, Error> {
-        std::fs::create_dir_all(&dir).map_err(Error::io("creating", &dir))?;
+    let dir = generated_dir(out_dir);
+    let write = |dir: &Path, name: String, text: &str| -> Result<PathBuf, Error> {
+        std::fs::create_dir_all(dir).map_err(Error::io("creating", dir))?;
         let path = dir.join(name);
         write_if_changed(&path, text)?;
         Ok(path)
     };
     let rust = emitted
         .rust
-        .map(|r| write(format!("{}.rs", config.name), &r))
+        .map(|r| write(&dir, format!("{}.rs", config.name), &r))
         .transpose()?;
-    let model_sources = emitted
+    let shim_dir = dir.join(&config.name);
+    let model_sources: Vec<PathBuf> = emitted
         .shim_cpp
-        .map(|s| write(format!("{prefix}_shim.cpp"), &s))
+        .map(|s| write(&shim_dir, format!("{prefix}_shim.cpp"), &s))
         .transpose()?
         .into_iter()
         .collect();
+    remove_other_files(&shim_dir, &model_sources)?;
     let inputs = emitted
         .vlt
         .map(|contents| GeneratedInput {
@@ -248,6 +254,25 @@ pub(crate) fn place(
         ports,
         probes: emitted.probes,
     })
+}
+
+/// `OUT_DIR/simjig/`: the files simjig generates into `OUT_DIR` (see the module docs).
+pub(crate) fn generated_dir(out_dir: &Path) -> PathBuf {
+    out_dir.join("simjig")
+}
+
+/// Removes every file in `dir` but `keep` (the shims of earlier configurations).
+fn remove_other_files(dir: &Path, keep: &[PathBuf]) -> Result<(), Error> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for e in entries {
+        let path = e.map_err(Error::io("listing", dir))?.path();
+        if path.is_file() && !keep.contains(&path) {
+            std::fs::remove_file(&path).map_err(Error::io("removing", &path))?;
+        }
+    }
+    Ok(())
 }
 
 /// Rewriting an identical file would bump its mtime and make Cargo rebuild whatever

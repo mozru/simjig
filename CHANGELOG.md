@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Each DUT's shim is written to `OUT_DIR/simjig/<name>/<prefix>_shim.cpp` (it was
+  `OUT_DIR/simjig/<prefix>_shim.cpp`), and the shim of an earlier configuration is removed.
+  A model archive's key no longer lists the files in `OUT_DIR/simjig/` or in the cache, so
+  a rerun of the build script compiles only the models whose DUT changed (it compiled
+  every model after any DUT changed, and most of them on the first rerun after a cold
+  build). Every model archive is compiled again once.
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

@@ -1,0 +1,15 @@
+# A minimal user crate whose build.rs builds three shared DUTs with simjig-build. The
+# integration tests (tests/it/rebuild.rs) copy it with the DUTs, point the simjig-build path
+# at the crate under test, and check what a rerun of the build script compiles again and
+# what makes Cargo rerun it.
+[package]
+name = "simjig-fixture-rebuild"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[build-dependencies]
+simjig-build = { path = "../../.." }
+
+# Not part of the simjig workspace.
+[workspace]

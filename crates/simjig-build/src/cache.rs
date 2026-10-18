@@ -2,7 +2,8 @@
 //!
 //! Layout under the cache root (see [`crate::BuildEnv::cache_dir`]):
 //! - `models/<full key>/obj/`: Verilator output; `models/<full key>/deps`: its inputs.
-//! - `manifests/<pre key>`: the input list of the last build with that pre key.
+//! - `manifests/<pre key>`: the input list of the last build with that pre key (of a
+//!   verilation, or of an archive compile, see `archive`).
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
 //! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
@@ -173,7 +174,8 @@ impl Cache {
         }
     }
 
-    fn write_atomic(&self, path: &Path, contents: &str) -> Result<(), Error> {
+    /// Replaces the file at `path` with `contents` atomically.
+    pub(crate) fn write_atomic(&self, path: &Path, contents: &str) -> Result<(), Error> {
         let work = self.work_dir()?;
         let tmp = work.join("file");
         std::fs::write(&tmp, contents).map_err(Error::io("writing", &tmp))?;

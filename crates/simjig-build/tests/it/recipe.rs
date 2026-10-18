@@ -244,3 +244,33 @@ fn editing_a_header_in_a_recipe_include_dir_recompiles_the_model() {
     let (edited, _) = build_inv(&s, &env, &log, recipe);
     assert!(edited.contains(&"uses_k.cpp".to_owned()), "{edited:?}");
 }
+
+/// A header found next to a recipe source (not in any include directory) is a dependency
+/// too: editing it compiles the model again, and the build script reruns on it.
+#[test]
+fn editing_a_header_next_to_a_recipe_source_recompiles_the_model() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    let mut env = s.env();
+    env.simjig_ccache = Some(ccache.into());
+    let source = recipe_source(&s, "uses_near.cpp", "near.h");
+    let near = source.with_file_name("near.h");
+    std::fs::write(&near, "#define K 1\n").unwrap();
+    let recipe = CppRecipe {
+        model_sources: vec![source],
+        ..CppRecipe::default()
+    };
+    let (first, directives) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(first.contains(&"uses_near.cpp".to_owned()), "{first:?}");
+    let rerun = format!("cargo::rerun-if-changed={}", near.display());
+    assert!(directives.contains(&rerun), "{directives:?}");
+    let (again, directives) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(again.is_empty(), "nothing changed: {again:?}");
+    assert!(
+        directives.contains(&rerun),
+        "a cache hit reruns on it too: {directives:?}"
+    );
+    std::fs::write(&near, "#define K 2\n").unwrap();
+    let (edited, _) = build_inv(&s, &env, &log, recipe);
+    assert!(edited.contains(&"uses_near.cpp".to_owned()), "{edited:?}");
+}

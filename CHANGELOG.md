@@ -24,3 +24,24 @@ the public API, the generated code or simulation semantics.
   result.
 - `BlockedTask` implements `Display` (`` `main.d` awaits rising(clk) ``), the rendering
   `Failure`'s `Display` and the failure report share.
+- `#[simjig::test]` has a default simulation-time budget of 10 ms (`DEFAULT_TIMEOUT_MS`),
+  rounded up to a whole tick (`ceil(10 ms / tick)`, at least one) at precisions coarser
+  than 1 ms; `timeout = "none"` disables it. Before, a test without `timeout` had no
+  limit.
+- `TestCtx::rng(path)` panics, at the second call, when `path` was already taken in the
+  run (the message names the first call's location): two streams with one path would
+  silently repeat each other's values.
+- `FailureKind::TimeLimit` gains `blocked`: the tasks still waiting, and on what, as for
+  `Starved` and `Deadlock`.
+- New `FailureKind::ReadWriteLimit { limit, waiters }`: more than `READ_WRITE_MAX`
+  (10 000) `ReadWrite` rounds that woke a task in one timestep.
+- New `FailureKind::DpiPanic { message }`: a DPI-C import implemented in Rust panicked
+  during an eval; the model is poisoned.
+- Times print in the largest unit that shows them exactly (`1250 ns`, `1 us`; zero in
+  the precision's unit, `0 ps`), through `SimTime::display` (`TimeDisplay`), in failures,
+  reports and `summary.json`.
+- The repro line is `SIMJIG_SEED=<seed> [<launcher> ]cargo nextest run -p <package>
+  [--run-ignored all] -E 'binary(=<binary>) & test(=<test>)'`, with the launcher
+  (`pixi run [--manifest-path ..] [-e <env>]`, `conda run -p <prefix>`) the test ran under.
+- Run directories are `<root>/<package>/<binary>/<test>/<seed>/` (was
+  `<root>/<test>/<seed>/`), written to a temporary sibling and renamed into place.

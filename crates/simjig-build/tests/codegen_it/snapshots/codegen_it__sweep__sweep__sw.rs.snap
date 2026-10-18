@@ -148,12 +148,12 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     const W: ::core::primitive::i32;
     /// Parameter `N` of `sw_top`.
     const N: ::core::primitive::i32;
-    /// The type of `a`, `b`: `Bits<8>` in `sw_small`, `WideBits<200, 7>` in `sw_big`.
+    /// The type of `a`, `b`, `word.data`: `Bits<8>` in `sw_small`, `WideBits<200, 7>` in `sw_big`.
     type A: ::simjig::__private::Vector;
     /// The type of `sum`: `Bits<9>` in `sw_small`, `WideBits<201, 7>` in `sw_big`.
     type Sum: ::simjig::__private::Vector;
     /// The type of `word`: `sw_small::Word` in `sw_small`, `sw_big::Word` in `sw_big`.
-    type Word: WordFields;
+    type Word: WordFields<Data = Self::A>;
     /// The type of `lanes`: `[Bits<8>; 2]` in `sw_small`, `[Bits<8>; 3]` in `sw_big`.
     type Lanes;
     /// `sw_top.clk`: input.

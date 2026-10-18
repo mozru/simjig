@@ -98,7 +98,7 @@ fn a_sweep_shares_what_is_alike_and_abstracts_the_rest() {
     assert_eq!(
         names,
         [
-            ("A", &AssocBound::Vector, vec!["a", "b"]),
+            ("A", &AssocBound::Vector, vec!["a", "b", "word.data"]),
             ("Sum", &AssocBound::Vector, vec!["sum"]),
             (
                 "Word",
@@ -185,6 +185,16 @@ fn a_struct_that_differs_gets_one_type_and_a_fields_trait() {
             ("PeekIn", &AssocBound::Vector, vec!["peek_in", "peek_out"]),
             ("Beat", &fields, vec!["up.beat", "down.beat"]),
             (
+                "Data",
+                &AssocBound::Vector,
+                vec!["up.beat.data", "down.beat.data"]
+            ),
+            (
+                "Tag",
+                &AssocBound::Vector,
+                vec!["up.beat.tag", "down.beat.tag"]
+            ),
+            (
                 "Up",
                 &AssocBound::Trait("BeatIfSinkPorts".into()),
                 vec!["up"]
@@ -196,8 +206,12 @@ fn a_struct_that_differs_gets_one_type_and_a_fields_trait() {
             ),
         ]
     );
-    assert_eq!(t.types[2].equals, [("Beat".to_owned(), 1)]);
-    assert_eq!(t.types[3].equals, [("Beat".to_owned(), 1)]);
+    // The bundle traits' and the fields trait's types are `Ports`' (indices into `names`).
+    let fixed = [("Data".to_owned(), 2), ("Tag".to_owned(), 3)];
+    assert_eq!(t.types[1].equals, fixed);
+    let bundle = [("Beat".to_owned(), 1), fixed[0].clone(), fixed[1].clone()];
+    assert_eq!(t.types[4].equals, bundle);
+    assert_eq!(t.types[5].equals, bundle);
     let [beat] = sweep.fields_traits.as_slice() else {
         panic!("{:?}", sweep.fields_traits)
     };
@@ -417,6 +431,106 @@ fn a_fields_trait_reads_and_builds_each_members_struct() {
     assert_eq!(beat_body::body(b), (0x5a, 2, 0x5a << 4 | 2, 20));
     let one: bt::bt_a::Beat = <bt::bt_a::Beat as bt::BeatFields>::new(1, 0);
     assert_eq!(one.data, Bits::new(1));
+}
+
+/// The index of `Ports`' associated type `name`.
+fn assoc_index(t: &simjig_build::codegen::PortsTrait, name: &str) -> usize {
+    t.types.iter().position(|a| a.name == name).unwrap()
+}
+
+/// A port and a struct field of one type in every member (`dout`, `pa.beat.data`), and a
+/// struct port nesting another's type (`o.i`, `io`), are one type in a generic body: the
+/// fields trait's associated types are fixed to `Ports`' as a bundle trait's are
+/// (`type AIfBeatT: AIfBeatTFields<Data = Self::Din, ..>`), or `dout == beat.data()` and
+/// `io == o.i()` do not compile (E0277, E0308; `fields_body` checks they do).
+#[test]
+fn a_fields_traits_types_are_fixed_to_the_ports_traits() {
+    let (sweep, out) = files(
+        "fs",
+        &[
+            cases::fields_sweep_member("fs_a", 8),
+            cases::fields_sweep_member("fs_b", 16),
+        ],
+    );
+    check_generated("fields_sweep", &out);
+    let t = &sweep.ports;
+    // Every type of the fields trait is fixed, `Tag` too though no port has it.
+    let fixed = [
+        ("Data".to_owned(), assoc_index(t, "Din")),
+        ("Tag".to_owned(), assoc_index(t, "Tag")),
+    ];
+    assert_eq!(t.types[assoc_index(t, "AIfBeatT")].equals, fixed);
+    // The bundle trait's `beat` is that type, and its fields' types are too.
+    let pa = &t.types[assoc_index(t, "Pa")].equals;
+    assert_eq!(pa[0], ("AIfBeatT".to_owned(), assoc_index(t, "AIfBeatT")));
+    assert_eq!(pa[1..], fixed);
+    let (sweep, out) = files(
+        "fn",
+        &[
+            cases::nested_fields_member("fn_a", 8),
+            cases::nested_fields_member("fn_b", 16),
+        ],
+    );
+    check_generated("fields_sweep", &out);
+    let t = &sweep.ports;
+    let outer = &t.types[assoc_index(t, "Outer")].equals;
+    assert_eq!(*outer, [("Inner".to_owned(), assoc_index(t, "Inner"))]);
+    // The nested struct's own field type is fixed through `Inner`'s bound.
+    let inner = &t.types[assoc_index(t, "Inner")].equals;
+    assert_eq!(*inner, [("A".to_owned(), assoc_index(t, "A"))]);
+}
+
+/// The committed sweeps of `cases/sweep_fields`.
+pub mod fs {
+    include!("generated/fields_sweep/fs.rs");
+}
+
+/// `fn` is a keyword, so the module is named for Rust.
+pub mod fn_sweep {
+    include!("generated/fields_sweep/fn.rs");
+}
+
+/// Bodies generic over `fs` and `fn_sweep` comparing a struct field with a port of the
+/// same type, and a nested struct with a port of its type, with no `where` clause.
+mod fields_body {
+    use crate::__private::{In, Out};
+
+    /// `pa.beat.data` and `pb.beat.x` have `dout`'s type: a field's value is the port's.
+    pub(super) fn ports<D: super::fs::Ports>(dut: D) -> bool {
+        use super::fs::*;
+        let _: Out<D::Din> = dut.dout();
+        let _: In<D::AIfBeatT> = dut.pa().beat();
+        let beat = D::AIfBeatT::new(3, 1);
+        let field: D::Din = beat.data();
+        let other: D::Din = D::BIfBeatT::default().x();
+        field == beat.data() && other != field
+    }
+
+    /// `o.i` has `io`'s type, and `rw.raw` that of `o.i.a`.
+    pub(super) fn nested<D: super::fn_sweep::Ports>(dut: D) -> (bool, u128) {
+        use super::fn_sweep::*;
+        let _: Out<D::Inner> = dut.io();
+        let inner = D::Inner::new(5);
+        let outer = D::Outer::new(inner, 1);
+        let rw = D::Rw::new(outer.i().a(), 0);
+        (inner == outer.i(), rw.raw().to_u128())
+    }
+}
+
+#[test]
+fn a_generic_body_compares_struct_fields_with_ports() {
+    let binder = &mut RecordingBinder::default();
+    assert!(fields_body::ports(fs::fs_a::Dut::__bind(binder)));
+    assert!(fields_body::ports(fs::fs_b::Dut::__bind(binder)));
+    let nested = (true, 5);
+    assert_eq!(
+        fields_body::nested(fn_sweep::fn_a::Dut::__bind(binder)),
+        nested
+    );
+    assert_eq!(
+        fields_body::nested(fn_sweep::fn_b::Dut::__bind(binder)),
+        nested
+    );
 }
 
 /// A fields trait's associated type is not named like one of its supertraits'

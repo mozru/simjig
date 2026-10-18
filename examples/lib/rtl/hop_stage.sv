@@ -1,7 +1,7 @@
 // One pipeline stage of tagged beats that counts hops: each beat on `up` leaves on `down`
 // one cycle later, its `data` unchanged and its `tag` (the number of stages it has
-// crossed) incremented, wrapping at 2**TAG_W. `rst` (synchronous, active high) empties
-// the stage.
+// crossed) incremented, wrapping at 2**TAG_W. `down_data` is `down.beat.data` on a plain
+// port. `rst` (synchronous, active high) empties the stage.
 module hop_stage #(
     parameter int WIDTH = 8,
     parameter int TAG_W = 2
@@ -9,7 +9,8 @@ module hop_stage #(
     input logic      clk,
     input logic      rst,
     tagged_if.sink   up,
-    tagged_if.source down
+    tagged_if.source down,
+    output logic [WIDTH-1:0] down_data
 );
   timeunit 1ns; timeprecision 1ps;
 
@@ -20,6 +21,8 @@ module hop_stage #(
     $fatal(1, "hop_stage: WIDTH %0d and TAG_W %0d disagree with the interfaces' beats",
            WIDTH, TAG_W);
   end
+
+  assign down_data = down.beat.data;
 
   always_ff @(posedge clk) begin
     if (rst) begin

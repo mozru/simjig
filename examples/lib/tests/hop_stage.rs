@@ -2,7 +2,8 @@
 //! sweep of two configurations whose `beat_t` has different field widths. One test body,
 //! generic over `hop_stage::Ports`, runs on both: `D::Beat` is the type of `up.beat` and of
 //! `down.beat`, built with `D::Beat::new(tag, data)` and read with `beat.tag()`
-//! (`hop_stage::BeatFields`). The glob import is the body's only one for the sweep: it
+//! (`hop_stage::BeatFields`); a field and a port of one type in every configuration
+//! (`beat.data()`, `down_data`) are one type, `D::DownData`. The glob import is the body's only one for the sweep: it
 //! brings the sweep's traits and the runtime's `Value`, `Vector` and `Packed`.
 #![forbid(unsafe_code)]
 
@@ -34,6 +35,8 @@ async fn a_beat_hops_with_its_tag_incremented<D: Ports>(dut: D) {
         let hopped: D::Beat = dut.down().beat().get(); // one type on both ports
         assert_eq!(hopped, beat.with_tag((beat.tag().to_u128() + 1) % wrap));
         assert_eq!(hopped.data(), beat.data());
+        let data: D::DownData = dut.down_data().get(); // the field's type is the port's
+        assert_eq!(data, hopped.data());
         assert_eq!(dut.down().valid().get(), 1);
         dut.clk().falling().await;
     }

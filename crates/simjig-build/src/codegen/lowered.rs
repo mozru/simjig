@@ -545,9 +545,10 @@ pub struct AssocType {
     pub per_impl: Vec<RustType>,
     /// The fields whose type it is, in declaration order.
     pub users: Vec<String>,
-    /// Associated types of the bound (a bundle trait) fixed to this trait's: the bound's
-    /// name for one, and the index of this trait's type it equals. So `up.beat` and
-    /// `down.beat`, in two bundle traits, are one type in a generic body.
+    /// Associated types of the bound (a bundle trait or a [`FieldsTrait`]) fixed to this
+    /// trait's: the bound's name for one, and the index of this trait's type it equals.
+    /// So `up.beat` and `down.beat`, in two bundle traits, are one type in a generic body,
+    /// and so are a port and a struct field of one type (`dout`, `beat.data()`).
     pub equals: Vec<(String, usize)>,
 }
 

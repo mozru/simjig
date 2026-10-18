@@ -406,7 +406,10 @@ its typedef: `beat_t` gets `BeatFields`, with a getter per field (`beat.tag()`),
 constructor taking every field in declaration order (`D::Beat::new(tag, data)`) and a
 `with_<field>` per field, each taking anything that converts into the field (a literal
 for a bit vector). In `examples/lib`, `hop_stage` is such a sweep over the interface
-`tagged_if`, whose `beat_t` has a `TAG_W`-bit tag and a `WIDTH`-bit data field:
+`tagged_if`, whose `beat_t` has a `TAG_W`-bit tag and a `WIDTH`-bit data field, and
+`down_data` a plain port of `down.beat.data`'s type. A field and a port of one type in
+every configuration are one associated type (`beat.data()` and `dut.down_data()` are
+both `D::DownData`), and so are a nested struct and a port of its type:
 
 ```rust
 #[simjig::test(init = random, timeout = "1us", duts = [hop_8x2::Dut, hop_32x4::Dut])]
@@ -427,6 +430,8 @@ async fn a_beat_hops_with_its_tag_incremented<D: Ports>(dut: D) {
         let hopped: D::Beat = dut.down().beat().get(); // one type on both ports
         assert_eq!(hopped, beat.with_tag((beat.tag().to_u128() + 1) % wrap));
         assert_eq!(hopped.data(), beat.data());
+        let data: D::DownData = dut.down_data().get(); // the field's type is the port's
+        assert_eq!(data, hopped.data());
         assert_eq!(dut.down().valid().get(), 1);
         dut.clk().falling().await;
     }

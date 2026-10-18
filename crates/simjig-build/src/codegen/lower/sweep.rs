@@ -25,7 +25,12 @@
 //! - **fields traits**: an associated type that is a packed struct in every member, with
 //!   the same field names, is bounded by `<Name>Fields` (`BeatFields`, which extends
 //!   `simjig::Value`): a getter per field, `new(field, ..)` and `with_<field>`, the field
-//!   types built like the signals' (concrete or associated);
+//!   types built like the signals' (concrete or associated). The fields trait's associated
+//!   types are `Ports`' (and a bundle trait's) too, recursively through nested structs,
+//!   fixed by the bound (`type Beat: BeatFields<Data = Self::Din, ..>`), so a field and a
+//!   port of one type in every member (`beat.data()`, `dout`) are one type in a generic
+//!   body. A fields trait's own types are its fields' only (`OuterFields::Inner` is
+//!   bounded by `InnerFields` alone): a body over `Ports` sees them tied through it;
 //! - **method names**: a trait method named like one of its supertraits' (`clone`, `fmt`;
 //!   for a fields trait also `Value`'s, `new` and another field's setter) gets `_`
 //!   appended (`clone_`), and its docs say so; a fields trait's associated type named
@@ -426,7 +431,7 @@ impl<'a> Builder<'a> {
                             bound,
                             per_impl,
                         } => {
-                            assoc_type(&mut t.types, &mut assoc, &name, bound, per_impl, entry.name)
+                            self.place(&mut t.types, &mut assoc, &name, bound, per_impl, entry.name)
                         }
                     };
                     MethodKind::Signal {
@@ -616,25 +621,63 @@ impl<'a> Builder<'a> {
         });
         let port = same[0].name;
         let inner = self.bundle_traits[index].types.clone();
-        let equals: Vec<(String, usize)> = inner
-            .into_iter()
-            .map(|a| {
-                let users: Vec<String> = a.users.iter().map(|u| format!("{port}.{u}")).collect();
-                let TraitType::Assoc(i) =
-                    assoc_type(&mut t.types, assoc, &a.name, a.bound, a.per_impl, &users[0])
-                else {
-                    unreachable!("`assoc_type` makes an associated type")
-                };
-                t.types[i].users.extend(users.into_iter().skip(1));
-                (a.name, i)
-            })
-            .collect();
+        let equals = lift(&mut t.types, assoc, inner, port);
         let name = camel(port.trim_start_matches("r#"));
         let bound = AssocBound::Trait(self.bundle_traits[index].name.clone());
         let ty = assoc_type(&mut t.types, assoc, &name, bound, per_impl, port);
         if let TraitType::Assoc(i) = ty {
             t.types[i].equals = equals;
         }
+        ty
+    }
+
+    /// The associated type of a `Ports` or bundle trait with these per-implementation types,
+    /// as [`assoc_type`] makes it. One bounded by a [`FieldsTrait`] also brings that trait's
+    /// associated types into `types`, recursively, and the bound fixes them
+    /// (`type Outer: OuterFields<Inner = Self::Inner>`), as a bundle trait's are: so a port
+    /// and a struct field of one type in every member (`dout`, `beat.data`) are one type in
+    /// a generic body. A fields trait's own types stay its fields' only: a body generic
+    /// over the fields trait alone does not need the nested ones.
+    fn place(
+        &self,
+        types: &mut Vec<AssocType>,
+        assoc: &mut Namespace,
+        name: &str,
+        bound: AssocBound,
+        per_impl: Vec<RustType>,
+        user: &str,
+    ) -> TraitType {
+        let fields = match &bound {
+            AssocBound::Trait(n) => self.fields_traits.iter().find(|f| f.name == *n),
+            _ => None,
+        }
+        .map(|f| f.types.clone());
+        let ty = assoc_type(types, assoc, name, bound, per_impl, user);
+        let (Some(inner), TraitType::Assoc(i)) = (fields, &ty) else {
+            return ty;
+        };
+        let mut equals = Vec::new();
+        for a in inner {
+            // Each user of the field's type is a user here (`o.i`, and `io` elsewhere).
+            let mut placed = None;
+            for u in &a.users {
+                let at = format!("{user}.{u}");
+                let ty = self.place(
+                    types,
+                    assoc,
+                    &a.name,
+                    a.bound.clone(),
+                    a.per_impl.clone(),
+                    &at,
+                );
+                placed = Some(ty);
+            }
+            let Some(TraitType::Assoc(j)) = placed else {
+                unreachable!("an associated type has a user, and `place` makes one")
+            };
+            equals.push((a.name, j));
+        }
+        types[*i].equals = equals;
         ty
     }
 
@@ -688,6 +731,46 @@ fn assoc_type(
         equals: Vec::new(),
     });
     TraitType::Assoc(types.len() - 1)
+}
+
+/// A bundle trait's associated types `inner` as associated types of the trait holding the
+/// interface port `port`, with their users prefixed by it: the bundle trait's bound's
+/// `equals` (`Beat = Self::Beat`), each type's own `equals` remapped to `types`.
+fn lift(
+    types: &mut Vec<AssocType>,
+    assoc: &mut Namespace,
+    inner: Vec<AssocType>,
+    port: &str,
+) -> Vec<(String, usize)> {
+    let map: Vec<usize> = inner
+        .iter()
+        .map(|a| {
+            let users: Vec<String> = a.users.iter().map(|u| format!("{port}.{u}")).collect();
+            let ty = assoc_type(
+                types,
+                assoc,
+                &a.name,
+                a.bound.clone(),
+                a.per_impl.clone(),
+                &users[0],
+            );
+            let TraitType::Assoc(i) = ty else {
+                unreachable!("`assoc_type` makes an associated type")
+            };
+            types[i].users.extend(users.into_iter().skip(1));
+            i
+        })
+        .collect();
+    for (a, &i) in inner.iter().zip(&map) {
+        if !a.equals.is_empty() {
+            types[i].equals = a.equals.iter().map(|(n, j)| (n.clone(), map[*j])).collect();
+        }
+    }
+    inner
+        .into_iter()
+        .zip(map)
+        .map(|(a, i)| (a.name, i))
+        .collect()
 }
 
 /// Whether two fields of the same name can be one trait method.

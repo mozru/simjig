@@ -338,6 +338,24 @@ pub fn all() -> Vec<Case> {
     cases
 }
 
+/// `cases/sweep_fields`' `fs_top` at `W`, both interfaces bound with it.
+pub fn fields_sweep_member(name: &str, w: u32) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/sweep_fields/design.sv")];
+    let params = vec![("W".to_owned(), w.to_string())];
+    let bind = |port: &str, interface: &str| IfaceBinding {
+        port: port.into(),
+        interface: interface.into(),
+        params: params.clone(),
+        modport: Some("sink".into()),
+    };
+    let iface = IfaceTop {
+        dut: "fs_top".into(),
+        params: params.clone(),
+        bindings: vec![bind("pa", "a_if"), bind("pb", "b_if")],
+    };
+    through_wrapper(name, sources, iface)
+}
+
 /// `cases/sweep_fields`' `fn_top` at `W`.
 pub fn nested_fields_member(name: &str, w: u32) -> Case {
     let sources = vec![manifest().join("tests/codegen_it/cases/sweep_fields/design.sv")];

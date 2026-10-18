@@ -11,7 +11,9 @@
 //!
 //! A generated Verilator model is loaded by its generated `Dut` type, which returns a
 //! [`Sim`] plus one typed handle per signal (or a [`LoadError`] if the model and the
-//! generated Rust disagree).
+//! generated Rust disagree). A test may take several DUTs, each its own model in one
+//! simulation ([`Lockstep`] compares two of them per cycle), and [`fork`] runs several
+//! branches of a test from one checkpoint (Unix, under nextest).
 #![deny(unsafe_code)]
 
 pub mod fork;

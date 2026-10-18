@@ -6,7 +6,7 @@
 //!   C ABI. `OUT_DIR/test_models.rs` gives every model's prefix and IR hash, and
 //!   `OUT_DIR/test_vtables/<name>.rs` declares its vtable symbol as `vtable()` (a
 //!   `link_name` must be a literal), returning the includer's `Vtable` type (a pointer).
-//! - `tests/model_tests`, `tests/e2e_*` and `tests/multi_dut` include the generated bindings with
+//! - `tests/model_tests`, `tests/e2e_*`, `tests/multi_dut` and `tests/fork_checkpoints` include the generated bindings with
 //!   `simjig::include_dut!` (`OUT_DIR/simjig/<name>.rs`).
 //!
 //! Cargo has no test-only build scripts, so two rules keep this away from simjig's users:

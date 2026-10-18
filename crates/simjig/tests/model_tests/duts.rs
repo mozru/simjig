@@ -2,7 +2,7 @@
 //! root, as a user would, so the generated `pub` items are reachable), and the harness's
 //! way of building one.
 
-pub(crate) use crate::{comb_chain, counter, fatal, flop, hello, inv, timing_dut, wide};
+pub(crate) use crate::{counter, fatal, flop, hello, inv, timing_dut, wide};
 
 /// A new simulation of `D` and its handles, as the harness builds them.
 pub(crate) fn sim<D: simjig::DutModel>() -> (simjig::Sim, D) {

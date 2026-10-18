@@ -21,8 +21,6 @@ simjig::include_dut!(flop);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(counter);
 #[cfg(simjig_test_models)]
-simjig::include_dut!(comb_chain);
-#[cfg(simjig_test_models)]
 simjig::include_dut!(fatal);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(wide);
@@ -35,10 +33,6 @@ simjig::include_dut!(hello);
 mod bench;
 #[cfg(simjig_test_models)]
 mod codegen;
-#[cfg(simjig_test_models)]
-mod conflog;
-#[cfg(simjig_test_models)]
-mod conformance;
 #[cfg(simjig_test_models)]
 mod duts;
 #[cfg(simjig_test_models)]

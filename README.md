@@ -282,7 +282,11 @@ rule:
 3. **Otherwise each side keeps its own default**, and when a parameter both declare ends
    up with two values (a module defaulting to 16, an interface to 8), the build warns
    (`cargo::warning`), naming both values and the `.bind_iface_with_params(..)` that
-   settles it. Setting either side explicitly silences it.
+   settles it. Setting either side explicitly silences it; binding the interface's own
+   value (`[("WIDTH", 8)]`) silences it without changing a width. Under Verilator's
+   default lint such a pair usually stops the build at a `%Warning-WIDTH*` inside the
+   generated wrapper instead; the error then starts with a `hint:` naming the two
+   defaults.
 
 The tie is by name only, a heuristic: an interface port header carries no parameter
 assignments (IEEE 1800-2017 §25.5), so nothing in the design says that a module's

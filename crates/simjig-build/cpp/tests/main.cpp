@@ -39,6 +39,7 @@ const simjig_model_vtable* simjig_vtable_Vtc_plain_rd_as_rw(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_no_scope(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_no_var(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_real(void);
+const simjig_model_vtable* simjig_vtable_Vtc_plain_real64(void);
 const simjig_model_vtable* simjig_vtable_Vtc_hier(void);
 const simjig_model_vtable* simjig_vtable_Vtc_timing(void);
 const simjig_model_vtable* simjig_vtable_Vtc_cg(void);
@@ -330,17 +331,21 @@ void missing_scopes_and_variables_are_told_apart() {
 }
 
 // A `real` is recorded as 1 bit wide, so a 1-bit probe of it passes the width check: its
-// storage type refuses it, with the build-time check's words (syms.rs).
+// storage type refuses it, with the build-time check's words (syms.rs). Bound as 64 bits,
+// the width check would refuse it as well; the type is checked first.
 void a_real_is_refused_by_its_type() {
-    Model m{simjig_vtable_Vtc_plain_real(), "TOP"};
-    CHECK_EQ(m.created(), SIMJIG_EXCEPTION);
-    const std::string why = create_failure(m);
     const char* want =
         "simjig: probe 'tc.u.rv': `rv` is a `real` (Verilator stores it as VLVT_REAL); only "
         "packed variables (bit vectors, packed structs and unions, enums) can be probed";
-    if (why != want) {
-        std::fprintf(stderr, "  message: %s\n", why.c_str());
-        CHECK(false);
+    for (const simjig_model_vtable* vt :
+         {simjig_vtable_Vtc_plain_real(), simjig_vtable_Vtc_plain_real64()}) {
+        Model m{vt, "TOP"};
+        CHECK_EQ(m.created(), SIMJIG_EXCEPTION);
+        const std::string why = create_failure(m);
+        if (why != want) {
+            std::fprintf(stderr, "  message: %s\n", why.c_str());
+            CHECK(false);
+        }
     }
 }
 

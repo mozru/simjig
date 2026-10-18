@@ -50,6 +50,7 @@ listed here with what keeps the copies equal.
 | Naming, slot, storage and access decisions | `codegen::lower` |
 | The "did you mean" hint | `codegen::names::did_you_mean` |
 | Two-step cache keys | `cache.rs` (Verilator output), `front.rs` (IR), `archive.rs` (archives), over the manifests of `manifest.rs` |
+| An input edited during a run | `manifest::{Snapshot, Manifest::record}`, `cache::keep_unpublished` |
 | What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`) |
 | Environment variables that rerun the build script | `BuildEnv::TRACKED_VARS` |
 | Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |

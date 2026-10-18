@@ -265,3 +265,26 @@ fn editing_a_nested_option_file_misses() {
     std::fs::write(&inner, "-Wno-UNUSED\n").unwrap();
     assert_eq!((build().cache, s.verilations()), (CacheStatus::Miss, 2));
 }
+
+/// With no target directory above `OUT_DIR` (and no `SIMJIG_CACHE_DIR`), the cache is
+/// `OUT_DIR/simjig-cache`, shared with nobody, and the build says so.
+#[test]
+fn an_unshared_cache_warns() {
+    let s = Sandbox::new();
+    let mut env = s.env();
+    env.simjig_cache_dir = None;
+    let built = Dut::new("inv")
+        .sources([crate::support::dut("inv").join("inv.sv")])
+        .top("inv")
+        .build_in(&env)
+        .unwrap();
+    assert!(built.obj_dir.starts_with(env.out_dir.join("simjig-cache")));
+    assert!(
+        built
+            .directives
+            .iter()
+            .any(|d| d.starts_with("cargo::warning=") && d.contains("not shared")),
+        "{:?}",
+        built.directives
+    );
+}

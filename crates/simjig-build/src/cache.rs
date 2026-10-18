@@ -122,8 +122,13 @@ impl Cache {
     ) -> Result<Verilated, Error> {
         let pre = pre_key(verilator, args, include_dirs)?;
         let manifest = self.root.join("manifests").join(&pre);
+        let prefix = prefix_of(args);
+        let label = format!("verilated-{prefix}");
         let known = match self.lookup(&pre, &manifest) {
-            Ok(hit) => return Ok(hit),
+            Ok(hit) => {
+                drop_unpublished(out_dir, &label);
+                return Ok(hit);
+            }
             Err(known) => known,
         };
         let work = self.work_dir()?;
@@ -135,12 +140,11 @@ impl Cache {
             remove_best_effort(&work);
             return Err(e);
         }
-        let prefix = prefix_of(args);
         let deps = read_deps(&obj, prefix)?;
         let recorded = match Manifest::record(&keyed_deps(&deps), &snapshot) {
             Recorded::Stable(m) => m,
             Recorded::Changed(path) => {
-                let dir = keep_unpublished(&work, out_dir, &format!("verilated-{prefix}"))?;
+                let dir = keep_unpublished(&work, out_dir, &label)?;
                 return Ok(Verilated {
                     obj_dir: dir.join("obj"),
                     deps,
@@ -158,6 +162,7 @@ impl Cache {
             .join(recorded.recorded_key(DEPS_DOMAIN, &pre));
         Self::publish(&work, &entry)?;
         self.write_atomic(&manifest, &recorded.text())?;
+        drop_unpublished(out_dir, &label);
         Ok(Verilated {
             obj_dir: entry.join("obj"),
             deps,
@@ -175,7 +180,7 @@ impl Cache {
         let entry = self.root.join("models").join(current.key(DEPS_DOMAIN, pre));
         // The entry's own list has the Verilator binary too, which the key leaves out.
         let listed = std::fs::read_to_string(entry.join("deps")).ok();
-        let deps = listed.and_then(|text| text.lines().map(unescape_path).collect());
+        let deps = listed.as_deref().and_then(parse_deps_listing);
         match deps {
             Some(deps) if entry.join("obj").is_dir() => Ok(Verilated {
                 obj_dir: entry.join("obj"),
@@ -257,6 +262,12 @@ impl Cache {
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
+
+    /// Whether `path` is in an output kept out of the cache (see [`keep_unpublished`]),
+    /// where it stays or where it falls back to.
+    pub(crate) fn is_unpublished(&self, path: &Path, out_dir: &Path) -> bool {
+        path.starts_with(unpublished_dir(out_dir)) || path.starts_with(self.root.join("tmp"))
+    }
 }
 
 fn pre_key(
@@ -324,6 +335,8 @@ fn prefix_of(args: &[String]) -> &str {
         .map_or("", String::as_str)
 }
 
+/// An entry's `deps` file: one escaped path per line (see [`escape_path`]), since a
+/// file name may hold a line break.
 fn deps_listing(deps: &[PathBuf]) -> String {
     let mut out = String::new();
     for d in deps {
@@ -333,6 +346,11 @@ fn deps_listing(deps: &[PathBuf]) -> String {
     out
 }
 
+/// The paths [`deps_listing`] wrote; `None` when a line is not one it writes.
+fn parse_deps_listing(text: &str) -> Option<Vec<PathBuf>> {
+    text.lines().map(unescape_path).collect()
+}
+
 /// Moves `work`, the output of a run whose input changed while it ran, to
 /// `OUT_DIR/simjig-unpublished/<label>` (replacing an earlier one) and returns where it
 /// is. It serves this build only, and must outlive the build script: the link that
@@ -340,7 +358,7 @@ fn deps_listing(deps: &[PathBuf]) -> String {
 /// the cache), it stays in `tmp/`, removed an hour later; by then Cargo has run the
 /// build script again, since the edited input is newer than its last run.
 pub(crate) fn keep_unpublished(work: &Path, out_dir: &Path, label: &str) -> Result<PathBuf, Error> {
-    let parent = out_dir.join("simjig-unpublished");
+    let parent = unpublished_dir(out_dir);
     std::fs::create_dir_all(&parent).map_err(Error::io("creating", &parent))?;
     let dst = parent.join(label);
     if dst.exists() {
@@ -350,6 +368,22 @@ pub(crate) fn keep_unpublished(work: &Path, out_dir: &Path, label: &str) -> Resu
         Ok(()) => dst,
         Err(_) => work.to_path_buf(),
     })
+}
+
+/// Where [`keep_unpublished`] keeps outputs.
+fn unpublished_dir(out_dir: &Path) -> PathBuf {
+    out_dir.join("simjig-unpublished")
+}
+
+/// Removes the output an earlier build kept for `label` (see [`keep_unpublished`]), once
+/// a later build of that label made a good one: nothing links it any more. Only for a
+/// label one DUT owns: a Verilator runtime's is shared by every DUT of the build script,
+/// and an earlier DUT of this run may link it (it is replaced by the next one kept).
+pub(crate) fn drop_unpublished(out_dir: &Path, label: &str) {
+    let dir = unpublished_dir(out_dir).join(label);
+    if dir.exists() {
+        remove_best_effort(&dir);
+    }
 }
 
 /// How old a work directory must be before it counts as left behind by a killed build.
@@ -423,6 +457,24 @@ mod tests {
             std::fs::read_to_string(&b).unwrap(),
             "`verilator_config\n// x\n"
         );
+    }
+
+    #[test]
+    fn deps_listings_round_trip_paths_with_escapes_and_line_breaks() {
+        let deps = [
+            "/r/a\\b.svh",
+            "/r/two\nlines.svh",
+            "/r/ends-in-cr\r",
+            "/r/plain.sv",
+        ]
+        .map(PathBuf::from);
+        let text = deps_listing(&deps);
+        assert_eq!(
+            text.lines().count(),
+            deps.len(),
+            "one line per path: {text:?}"
+        );
+        assert_eq!(parse_deps_listing(&text).as_deref(), Some(&deps[..]));
     }
 
     #[test]

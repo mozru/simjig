@@ -4,14 +4,27 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Breaking: `simjig_build::CacheStatus` and `simjig::SeedSource` are `#[non_exhaustive]`,
+  so a `match` on them outside their crate needs a wildcard arm.
+- A model archive compiled from a verilation kept out of the cache (an input edited while
+  Verilator read it) is kept out too, in `OUT_DIR/simjig-unpublished/`: its key named
+  that one-off output, so the entry was never found again. A later good build of the
+  DUT removes the model's outputs kept there.
+- The shared cache is found in a target directory without Cargo's `CACHEDIR.TAG` too, by
+  `OUT_DIR`'s layout (`<target>/[<triple>/]<profile>/build/<pkg>-<hash>/out`): a target
+  directory another tool created first (`--target-dir target/rust-analyzer` creates
+  `target/`) has no tag, and every crate fell back to its own `OUT_DIR/simjig-cache`. A
+  build that still falls back warns (`cargo::warning`).
 - Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.
 - The shim is stored content-addressed in the cache (`inputs/<hash>/<prefix>_shim.cpp`)
-  and compiled from there; it is no longer written to `OUT_DIR/simjig/<name>/`. A model
-  archive's key has the shim's path, so crates and target directories that build the same
-  configuration now share one model archive (each compiled its own). Every model archive
-  is compiled again once.
+  and compiled from there; it is no longer written to `OUT_DIR/simjig/`, which holds only
+  the generated Rust. A model archive's key has the shim's path, so crates and target
+  directories that build the same configuration now share one model archive (each
+  compiled its own), and it no longer lists the files in `OUT_DIR/simjig/` or in the
+  cache, so a rerun of the build script compiles only the models whose DUT changed (it
+  compiled every model after any DUT changed). Every model archive is compiled again once.
 - `create` refuses a probe of a `real`, a `string` or another variable that is not a
   packed vector by its type, with the build-time check's words ("`r` is a `real`
   (Verilator stores it as VLVT_REAL) ..."), before comparing widths: a 1-bit probe of a
@@ -28,12 +41,6 @@ the public API, the generated code or simulation semantics.
   key and hit on every later build. Verilation manifests now record digests and file
   status like the archive ones: every model is verilated again once
   (`simjig-verilate-deps-v2`).
-- Each DUT's shim is written to `OUT_DIR/simjig/<name>/<prefix>_shim.cpp` (it was
-  `OUT_DIR/simjig/<prefix>_shim.cpp`), and the shim of an earlier configuration is removed.
-  A model archive's key no longer lists the files in `OUT_DIR/simjig/` or in the cache, so
-  a rerun of the build script compiles only the models whose DUT changed (it compiled
-  every model after any DUT changed, and most of them on the first rerun after a cold
-  build). Every model archive is compiled again once.
 - The build script reruns when the C++ compiler changes in place: it emits
   `cargo::rerun-if-changed` for the path `CXX` (or `cc`'s default) is found at, the
   executable that resolves to, and the same for a compiler wrapper (`CXX="ccache c++"`).
@@ -154,7 +161,6 @@ the public API, the generated code or simulation semantics.
   (`pixi run [--manifest-path ..] [-e <env>]`, `conda run -p <prefix>`) the test ran under.
 - Run directories are `<root>/<package>/<binary>/<test>/<seed>/` (was
   `<root>/<test>/<seed>/`), written to a temporary sibling and renamed into place.
-
 - IR schema 3: `Module::instances` (`Instance { name, module }`) and `Module::variables`
   (`Variable { name, kind: VariableKind::{Signal, Parameter, Localparam} }`), both omitted
   from the JSON when empty. Every IR hash, and so every generated `IR_HASH`/`kIrHash`,

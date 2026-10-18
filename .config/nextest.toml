@@ -27,3 +27,15 @@ fixture-rebuild = { max-threads = 1 }
 filter = 'test(/^rebuild::/)'
 test-group = 'fixture-rebuild'
 slow-timeout = { period = "60s", terminate-after = 6 }
+
+# Tests that verilate and compile several models from a cold cache, or build the fixture
+# crate with Cargo: 30-60 s each when the gate runs them in parallel on an idle machine
+# (s1c7fix), so a loaded one may pass the default's 2-minute limit. They get 6 minutes.
+[[profile.default.overrides]]
+filter = '''
+test(=probes::a_probe_through_a_generate_for_iteration_builds)
+| test(=probes::probes_are_checked_in_a_split_scope_table)
+| test(=recipe::a_new_compiler_version_recompiles_every_archive)
+| test(/^fixture_crate::/)
+'''
+slow-timeout = { period = "60s", terminate-after = 6 }

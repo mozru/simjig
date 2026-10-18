@@ -148,19 +148,35 @@ impl BuildEnv {
     }
 
     /// The shared cache directory, in this order: `SIMJIG_CACHE_DIR`;
-    /// `$CARGO_TARGET_DIR/simjig-cache` when that is absolute; the target directory found
-    /// above `OUT_DIR` (the nearest ancestor holding Cargo's `CACHEDIR.TAG`); and as a last
-    /// resort `OUT_DIR/simjig-cache`, which is correct but not shared.
+    /// `$CARGO_TARGET_DIR/simjig-cache` when that is absolute; `simjig-cache` in the target
+    /// directory above `OUT_DIR` (the nearest ancestor holding Cargo's `CACHEDIR.TAG`, else
+    /// the one Cargo's `OUT_DIR` layout names); and as a last resort
+    /// `OUT_DIR/simjig-cache`, which is correct but not shared (the build warns).
     pub fn cache_dir(&self) -> PathBuf {
+        self.shared_cache_dir()
+            .unwrap_or_else(|| self.out_dir.join("simjig-cache"))
+    }
+
+    /// The `cargo::warning` for a cache that falls back to `OUT_DIR`: every crate and
+    /// every change of its build script's hash then builds every model again.
+    pub(crate) fn unshared_cache_warning(&self) -> Option<String> {
+        self.shared_cache_dir().is_none().then(|| {
+            format!(
+                "cargo::warning=simjig: found no Cargo target directory above `{}`, so the \
+                 model cache is not shared; set SIMJIG_CACHE_DIR to share it",
+                self.out_dir.display()
+            )
+        })
+    }
+
+    fn shared_cache_dir(&self) -> Option<PathBuf> {
         if let Some(dir) = &self.simjig_cache_dir {
-            return dir.clone();
+            return Some(dir.clone());
         }
         if let Some(dir) = self.cargo_target_dir.as_ref().filter(|d| d.is_absolute()) {
-            return dir.join("simjig-cache");
+            return Some(dir.join("simjig-cache"));
         }
-        target_dir_above(&self.out_dir)
-            .unwrap_or(&self.out_dir)
-            .join("simjig-cache")
+        target_dir_above(&self.out_dir, &self.target).map(|d| d.join("simjig-cache"))
     }
 
     /// Finds an executable named `name` on `PATH`.
@@ -196,12 +212,42 @@ fn cxx_opt(value: Option<OsString>) -> Result<String, Error> {
     }
 }
 
-/// Cargo writes `CACHEDIR.TAG` at the root of every target (and build) directory.
-fn target_dir_above(out_dir: &Path) -> Option<&Path> {
-    out_dir
+/// The Cargo target directory `OUT_DIR` is in: the nearest ancestor holding the
+/// `CACHEDIR.TAG` Cargo writes at the root of a target directory it creates; else the one
+/// Cargo's layout names, `<target dir>/[<triple>/]<profile>/build/<pkg>-<hash>/out`.
+///
+/// The tag alone is not enough: Cargo writes it only when it creates the directory, so
+/// one made by another tool first (`--target-dir target/rust-analyzer` creates `target/`
+/// on its way) never gets one.
+fn target_dir_above<'a>(out_dir: &'a Path, triple: &str) -> Option<&'a Path> {
+    let tagged = out_dir
         .ancestors()
         .skip(1)
-        .find(|d| d.join("CACHEDIR.TAG").is_file())
+        .find(|d| d.join("CACHEDIR.TAG").is_file());
+    tagged.or_else(|| target_dir_by_layout(out_dir, triple))
+}
+
+/// The target directory from Cargo's `OUT_DIR` layout (see [`target_dir_above`]). The
+/// `<triple>/` level is there when the build names a target (`--target`), whose triple
+/// Cargo gives the build script as `TARGET`.
+fn target_dir_by_layout<'a>(out_dir: &'a Path, triple: &str) -> Option<&'a Path> {
+    let name = |p: &Path| p.file_name().and_then(|n| n.to_str()).map(str::to_owned);
+    let pkg = out_dir
+        .parent()
+        .filter(|_| name(out_dir).as_deref() == Some("out"))?;
+    let build = pkg
+        .parent()
+        .filter(|_| name(pkg).is_some_and(|n| n.contains('-')))?;
+    let profile = build
+        .parent()
+        .filter(|_| name(build).as_deref() == Some("build"))?;
+    let above = profile.parent()?;
+    match above.parent() {
+        Some(target) if !triple.is_empty() && name(above).as_deref() == Some(triple) => {
+            Some(target)
+        }
+        _ => Some(above),
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +341,37 @@ mod tests {
     #[test]
     fn cache_dir_falls_back_to_out_dir() {
         let t = tempfile::tempdir().unwrap();
-        assert_eq!(env(t.path()).cache_dir(), t.path().join("simjig-cache"));
+        let e = env(t.path());
+        assert_eq!(e.cache_dir(), t.path().join("simjig-cache"));
+        let warning = e.unshared_cache_warning().expect("a warning");
+        assert!(warning.starts_with("cargo::warning="), "{warning}");
+    }
+
+    /// `cargo check --target-dir target/rust-analyzer` ran first: it created `target/`
+    /// on its way and tagged only `target/rust-analyzer/`. The default build's `OUT_DIR`
+    /// is then under an untagged `target/`.
+    #[test]
+    fn cache_dir_is_found_by_layout_in_an_untagged_target_dir() {
+        let t = tempfile::tempdir().unwrap();
+        let target = t.path().join("target");
+        let ra = target.join("rust-analyzer");
+        std::fs::create_dir_all(&ra).unwrap();
+        std::fs::write(ra.join("CACHEDIR.TAG"), "Signature: x").unwrap();
+        let out = target.join("debug/build/foo-0123/out");
+        std::fs::create_dir_all(&out).unwrap();
+        let mut e = env(&out);
+        e.target = "aarch64-apple-darwin".into();
+        assert_eq!(e.cache_dir(), target.join("simjig-cache"));
+        assert_eq!(e.unshared_cache_warning(), None);
+
+        e.out_dir = target.join("aarch64-apple-darwin/release/build/foo-1/out");
+        assert_eq!(
+            e.cache_dir(),
+            target.join("simjig-cache"),
+            "with `--target`"
+        );
+        // Not Cargo's layout.
+        e.out_dir = target.join("debug/build/out");
+        assert_eq!(e.cache_dir(), e.out_dir.join("simjig-cache"));
     }
 }

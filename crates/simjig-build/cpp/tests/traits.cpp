@@ -145,6 +145,21 @@ struct RealProbeTraits {
     }
 };
 
+// tc_sub.rv bound as the 64 bits a `real` holds: the width check would refuse it too (as
+// 1 bit wide), so this pins that the type is checked first.
+struct Real64ProbeTraits {
+    using Model = Vtc_plain;
+    static constexpr const char* kPrefix = "Vtc_plain";
+    static constexpr uint64_t kIrHash = 0x7c0000000000000cull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = false;
+    static void bind(Vtc_plain& m, simjig::SignalTable& t) {
+        bind_tc(m, t);
+        SIMJIG_PROBE(t, m, "tc.u", "rv", "tc.u.rv", 64, kRead);
+    }
+};
+
 struct HierTraits {
     using Model = Vtc_hier;
     static constexpr const char* kPrefix = "Vtc_hier";
@@ -194,6 +209,7 @@ SIMJIG_EXPORT_VTABLE(Vtc_plain_rd_as_rw, ReadOnlyWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_no_scope, NoScopeTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_no_var, NoVarTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_real, RealProbeTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_plain_real64, Real64ProbeTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_hier, HierTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_cg, CgTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_timing, TimingTraits)

@@ -23,7 +23,8 @@ fn abi_models_were_built() {
 #[cfg(simjig_abi_models)]
 mod with_models {
     use super::abi::{
-        self, CreateOpts, Handle, ModelVtable, MsgKind, OwnedMsg, Signal, Status, TIME_NONE,
+        self, Cell, CreateOpts, Decoded, Handle, ModelVtable, MsgKind, OwnedMsg, Signal, Status,
+        TIME_NONE,
     };
     use std::ptr::{self, NonNull};
 
@@ -39,7 +40,7 @@ mod with_models {
     struct Model {
         vt: &'static ModelVtable,
         handle: NonNull<Handle>,
-        signals: Vec<Signal>,
+        signals: Vec<Decoded>,
     }
 
     /// The IR hashes `shim.cpp` gives the two models.
@@ -82,7 +83,11 @@ mod with_models {
             let table = unsafe { (vt.signals)(handle.as_ptr(), &raw mut count) };
             // SAFETY: the table holds `count` rows and lives as long as the handle; copying
             // the rows (plain data and pointers) creates no reference into model memory.
-            let signals = unsafe { std::slice::from_raw_parts(table, count as usize) }.to_vec();
+            let rows = unsafe { std::slice::from_raw_parts(table, count as usize) };
+            let signals = rows
+                .iter()
+                .map(|r| r.decode().unwrap_or_else(|e| panic!("bad row: {e:?}")))
+                .collect();
             (
                 Self {
                     vt,
@@ -117,7 +122,7 @@ mod with_models {
             unsafe { (self.vt.next_time_slot)(self.handle.as_ptr()) }
         }
 
-        fn sig(&self, name: &str) -> Signal {
+        fn sig(&self, name: &str) -> Decoded {
             *self
                 .signals
                 .iter()
@@ -129,15 +134,21 @@ mod with_models {
         fn get(&self, name: &str) -> u64 {
             let sig = self.sig(name);
             assert!(sig.access & abi::ACCESS_READ != 0);
+            let Cell::Narrow(cell) = sig.cell else {
+                panic!("{name} is wide")
+            };
             // SAFETY: a narrow, readable row of this live model; no eval is running.
-            unsafe { abi::read_narrow(&sig) }
+            unsafe { abi::read_narrow(cell) }
         }
 
         fn set(&mut self, name: &str, value: u64) {
             let sig = self.sig(name);
             assert!(sig.access & abi::ACCESS_WRITE != 0);
+            let Cell::Narrow(cell) = sig.cell else {
+                panic!("{name} is wide")
+            };
             // SAFETY: a narrow, writable row of this live model; no eval is running.
-            unsafe { abi::write_narrow(&sig, value) }
+            unsafe { abi::write_narrow(cell, sig.width, value) }
         }
 
         fn drain(&mut self) -> Vec<OwnedMsg> {
@@ -239,19 +250,12 @@ mod with_models {
             .map(|s| {
                 // SAFETY: rows of this live model's table.
                 let name = unsafe { s.name() };
-                let storage = abi::Storage::try_from(s.storage).unwrap();
-                (
-                    name,
-                    s.width,
-                    s.words,
-                    storage,
-                    abi::Dir::try_from(s.dir).unwrap(),
-                )
+                (name, s.width, s.words, s.cell.storage(), s.dir)
             })
             .collect();
         for (i, s) in model.signals.iter().enumerate() {
             assert_eq!(s.id as usize, i);
-            assert_eq!(abi::Storage::for_width(s.width) as u8, s.storage);
+            assert_eq!(abi::Storage::for_width(s.width), s.cell.storage());
         }
         let want = [
             ("counter.clk", 1, 1, C, In),
@@ -287,20 +291,24 @@ mod with_models {
         assert_eq!(m.eval(), Status::Ok);
         assert_eq!(m.get("counter.half_out"), 0);
 
-        let (wide_in, wide_out) = (m.sig("counter.wide_in"), m.sig("counter.wide_out"));
+        let wide = |name: &str| match m.sig(name).cell {
+            Cell::Wide(p) => p,
+            Cell::Narrow(_) => panic!("{name} is narrow"),
+        };
+        let (wide_in, wide_out) = (wide("counter.wide_in"), wide("counter.wide_out"));
         let mut out = [0u32; 4];
         // SAFETY: W rows of the live model, buffers of `words` entries, no eval running.
-        unsafe { abi::write_wide(&wide_in, &[0x1234_5678, 0, 0xffff_ffff, 0xffff_ffff]) };
+        unsafe { abi::write_wide(wide_in, 100, &[0x1234_5678, 0, 0xffff_ffff, 0xffff_ffff]) };
         assert_eq!(m.eval(), Status::Ok);
         // SAFETY: as above.
-        unsafe { abi::read_wide(&wide_in, &mut out) };
+        unsafe { abi::read_wide(wide_in, &mut out) };
         assert_eq!(
             out,
             [0x1234_5678, 0, 0xffff_ffff, 0xf],
             "top word masked to 100 bits"
         );
         // SAFETY: as above.
-        unsafe { abi::read_wide(&wide_out, &mut out) };
+        unsafe { abi::read_wide(wide_out, &mut out) };
         assert_eq!(out, [!0x1234_5678, 0xffff_ffff, 0, 0]);
     }
 
@@ -427,19 +435,22 @@ mod with_models {
         use std::time::Instant;
         const N: u32 = 50_000_000;
         let (mut m, _) = Model::new(counter(), 0);
-        let count = m.sig("counter.count");
-        let half = m.sig("counter.half_in");
+        let narrow = |name: &str| match m.sig(name).cell {
+            Cell::Narrow(cell) => cell,
+            Cell::Wide(_) => panic!("{name} is wide"),
+        };
+        let (count, half) = (narrow("counter.count"), narrow("counter.half_in"));
         let start = Instant::now();
         let mut acc = 0u64;
         for _ in 0..N {
             // SAFETY: readable narrow row of the live model; no eval running.
-            acc = acc.wrapping_add(unsafe { abi::read_narrow(black_box(&count)) });
+            acc = acc.wrapping_add(unsafe { abi::read_narrow(black_box(count)) });
         }
         let read = start.elapsed().as_secs_f64() * 1e9 / f64::from(N);
         let start = Instant::now();
         for i in 0..N {
             // SAFETY: writable narrow row of the live model; no eval running.
-            unsafe { abi::write_narrow(black_box(&half), u64::from(i)) };
+            unsafe { abi::write_narrow(black_box(half), 16, u64::from(i)) };
         }
         let write = start.elapsed().as_secs_f64() * 1e9 / f64::from(N);
         let start = Instant::now();

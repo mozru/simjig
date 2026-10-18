@@ -275,6 +275,15 @@ pub(crate) enum AbiError {
     Size { model: u32, runtime: usize },
     /// The model's IR hash differs from the generated Rust's.
     IrHash { model: u64, expected: u64 },
+    /// A row of the signal table holds an unknown storage class or direction.
+    Row { id: u32, unknown: Unknown },
+    /// A row's storage class or word count does not match its width.
+    RowShape {
+        id: u32,
+        width: u32,
+        storage: Storage,
+        words: u32,
+    },
 }
 
 impl ModelVtable {
@@ -375,6 +384,94 @@ impl Msg {
 }
 
 impl Signal {
+    /// Decodes the row once, when the table is read: the storage class and direction are
+    /// checked here, so accessors match on Rust enums only and never guess a size.
+    ///
+    /// # Errors
+    /// [`AbiError::Row`] for an unknown storage class or direction, and
+    /// [`AbiError::RowShape`] when the storage or word count disagrees with the width.
+    pub(crate) fn decode(&self) -> Result<Decoded, AbiError> {
+        let row = |unknown| AbiError::Row {
+            id: self.id,
+            unknown,
+        };
+        let storage = Storage::try_from(self.storage).map_err(row)?;
+        let dir = Dir::try_from(self.dir).map_err(row)?;
+        if self.width == 0
+            || storage != Storage::for_width(self.width)
+            || self.words != self.width.div_ceil(32)
+        {
+            return Err(AbiError::RowShape {
+                id: self.id,
+                width: self.width,
+                storage,
+                words: self.words,
+            });
+        }
+        let p = self.ptr;
+        let cell = match storage {
+            Storage::C => Cell::Narrow(Narrow::C(p.cast())),
+            Storage::S => Cell::Narrow(Narrow::S(p.cast())),
+            Storage::I => Cell::Narrow(Narrow::I(p.cast())),
+            Storage::Q => Cell::Narrow(Narrow::Q(p.cast())),
+            Storage::W => Cell::Wide(p.cast()),
+        };
+        Ok(Decoded {
+            id: self.id,
+            width: self.width,
+            words: self.words,
+            dir,
+            access: self.access,
+            name: self.name,
+            cell,
+        })
+    }
+}
+
+/// A signal-table row after [`Signal::decode`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Decoded {
+    pub(crate) id: u32,
+    pub(crate) width: u32,
+    pub(crate) words: u32,
+    pub(crate) dir: Dir,
+    pub(crate) access: u8,
+    name: *const c_char,
+    pub(crate) cell: Cell,
+}
+
+/// Where a signal's value lives, typed by its storage class.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Cell {
+    /// At most 64 bits, in one integer.
+    Narrow(Narrow),
+    /// `VlWide<words>`: 32-bit words, least significant first.
+    Wide(*mut u32),
+}
+
+/// A pointer to a `CData`, `SData`, `IData` or `QData` member.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Narrow {
+    C(*mut u8),
+    S(*mut u16),
+    I(*mut u32),
+    Q(*mut u64),
+}
+
+impl Cell {
+    /// The storage class this cell was decoded from.
+    pub(crate) fn storage(self) -> Storage {
+        match self {
+            Self::Narrow(Narrow::C(_)) => Storage::C,
+            Self::Narrow(Narrow::S(_)) => Storage::S,
+            Self::Narrow(Narrow::I(_)) => Storage::I,
+            Self::Narrow(Narrow::Q(_)) => Storage::Q,
+            Self::Wide(_) => Storage::W,
+        }
+    }
+}
+
+impl Decoded {
     /// The signal's hierarchical name.
     ///
     /// # Safety
@@ -383,87 +480,83 @@ impl Signal {
         // SAFETY: the table's names are NUL-terminated static strings (caller's precondition).
         unsafe { c_string(self.name) }
     }
+}
 
-    /// Mask of the bits the signal's width allows in its lowest 64 bits.
-    fn mask(&self) -> u64 {
-        if self.width >= 64 {
-            u64::MAX
-        } else {
-            (1u64 << self.width) - 1
-        }
+/// Mask of the bits a `width`-bit value may use in its lowest 64 bits.
+fn mask(width: u32) -> u64 {
+    if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
     }
 }
 
-/// Reads a signal of at most 64 bits (storage C, S, I or Q).
+/// Reads a signal of at most 64 bits.
 ///
 /// # Safety
-/// - `sig` is a row of a live model's signal table, with `ACCESS_READ`, and its storage is
-///   not `W`;
+/// - `cell` comes from a row of a live model's signal table with `ACCESS_READ`;
 /// - no entry point of that model runs concurrently.
 #[inline]
-pub(crate) unsafe fn read_narrow(sig: &Signal) -> u64 {
-    let p = sig.ptr;
-    // The row's `ptr` points to a live, aligned member of exactly the storage type named by
-    // `storage` (the C++ shim static_asserts type and size); the caller guarantees liveness.
-    match sig.storage {
-        // SAFETY: storage C: `p` is a live CData (u8).
-        1 => u64::from(unsafe { p.cast::<u8>().read() }),
-        // SAFETY: storage S: `p` is a live, 2-aligned SData (u16).
-        2 => u64::from(unsafe { p.cast::<u16>().read() }),
-        // SAFETY: storage I: `p` is a live, 4-aligned IData (u32).
-        3 => u64::from(unsafe { p.cast::<u32>().read() }),
-        // SAFETY: storage Q (the only narrow class left): `p` is a live, 8-aligned QData.
-        _ => unsafe { p.cast::<u64>().read() },
+pub(crate) unsafe fn read_narrow(cell: Narrow) -> u64 {
+    // Each pointer is a live, aligned member of exactly that storage type (the C++ shim
+    // static_asserts type and size; `decode` checked the class); the caller guarantees
+    // liveness.
+    match cell {
+        // SAFETY: a live CData (u8).
+        Narrow::C(p) => u64::from(unsafe { p.read() }),
+        // SAFETY: a live, 2-aligned SData (u16).
+        Narrow::S(p) => u64::from(unsafe { p.read() }),
+        // SAFETY: a live, 4-aligned IData (u32).
+        Narrow::I(p) => u64::from(unsafe { p.read() }),
+        // SAFETY: a live, 8-aligned QData (u64).
+        Narrow::Q(p) => unsafe { p.read() },
     }
 }
 
-/// Writes a signal of at most 64 bits, masking `value` to its width: Verilator assumes the
+/// Writes a signal of at most 64 bits, masking `value` to `width`: Verilator assumes the
 /// unused upper bits are zero.
 ///
 /// # Safety
-/// As for [`read_narrow`], with `ACCESS_WRITE`.
+/// As for [`read_narrow`], with `ACCESS_WRITE`, and `width` is the row's width.
 #[inline]
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "the value is masked to the storage width"
+    reason = "the value is masked to the width, which fits the storage"
 )]
-pub(crate) unsafe fn write_narrow(sig: &Signal, value: u64) {
-    let p = sig.ptr;
-    let v = value & sig.mask();
+pub(crate) unsafe fn write_narrow(cell: Narrow, width: u32, value: u64) {
+    let v = value & mask(width);
     // As in read_narrow; after masking, `v` fits the storage type, so the casts lose nothing.
-    match sig.storage {
-        // SAFETY: storage C: `p` is a live, writable CData (u8).
-        1 => unsafe { p.cast::<u8>().write(v as u8) },
-        // SAFETY: storage S: `p` is a live, writable, 2-aligned SData (u16).
-        2 => unsafe { p.cast::<u16>().write(v as u16) },
-        // SAFETY: storage I: `p` is a live, writable, 4-aligned IData (u32).
-        3 => unsafe { p.cast::<u32>().write(v as u32) },
-        // SAFETY: storage Q: `p` is a live, writable, 8-aligned QData (u64).
-        _ => unsafe { p.cast::<u64>().write(v) },
+    match cell {
+        // SAFETY: a live, writable CData (u8).
+        Narrow::C(p) => unsafe { p.write(v as u8) },
+        // SAFETY: a live, writable, 2-aligned SData (u16).
+        Narrow::S(p) => unsafe { p.write(v as u16) },
+        // SAFETY: a live, writable, 4-aligned IData (u32).
+        Narrow::I(p) => unsafe { p.write(v as u32) },
+        // SAFETY: a live, writable, 8-aligned QData (u64).
+        Narrow::Q(p) => unsafe { p.write(v) },
     }
 }
 
-/// Reads a wide (`W`) signal into `out`, least significant word first.
+/// Reads a wide signal at `ptr` into `out`, least significant word first.
 ///
 /// # Safety
-/// - `sig` is a `W` row of a live model's table with `ACCESS_READ`, and `out.len() ==
-///   sig.words`;
+/// - `ptr` is the [`Cell::Wide`] of a row of a live model's table with `ACCESS_READ`, and
+///   `out.len()` is the row's `words`;
 /// - no entry point of that model runs concurrently.
-pub(crate) unsafe fn read_wide(sig: &Signal, out: &mut [u32]) {
-    debug_assert_eq!(out.len(), sig.words as usize);
+pub(crate) unsafe fn read_wide(ptr: *mut u32, out: &mut [u32]) {
     // SAFETY: `ptr` points to a live VlWide<words> (`words` u32s, 4-aligned) that does not
     // overlap `out` (Rust-owned memory).
-    unsafe { std::ptr::copy_nonoverlapping(sig.ptr.cast::<u32>(), out.as_mut_ptr(), out.len()) }
+    unsafe { std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), out.len()) }
 }
 
-/// Writes a wide (`W`) signal from `words`, masking the top word to the width.
+/// Writes a wide signal at `ptr` from `words`, masking the top word to `width`.
 ///
 /// # Safety
-/// As for [`read_wide`], with `ACCESS_WRITE` and `words.len() == sig.words`.
-pub(crate) unsafe fn write_wide(sig: &Signal, words: &[u32]) {
-    debug_assert_eq!(words.len(), sig.words as usize);
-    let dst = sig.ptr.cast::<u32>();
-    let top_bits = sig.width % 32;
+/// As for [`read_wide`], with `ACCESS_WRITE`, `words.len()` the row's `words` and `width`
+/// its width.
+pub(crate) unsafe fn write_wide(ptr: *mut u32, width: u32, words: &[u32]) {
+    let top_bits = width % 32;
     for (i, &w) in words.iter().enumerate() {
         let v = if i + 1 == words.len() && top_bits != 0 {
             w & ((1u32 << top_bits) - 1)
@@ -471,7 +564,7 @@ pub(crate) unsafe fn write_wide(sig: &Signal, words: &[u32]) {
             w
         };
         // SAFETY: `i < words`, so the offset stays inside the live VlWide member.
-        let word = unsafe { dst.add(i) };
+        let word = unsafe { ptr.add(i) };
         // SAFETY: `word` is a live, writable, 4-aligned u32 of that member.
         unsafe { word.write(v) }
     }
@@ -516,5 +609,57 @@ mod tests {
         // SAFETY: as above.
         let result = unsafe { ModelVtable::check((&raw const *other).cast(), 0) };
         assert!(matches!(result, Err(AbiError::Version { model: 2, .. })));
+    }
+
+    fn row(width: u32, words: u32, storage: u8, dir: u8, ptr: *mut c_void) -> Signal {
+        Signal {
+            id: 7,
+            width,
+            words,
+            storage,
+            dir,
+            access: ACCESS_READ | ACCESS_WRITE,
+            reserved: 0,
+            name: std::ptr::null(),
+            ptr,
+        }
+    }
+
+    // Run under Miri: before decoding, an unknown class was read as a u64.
+    #[test]
+    fn rows_decode_once_and_reject_unknown_or_inconsistent_values() {
+        let mut byte = Box::new(0u8);
+        let p: *mut c_void = (&raw mut *byte).cast();
+        let unknown = |what, value| AbiError::Row {
+            id: 7,
+            unknown: Unknown { what, value },
+        };
+        assert_eq!(
+            row(8, 1, 9, 1, p).decode().err(),
+            Some(unknown("Storage", 9))
+        );
+        assert_eq!(row(8, 1, 1, 4, p).decode().err(), Some(unknown("Dir", 4)));
+        let shape = |width, storage, words| AbiError::RowShape {
+            id: 7,
+            width,
+            storage,
+            words,
+        };
+        assert_eq!(
+            row(12, 1, 1, 1, p).decode().err(),
+            Some(shape(12, Storage::C, 1))
+        );
+        assert_eq!(
+            row(100, 3, 5, 1, p).decode().err(),
+            Some(shape(100, Storage::W, 3))
+        );
+        let ok = row(5, 1, 1, 1, p).decode().unwrap();
+        let Cell::Narrow(cell) = ok.cell else {
+            panic!("CData row decoded as wide")
+        };
+        // SAFETY: `cell` points to the live, writable byte above.
+        unsafe { write_narrow(cell, ok.width, u64::MAX) };
+        // SAFETY: as above.
+        assert_eq!(unsafe { read_narrow(cell) }, 0x1f, "masked to 5 bits");
     }
 }

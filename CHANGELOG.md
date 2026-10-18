@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `with_timeout(ns(0), ..)` panics with "with_timeout of zero ticks", pointing at the
+  `with_timeout` call; it said "Timer of zero ticks" at a line inside simjig. It is a
+  plain `fn` returning the future now (`#[track_caller]`), with the same output type.
 - The `FailureKind::Timeout` failure of `with_timeout(..).await?` points at the `?`
   (`Failure::location`); it had none, so every timeout of a test shared one signature.
 - A `Setup` failure for a `Task` handle dropped before its task ran names the task

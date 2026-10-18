@@ -656,7 +656,7 @@ fn line_of(marker: &str) -> u32 {
 #[test]
 fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
     type Main = fn() -> std::pin::Pin<Box<dyn Future<Output = ()>>>;
-    let cases: [(Main, &str); 3] = [
+    let cases: [(Main, &str); 4] = [
         (
             || {
                 Box::pin(async {
@@ -669,6 +669,14 @@ fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
         (
             || Box::pin(Timer::new(ticks(0))), // misuse: zero timer
             "misuse: zero timer",
+        ),
+        (
+            || {
+                Box::pin(async {
+                    with_timeout(ticks(0), async {}).await.unwrap(); // misuse: zero timeout
+                })
+            },
+            "misuse: zero timeout",
         ),
         (
             || {
@@ -693,6 +701,9 @@ fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
             message.contains("phases.rs"),
             "the message names the line: {message}"
         );
+        if marker == "misuse: zero timeout" {
+            assert!(message.contains("with_timeout"), "{message}");
+        }
         assert_clean(&d.sim);
     }
 }

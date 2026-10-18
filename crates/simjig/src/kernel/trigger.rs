@@ -413,25 +413,47 @@ impl From<Elapsed> for Failure {
 /// # Errors
 /// [`Elapsed`] if the timeout expired first.
 ///
+/// # Panics
+/// When awaited, if `duration` is zero ticks (cocotb 2.1's `Timer(0)` raises
+/// `ValueError`); the panic names `with_timeout` and points at this call.
+///
 /// # Cancellation
 /// Cancel-safe exactly when `future` is: a timeout drops it mid-way.
-pub async fn with_timeout<T>(
+#[track_caller]
+pub fn with_timeout<T>(
     duration: SimDuration,
     future: impl Future<Output = T>,
-) -> Result<T, Elapsed> {
-    let mut timer = MaybeDone::new(Timer::new(duration));
-    let mut inner = MaybeDone::new(future);
-    let mut fork = Fork::first();
-    let decided = std::future::poll_fn(|cx| fork.poll([&mut timer, &mut inner], cx)).await;
-    drop(fork);
-    if decided == 0 {
-        let (at, precision) = state::with_current("with_timeout", |k| (k.now.get(), k.precision));
-        Err(Elapsed {
-            after: duration,
+) -> impl Future<Output = Result<T, Elapsed>> {
+    // Not an `async fn`: `#[track_caller]` needs a plain fn to capture the user's call.
+    let at = Location::caller();
+    async move {
+        if duration.ticks() == 0 {
+            panics::panic_at(
+                at,
+                format_args!(
+                    "with_timeout of zero ticks; pass a positive duration (cocotb rejects \
+                     a zero timeout too)"
+                ),
+            );
+        }
+        let mut timer = MaybeDone::new(Timer {
+            duration,
             at,
-            precision,
-        })
-    } else {
+            reg: None,
+        });
+        let mut inner = MaybeDone::new(future);
+        let mut fork = Fork::first();
+        let decided = std::future::poll_fn(|cx| fork.poll([&mut timer, &mut inner], cx)).await;
+        drop(fork);
+        if decided == 0 {
+            let (at, precision) =
+                state::with_current("with_timeout", |k| (k.now.get(), k.precision));
+            return Err(Elapsed {
+                after: duration,
+                at,
+                precision,
+            });
+        }
         Ok(inner.take())
     }
 }

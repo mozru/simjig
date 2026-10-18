@@ -21,7 +21,7 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
   captured by that edge.
 - Within a delta the last write wins. `WriteConflict` applies only to two different tasks
   writing different values.
-- At coincident edges, waiters wake in the order their triggers were armed.
+- At coincident edges, waiters wake one trigger group (signal, edge kind) at a time, in priming order, running all ready tasks after each group (see the conformance README "Callback order").
 
 ## 1. Where all three agreed (adopted as-is)
 - **Signal handles are `Copy` ids** (model, generation, slot), with the direction in the

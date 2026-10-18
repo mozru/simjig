@@ -1,0 +1,5 @@
+error: `#[simjig::test]` needs an `async fn`: the body runs as the simulation's main task
+ --> tests/harness_ui/not_async.rs:2:1
+  |
+2 | fn not_async() {}
+  | ^^

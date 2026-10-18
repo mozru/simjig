@@ -1,0 +1,262 @@
+//! End-to-end checks with the pinned Verilator (`pixi run`): the layout check elaborates
+//! cleanly and catches a wrong IR, the wrapper lints cleanly and matches its plan, and the
+//! C++ shim builds against a real model and exports a working vtable.
+
+use std::fmt::Write as _;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use simjig_build::codegen::{
+    Access, ItemKind, LAYOUT_CHECK_FLAGS, Lowered, ShimOptions, emit_layout_check, emit_shim,
+    emit_vlt, emit_wrapper, lower,
+};
+
+use crate::cases::{self, Case};
+
+fn verilator(args: &[&str], files: &[PathBuf]) -> Output {
+    Command::new("verilator")
+        .args(args)
+        .args(files)
+        .output()
+        .expect("verilator on PATH (run under `pixi run`)")
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Lints `lowered`'s layout check against the case sources; returns the output.
+fn run_layout_check(case: &Case, lowered: &Lowered) -> Output {
+    let dir = cases::scratch(&format!("layout_{}", case.name));
+    let file = dir.join(format!("{}.sv", lowered.layout.module));
+    fs::write(&file, emit_layout_check(lowered)).unwrap();
+    let mut files = case.sources.clone();
+    files.push(file);
+    let mut args: Vec<&str> = LAYOUT_CHECK_FLAGS.to_vec();
+    args.extend([
+        "-Wall",
+        "-Wno-fatal",
+        "--top-module",
+        &lowered.layout.module,
+    ]);
+    verilator(&args, &files)
+}
+
+#[test]
+fn layout_checks_pass_and_are_lint_clean() {
+    for case in cases::all() {
+        let lowered = lower(&case.design, &case.config).unwrap();
+        let out = run_layout_check(&case, &lowered);
+        let err = stderr(&out);
+        assert!(
+            out.status.success(),
+            "{}: layout check failed:\n{err}",
+            case.name
+        );
+        let ours = format!("{}.sv", lowered.layout.module);
+        let warnings: Vec<&str> = err
+            .lines()
+            .filter(|l| l.starts_with('%') && l.contains(&ours))
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "{}: warnings in the layout check:\n{err}",
+            case.name
+        );
+    }
+}
+
+/// Damages a lowering the way a wrong IR would.
+type Corrupt = fn(&mut Lowered);
+
+#[test]
+fn layout_check_catches_a_wrong_ir() {
+    let case = cases::fixture("structs");
+    let good = lower(&case.design, &case.config).unwrap();
+    let breakages: [(&str, Corrupt); 3] = [
+        ("member tag of pkg::inner_t is not bits [14:11]", |l| {
+            l.layout.checks[1].members[0].lsb = 11;
+        }),
+        ("$bits(pkg::outer_t) differs from the IR width 23", |l| {
+            l.layout.checks[2].width = 23;
+        }),
+        ("pkg::BUSY differs from the IR value 2'h2", |l| {
+            l.layout.checks[0].values[1].literal = "2'h2".into();
+        }),
+    ];
+    for (expected, corrupt) in breakages {
+        let mut bad = good.clone();
+        corrupt(&mut bad);
+        let out = run_layout_check(&case, &bad);
+        let err = stderr(&out);
+        assert!(!out.status.success(), "{expected}: the check passed");
+        assert!(
+            err.contains("%Error-USERFATAL") && err.contains(expected),
+            "{expected}:\n{err}"
+        );
+    }
+}
+
+#[test]
+fn wrappers_lint_clean_and_match_their_plan() {
+    for case in [cases::iface_top(), cases::producer()] {
+        let lowered = lower(&case.design, &case.config).unwrap();
+        let wrapper = lowered.wrapper.as_ref().unwrap();
+        // The plan from the wrapper-top IR reproduces the file elaborated from the
+        // elaboration-top IR.
+        let written = case.sources.last().unwrap();
+        assert_eq!(
+            fs::read_to_string(written).unwrap(),
+            emit_wrapper(wrapper),
+            "{}",
+            case.name
+        );
+        let out = verilator(
+            &["--lint-only", "-Wall", "--top-module", &wrapper.module],
+            &case.sources,
+        );
+        let err = stderr(&out);
+        let file = written.file_name().unwrap().to_string_lossy().into_owned();
+        let ours: Vec<&str> = err
+            .lines()
+            .filter(|l| l.starts_with('%') && l.contains(&file))
+            .collect();
+        assert!(ours.is_empty(), "{}: wrapper warnings:\n{err}", case.name);
+    }
+}
+
+#[test]
+fn interface_ports_of_the_interface_become_bundle_inputs() {
+    let lowered = {
+        let case = cases::producer();
+        lower(&case.design, &case.config).unwrap()
+    };
+    let bundle = &lowered.bundles[0];
+    let members: Vec<(&str, Access)> = bundle
+        .members
+        .iter()
+        .map(|m| (m.sv_name.as_str(), m.access))
+        .collect();
+    assert_eq!(
+        members,
+        [
+            ("data", Access::Out),
+            ("valid", Access::Out),
+            ("ready", Access::In),
+            ("clk", Access::In)
+        ]
+    );
+    let iface = &lowered.wrapper.as_ref().unwrap().ifaces[0];
+    assert_eq!(iface.port_conns, [("clk".to_owned(), "bus_clk".to_owned())]);
+    assert!(
+        iface
+            .assigns
+            .iter()
+            .all(|(l, r)| !l.contains("clk") && !r.contains("clk"))
+    );
+}
+
+/// `(name, width, storage, dir, access)` per slot, as the driver prints them.
+fn expected_table(lowered: &Lowered) -> String {
+    let mut out = String::new();
+    for s in &lowered.signals {
+        let storage = match s.width {
+            1..=8 => 1,
+            9..=16 => 2,
+            17..=32 => 3,
+            33..=64 => 4,
+            _ => 5,
+        };
+        let (dir, access) = match s.access {
+            Access::In => (1, 3),
+            Access::Out => (2, 1),
+            Access::InOut => (3, 3),
+            Access::PublicRd => (0, 1),
+            Access::PublicRw => (0, 3),
+        };
+        writeln!(
+            out,
+            "{} {} {} {storage} {dir} {access}",
+            s.slot, s.name, s.width
+        )
+        .unwrap();
+    }
+    out + "ok\n"
+}
+
+fn cpp_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("cpp")
+}
+
+#[test]
+fn shim_builds_against_the_model_and_exports_its_vtable() {
+    let case = cases::wide();
+    let lowered = lower(&case.design, &case.config).unwrap();
+    assert!(
+        lowered
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, ItemKind::Struct { .. }) && i.width > 128)
+    );
+    let dir = cases::scratch("shim_wide");
+    let prefix = "Vwide_top";
+    let shim = dir.join(format!("{prefix}_shim.cpp"));
+    let shim_text = emit_shim(
+        &lowered,
+        &ShimOptions {
+            prefix: prefix.into(),
+            timing: false,
+        },
+    )
+    .unwrap();
+    fs::write(&shim, shim_text).unwrap();
+    let vlt = dir.join("probes.vlt");
+    fs::write(&vlt, emit_vlt(&lowered)).unwrap();
+    let cpp = cpp_dir();
+    let cflags = format!(
+        "-include {0}/simjig_vl_config.h -I{0} -std=gnu++20",
+        cpp.display()
+    );
+    let mdir = dir.join("obj");
+    let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/codegen_it/shim_driver.cpp");
+    let mut files = vec![vlt];
+    files.extend(case.sources.iter().cloned());
+    files.extend([shim, driver, cpp.join("simjig_rt.cpp")]);
+    let out = verilator(
+        &[
+            "--cc",
+            "--exe",
+            "--build",
+            "-j",
+            "4",
+            "--no-timing",
+            "-Wno-fatal",
+            "--top-module",
+            "wide_top",
+            "--prefix",
+            prefix,
+            "--Mdir",
+            mdir.to_str().unwrap(),
+            "-CFLAGS",
+            &cflags,
+        ],
+        &files,
+    );
+    assert!(
+        out.status.success(),
+        "model build failed:\n{}",
+        stderr(&out)
+    );
+    let run = Command::new(mdir.join(prefix))
+        .arg(format!("{:x}", lowered.ir_hash))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "driver failed:\n{stdout}{}",
+        stderr(&run)
+    );
+    assert_eq!(stdout, expected_table(&lowered));
+}

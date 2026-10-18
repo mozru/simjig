@@ -1,0 +1,23 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(), quote! { async fn b(sim: &TestCtx) {} })"
+---
+#[::core::prelude::v1::test]
+fn b() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn b(sim: &TestCtx) {}
+    ::simjig::__private::run_test::<
+        (),
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(b),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::core::option::Option::None,
+            ignored: false,
+        },
+        |__simjig_sim, _| async move { b(&__simjig_sim).await },
+    );
+}

@@ -1,0 +1,10 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(), quote!\n{ const unsafe fn bad<T>(a: &mut Ctx, b: Dut, c: Dut) {} })"
+---
+error: `#[simjig::test]` needs an `async fn`: the body runs as the simulation's main task
+error: a simjig test cannot be `const`
+error: a simjig test cannot be `unsafe`
+error: a simjig test cannot be generic; name the DUT type in the parameter list
+error: the test context is shared: take `&simjig::TestCtx`, not `&mut`
+error: a simjig test takes at most one DUT parameter; group several models in one type that implements `simjig::DutModel`

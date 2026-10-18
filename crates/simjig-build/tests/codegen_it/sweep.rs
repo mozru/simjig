@@ -585,3 +585,73 @@ fn a_method_named_like_a_blanket_impls_gets_an_underscore() {
         .unwrap();
     assert_eq!(from.name, "from_");
 }
+
+/// Structs nested three deep, one struct at two depths and as a port, and field types
+/// shared with flat ports generate (and, included below, compile).
+#[test]
+fn deep_nested_struct_sweeps_generate() {
+    let (_, out) = files(
+        "dp",
+        &[
+            cases::deep_iface_member("dp_a", 8),
+            cases::deep_iface_member("dp_b", 16),
+        ],
+    );
+    check_generated("deep_sweep", &out);
+    let (_, out) = files(
+        "dq",
+        &[
+            cases::deep_member("dq_a", 8),
+            cases::deep_member("dq_b", 16),
+        ],
+    );
+    check_generated("deep_sweep", &out);
+}
+
+/// The committed sweep `dp`: two interface ports over a nested struct.
+pub mod dp {
+    include!("generated/deep_sweep/dp.rs");
+}
+/// The committed sweep `dq`: a struct nested three deep.
+pub mod dq {
+    include!("generated/deep_sweep/dq.rs");
+}
+
+/// Generic bodies relating fields three levels deep to ports and to each other: each
+/// comparison compiles only if the sweep makes the two sides one associated type.
+mod deep_body {
+    use crate::__private::{In, Out};
+
+    pub(super) fn dq<D: super::dq::Ports>(dut: D) -> bool {
+        use super::dq::*;
+        let _: In<D::Top> = dut.top();
+        let _: Out<D::Leaf> = dut.lf();
+        let _: In<D::A> = dut.din();
+        let _: Out<D::B> = dut.bout();
+        let top = D::Top::default();
+        let deep: D::A = top.m().x().a();
+        let b: D::B = top.m().b();
+        let leaf: D::Leaf = top.l();
+        top.a2() == deep && leaf == top.m().y() && leaf.a() == deep && b == D::B::default()
+    }
+
+    pub(super) fn dp<D: super::dp::Ports>(dut: D) -> bool {
+        use super::dp::*;
+        let _: In<D::Din> = dut.din();
+        let _: In<D::Mid> = dut.p().beat();
+        let _: In<D::Din> = dut.q().side();
+        let mid = D::Mid::default();
+        let a: D::Din = mid.x().a();
+        let b: D::Bout = mid.b();
+        a == mid.y().a() && b == D::Bout::default()
+    }
+}
+
+#[test]
+fn deep_bodies_relate_fields_and_ports() {
+    let binder = &mut RecordingBinder::default();
+    assert!(deep_body::dq(dq::dq_a::Dut::__bind(binder)));
+    assert!(deep_body::dq(dq::dq_b::Dut::__bind(binder)));
+    assert!(deep_body::dp(dp::dp_a::Dut::__bind(binder)));
+    assert!(deep_body::dp(dp::dp_b::Dut::__bind(binder)));
+}

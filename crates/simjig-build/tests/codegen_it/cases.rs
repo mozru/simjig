@@ -373,3 +373,39 @@ pub fn nested_fields_member(name: &str, w: u32) -> Case {
         sources,
     }
 }
+
+/// `cases/sweep_deep`'s `dp_top` at `W`, both interface ports bound with it.
+pub fn deep_iface_member(name: &str, w: u32) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/sweep_deep/design.sv")];
+    let params = vec![("W".to_owned(), w.to_string())];
+    let bind = |port: &str| IfaceBinding {
+        port: port.into(),
+        interface: "dp_if".into(),
+        params: params.clone(),
+        modport: Some("sink".into()),
+    };
+    let iface = IfaceTop {
+        dut: "dp_top".into(),
+        params: params.clone(),
+        bindings: vec![bind("p"), bind("q")],
+    };
+    through_wrapper(name, sources, iface)
+}
+
+/// `cases/sweep_deep`'s `dq_top` at `W`.
+pub fn deep_member(name: &str, w: u32) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/sweep_deep/design.sv")];
+    let design = json_pass(&JsonPassOpts {
+        sources: sources.clone(),
+        top: "dq_top".to_owned(),
+        params: vec![("W".into(), w.to_string())],
+        ..JsonPassOpts::default()
+    })
+    .unwrap_or_else(|e| panic!("{name}: {e}"));
+    Case {
+        name: name.to_owned(),
+        design,
+        config: CodegenConfig::default(),
+        sources,
+    }
+}

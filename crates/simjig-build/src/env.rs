@@ -34,7 +34,18 @@ pub struct BuildEnv {
     pub debug: bool,
     /// `PATH`, searched for `verilator` and `ccache`.
     pub path: Option<OsString>,
-    /// `VERILATOR_ROOT`.
+    /// `VERILATOR_ROOT`: the build runs `$VERILATOR_ROOT/bin/verilator` and compiles
+    /// `$VERILATOR_ROOT/include`.
+    ///
+    /// With a packaged Verilator (conda-forge, as pixi installs it) the root is
+    /// `<prefix>/share/verilator`, and its `bin/verilator` is a wrapper that runs
+    /// `<prefix>/bin/verilator`, found by relative path, which in turn refuses any
+    /// `VERILATOR_ROOT` but its own `../share/verilator`. A root copied elsewhere must
+    /// therefore be a copy of the whole prefix (at least `bin/verilator`,
+    /// `bin/verilator_bin` and `share/verilator/`), with
+    /// `VERILATOR_ROOT=<copy>/share/verilator`: a copy of `share/verilator` alone fails
+    /// with `Exec failed`, and the original executable with a copied root with
+    /// `VERILATOR_ROOT is set to inconsistent path` (checked on 5.052 from conda-forge).
     pub verilator_root: Option<PathBuf>,
     /// `SIMJIG_VERILATOR`: an explicit `verilator` executable; overrides the search.
     pub simjig_verilator: Option<PathBuf>,

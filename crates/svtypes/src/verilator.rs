@@ -1,9 +1,10 @@
 //! Runs `verilator --json-only` and decodes its output.
 //!
-//! The pass always adds `--no-timing` (`--json-only` turns `--timing` on otherwise, which
-//! changes elaboration and needs coroutine support the model build may not have) and
-//! `-Wno-fatal` (lint policy belongs to the model build, which sees the same warnings;
-//! the JSON pass only reads types). It runs [`JsonPassOpts::exe`], which defaults to the
+//! The pass always passes `--timing` or `--no-timing` ([`JsonPassOpts::timing`]): left
+//! out, `--json-only` turns timing on, which changes elaboration (`VERILATOR_TIMING`,
+//! which constructs are legal), so the IR must be elaborated in the model's mode. It also
+//! adds `-Wno-fatal` (lint policy belongs to the model build, which sees the same
+//! warnings; the JSON pass only reads types). It runs [`JsonPassOpts::exe`], which defaults to the
 //! `verilator` on `PATH`; a build that located its own Verilator passes that one, so the
 //! IR and the model come from the same tool.
 
@@ -29,6 +30,9 @@ pub struct JsonPassOpts {
     pub sources: Vec<PathBuf>,
     /// Top module name (`--top-module`).
     pub top: String,
+    /// `--timing` instead of `--no-timing`: must match the model build, because it
+    /// decides which constructs elaborate and whether `VERILATOR_TIMING` is defined.
+    pub timing: bool,
     /// Preprocessor defines (`-DNAME` or `-DNAME=VALUE`). `-D` and not `+define+`,
     /// which splits its value at every `+`.
     pub defines: Vec<(String, Option<String>)>,
@@ -42,8 +46,9 @@ pub struct JsonPassOpts {
 }
 
 impl JsonPassOpts {
-    /// The arguments that describe the design: `--top-module`, `-I`, `-D`, `-G`, the
-    /// sources and the extra arguments, in that order.
+    /// The arguments that describe the design: `--timing` or `--no-timing`,
+    /// `--top-module`, `-I`, `-D`, `-G`, the sources and the extra arguments, in that
+    /// order.
     ///
     /// This is the one place these are spelled: the JSON pass uses it, and so does any
     /// other Verilator run that must elaborate the same design (simjig-build's model
@@ -51,7 +56,16 @@ impl JsonPassOpts {
     /// and another to the model.
     #[must_use]
     pub fn design_args(&self) -> Vec<String> {
-        let mut a = vec!["--top-module".to_owned(), self.top.clone()];
+        let timing = if self.timing {
+            "--timing"
+        } else {
+            "--no-timing"
+        };
+        let mut a = vec![
+            timing.to_owned(),
+            "--top-module".to_owned(),
+            self.top.clone(),
+        ];
         a.extend(
             self.include_dirs
                 .iter()
@@ -75,6 +89,7 @@ impl Default for JsonPassOpts {
             env: Vec::new(),
             sources: Vec::new(),
             top: String::new(),
+            timing: false,
             defines: Vec::new(),
             params: Vec::new(),
             include_dirs: Vec::new(),
@@ -155,7 +170,7 @@ fn verilator(opts: &JsonPassOpts) -> Command {
 
 fn command(opts: &JsonPassOpts, out_dir: &Path, tree: &Path, meta: &Path) -> Command {
     let mut cmd = verilator(opts);
-    cmd.args(["--json-only", "--no-timing", "-Wno-fatal"]);
+    cmd.args(["--json-only", "-Wno-fatal"]);
     cmd.arg("-Mdir").arg(out_dir);
     cmd.arg("--json-only-output").arg(tree);
     cmd.arg("--json-only-meta-output").arg(meta);
@@ -281,6 +296,7 @@ mod tests {
             params: vec![("P".into(), "4'hc".into())],
             include_dirs: vec!["inc".into()],
             extra_args: vec!["--x-assign".into(), "0".into()],
+            ..JsonPassOpts::default()
         };
         let cmd = command(
             &opts,
@@ -298,9 +314,14 @@ mod tests {
         );
         assert_eq!(
             command_line(&cmd),
-            "/opt/v/bin/verilator --json-only --no-timing -Wno-fatal -Mdir o \
-             --json-only-output o/t.json --json-only-meta-output o/m.json --top-module t \
+            "/opt/v/bin/verilator --json-only -Wno-fatal -Mdir o --json-only-output o/t.json \
+             --json-only-meta-output o/m.json --no-timing --top-module t \
              -Iinc -DX -DY=2 '-GP=4'\\''hc' a.sv --x-assign 0"
         );
+        let timed = JsonPassOpts {
+            timing: true,
+            ..opts
+        };
+        assert_eq!(timed.design_args()[0], "--timing");
     }
 }

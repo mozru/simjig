@@ -50,11 +50,11 @@ fn verilator_errors_carry_command_and_stderr() {
     else {
         panic!("expected a tool error, got {err}");
     };
+    assert!(command.starts_with("verilator --json-only"), "{command}");
     assert!(
-        command.starts_with("verilator --json-only --no-timing"),
+        command.contains("--no-timing --top-module no_such_module"),
         "{command}"
     );
-    assert!(command.contains("--top-module no_such_module"), "{command}");
     assert!(status.is_some_and(|s| s != 0), "{status:?}");
     assert!(stderr.contains("no_such_module"), "{stderr}");
 }

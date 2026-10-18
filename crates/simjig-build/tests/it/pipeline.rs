@@ -196,3 +196,28 @@ fn defines_reach_both_passes_alike() {
     let rust = std::fs::read_to_string(built.rust_file.unwrap()).unwrap();
     assert!(rust.contains("pub const D: i32 = 8;"), "{rust}");
 }
+
+/// A `.timing(true)` DUT is elaborated with `--timing` by the JSON pass too: it accepts
+/// `fork`/`#`/`@(e)`, and sees the same `VERILATOR_TIMING` branch as the model.
+#[test]
+fn timing_reaches_the_json_pass() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let built = Dut::new("timing")
+        .sources([rtl.join("timing.sv")])
+        .top("timing")
+        .timing(true)
+        .build_in(&s.env())
+        .unwrap();
+    let q = &built.design.top_module().ports[1];
+    assert_eq!(built.design.ty(q.ty).width, Some(8));
+    assert_eq!(
+        built
+            .header_ports
+            .iter()
+            .find(|p| p.name == "q")
+            .unwrap()
+            .msb,
+        7
+    );
+}

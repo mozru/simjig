@@ -177,14 +177,6 @@ fn layout_check_args(config: &DutConfig, module: &str, file: &Path) -> Vec<Strin
     // mismatch fatal.
     let mut a = vec!["-Wno-fatal".to_owned()];
     a.extend(codegen::LAYOUT_CHECK_FLAGS.iter().map(|f| (*f).to_owned()));
-    a.push(
-        if config.timing {
-            "--timing"
-        } else {
-            "--no-timing"
-        }
-        .to_owned(),
-    );
     let sources = config
         .sources
         .iter()

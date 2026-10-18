@@ -5,7 +5,7 @@
 //! 1. locate and version-check Verilator;
 //! 2. claim the prefix (see `pipeline::claim`): two configurations must never share one;
 //! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
-//!    `-G` and extra arguments (one builder, `DutConfig::design`), always `--no-timing`,
+//!    `-G`, extra arguments and `--timing` setting (one builder, `DutConfig::design`),
 //!    giving the type IR. A DUT with
 //!    interface ports takes two passes through generated tops (`pipeline::design_ir`);
 //! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
@@ -123,14 +123,6 @@ impl DutConfig {
         let mut a: Vec<String> = ["--cc", "--MMD", "--prefix", prefix]
             .map(str::to_owned)
             .into();
-        a.push(
-            if self.timing {
-                "--timing"
-            } else {
-                "--no-timing"
-            }
-            .to_owned(),
-        );
         if self.trace_fst {
             a.push("--trace-fst".to_owned());
         }
@@ -146,8 +138,8 @@ impl DutConfig {
     }
 
     /// The design as every Verilator run sees it (the JSON pass, the model build, the
-    /// layout check): one [`svtypes::verilator::JsonPassOpts`], so the three spell the
-    /// defines, `-I`, `-G` and extra arguments with one builder
+    /// layout check): one [`svtypes::verilator::JsonPassOpts`], so the three spell
+    /// `--timing`, the defines, `-I`, `-G` and extra arguments with one builder
     /// ([`JsonPassOpts::design_args`](svtypes::verilator::JsonPassOpts::design_args)).
     ///
     /// `params` says whether the DUT's parameters go on the command line (`-G`). They do
@@ -163,6 +155,7 @@ impl DutConfig {
         svtypes::verilator::JsonPassOpts {
             sources,
             top: top.to_owned(),
+            timing: self.timing,
             defines: self
                 .defines
                 .iter()
@@ -566,7 +559,7 @@ mod tests {
         let args = c.verilator_args("Vfifo_1234abcd", "fifo", &[PathBuf::from("/c/p.vlt")]);
         assert_eq!(
             args.join(" "),
-            "--cc --MMD --prefix Vfifo_1234abcd --no-timing --trace-fst --top-module fifo \
+            "--cc --MMD --prefix Vfifo_1234abcd --trace-fst --no-timing --top-module fifo \
              -I/r/inc -DK=V -GDEPTH=16 /c/p.vlt /r/fifo.sv -Wno-WIDTH"
         );
         let timing = DutConfig {

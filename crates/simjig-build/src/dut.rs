@@ -989,11 +989,7 @@ impl Dut {
             })
             .and_then(|env| self.build_in(&env))
             .inspect_err(|e| {
-                // Cargo prints warnings above its dump of a failed script's stdout, so
-                // the cause leads the output as well as ending it (on stderr).
-                for line in e.summary() {
-                    println!("cargo::warning=simjig: {line}");
-                }
+                warn_cause(e);
                 for line in &reruns {
                     println!("{line}");
                 }
@@ -1266,6 +1262,16 @@ fn reruns<'a>(named: impl Iterator<Item = &'a PathBuf>, out_dir: Option<&Path>) 
             .map(|v| format!("cargo::rerun-if-env-changed={v}")),
     );
     out
+}
+
+/// Prints a failed build's cause ([`Error::summary`]) as `cargo::warning=` lines. Cargo
+/// prints warnings above its dump of a failed script's stdout, so the cause leads the
+/// output as well as ending it (on stderr), and a script that handles the error sees it.
+#[expect(clippy::print_stdout, reason = "build scripts talk to Cargo on stdout")]
+pub(crate) fn warn_cause(e: &Error) {
+    for line in e.summary() {
+        println!("cargo::warning=simjig: {line}");
+    }
 }
 
 /// Whether `name` is a C identifier (letters, digits, `_`; not starting with a digit),

@@ -629,6 +629,9 @@ impl DutConfig {
         if let Some(msg) = self.option_file_problem() {
             return fail(msg);
         }
+        if let Some(msg) = twice_bound(&self.ifaces) {
+            return fail(msg);
+        }
         if self
             .sources
             .iter()
@@ -642,6 +645,41 @@ impl DutConfig {
             _ => fail("no top module; set it with `.top(\"module\")`".to_owned()),
         }
     }
+}
+
+/// The message for the first interface port bound twice, naming both calls: two bindings
+/// of one port would make the wrapper instantiate two interfaces for it.
+fn twice_bound(bindings: &[IfaceBinding]) -> Option<String> {
+    bindings.iter().enumerate().find_map(|(i, later)| {
+        let first = bindings[..i].iter().find(|b| b.port == later.port)?;
+        Some(format!(
+            "interface port `{}` is bound twice, by `{}` and by `{}`; bind each port once",
+            later.port,
+            binding_call(first),
+            binding_call(later)
+        ))
+    })
+}
+
+/// The builder call that makes `binding`, as a user writes it.
+fn binding_call(binding: &IfaceBinding) -> String {
+    let iface = match &binding.modport {
+        Some(modport) => format!("{}.{modport}", binding.interface),
+        None => binding.interface.clone(),
+    };
+    if binding.params.is_empty() {
+        return format!(".bind_iface({:?}, {iface:?})", binding.port);
+    }
+    let params: Vec<String> = binding
+        .params
+        .iter()
+        .map(|(n, v)| format!("({n:?}, {v})"))
+        .collect();
+    format!(
+        ".bind_iface_with_params({:?}, {iface:?}, [{}])",
+        binding.port,
+        params.join(", ")
+    )
 }
 
 /// What a build produced. Emitters and the runtime glue read this.
@@ -793,8 +831,16 @@ impl Dut {
 
     /// Overrides a top-level parameter (`-Gname=value`). String parameters must include
     /// their SystemVerilog quotes: `.param("MODE", "\"fast\"")`.
+    ///
+    /// Setting a parameter again replaces its value: the last call wins, so a sweep
+    /// member can override a base configuration (`base().param("WIDTH", 32)`). The
+    /// parameter keeps the place of its first call among the others.
     pub fn param(mut self, name: impl Into<String>, value: impl Display) -> Self {
-        self.config.params.push((name.into(), value.to_string()));
+        let (name, value) = (name.into(), value.to_string());
+        match self.config.params.iter_mut().find(|(n, _)| *n == name) {
+            Some(slot) => slot.1 = value,
+            None => self.config.params.push((name, value)),
+        }
         self
     }
 
@@ -830,7 +876,9 @@ impl Dut {
     }
 
     /// Binds an interface port of the top to the interface the generated wrapper
-    /// instantiates for it: `iface` is `interface` or `interface.modport`.
+    /// instantiates for it: `iface` is `interface` or `interface.modport`. A port is
+    /// bound once: a second binding of it (by any `bind_iface*`) fails the build with
+    /// [`Error::Config`] naming both.
     pub fn bind_iface(self, port: impl Into<String>, iface: &str) -> Self {
         self.bind_iface_with_params(port, iface, None::<(String, u32)>)
     }
@@ -1701,6 +1749,46 @@ mod tests {
             ..empty
         };
         assert_ne!(arg.prefix(), generated.prefix());
+    }
+
+    #[test]
+    fn a_parameter_set_again_takes_the_last_value_in_its_first_place() {
+        let d = Dut::new("t").param("W", 8).param("D", 4).param("W", 16);
+        assert_eq!(
+            d.config().params,
+            [("W".to_owned(), "16".to_owned()), ("D".into(), "4".into())]
+        );
+        assert_eq!(
+            d.config().prefix(),
+            Dut::new("t").param("W", 16).param("D", 4).config().prefix(),
+            "the same model as setting it once"
+        );
+    }
+
+    #[test]
+    fn a_port_bound_twice_is_refused_naming_both_calls() {
+        let config = Dut::new("t")
+            .sources(["/r/t.sv"])
+            .top("t")
+            .bind_iface("up", "stream_if.sink")
+            .bind_iface("down", "stream_if.source")
+            .bind_iface_with_params("up", "stream_if", [("WIDTH", 8)])
+            .config;
+        let err = config.validate().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "invalid DUT `t` configuration: interface port `up` is bound twice, by \
+             `.bind_iface(\"up\", \"stream_if.sink\")` and by \
+             `.bind_iface_with_params(\"up\", \"stream_if\", [(\"WIDTH\", 8)])`; bind each \
+             port once"
+        );
+        let once = Dut::new("t")
+            .sources(["/r/t.sv"])
+            .top("t")
+            .bind_iface("up", "stream_if.sink")
+            .bind_iface("down", "stream_if.source")
+            .config;
+        assert!(once.validate().is_ok());
     }
 
     #[test]

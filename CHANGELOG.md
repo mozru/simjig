@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `Dut::param` set twice for one parameter keeps the last value (in the first call's
+  place) instead of passing Verilator two `-G` options ("Duplicate parameter
+  connection"), so a sweep member can override a base configuration. A second
+  `bind_iface*` of one port is now a configuration error naming both calls; it used to
+  make the wrapper instantiate two interfaces.
 - Parameter sweeps are first class. `simjig_build::Sweep::new("sync_fifo").dut(a).dut(b)
   .build()` builds several configurations of one module and one Rust module over them:
   `simjig::include_dut!(sync_fifo)` brings in each configuration

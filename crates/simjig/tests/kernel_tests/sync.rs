@@ -316,8 +316,27 @@ fn a_queue_of_capacity_zero_is_unbounded() {
             }
             assert_eq!(now().ticks(), 0, "no put waited");
             assert_eq!(q.try_put(1000), Ok(()));
-            assert_eq!((q.len(), q.capacity()), (1001, 0));
+            assert_eq!((q.len(), q.capacity()), (1001, None));
             assert_eq!(q.get().await, 0);
+        })
+        .unwrap();
+    assert_clean(&d.sim);
+}
+
+/// A huge bound is a bound, not an allocation: `usize::MAX` items are not reserved up
+/// front (which panicked: "capacity overflow").
+#[test]
+fn a_queue_with_a_huge_capacity_allocates_only_what_it_holds() {
+    let mut d = dut();
+    d.sim
+        .run(async move {
+            let q = Queue::new("huge", usize::MAX);
+            assert_eq!(
+                q.capacity().map(std::num::NonZeroUsize::get),
+                Some(usize::MAX)
+            );
+            q.put(1).await;
+            assert_eq!(q.get().await, 1);
         })
         .unwrap();
     assert_clean(&d.sim);

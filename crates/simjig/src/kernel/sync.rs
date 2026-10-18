@@ -18,6 +18,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
@@ -342,7 +343,8 @@ impl Drop for LockGuard<'_> {
 
 struct QueueInner<T> {
     items: RefCell<VecDeque<T>>,
-    capacity: usize,
+    /// `None`: unbounded.
+    capacity: Option<NonZeroUsize>,
     getters: OwnedList,
     putters: OwnedList,
 }
@@ -382,10 +384,13 @@ impl<T> Queue<T> {
     #[track_caller]
     #[must_use]
     pub fn new(name: &str, capacity: usize) -> Self {
+        /// Items allocated up front; a large bound (often `usize::MAX` for "big enough")
+        /// must not reserve (or panic on) its whole size before anything is put.
+        const PREALLOCATE: usize = 16;
         Self {
             inner: Rc::new(QueueInner {
-                items: RefCell::new(VecDeque::with_capacity(capacity)),
-                capacity,
+                items: RefCell::new(VecDeque::with_capacity(capacity.min(PREALLOCATE))),
+                capacity: NonZeroUsize::new(capacity),
                 getters: OwnedList::new(ListKind::QueueGet, name),
                 putters: OwnedList::new(ListKind::QueuePut, name),
             }),
@@ -404,15 +409,16 @@ impl<T> Queue<T> {
         self.len() == 0
     }
 
-    /// The maximum number of items; 0 for an unbounded queue.
+    /// The maximum number of items, or `None` for an unbounded queue (made with a
+    /// `capacity` of 0).
     #[must_use]
-    pub fn capacity(&self) -> usize {
+    pub fn capacity(&self) -> Option<NonZeroUsize> {
         self.inner.capacity
     }
 
     /// Whether a `put` must wait (cocotb's `full()`, which is never true for `maxsize=0`).
     fn is_full(&self) -> bool {
-        self.inner.capacity != 0 && self.len() >= self.inner.capacity
+        self.inner.capacity.is_some_and(|c| self.len() >= c.get())
     }
 
     fn push(&self, item: T) {

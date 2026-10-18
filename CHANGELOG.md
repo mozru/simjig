@@ -21,7 +21,9 @@ the public API, the generated code or simulation semantics.
   `u64`, and an unsuffixed literal, which falls back to `i32`); a negative count panics
   at the call. It is a plain `fn` returning the future now, so the panic points there.
 - `Queue::new(name, 0)` is an unbounded queue (`put` never waits), as cocotb's
-  `Queue(maxsize=0)`; it panicked. `Queue::capacity` is 0 for it.
+  `Queue(maxsize=0)`; it panicked. Breaking: `Queue::capacity` returns
+  `Option<NonZeroUsize>`, `None` for an unbounded queue (was a `usize`, 0 for it). A large
+  capacity (`usize::MAX`) no longer reserves its whole size up front, which panicked.
 - `with_timeout(..).await?` works in a test returning `simjig::Result`: `Failure`
   implements `From<Elapsed>`, as the new `FailureKind::Timeout { after }`, a failure of
   the awaiting task at the time the timeout elapsed. Breaking: `Elapsed` is

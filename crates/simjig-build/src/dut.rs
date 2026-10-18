@@ -427,11 +427,26 @@ pub struct Built {
 }
 
 /// Whether the Verilator output came from the cache.
+///
+/// `#[non_exhaustive]`, like the other public enums that may grow: a `match` outside
+/// `simjig-build` needs a wildcard arm.
+///
+/// ```compile_fail,E0004
+/// fn ran(status: simjig_build::CacheStatus) -> bool {
+///     match status {
+///         simjig_build::CacheStatus::Hit => false,
+///         simjig_build::CacheStatus::Miss => true,
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CacheStatus {
     /// Found in the cache; Verilator did not run.
     Hit,
-    /// Verilator ran and the output was added to the cache.
+    /// Verilator ran. Its output was added to the cache, unless an input changed while
+    /// Verilator read it: then it serves this build only, from
+    /// `OUT_DIR/simjig-unpublished/` (see [`Built::obj_dir`]).
     Miss,
 }
 

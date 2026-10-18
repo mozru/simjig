@@ -14,7 +14,20 @@
 use std::fmt;
 
 /// Where a run's root seed came from.
+///
+/// `#[non_exhaustive]`, like the other public enums that may grow: a `match` outside
+/// `simjig` needs a wildcard arm.
+///
+/// ```compile_fail,E0004
+/// fn from_env(source: simjig::SeedSource) -> bool {
+///     match source {
+///         simjig::SeedSource::Env => true,
+///         simjig::SeedSource::TestName => false,
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SeedSource {
     /// The `SIMJIG_SEED` environment variable.
     Env,

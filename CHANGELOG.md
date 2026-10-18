@@ -17,3 +17,9 @@ the public API, the generated code or simulation semantics.
   (`Variable { name, kind: VariableKind::{Signal, Parameter, Localparam} }`), both omitted
   from the JSON when empty. Every IR hash, and so every generated `IR_HASH`/`kIrHash`,
   changes once.
+- `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
+  instance or variable (with the closest name), a declaring module that is not the
+  instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are
+  `codegen::Error::Config` errors, so the build fails before verilating.
+- C ABI runtime: `create` refuses a probe bound for writing when its variable is a
+  parameter (constant storage) or only `public_flat_rd` (`EXCEPTION`, model poisoned).

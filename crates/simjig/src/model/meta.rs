@@ -31,6 +31,11 @@ impl Vtable {
     }
 
     /// A vtable built in Rust (the fake model of the backend's unit tests), leaked.
+    ///
+    /// The leak is intended and test-only: a `Vtable` must point at a table valid for the
+    /// whole program, as a generated model's `static` is, and each test thread leaks one
+    /// table (kept in a thread-local, which Miri does not count as reachable). `cargo xtask
+    /// miri` therefore runs with `-Zmiri-ignore-leaks`.
     #[cfg(test)]
     pub(crate) fn leak(vt: ModelVtable) -> Self {
         Self(Box::leak(Box::new(vt)))

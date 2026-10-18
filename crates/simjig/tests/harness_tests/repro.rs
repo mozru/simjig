@@ -85,8 +85,7 @@ fn header_and_seed(output: &Output) -> (String, String, String) {
         .find_map(|l| l.trim().strip_prefix("repro:"))
         .unwrap_or_else(|| panic!("no repro line in:\n{stderr}"))
         .trim();
-    let expected_tail =
-        "cargo nextest run -p simjig --run-ignored all \
+    let expected_tail = "cargo nextest run -p simjig --run-ignored all \
          -E 'binary(=harness_tests) & test(=repro::seeded_failure)'";
     let (seed, launcher) = repro
         .strip_prefix("SIMJIG_SEED=")

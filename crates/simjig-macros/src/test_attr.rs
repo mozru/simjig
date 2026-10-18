@@ -4,6 +4,7 @@
 //! ```text
 //! #[simjig::test]
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
+//! #[simjig::test(timeout = "none")]                 no time limit
 //! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>]) [-> <Output>] { ... }
 //! ```
 //! A parameter whose type is a shared reference is the test context; a parameter taken by
@@ -33,7 +34,16 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
 /// The attribute's arguments.
 #[derive(Debug, Default)]
 struct Args {
-    timeout: Option<Timeout>,
+    /// `None` without the argument (the runner's default applies).
+    timeout: Option<TimeoutArg>,
+}
+
+/// A `timeout` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimeoutArg {
+    /// `timeout = "none"`.
+    Disabled,
+    Given(Timeout),
 }
 
 /// A simulation-time timeout, checked against the design's precision at run time.
@@ -83,10 +93,13 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
     Ok(args)
 }
 
-/// Parses `"2ms"`, `"10 us"` or `"1_000ns"`.
-fn parse_timeout(lit: &LitStr) -> syn::Result<Timeout> {
+/// Parses `"none"`, `"2ms"`, `"10 us"` or `"1_000ns"`.
+fn parse_timeout(lit: &LitStr) -> syn::Result<TimeoutArg> {
     let text = lit.value();
     let text = text.trim();
+    if text == "none" {
+        return Ok(TimeoutArg::Disabled);
+    }
     let split = text
         .find(|c: char| !(c.is_ascii_digit() || c == '_'))
         .unwrap_or(text.len());
@@ -96,7 +109,7 @@ fn parse_timeout(lit: &LitStr) -> syn::Result<Timeout> {
             lit.span(),
             format!(
                 "{why}: expected a simulation time like \"2ms\" \
-                 (an integer and one of the units fs, ps, ns, us, ms, s)"
+                 (an integer and one of the units fs, ps, ns, us, ms, s), or \"none\""
             ),
         )
     };
@@ -110,7 +123,7 @@ fn parse_timeout(lit: &LitStr) -> syn::Result<Timeout> {
     let Some(&(_, unit)) = UNITS.iter().find(|(suffix, _)| *suffix == unit) else {
         return Err(bad(&format!("`{unit}` is not a time unit")));
     };
-    Ok(Timeout { value, unit })
+    Ok(TimeoutArg::Given(Timeout { value, unit }))
 }
 
 /// A validated test function.
@@ -253,14 +266,16 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
         None => (quote!(_), None),
     };
     let call_args = sim_arg.into_iter().chain(dut_arg);
-    let timeout = if let Some(Timeout { value, unit }) = args.timeout {
-        let unit = format_ident!("{unit}");
-        quote!(::core::option::Option::Some(::simjig::__private::Timeout {
-            value: #value,
-            unit: ::simjig::TimeUnit::#unit,
-        }))
-    } else {
-        quote!(::core::option::Option::None)
+    let timeout = match args.timeout {
+        None => quote!(::simjig::__private::TimeoutArg::Default),
+        Some(TimeoutArg::Disabled) => quote!(::simjig::__private::TimeoutArg::Disabled),
+        Some(TimeoutArg::Given(Timeout { value, unit })) => {
+            let unit = format_ident!("{unit}");
+            quote!(::simjig::__private::TimeoutArg::Given(::simjig::__private::Timeout {
+                value: #value,
+                unit: ::simjig::TimeUnit::#unit,
+            }))
+        }
     };
     // Whether these fire depends on user code, so this is `allow`, not `expect` (an
     // unfulfilled `expect` would warn instead): a body need not await, and the test's
@@ -328,6 +343,14 @@ mod tests {
     }
 
     #[test]
+    fn expands_timeout_none() {
+        insta::assert_snapshot!(render(
+            quote!(timeout = "none"),
+            quote! { async fn soak() {} }
+        ));
+    }
+
+    #[test]
     fn expands_without_parameters_or_output() {
         insta::assert_snapshot!(render(
             quote!(),
@@ -350,28 +373,13 @@ mod tests {
     #[test]
     fn parses_timeouts() {
         let parse = |s: &str| parse_timeout(&LitStr::new(s, Span::call_site()));
-        assert_eq!(
-            parse("2ms").ok(),
-            Some(Timeout {
-                value: 2,
-                unit: "Ms"
-            })
-        );
-        assert_eq!(
-            parse(" 1_000 ns ").ok(),
-            Some(Timeout {
-                value: 1000,
-                unit: "Ns"
-            })
-        );
-        assert_eq!(
-            parse("3s").ok(),
-            Some(Timeout {
-                value: 3,
-                unit: "S"
-            })
-        );
+        let given = |value, unit| Some(TimeoutArg::Given(Timeout { value, unit }));
+        assert_eq!(parse("2ms").ok(), given(2, "Ms"));
+        assert_eq!(parse(" 1_000 ns ").ok(), given(1000, "Ns"));
+        assert_eq!(parse("3s").ok(), given(3, "S"));
+        assert_eq!(parse(" none ").ok(), Some(TimeoutArg::Disabled));
         for bad in [
+            "None",
             "",
             "ms",
             "0ns",

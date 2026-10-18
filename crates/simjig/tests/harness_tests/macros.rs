@@ -68,3 +68,16 @@ async fn a_returned_failure_fails_the_test() -> simjig::Result {
 async fn a_panic_reports_its_location() {
     panic!("boom");
 }
+
+#[simjig::test(timeout = "none")]
+async fn timeout_none_runs_past_the_default() {
+    Timer::new(simjig::ms(20)).await;
+}
+
+#[simjig::test]
+#[should_panic(expected = "(the default for #[simjig::test]")]
+async fn the_default_timeout_fails_a_hang() {
+    loop {
+        Timer::new(simjig::ms(1)).await;
+    }
+}

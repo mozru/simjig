@@ -173,6 +173,16 @@ impl RunIdentity {
     }
 }
 
+/// The time limit a test ran under, named in its `TimeLimit` report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppliedTimeout {
+    /// The limit.
+    pub duration: SimDuration,
+    /// Whether it is the default of `#[simjig::test]` (no `timeout` argument), so the
+    /// report says how to change it.
+    pub is_default: bool,
+}
+
 /// Everything a failed test prints, as data; its `Display` is the report block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FailureReport {
@@ -210,7 +220,7 @@ impl FailureReport {
         failure: &Failure,
         run: RunIdentity,
         location: Option<String>,
-        timeout: Option<SimDuration>,
+        timeout: Option<AppliedTimeout>,
     ) -> Self {
         let location = location.or_else(|| failure.location.map(ToString::to_string));
         let kind = failure.kind.name();
@@ -238,7 +248,11 @@ fn help(failure: &Failure) -> Option<String> {
 }
 
 /// Kind-specific detail lines, each `label: value`.
-fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration>) -> Vec<String> {
+fn details(
+    kind: &FailureKind,
+    precision: Precision,
+    timeout: Option<AppliedTimeout>,
+) -> Vec<String> {
     match kind {
         FailureKind::TaskPanic { .. }
         | FailureKind::ModelFatal { .. }
@@ -270,9 +284,15 @@ fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration
         FailureKind::TimeLimit { limit } => {
             let mut lines = vec![format!("limit:    t={}", limit.display(precision))];
             if let Some(timeout) = timeout {
+                let from = if timeout.is_default {
+                    "(the default for #[simjig::test]; change it with \
+                     `#[simjig::test(timeout = \"50ms\")]`, or `timeout = \"none\"` for no limit)"
+                } else {
+                    "(from `#[simjig::test(timeout = ...)]`)"
+                };
                 lines.push(format!(
-                    "timeout:  {} (from `#[simjig::test(timeout = ...)]`)",
-                    SimTime(timeout.ticks()).display(precision)
+                    "timeout:  {} {from}",
+                    SimTime(timeout.duration.ticks()).display(precision)
                 ));
             }
             lines

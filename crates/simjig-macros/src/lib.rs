@@ -24,7 +24,9 @@ mod test_attr;
 /// # Arguments
 /// - `timeout = "<integer><unit>"` (unit `fs`, `ps`, `ns`, `us`, `ms` or `s`): the
 ///   simulation-time budget. Past it the test fails with `TimeLimit`. The value must be a
-///   whole number of the design's ticks. Without it, the test has no time limit.
+///   whole number of the design's ticks. Without it, the budget is 10 ms of simulation
+///   time (`simjig::__private::DEFAULT_TIMEOUT_MS`, rounded up to a whole tick), and the
+///   `TimeLimit` report says it was the default; `timeout = "none"` removes the limit.
 ///
 /// # Signature
 /// `async fn name([sim: &simjig::TestCtx,] [dut: D]) [-> simjig::Result]`, where `D`

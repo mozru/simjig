@@ -1,4 +1,4 @@
-error: `days` is not a time unit: expected a simulation time like "2ms" (an integer and one of the units fs, ps, ns, us, ms, s)
+error: `days` is not a time unit: expected a simulation time like "2ms" (an integer and one of the units fs, ps, ns, us, ms, s), or "none"
  --> tests/harness_ui/bad_timeout.rs:1:26
   |
 1 | #[simjig::test(timeout = "2 days")]

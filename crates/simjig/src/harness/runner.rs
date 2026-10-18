@@ -12,11 +12,11 @@ use std::future::Future;
 use std::panic;
 use std::path::{Path, PathBuf};
 
-use crate::{Failure, Sim, SimDuration, SimTime, TimeUnit};
+use crate::{Failure, Precision, Sim, SimDuration, SimTime, TimeUnit};
 
 use super::ctx::TestCtx;
 use super::dut::{DutModel, ModelOptions};
-use super::report::{FailureReport, RunIdentity};
+use super::report::{AppliedTimeout, FailureReport, RunIdentity};
 use super::rundir::{self, Json, Summary};
 use super::seed::{Seed, SeedSource, parse_seed};
 
@@ -29,6 +29,27 @@ pub struct Timeout {
     pub unit: TimeUnit,
 }
 
+/// The `timeout` argument of `#[simjig::test]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeoutArg {
+    /// No `timeout` argument: [`DEFAULT_TIMEOUT_MS`] applies.
+    Default,
+    /// `timeout = "none"`: no time limit.
+    Disabled,
+    /// `timeout = "<duration>"`.
+    Given(Timeout),
+}
+
+/// The simulation-time budget of a `#[simjig::test]` without a `timeout` argument, in
+/// milliseconds.
+///
+/// Without one, a test whose clock keeps running while a task waits forever never ends.
+/// 10 ms is 10^6 cycles of a 100 MHz clock: more than unit-level tests need, and still
+/// seconds of wall time. Longer tests say `timeout = "..."` or `timeout = "none"`; a
+/// test that hangs in wall time without advancing simulation time is nextest's
+/// `slow-timeout` to catch.
+pub const DEFAULT_TIMEOUT_MS: u64 = 10;
+
 /// What `#[simjig::test]` knows about the test at compile time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TestMeta {
@@ -39,7 +60,7 @@ pub struct TestMeta {
     /// `CARGO_PKG_NAME` of the crate holding the test.
     pub package: &'static str,
     /// The `timeout` argument.
-    pub timeout: Option<Timeout>,
+    pub timeout: TimeoutArg,
     /// Whether the test has an `#[ignore]` attribute.
     pub ignored: bool,
 }
@@ -211,7 +232,7 @@ pub struct TestOutcome {
 /// What [`execute`] leaves behind.
 struct Executed {
     sim: Option<Sim>,
-    timeout: Option<SimDuration>,
+    timeout: Option<AppliedTimeout>,
     result: Result<(), Failure>,
 }
 
@@ -266,24 +287,45 @@ where
         Ok(dut) => dut,
         Err(failure) => return failed(Some(sim), Err(failure)),
     };
-    let timeout = meta.timeout.map(|t| {
-        sim.precision()
-            .duration(t.value, t.unit)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "#[simjig::test(timeout = ...)] of `{}`: {e}",
-                    ctx.test_name()
-                )
-            })
-    });
+    let timeout = time_limit(meta.timeout, sim.precision(), ctx.test_name());
     if let Some(timeout) = timeout {
-        sim.set_time_limit(SimTime(timeout.ticks()));
+        sim.set_time_limit(SimTime(timeout.duration.ticks()));
     }
     let result = sim.run(body(ctx, dut)).and_then(TestOutput::into_result);
     Executed {
         sim: Some(sim),
         timeout,
         result,
+    }
+}
+
+/// The time limit `timeout` asks for at `precision`.
+///
+/// # Panics
+/// If a given timeout is not a whole number of ticks.
+fn time_limit(timeout: TimeoutArg, precision: Precision, test: &str) -> Option<AppliedTimeout> {
+    match timeout {
+        TimeoutArg::Disabled => None,
+        TimeoutArg::Given(t) => {
+            let duration = precision
+                .duration(t.value, t.unit)
+                .unwrap_or_else(|e| panic!("#[simjig::test(timeout = ...)] of `{test}`: {e}"));
+            Some(AppliedTimeout {
+                duration,
+                is_default: false,
+            })
+        }
+        TimeoutArg::Default => {
+            // At a precision coarser than 1 ms, round up to whole ticks.
+            let ticks_per_ms = match precision.exponent() {
+                e @ ..=-3 => 10u64.pow(u32::from((-3 - e).unsigned_abs())),
+                _ => 1,
+            };
+            Some(AppliedTimeout {
+                duration: SimDuration::from_ticks(DEFAULT_TIMEOUT_MS * ticks_per_ms),
+                is_default: true,
+            })
+        }
     }
 }
 
@@ -336,7 +378,7 @@ fn summary<'a>(
     run: &'a RunIdentity,
     options: &ModelOptions,
     sim: Option<&Sim>,
-    timeout: Option<SimDuration>,
+    timeout: Option<AppliedTimeout>,
     failure: Option<&'a FailureReport>,
 ) -> Summary<'a> {
     let precision = sim.map(Sim::precision);
@@ -351,7 +393,15 @@ fn summary<'a>(
             Json::time(s.now().0, s.now().display(s.precision()))
         }),
         timeout: match (timeout, precision) {
-            (Some(t), Some(p)) => Json::time(t.ticks(), SimTime(t.ticks()).display(p)),
+            (Some(t), Some(p)) => {
+                let ticks = t.duration.ticks();
+                let source = if t.is_default { "default" } else { "attribute" };
+                let mut json = Json::time(ticks, SimTime(ticks).display(p));
+                if let Json::Obj(fields) = &mut json {
+                    fields.push(("source", Json::str(source)));
+                }
+                json
+            }
             _ => Json::Null,
         },
         trace_hash: sim.map(Sim::trace_hash),

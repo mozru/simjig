@@ -1,0 +1,23 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(timeout = \"none\"), quote! { async fn soak() {} })"
+---
+#[::core::prelude::v1::test]
+fn soak() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn soak() {}
+    ::simjig::__private::run_test::<
+        (),
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(soak),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::simjig::__private::TimeoutArg::Disabled,
+            ignored: false,
+        },
+        |_, _| async move { soak().await },
+    );
+}

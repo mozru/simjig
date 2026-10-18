@@ -22,7 +22,7 @@ mod signal;
 pub use harness::Result;
 pub use harness::ctx::TestCtx;
 pub use harness::dut::{DutModel, ModelOptions};
-pub use harness::report::{FailureReport, RunIdentity, Signature};
+pub use harness::report::{AppliedTimeout, FailureReport, RunIdentity, Signature};
 pub use harness::runner::TestOutput;
 pub use harness::seed::{Rng, Seed, SeedSource};
 pub use kernel::clock::{Clock, ClockError, ClockHandle, clock};
@@ -54,7 +54,8 @@ pub use simjig_macros::test;
 #[doc(hidden)]
 pub mod __private {
     pub use crate::harness::runner::{
-        RunEnv, TestMeta, TestOutcome, Timeout, assert_test_output, run, run_test,
+        DEFAULT_TIMEOUT_MS, RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, assert_test_output,
+        run, run_test,
     };
     pub use crate::kernel::combinator::{MaybeDone, boxed};
 

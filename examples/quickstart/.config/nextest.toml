@@ -1,0 +1,14 @@
+# nextest settings for a simjig project. Copy this file with the rest of the quickstart:
+# nextest reads `.config/nextest.toml` at the root of the Cargo workspace. (Inside the
+# simjig repository the root `.config/nextest.toml` applies instead, with the same
+# timeout.)
+[profile.default]
+# A deterministic simulator gives nothing to retry: a flaky test is a bug.
+retries = 0
+# Two clocks guard a simjig test against hangs:
+# - simulation time: `#[simjig::test]` fails with `TimeLimit` past its `timeout`
+#   (10 ms of simulation time by default; `timeout = "..."` or `timeout = "none"`);
+# - wall time: this one. It also catches what simulation time cannot, such as a task
+#   that spins without awaiting, or a model that is slow to build. A test is reported
+#   SLOW after 30 s and killed after 4 periods (2 minutes).
+slow-timeout = { period = "30s", terminate-after = 4 }

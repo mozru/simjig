@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use simjig::{
-    BlockedTask, Failure, FailureKind, FailureReport, Precision, RunIdentity, Seed, SeedSource,
-    SimDuration, SimTime,
+    AppliedTimeout, BlockedTask, Failure, FailureKind, FailureReport, Precision, RunIdentity, Seed,
+    SeedSource, SimDuration, SimTime,
 };
 
 fn run() -> RunIdentity {
@@ -168,7 +168,15 @@ fn time_limit_with_the_run_dir() {
         None,
         "the next timestep, t=1250 ns, is past the time limit",
     );
-    let mut report = FailureReport::new(&f, run(), None, Some(SimDuration::from_ticks(1000)));
+    let mut report = FailureReport::new(
+        &f,
+        run(),
+        None,
+        Some(AppliedTimeout {
+            duration: SimDuration::from_ticks(1000),
+            is_default: false,
+        }),
+    );
     report.run_dir = Some(PathBuf::from(
         "target/simjig/runs/fifo__backpressure/9e3779b97f4a7c15",
     ));

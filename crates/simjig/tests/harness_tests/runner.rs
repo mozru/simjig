@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use simjig::__private::{RunEnv, TestMeta, TestOutcome, Timeout, run};
+use simjig::__private::{RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, run};
 use simjig::{
     DutModel, Failure, FakeModel, ModelOptions, Precision, Seed, SeedSource, Sim, SimTime, TestCtx,
     TimeUnit, rising, yield_now,
@@ -17,7 +17,7 @@ fn meta(name: &'static str) -> TestMeta {
         module_path: "harness_tests::runner",
         name,
         package: "simjig",
-        timeout: None,
+        timeout: TimeoutArg::Default,
         ignored: false,
     }
 }
@@ -84,7 +84,7 @@ fn an_env_seed_overrides_the_test_name_seed() {
 #[test]
 fn a_timeout_becomes_the_time_limit() {
     let mut meta = meta("timeout");
-    meta.timeout = Some(Timeout {
+    meta.timeout = TimeoutArg::Given(Timeout {
         value: 100,
         unit: TimeUnit::Ns,
     });
@@ -104,11 +104,54 @@ fn a_timeout_becomes_the_time_limit() {
 #[should_panic(expected = "is not a whole number of ticks")]
 fn a_timeout_finer_than_the_precision_is_rejected() {
     let mut meta = meta("fine");
-    meta.timeout = Some(Timeout {
+    meta.timeout = TimeoutArg::Given(Timeout {
         value: 1,
         unit: TimeUnit::Fs,
     });
     run::<counter::Dut, _, _>(&meta, &env(None, "fine"), |_, _| async {});
+}
+
+async fn tick_forever() {
+    loop {
+        simjig::Timer::new(simjig::ms(1)).await;
+    }
+}
+
+#[test]
+fn a_test_without_a_timeout_stops_at_the_default() {
+    let outcome = run::<(), _, _>(&meta("default"), &env(None, "default"), |_, ()| {
+        tick_forever()
+    });
+    let report = outcome.failure.expect("the default timeout fires");
+    assert_eq!(report.kind, "TimeLimit");
+    let line = report
+        .details
+        .iter()
+        .find(|l| l.starts_with("timeout:"))
+        .unwrap_or_else(|| panic!("no timeout line in\n{report}"));
+    assert!(
+        line.contains("the default") && line.contains("timeout = \"none\""),
+        "{line}"
+    );
+    // An empty model runs at 1 ps; the default is 10 ms.
+    assert_eq!(outcome.end_time.map(SimTime::ticks), Some(10_000_000_000));
+    let dir = outcome.run_dir.expect("written");
+    let summary = read_json(&dir.join("summary.json"));
+    assert_eq!(summary["timeout"]["source"], "default");
+}
+
+async fn run_20ms() {
+    simjig::Timer::new(simjig::ms(20)).await;
+}
+
+#[test]
+fn timeout_none_disables_the_default() {
+    let mut meta = meta("none");
+    meta.timeout = TimeoutArg::Disabled;
+    let outcome = run::<(), _, _>(&meta, &env(None, "none"), |_, ()| run_20ms());
+    assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+    let summary = read_json(&outcome.run_dir.expect("written").join("summary.json"));
+    assert_eq!(summary["timeout"], Value::Null);
 }
 
 async fn forever(dut: counter::Dut) {
@@ -274,7 +317,7 @@ fn the_run_dir_holds_the_summary_and_the_events() {
         summary["end_time"]["ticks"],
         outcome.end_time.map(SimTime::ticks).unwrap_or_default()
     );
-    assert_eq!(summary["timeout"], Value::Null);
+    assert_eq!(summary["timeout"]["source"], "default");
     let hash = format!("{:#018x}", outcome.trace_hash.unwrap_or_default());
     assert_eq!(summary["trace_hash"], hash.as_str());
     let failure = &summary["failure"];

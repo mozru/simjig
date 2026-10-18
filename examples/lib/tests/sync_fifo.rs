@@ -604,7 +604,7 @@ async fn random_continuations_from_full(ctx: &TestCtx, dut: item_fifo::Dut) {
         cycle(fifo, Some(entry), false).await;
     }
     assert!(fifo.full.get().to_bool());
-    let branches = fork::run_from_checkpoint(ctx.seed(), 4, |branch| {
+    let forked = fork::run_from_checkpoint(ctx.seed(), 4, |branch| {
         let model = Model::new(fifo, &fill);
         async move {
             let board = monitor(fifo, model);
@@ -614,8 +614,16 @@ async fn random_continuations_from_full(ctx: &TestCtx, dut: item_fifo::Dut) {
             Ok((st.pushes, st.pops))
         }
     })
-    .await
-    .expect("a quiet point, under nextest");
+    .await;
+    let branches = match forked {
+        Ok(branches) => branches,
+        // Multi-threaded `cargo test`: a fork is safe only with one test per process.
+        Err(e @ fork::ForkError::Threads { .. }) => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+        Err(e) => panic!("the fill ends at a quiet point: {e}"),
+    };
     let counts = branches.into_values();
     let filled = u32::try_from(fill.len()).unwrap();
     for &(pushes, pops) in &counts {

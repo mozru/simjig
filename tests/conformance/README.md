@@ -39,6 +39,7 @@ python tests/conformance/show.py golden/timer.jsonl # print a log as a table
 | `readonly_read` | flop | values in `ReadOnly` after a `RisingEdge` |
 | `write_after_edge` | flop | when a write after `RisingEdge` becomes visible, and which edge captures it; last write wins |
 | `timeout` | flop | `with_timeout`: trigger loses, wins, and ties with the timeout |
+| `timeout_ties` | flop | `with_timeout` ties: a `Timer`, a sub-coroutine, a task started just before, an edge, `ClockCycles`; one tick short of a tie; a task whose `Timer` was armed first |
 | `timer` | counter | `Timer` wake-ups between edges and exactly on edges; `Timer(1, "step")` |
 | `clock_cycles` | counter | `ClockCycles`, rising and falling |
 | `value_change` | counter | `ValueChange` on a DUT output and on a testbench-written input |
@@ -124,7 +125,16 @@ The rules below follow from this loop.
 - `First(RisingEdge(clk), Timer(t))` with both due at the same time: **the Timer wins**
   (`first_combine` at 25 ns).
 - `with_timeout(RisingEdge(clk), t)` with the timeout at the same time as the edge:
-  **`SimTimeoutError`** (`timeout` at 25 ns, reading `clk=0`).
+  **`SimTimeoutError`** (`timeout` at 25 ns, reading `clk=0`). The same for
+  `ClockCycles` (`timeout_ties` at 45 ns).
+- `with_timeout(x, t)` is `select(Timer(t), x)`, which arms the timeout's Timer
+  **before** `x`. Timers due at the same time fire one at a time, in the order they were
+  armed, and cocotb runs every task a callback makes ready (and every task those wake)
+  before the next callback. So a Timer due exactly at the timeout loses to it, whether
+  awaited directly, inside a sub-coroutine, or in a task started just before
+  (`timeout_ties` at 15, 20 and 25 ns: `SimTimeoutError`). A task whose own Timer was
+  armed *before* the `with_timeout` call finishes first and its result wins
+  (`timeout_ties` at 54.999 ns: `fired`).
 - A trigger armed from a Timer wake-up at time t still catches the clock edge at t,
   because that edge has not been applied yet. In `first_combine`, `Combine(ClockCycles(clk,2),
   Timer(13ns))` armed at 25 ns counts the 25 ns edge as its first cycle, finishes its

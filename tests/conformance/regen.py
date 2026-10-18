@@ -33,6 +33,7 @@ COCOTB_VERSION = "2.1.0"
 SUITES = [
     ("flop", "flop", ["flop.sv"], {}, "test_flop",
      ["edge_read", "readonly_read", "write_after_edge", "timeout"]),
+    ("flop", "flop", ["flop.sv"], {}, "test_timeout_ties", ["timeout_ties"]),
     ("counter", "counter", ["counter.sv"], {"WIDTH": 8}, "test_counter",
      ["timer", "clock_cycles", "value_change", "first_combine"]),
     ("comb_chain", "comb_chain", ["comb_chain.sv"], {}, "test_comb_chain", ["comb_settle"]),

@@ -21,7 +21,7 @@ mod signal;
 
 pub use harness::Result;
 pub use harness::ctx::TestCtx;
-pub use harness::dut::{DutModel, ModelOptions};
+pub use harness::dut::{DutModel, LoadedModel, ModelOptions};
 pub use harness::report::{AppliedTimeout, FailureReport, RunIdentity, Signature};
 pub use harness::runner::TestOutput;
 pub use harness::seed::{Rng, Seed, SeedSource};
@@ -61,7 +61,7 @@ pub mod __private {
 
     // Generated model code (simjig-build's codegen) names these: docs/notes/codegen.md,
     // "The `__private` contract", and `model::bind` for the model glue.
-    pub use crate::model::bind::{Binder, ModelBinder, create, instantiate};
+    pub use crate::model::bind::{Binder, ModelBinder, create, create_in, instantiate, load};
     pub use crate::model::meta::{Access, ModelMeta, SignalMeta, Storage, Vtable};
     pub use crate::model::values::{FieldDiff, InvalidEnum, pack_field, unpack_field};
     pub use crate::signal::{In, InOut, Out, PublicRd, PublicRw, RawWords};

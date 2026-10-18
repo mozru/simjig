@@ -6,11 +6,13 @@
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
 //! #[simjig::test(timeout = "none")]                 no time limit
 //! #[simjig::test(crate = <path>)]                   simjig under another name
-//! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>]) [-> <Output>] { ... }
+//! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
 //! ```
 //! A parameter whose type is a shared reference is the test context; a parameter taken by
-//! value is the DUT, whose type implements `simjig::DutModel`. Both are optional; when both
-//! are present the context comes first. The output is `()` or `simjig::Result`.
+//! value is a DUT, whose type implements `simjig::DutModel`. Both are optional; when both
+//! are present the context comes first. Up to [`MAX_DUTS`] DUT parameters share one
+//! simulation: the runner's DUT type is then the tuple of their types, in order (simjig
+//! implements `DutModel` for such tuples). The output is `()` or `simjig::Result`.
 //!
 //! The expansion is a zero-argument `#[test]` with the user's attributes and visibility.
 //! Inside it, the user's function is kept as written (minus attributes and visibility) and
@@ -136,13 +138,17 @@ fn parse_timeout(lit: &LitStr) -> syn::Result<TimeoutArg> {
     Ok(TimeoutArg::Given(Timeout { value, unit }))
 }
 
+/// The most DUT parameters one test takes: simjig implements `DutModel` for tuples of up to
+/// this many DUT types.
+const MAX_DUTS: usize = 4;
+
 /// A validated test function.
 struct TestFn {
     func: ItemFn,
     /// The span of the context parameter's type, if the test takes one.
     sim: Option<Span>,
-    /// The DUT type, if the test takes one.
-    dut: Option<Type>,
+    /// The DUT types, in parameter order.
+    duts: Vec<Type>,
 }
 
 impl TestFn {
@@ -150,7 +156,7 @@ impl TestFn {
     fn validate(func: ItemFn) -> syn::Result<Self> {
         let mut errors = Vec::new();
         check_qualifiers(&func, &mut errors);
-        let (sim, dut) = classify_params(&func, &mut errors);
+        let (sim, duts) = classify_params(&func, &mut errors);
         let mut errors = errors.into_iter();
         if let Some(mut first) = errors.next() {
             for e in errors {
@@ -158,7 +164,7 @@ impl TestFn {
             }
             return Err(first);
         }
-        Ok(Self { func, sim, dut })
+        Ok(Self { func, sim, duts })
     }
 }
 
@@ -203,9 +209,9 @@ fn check_qualifiers(func: &ItemFn, errors: &mut Vec<syn::Error>) {
     }
 }
 
-/// Sorts the parameters into the context (a shared reference) and the DUT (by value).
-fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>, Option<Type>) {
-    let (mut sim, mut dut) = (None::<Span>, None::<Type>);
+/// Sorts the parameters into the context (a shared reference) and the DUTs (by value).
+fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>, Vec<Type>) {
+    let (mut sim, mut duts) = (None::<Span>, Vec::<Type>::new());
     for arg in &func.sig.inputs {
         let pat = match arg {
             FnArg::Receiver(receiver) => {
@@ -229,7 +235,7 @@ fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>
                         pat,
                         "a simjig test takes at most one context parameter (`&simjig::TestCtx`)",
                     ));
-                } else if dut.is_some() {
+                } else if !duts.is_empty() {
                     errors.push(syn::Error::new_spanned(
                         pat,
                         "put the context parameter first: `(sim: &simjig::TestCtx, dut: Dut)`",
@@ -238,15 +244,37 @@ fn classify_params(func: &ItemFn, errors: &mut Vec<syn::Error>) -> (Option<Span>
                     sim = Some(pat.ty.span());
                 }
             }
-            ty if dut.is_some() => errors.push(syn::Error::new_spanned(
+            ty if duts.len() == MAX_DUTS => errors.push(syn::Error::new_spanned(
                 ty,
-                "a simjig test takes at most one DUT parameter; group several models in \
-                 one type that implements `simjig::DutModel`",
+                format!(
+                    "a simjig test takes at most {MAX_DUTS} DUT parameters; group more models \
+                     in one type that implements `simjig::DutModel`"
+                ),
             )),
-            ty => dut = Some(ty.clone()),
+            ty => duts.push(ty.clone()),
         }
     }
-    (sim, dut)
+    (sim, duts)
+}
+
+/// The runner's DUT type, the closure pattern that takes it apart, and the variables it
+/// binds, one per DUT parameter.
+///
+/// One DUT is its own type (not a 1-tuple), so single-DUT expansions stay as they were;
+/// several are a tuple, which simjig implements `DutModel` for.
+fn dut_parts(duts: &[Type]) -> (TokenStream, TokenStream, Vec<Ident>) {
+    let vars: Vec<Ident> = match duts.len() {
+        1 => vec![format_ident!("__simjig_dut")],
+        n => (0..n).map(|i| format_ident!("__simjig_dut{i}")).collect(),
+    };
+    match (duts, vars.as_slice()) {
+        ([], _) => (quote!(()), quote!(_), vars),
+        ([ty], [var]) => (quote!(#ty), quote!(#var), vars),
+        _ => {
+            let pat = quote!((#(#vars),*));
+            (quote!((#(#duts),*)), pat, vars)
+        }
+    }
 }
 
 fn emit(args: &Args, test: &TestFn) -> TokenStream {
@@ -257,12 +285,8 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
     let mut body = test.func.clone();
     body.attrs.clear();
     body.vis = Visibility::Inherited;
-    let dut_ty = test
-        .dut
-        .as_ref()
-        .map_or_else(|| quote!(()), |ty| quote!(#ty));
+    let (dut_ty, dut_pat, dut_vars) = dut_parts(&test.duts);
     let sim_var = format_ident!("__simjig_sim");
-    let dut_var = format_ident!("__simjig_dut");
     let (sim_pat, sim_arg) = match test.sim {
         // Spanned at the user's parameter type, so a wrong type is reported there.
         Some(span) => {
@@ -271,11 +295,9 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
         }
         None => (quote!(_), None),
     };
-    let (dut_pat, dut_arg) = match test.dut {
-        Some(_) => (quote!(#dut_var), Some(quote!(#dut_var))),
-        None => (quote!(_), None),
-    };
-    let call_args = sim_arg.into_iter().chain(dut_arg);
+    let call_args = sim_arg
+        .into_iter()
+        .chain(dut_vars.iter().map(|v| quote!(#v)));
     let krate = args
         .krate
         .as_ref()
@@ -420,7 +442,15 @@ mod tests {
     fn reports_every_signature_error_at_once() {
         insta::assert_snapshot!(render(
             quote!(),
-            quote! { const unsafe fn bad<T>(a: &mut Ctx, b: Dut, c: Dut) {} }
+            quote! { const unsafe fn bad<T>(a: &mut Ctx, b: A, c: B, d: C, e: D, f: E) {} }
+        ));
+    }
+
+    #[test]
+    fn expands_several_duts_to_a_tuple() {
+        insta::assert_snapshot!(render(
+            quote!(),
+            quote! { async fn pair(sim: &TestCtx, a: inv::Dut, b: flop::Dut) {} }
         ));
     }
 

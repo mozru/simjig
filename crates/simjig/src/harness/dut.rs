@@ -5,8 +5,16 @@
 //! DUT value bound to that simulation ([`DutModel::create`]). simjig-build's generated
 //! `Dut` types implement the trait on top of the model backend; tests of simjig itself
 //! implement it on [`FakeModel`].
+//!
+//! A test with several DUTs (`async fn t(a: inv::Dut, b: flop::Dut)`) asks each DUT type
+//! for its model alone ([`DutModel::load`]), puts the models into one [`Sim`] in parameter
+//! order, and binds each DUT to its model's index ([`DutModel::bind`]); see
+//! `harness::multi`.
 
-use crate::{Failure, FakeModel, Precision, Sim};
+use std::fmt;
+
+use crate::kernel::backend::ModelBackend;
+use crate::{Failure, FailureKind, FakeModel, Precision, Sim, SimTime};
 
 use super::seed::Seed;
 
@@ -93,6 +101,82 @@ pub trait DutModel: Sized + 'static {
     /// # Errors
     /// A [`Failure`] if the model does not match what the DUT type expects.
     fn create(sim: &mut Sim) -> Result<Self, Failure>;
+
+    /// Builds the model alone, to share one [`Sim`] with the models of other DUTs.
+    ///
+    /// The default refuses: a DUT type that builds its `Sim` directly cannot share one.
+    /// Generated `Dut` types implement it.
+    ///
+    /// # Errors
+    /// A [`Failure`] if the model cannot be built, or if the type does not support it.
+    fn load(_options: &ModelOptions) -> Result<LoadedModel, Failure> {
+        Err(unsupported::<Self>("load"))
+    }
+
+    /// Binds the DUT to model number `model` of `sim` (its position among the test's DUT
+    /// parameters, from 0).
+    ///
+    /// The default binds model 0 with [`create`](Self::create) and refuses any other.
+    ///
+    /// # Errors
+    /// A [`Failure`] if model `model` is not the model this DUT type expects.
+    fn bind(sim: &mut Sim, model: usize) -> Result<Self, Failure> {
+        if model == 0 {
+            Self::create(sim)
+        } else {
+            Err(unsupported::<Self>("bind"))
+        }
+    }
+}
+
+/// One model built by [`DutModel::load`], not yet part of a [`Sim`].
+pub struct LoadedModel {
+    backend: Box<dyn ModelBackend>,
+}
+
+impl LoadedModel {
+    /// A [`FakeModel`], for a hand-written [`DutModel`] that takes part in a test with
+    /// several DUTs.
+    #[must_use]
+    pub fn from_fake(model: FakeModel) -> Self {
+        Self::from_backend(Box::new(model))
+    }
+
+    pub(crate) fn from_backend(backend: Box<dyn ModelBackend>) -> Self {
+        Self { backend }
+    }
+
+    pub(crate) fn into_backend(self) -> Box<dyn ModelBackend> {
+        self.backend
+    }
+}
+
+impl fmt::Debug for LoadedModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoadedModel")
+            .field("precision", &self.backend.precision())
+            .field("signals", &self.backend.slot_count())
+            .finish()
+    }
+}
+
+/// The failure of a default [`DutModel`] method that `D` does not provide.
+fn unsupported<D>(method: &str) -> Failure {
+    let message = format!(
+        "`{}` does not implement `DutModel::{method}`, so it cannot share a simulation with \
+         other DUTs; implement `load` and `bind` (generated `Dut` types do)",
+        std::any::type_name::<D>()
+    );
+    Failure {
+        kind: FailureKind::ModelFatal {
+            message: message.clone(),
+        },
+        time: SimTime::ZERO,
+        precision: Precision::PS,
+        task: None,
+        location: None,
+        message,
+    }
 }
 
 /// No DUT: an empty model with Verilator's default precision, 1 ps.

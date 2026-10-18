@@ -1,0 +1,27 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+assertion_line: 444
+expression: "render(quote!(), quote!\n{ async fn pair(sim: &TestCtx, a: inv::Dut, b: flop::Dut) {} })"
+---
+#[::core::prelude::v1::test]
+fn pair() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn pair(sim: &TestCtx, a: inv::Dut, b: flop::Dut) {}
+    ::simjig::__private::run_test::<
+        (inv::Dut, flop::Dut),
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(pair),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::simjig::__private::TimeoutArg::Default,
+            ignored: false,
+            should_panic: false,
+        },
+        |__simjig_sim, (__simjig_dut0, __simjig_dut1)| async move {
+            pair(&__simjig_sim, __simjig_dut0, __simjig_dut1).await
+        },
+    );
+}

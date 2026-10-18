@@ -19,6 +19,7 @@
 
 pub(crate) mod ctx;
 pub(crate) mod dut;
+pub(crate) mod multi;
 pub(crate) mod report;
 pub(crate) mod rundir;
 pub(crate) mod runner;

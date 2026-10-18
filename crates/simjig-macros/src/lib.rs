@@ -33,15 +33,17 @@ mod test_attr;
 ///   name `::simjig`, so a crate with generated DUTs must keep the dependency's name.
 ///
 /// # Signature
-/// `async fn name([sim: &simjig::TestCtx,] [dut: D]) [-> simjig::Result]`, where `D`
-/// implements `simjig::DutModel` and the parameter names are free. A shared-reference
-/// parameter is the context, a by-value parameter the DUT; the context comes first. The
+/// `async fn name([sim: &simjig::TestCtx,] [dut: D, ...]) [-> simjig::Result]`, where each
+/// `D` implements `simjig::DutModel` and the parameter names are free. A shared-reference
+/// parameter is the context, a by-value parameter a DUT; the context comes first. Up to
+/// four DUTs share one simulation (`async fn t(a: inv::Dut, b: flop::Dut)`), each with its
+/// own model, evaluated in parameter order in every delta; see `simjig::Lockstep`. The
 /// function cannot be generic, `const`, `unsafe` or a method. Other attributes
 /// (`#[ignore]`, `#[should_panic]`, docs) apply to the generated test.
 ///
 /// # What the test does
 /// It picks the root seed (`SIMJIG_SEED`, or a hash of the test name), builds the model
-/// with `D::instantiate` and the DUT with `D::create`, runs the body as the task `main`,
+/// with `D::instantiate` and the DUT with `D::create` (several DUTs: their tuple's), runs the body as the task `main`,
 /// and on any failure prints one report block (kind, time, task, location, message,
 /// triage signature, a one-line repro command) and fails. Every run writes
 /// `<target>/simjig/runs/<package>/<binary>/<test>/<seed>/{summary.json,events.jsonl}`.

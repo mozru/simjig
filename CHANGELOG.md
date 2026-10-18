@@ -22,6 +22,10 @@ the public API, the generated code or simulation semantics.
   file the model's verilation read: a rerun that changes nothing runs no JSON pass and
   no layout check. A build script also locates Verilator, sets the C++ compiler up and
   looks the Verilator runtime up once instead of once per DUT.
+- The build-time probe check reads each variable's `VLVT_*` type from the scope table: a
+  probe of a `real`, a `string` or another variable that is not stored as a packed vector
+  fails the build naming its type (it passed as one bit, and `create` refused it), and so
+  does a variable whose storage is not the one its width has.
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

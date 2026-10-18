@@ -194,3 +194,35 @@ fn probes_are_checked_in_a_split_scope_table() {
         "{msg}"
     );
 }
+
+/// A `real` or `string` variable has no packed width (Verilator's scope table records it
+/// with 0 packed dimensions, as if it were one bit): the build names its type instead of
+/// suggesting a one-bit probe that `create` would then refuse.
+#[test]
+fn probes_of_a_real_or_a_string_fail_the_build() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    for (var, ty, width) in [("r", "real", 1), ("r", "real", 64), ("s", "string", 1)] {
+        // One name per configuration in this build script.
+        let name = format!("unpacked_{var}_{width}");
+        let err = Dut::new(&name)
+            .sources([rtl.join("unpacked_vars.sv")])
+            .top("unpacked_vars")
+            .probe(
+                format!("unpacked_vars.{var}"),
+                "unpacked_vars",
+                ProbeType::Bits { width },
+                ProbeAccess::Read,
+            )
+            .build_in(&s.env())
+            .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.starts_with(&format!(
+                "invalid DUT `{name}` configuration: probe `unpacked_vars.{var}` (declared \
+                 in build.rs): `{var}` is a `{ty}`"
+            )),
+            "{msg}"
+        );
+    }
+}

@@ -40,6 +40,10 @@ the public API, the generated code or simulation semantics.
   in it public", or "no public variable `v` in scope `s` (a probe inside a hierarchical
   block, `hier_block`, is in another model)". The build-time check gave the
   hierarchical-block reason for a missing scope, where it cannot apply.
+- `CppRecipe::flags` reach the model's translation units only, no longer the shared
+  Verilator runtime: a DUT's flags compiled a libverilated of its own, and two in one
+  binary define the same symbols. Flags that must reach every translation unit (ABI
+  switches such as `-D_GLIBCXX_DEBUG`, `-stdlib=`, `-fsanitize=`) belong in `CXXFLAGS`.
 - Initial workspace:
   - `svtypes`: the IR from Verilator `--json-only`;
   - `simjig-bits`: bit-vector values;

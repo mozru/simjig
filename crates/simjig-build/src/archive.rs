@@ -61,6 +61,8 @@ pub(crate) struct Spec<'a> {
     pub(crate) defines: &'a [(String, Option<String>)],
     /// Include paths for this archive only, beyond the base build's.
     pub(crate) includes: &'a [PathBuf],
+    /// Compiler flags for this archive only, after the base build's.
+    pub(crate) flags: &'a [String],
 }
 
 /// The domain of the full keys (see the module docs).
@@ -171,6 +173,9 @@ impl Toolchain<'_> {
         for d in spec.includes {
             h.path(d);
         }
+        for f in spec.flags {
+            h.str(f);
+        }
         for d in search_dirs(i, spec) {
             if !self.is_generated(&d) {
                 hash_listing(&mut h, &d);
@@ -195,6 +200,7 @@ impl Toolchain<'_> {
         let mut b = self.base.clone();
         b.out_dir(work)
             .includes(spec.includes)
+            .flags(spec.flags)
             .files(spec.sources)
             .flag("-MD");
         for (k, v) in spec.defines {
@@ -335,7 +341,7 @@ fn compiler_deps(work: &Path) -> Result<Vec<PathBuf>, Error> {
 /// The directories a quoted `#include` of `spec` may be resolved in, besides the fixed
 /// runtime and Verilator directories: each source's directory, the archive's and the
 /// recipe's include directories, and those named by `-I`, `-iquote`, `-isystem` and
-/// `-idirafter` in the recipe flags.
+/// `-idirafter` in the archive's flags.
 fn search_dirs(i: &Inputs<'_>, spec: &Spec<'_>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = spec
         .sources
@@ -344,7 +350,7 @@ fn search_dirs(i: &Inputs<'_>, spec: &Spec<'_>) -> Vec<PathBuf> {
         .collect();
     dirs.extend(spec.includes.iter().cloned());
     dirs.extend(i.recipe.include_dirs.iter().cloned());
-    dirs.extend(flag_dirs(&i.recipe.flags));
+    dirs.extend(flag_dirs(spec.flags));
     dirs.sort();
     dirs.dedup();
     dirs

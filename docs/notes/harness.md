@@ -22,7 +22,8 @@ which model it needs. The generated `Dut` (simjig-build + the model agent) imple
 ## Attribute grammar
 ```text
 #[simjig::test]
-#[simjig::test(timeout = "<integer><unit>")]          unit: fs ps ns us ms s; "1_000 ns" ok
+#[simjig::test(timeout = "<integer><unit>" | "none")]  unit: fs ps ns us ms s; "1_000 ns" ok
+#[simjig::test(crate = <path>)]                      simjig under another name
 async fn <name>([<pat>: &<Ctx>,] [<pat>: <Dut>]) [-> <Output>] { ... }
 ```
 - A `&T` parameter is the context, a by-value one the DUT; context first; at most one of
@@ -38,15 +39,21 @@ async fn <name>([<pat>: &<Ctx>,] [<pat>: <Dut>]) [-> <Output>] { ... }
 - `#[ignore]` is detected so the repro line adds `--run-ignored all`.
 
 ## Run directory schema
-`<target>/simjig/runs/<test with :: -> __>/<seed, 16 hex>/`, replaced on every run (pass or
-fail). `<target>` = nearest ancestor of the test binary holding `CACHEDIR.TAG`; override
-with `SIMJIG_RUNS_DIR`.
+`<root>/<package>/<binary>/<test with :: -> __>/<seed, 16 hex>/`, replaced on every run
+(pass or fail). `<root>` is `SIMJIG_RUNS_DIR`, else `<target>/simjig/runs`, where
+`<target>` is the nearest ancestor of the test binary (within five levels) holding
+`CACHEDIR.TAG`. `<package>` and `<binary>` (the test binary as nextest's `binary()`
+filter names it) keep same-named tests of two test files or packages apart. A run is
+written into a temporary sibling (`.<seed>.tmp-<pid>-<n>`) and renamed into place, so
+concurrent runs of one test and seed each leave a complete directory (last writer wins).
+See `crates/simjig/src/harness/rundir.rs`.
 
 `summary.json`:
 ```text
-schema "simjig.run/1" | test (libtest name) | package | status "pass"|"fail"
-seed "0x%016x" | seed_source "env"|"test-name" | verilator_seed u32
-precision "1ns"|null | end_time {ticks, display}|null | timeout {ticks, display}|null
+schema "simjig.run/1" | test (libtest name) | package | launcher (e.g. "pixi run")|null
+status "pass"|"fail" | seed "0x%016x" | seed_source "env"|"test-name" | verilator_seed u32
+precision "1ns"|null | end_time {ticks, display}|null
+timeout {ticks, display, source "default"|"attribute"}|null
 trace_hash "0x%016x"|null | events {file:"events.jsonl", written, recorded}|null
 failure null | {kind, signature, time {ticks, display}, task|null, location|null,
                 message, repro, waves, report (the printed block)}
@@ -64,12 +71,18 @@ SplitMix64 from `mix64(root ^ mix64(fnv1a(path)))`. Verilator: stream `"verilato
 
 ## Failure report
 One block per failure (`FailureReport`'s `Display`): header `FAIL <test> seed= t= [Kind
-sig=]`, then `task`, `at`, `message`, kind-specific lines, `help`, `repro`, `waves`
-(placeholder), `run dir`. Signature = FNV-1a of kind, location and the message with
-numbers masked (words starting with a digit, or all-hex words containing a digit). Not
-included: time, seed, task path (they vary per seed). `run_test` prints the block once to
-stderr and fails with `resume_unwind` (no extra "panicked at harness" line); the payload is
-the block, so `#[should_panic(expected = ...)]` works.
+sig=]`, then `task`, `at`, `message`, kind-specific lines (`blocked:` uses
+`BlockedTask`'s `Display`, as `Failure`'s does), `help`, `repro`, `waves` (placeholder),
+`run dir`. Times print in the largest unit that shows them exactly (`TimeDisplay`:
+`1250 ns`, `1 us`). The repro line is
+`SIMJIG_SEED=<seed> [<launcher> ]cargo nextest run -p <package> [--run-ignored all] -E
+'binary(=<binary>) & test(=<test>)'`, the launcher (`pixi run`, `conda run -p ..`) when
+the test ran inside one. Signature = FNV-1a (`kernel::recorder::Fnv`) of kind, location
+and the message with numbers masked (words starting with a digit, or all-hex words
+containing a digit). Not included: time, seed, task path (they vary per seed).
+`run_test` prints the block once to stderr and fails with `resume_unwind` (no extra
+"panicked at harness" line); the payload is the block, so
+`#[should_panic(expected = ...)]` works.
 
 ## Deviations and contradictions (report to the director)
 - **`sim: &Sim` is impossible with the current kernel.** `Sim::run(&mut self, main: impl
@@ -80,13 +93,13 @@ the block, so `#[should_panic(expected = ...)]` works.
   gives a rustc error at the parameter type ("expected `&Sim`, found `&TestCtx`").
   Getting `&Sim` would need a kernel change (e.g. `Sim::run(&self)` with clocks behind a
   `RefCell` and a non-`'static` main), which needs `unsafe` or a different task store.
-- **TaskPanic locations**: the kernel does not capture them. The harness chains a process
-  panic hook (installed once) that records `(payload, location)` per thread during a run
-  and attaches the latest one whose payload equals the `TaskPanic` message.
+- **TaskPanic locations** come from the kernel (`kernel::panics` captures the location of
+  the exact poll or drop that panicked). The harness installs no panic hook.
 - **`help:` text** is taken from the last line of the kernel's `Failure` `Display`
   (`FailureKind::help` is private to the kernel). Covered by the per-kind snapshots.
-- **No timeout by default**: without `timeout`, a test with a free-running clock that never
-  ends runs until nextest's slow-timeout. A default needs a project decision.
+- **Default timeout**: without `timeout`, a test stops at 10 ms of simulation time
+  (`DEFAULT_TIMEOUT_MS`), `ceil(10 ms / tick)` ticks at precisions coarser than 1 ms;
+  `timeout = "none"` disables it.
 - `ARCHITECTURE.md` is not mine: its code map should gain "`simjig::harness`: seeds, test
   runner, failure reports, run directories" and `simjig-macros`' now real `#[simjig::test]`.
 - `clippy::result_large_err` fires on every `-> simjig::Result` (Failure is 144 bytes).
@@ -117,4 +130,5 @@ the block, so `#[should_panic(expected = ...)]` works.
 - `include_dut!(name)` (the `OUT_DIR` form) is untested; only `@from <dir>` is, since no
   build script of mine writes `OUT_DIR/simjig/`.
 - Waves: the `waves:` line is a placeholder; `SIMJIG_WAVES` is read by nothing.
-- Run dirs under concurrent runs of the same test and seed (two processes) can race.
+- Concurrent runs of one test and seed: covered by
+  `concurrency::concurrent_runs_of_one_test_all_write_their_run_dir` on one machine only.

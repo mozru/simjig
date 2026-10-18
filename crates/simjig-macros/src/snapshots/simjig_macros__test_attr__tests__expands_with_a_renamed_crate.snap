@@ -1,0 +1,30 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(crate = ::sj, timeout = \"1us\"), quote!\n{ async fn renamed(dut: Counter) -> sj::Result { Ok(()) } })"
+---
+#[::core::prelude::v1::test]
+fn renamed() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn renamed(dut: Counter) -> sj::Result {
+        Ok(())
+    }
+    ::sj::__private::assert_test_output::<sj::Result>();
+    ::sj::__private::run_test::<
+        Counter,
+        _,
+        _,
+    >(
+        &::sj::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(renamed),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::sj::__private::TimeoutArg::Given(::sj::__private::Timeout {
+                value: 1u64,
+                unit: ::sj::TimeUnit::Us,
+            }),
+            ignored: false,
+            should_panic: false,
+        },
+        |_, __simjig_dut| async move { renamed(__simjig_dut).await },
+    );
+}

@@ -20,7 +20,7 @@
 
 use super::abi::{ACCESS_WRITE, Dir, MsgKind, OwnedMsg, Status};
 use super::meta::{Access, LoadError, ModelMeta, Storage};
-use super::raw::{CreateError, RawModel};
+use super::raw::{CreateError, RawModel, check_vtable};
 use crate::kernel::backend::{EvalStatus, ModelBackend, ModelError};
 use crate::kernel::time::{Precision, SimTime};
 
@@ -39,7 +39,9 @@ impl VerilatorModel {
     /// Creates the model described by `meta`, passing `args` (plusargs such as
     /// `+verilator+seed+N`) to its context, and checks it against the generated Rust.
     pub(crate) fn load(meta: &ModelMeta, args: &[String]) -> Result<Self, LoadError> {
-        let vt = (meta.vtable)().as_abi();
+        // The version and size are checked before anything else is read from the table.
+        let vt = check_vtable((meta.vtable)(), meta.ir_hash)
+            .map_err(|e| LoadError::from_abi(meta.prefix, &e))?;
         let prefix = vt.prefix();
         if prefix != meta.prefix {
             return Err(LoadError::Prefix {
@@ -47,8 +49,6 @@ impl VerilatorModel {
                 found: prefix,
             });
         }
-        vt.check(meta.ir_hash)
-            .map_err(|e| LoadError::from_abi(meta.prefix, &e))?;
         let precision =
             Precision::from_exponent(meta.precision_exponent).map_err(|_unsupported| {
                 LoadError::Precision {
@@ -137,7 +137,7 @@ impl VerilatorModel {
                 let problem = format!(
                     "`{name}` has direction {} and access bits {:#x} in the model, but is {:?} \
                      in the Rust",
-                    row.dir, row.access, want.access
+                    row.dir as u8, row.access, want.access
                 );
                 return Err(mismatch(slot, problem));
             }
@@ -182,6 +182,9 @@ impl VerilatorModel {
             (Ok(Status::Unsupported), None) => Err(
                 "the model reported UNSUPPORTED from an entry point it must implement".to_owned(),
             ),
+            (Ok(Status::IoError), None) => {
+                Err("the model reported IO_ERROR from an entry point that opens no file".to_owned())
+            }
             (Err(unknown), None) => Err(format!("the model returned {unknown:?}")),
         };
         result.map_err(|message| {
@@ -254,11 +257,8 @@ impl Drop for VerilatorModel {
 }
 
 /// Whether a C++ row's direction and access bits implement the generated access kind.
-fn access_matches(dir: u8, access: u8, want: Access) -> bool {
+fn access_matches(dir: Dir, access: u8, want: Access) -> bool {
     let writable = access & ACCESS_WRITE != 0;
-    let Ok(dir) = Dir::try_from(dir) else {
-        return false;
-    };
     match want {
         Access::In => dir == Dir::In && writable,
         Access::Out => dir == Dir::Out,
@@ -336,14 +336,14 @@ fn print_line(text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::abi::Status;
+    use super::super::abi::{ModelVtable, Status};
     use super::super::meta::{SignalMeta, Vtable};
     use super::super::raw::fake::{self, STATE};
     use super::*;
 
-    fn fake_vtable() -> &'static Vtable {
+    fn fake_vtable() -> Vtable {
         thread_local! {
-            static VT: &'static Vtable = Vtable::leak(fake::vtable());
+            static VT: Vtable = Vtable::leak(fake::vtable());
         }
         VT.with(|vt| *vt)
     }
@@ -416,6 +416,37 @@ mod tests {
         STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Error as u32, c"bad")));
         assert!(model.eval().is_err());
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
+    }
+
+    /// A table from an older header is rejected on its size before any other field (here
+    /// the prefix, which names another model) is read.
+    #[test]
+    fn a_shorter_vtable_is_rejected_before_its_prefix_is_read() {
+        fn short() -> Vtable {
+            thread_local! {
+                static VT: Vtable = Vtable::leak(ModelVtable {
+                    size: 136,
+                    prefix: c"Vother".as_ptr(),
+                    ..fake::vtable()
+                });
+            }
+            VT.with(|vt| *vt)
+        }
+        static SHORT: ModelMeta = ModelMeta {
+            vtable: short,
+            ..FAKE
+        };
+        fake::reset();
+        let err = VerilatorModel::load(&SHORT, &[]).unwrap_err();
+        assert_eq!(
+            err,
+            LoadError::VtableSize {
+                prefix: "Vfake",
+                model: 136,
+                runtime: 192
+            }
+        );
+        assert_eq!(counts(), (0, 0, 0), "nothing was created");
     }
 
     #[test]

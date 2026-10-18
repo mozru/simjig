@@ -20,11 +20,12 @@ fn backpressure() {
             module_path: ::core::module_path!(),
             name: ::core::stringify!(backpressure),
             package: ::core::env!("CARGO_PKG_NAME"),
-            timeout: ::core::option::Option::Some(::simjig::__private::Timeout {
+            timeout: ::simjig::__private::TimeoutArg::Given(::simjig::__private::Timeout {
                 value: 2u64,
                 unit: ::simjig::TimeUnit::Ms,
             }),
             ignored: true,
+            should_panic: false,
         },
         |__simjig_sim, __simjig_dut| async move {
             backpressure(&__simjig_sim, __simjig_dut).await

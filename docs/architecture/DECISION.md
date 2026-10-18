@@ -42,7 +42,7 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
 
   Clocks are kernel data, not tasks. Coincident edges share one eval. Triggers on
   internal derived clocks are documented as sampled.
-- **One front end: Verilator `--json-only --no-timing`.** It is decoded in exactly one place
+- **One front end: Verilator `--json-only`, with `--timing` iff the DUT is built with it.** It is decoded in exactly one place
   per Verilator dialect, with widths computed (never trusted), strict about unknown nodes,
   and backed by a fixture corpus, insta IR snapshots and a nightly canary against
   Verilator master. **slang is dropped** from M0–M2; it can return later as a second IR

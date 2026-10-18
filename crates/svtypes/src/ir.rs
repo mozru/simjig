@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::literal::Literal;
 
 /// Version of the serialized IR. Bumped on every change to the JSON form.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// An elaborated design: types, modules and packages, as seen by one producer run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,6 +280,10 @@ pub struct Module {
     pub kind: ModuleKind,
     /// Overridable parameters (`parameter`, not `localparam`) with their elaborated values.
     pub params: Vec<Param>,
+    /// Overridable parameters whose value the IR cannot hold, left out of `params`.
+    /// Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unrepresentable: Vec<Unrepresentable>,
     /// Data ports in declaration order.
     pub ports: Vec<Port>,
     /// Interface ports in declaration order.
@@ -295,8 +299,27 @@ pub struct Package {
     pub name: String,
     /// Parameters and localparams in declaration order.
     pub params: Vec<Param>,
+    /// Parameters and localparams whose value the IR cannot hold, left out of `params`.
+    /// Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unrepresentable: Vec<Unrepresentable>,
     /// Types declared with `typedef`, in declaration order.
     pub typedefs: Vec<TypeId>,
+}
+
+/// A parameter whose value the IR cannot hold, such as `4'b10x1`: IR values are two-state.
+///
+/// Such a parameter is recorded instead of failing the design, because a design may
+/// declare X/Z constants it never uses where the IR matters. If a port or type does use
+/// one (an enum member, say), decoding that port or type still fails.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unrepresentable {
+    /// Parameter name.
+    pub name: String,
+    /// The value as the producer printed it.
+    pub value: String,
+    /// Why the IR cannot hold it.
+    pub reason: String,
 }
 
 /// An elaborated parameter.

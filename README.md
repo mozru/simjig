@@ -50,3 +50,8 @@ pixi run cargo nextest run -p quickstart
 
 A failing test prints a report with the seed, the simulation time, the failing task and a
 one-line `repro:` command that reruns it with the same seed.
+
+Every `#[simjig::test]` has a simulation-time budget: 10 ms unless it sets
+`timeout = "..."` (or `timeout = "none"`). For hangs that do not advance simulation time,
+the quickstart's `.config/nextest.toml` sets a wall-clock `slow-timeout` with
+`terminate-after`.

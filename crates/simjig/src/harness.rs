@@ -9,11 +9,13 @@
 //! 4. runs the body as the main task, with a [`TestCtx`](crate::TestCtx) for named random streams;
 //! 5. renders any [`Failure`](crate::Failure) as one [`FailureReport`](crate::FailureReport) block with a
 //!    triage signature and a one-line repro, and writes the run directory
-//!    (`<target>/simjig/runs/<test>/<seed>/`, see `rundir`).
+//!    (`<target>/simjig/runs/<package>/<binary>/<test>/<seed>/`, see `rundir`).
 //!
 //! # Environment
 //! - `SIMJIG_SEED`: the root seed (`0x`-hex or decimal), as printed by a failure report.
 //! - `SIMJIG_RUNS_DIR`: where run directories go, instead of `<target>/simjig/runs`.
+//! - `PIXI_WORKSPACE_ROOT`, `PIXI_PROJECT_ROOT`, `CONDA_PREFIX`: when set, the repro line
+//!   runs `cargo` through `pixi run` (or `conda run`), as `RunEnv::from_process` says.
 
 pub(crate) mod ctx;
 pub(crate) mod dut;

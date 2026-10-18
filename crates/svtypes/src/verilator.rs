@@ -1,10 +1,14 @@
 //! Runs `verilator --json-only` and decodes its output.
 //!
-//! The pass always adds `--no-timing` (`--json-only` turns `--timing` on otherwise, which
-//! changes elaboration and needs coroutine support the model build may not have) and
-//! `-Wno-fatal` (lint policy belongs to the model build, which sees the same warnings;
-//! the JSON pass only reads types). `verilator` is taken from `PATH`.
+//! The pass always passes `--timing` or `--no-timing` ([`JsonPassOpts::timing`]): left
+//! out, `--json-only` turns timing on, which changes elaboration (`VERILATOR_TIMING`,
+//! which constructs are legal), so the IR must be elaborated in the model's mode. It also
+//! adds `-Wno-fatal` (lint policy belongs to the model build, which sees the same
+//! warnings; the JSON pass only reads types). It runs [`JsonPassOpts::exe`], which defaults to the
+//! `verilator` on `PATH`; a build that located its own Verilator passes that one, so the
+//! IR and the model come from the same tool.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -15,21 +19,83 @@ use crate::frontend;
 use crate::ir::Design;
 
 /// Inputs of one JSON pass.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct JsonPassOpts {
+    /// The `verilator` executable to run (default: `verilator`, looked up on `PATH`).
+    pub exe: PathBuf,
+    /// Environment variables set for the Verilator process (for example
+    /// `VERILATOR_ROOT`), on top of the inherited environment.
+    pub env: Vec<(OsString, OsString)>,
     /// SystemVerilog source files.
     pub sources: Vec<PathBuf>,
     /// Top module name (`--top-module`).
     pub top: String,
-    /// Preprocessor defines (`+define+NAME` or `+define+NAME=VALUE`).
+    /// `--timing` instead of `--no-timing`: must match the model build, because it
+    /// decides which constructs elaborate and whether `VERILATOR_TIMING` is defined.
+    pub timing: bool,
+    /// Preprocessor defines (`-DNAME` or `-DNAME=VALUE`). `-D` and not `+define+`,
+    /// which splits its value at every `+`.
     pub defines: Vec<(String, Option<String>)>,
     /// Top-level parameter overrides (`-GNAME=VALUE`); values are SystemVerilog
     /// expressions, e.g. `8` or `4'hc`.
     pub params: Vec<(String, String)>,
     /// Include directories (`-I`).
     pub include_dirs: Vec<PathBuf>,
-    /// Further arguments, passed through before the sources.
+    /// Further arguments, passed last (after the sources).
     pub extra_args: Vec<String>,
+}
+
+impl JsonPassOpts {
+    /// The arguments that describe the design: `--timing` or `--no-timing`,
+    /// `--top-module`, `-I`, `-D`, `-G`, the sources and the extra arguments, in that
+    /// order.
+    ///
+    /// This is the one place these are spelled: the JSON pass uses it, and so does any
+    /// other Verilator run that must elaborate the same design (simjig-build's model
+    /// build and layout check), so a define or parameter cannot mean one thing to the IR
+    /// and another to the model.
+    #[must_use]
+    pub fn design_args(&self) -> Vec<String> {
+        let timing = if self.timing {
+            "--timing"
+        } else {
+            "--no-timing"
+        };
+        let mut a = vec![
+            timing.to_owned(),
+            "--top-module".to_owned(),
+            self.top.clone(),
+        ];
+        a.extend(
+            self.include_dirs
+                .iter()
+                .map(|d| format!("-I{}", d.display())),
+        );
+        a.extend(self.defines.iter().map(|(name, value)| match value {
+            Some(v) => format!("-D{name}={v}"),
+            None => format!("-D{name}"),
+        }));
+        a.extend(self.params.iter().map(|(n, v)| format!("-G{n}={v}")));
+        a.extend(self.sources.iter().map(|p| p.display().to_string()));
+        a.extend(self.extra_args.iter().cloned());
+        a
+    }
+}
+
+impl Default for JsonPassOpts {
+    fn default() -> Self {
+        Self {
+            exe: PathBuf::from("verilator"),
+            env: Vec::new(),
+            sources: Vec::new(),
+            top: String::new(),
+            timing: false,
+            defines: Vec::new(),
+            params: Vec::new(),
+            include_dirs: Vec::new(),
+            extra_args: Vec::new(),
+        }
+    }
 }
 
 /// Where a JSON pass wrote its output.
@@ -83,7 +149,7 @@ pub fn json_pass(opts: &JsonPassOpts) -> Result<Design> {
 /// # Errors
 /// As [`json_pass`].
 pub fn write_json_files(opts: &JsonPassOpts, out_dir: &Path) -> Result<JsonFiles> {
-    let version = run(Command::new("verilator").arg("--version"))?;
+    let version = run(verilator(opts).arg("--version"))?;
     let version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
     let tree = out_dir.join("design.tree.json");
     let meta = out_dir.join("design.tree.meta.json");
@@ -95,32 +161,20 @@ pub fn write_json_files(opts: &JsonPassOpts, out_dir: &Path) -> Result<JsonFiles
     })
 }
 
+/// A command running `opts.exe` in `opts.env`.
+fn verilator(opts: &JsonPassOpts) -> Command {
+    let mut cmd = Command::new(&opts.exe);
+    cmd.envs(opts.env.iter().map(|(k, v)| (k, v)));
+    cmd
+}
+
 fn command(opts: &JsonPassOpts, out_dir: &Path, tree: &Path, meta: &Path) -> Command {
-    let mut cmd = Command::new("verilator");
-    cmd.args([
-        "--json-only",
-        "--no-timing",
-        "-Wno-fatal",
-        "--top-module",
-        &opts.top,
-    ]);
+    let mut cmd = verilator(opts);
+    cmd.args(["--json-only", "-Wno-fatal"]);
     cmd.arg("-Mdir").arg(out_dir);
     cmd.arg("--json-only-output").arg(tree);
     cmd.arg("--json-only-meta-output").arg(meta);
-    for dir in &opts.include_dirs {
-        cmd.arg(format!("-I{}", dir.display()));
-    }
-    for (name, value) in &opts.defines {
-        match value {
-            Some(v) => cmd.arg(format!("+define+{name}={v}")),
-            None => cmd.arg(format!("+define+{name}")),
-        };
-    }
-    for (name, value) in &opts.params {
-        cmd.arg(format!("-G{name}={value}"));
-    }
-    cmd.args(&opts.extra_args);
-    cmd.args(&opts.sources);
+    cmd.args(opts.design_args());
     cmd
 }
 
@@ -130,7 +184,10 @@ fn run(cmd: &mut Command) -> Result<Output> {
     let out = cmd.output().map_err(|e| Error::Tool {
         command: line.clone(),
         status: None,
-        stderr: format!("could not start verilator: {e} (is it on PATH? try `pixi run`)"),
+        stderr: format!(
+            "could not start `{}`: {e} (is it installed? try `pixi run`)",
+            cmd.get_program().to_string_lossy()
+        ),
     })?;
     if out.status.success() {
         return Ok(out);
@@ -231,24 +288,40 @@ mod tests {
     #[test]
     fn command_has_the_required_flags() {
         let opts = JsonPassOpts {
+            exe: "/opt/v/bin/verilator".into(),
+            env: vec![("VERILATOR_ROOT".into(), "/opt/v".into())],
             sources: vec!["a.sv".into()],
             top: "t".into(),
             defines: vec![("X".into(), None), ("Y".into(), Some("2".into()))],
             params: vec![("P".into(), "4'hc".into())],
             include_dirs: vec!["inc".into()],
             extra_args: vec!["--x-assign".into(), "0".into()],
+            ..JsonPassOpts::default()
         };
-        let line = command_line(&command(
+        let cmd = command(
             &opts,
             Path::new("o"),
             Path::new("o/t.json"),
             Path::new("o/m.json"),
-        ));
-        assert_eq!(
-            line,
-            "verilator --json-only --no-timing -Wno-fatal --top-module t -Mdir o \
-             --json-only-output o/t.json --json-only-meta-output o/m.json -Iinc +define+X \
-             +define+Y=2 '-GP=4'\\''hc' --x-assign 0 a.sv"
         );
+        let env: Vec<_> = cmd.get_envs().collect();
+        assert_eq!(
+            env,
+            [(
+                std::ffi::OsStr::new("VERILATOR_ROOT"),
+                Some(std::ffi::OsStr::new("/opt/v"))
+            )]
+        );
+        assert_eq!(
+            command_line(&cmd),
+            "/opt/v/bin/verilator --json-only -Wno-fatal -Mdir o --json-only-output o/t.json \
+             --json-only-meta-output o/m.json --no-timing --top-module t \
+             -Iinc -DX -DY=2 '-GP=4'\\''hc' a.sv --x-assign 0"
+        );
+        let timed = JsonPassOpts {
+            timing: true,
+            ..opts
+        };
+        assert_eq!(timed.design_args()[0], "--timing");
     }
 }

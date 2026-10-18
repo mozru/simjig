@@ -15,7 +15,7 @@ fn probe(path: &str, module: &str, ty: ProbeType) -> CodegenConfig {
             ty,
             access: ProbeAccess::Read,
         }],
-        iface_top: None,
+        ..CodegenConfig::default()
     }
 }
 
@@ -51,6 +51,7 @@ fn error_messages() {
         CodegenConfig {
             probes: Vec::new(),
             iface_top: Some(iface("producer", Vec::new())),
+            ..CodegenConfig::default()
         },
     ] {
         out.push(lower(&structs, &config).unwrap_err().to_string());
@@ -69,4 +70,45 @@ fn error_messages() {
         out.push(lower_wrapper(&modports, &config).unwrap_err().to_string());
     }
     insta::assert_snapshot!(out.join("\n"));
+}
+
+/// Probes name root members that exist only when every module is inlined into the root
+/// (`top__DOT__u__DOT__x`). Flags and control files that keep modules apart are rejected
+/// with the reason, not left to fail in the C++ compiler.
+#[test]
+fn probes_reject_builds_that_do_not_inline() {
+    let design = cases::wide().design;
+    let with = |args: &[&str], vlt: &[&str]| CodegenConfig {
+        probes: cases::wide_probes(),
+        verilator_args: args.iter().map(|a| (*a).to_owned()).collect(),
+        control_files: vlt.iter().map(|v| (*v).to_owned()).collect(),
+        iface_top: None,
+    };
+    let no_inline_acc = "`verilator_config\nno_inline -module \"acc\"\n";
+    let hier_acc = "`verilator_config\n// a comment\nhier_block -module \"acc\"\n";
+    let mut out = Vec::new();
+    for config in [
+        with(&["-fno-inline"], &[]),
+        with(&["-O2", "--O0"], &[]),
+        with(&["--hierarchical"], &[]),
+        with(&[], &[no_inline_acc]),
+        with(&[], &[hier_acc]),
+    ] {
+        out.push(lower(&design, &config).unwrap_err().to_string());
+    }
+    insta::assert_snapshot!(out.join("\n"));
+    for ok in [
+        with(&["-O0", "-finline"], &[]),
+        with(&["--hierarchical", "--no-hierarchical"], &[]),
+        with(
+            &[],
+            &["`verilator_config\nno_inline -module \"acc\" -task \"t\"\n"],
+        ),
+        CodegenConfig {
+            probes: Vec::new(),
+            ..with(&["-fno-inline"], &[no_inline_acc])
+        },
+    ] {
+        assert!(lower(&design, &ok).is_ok(), "{ok:?}");
+    }
 }

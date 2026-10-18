@@ -6,6 +6,7 @@
 //! - [`ir`]: the versioned IR ([`ir::Design`] and friends).
 //! - [`verilator::json_pass`]: run Verilator and decode its output in one call.
 //! - [`frontend::parse`]: decode already-written `.tree.json` / `.tree.meta.json` files.
+//! - [`version`]: the supported Verilator versions and their parser.
 //! - [`literal`] and [`width`]: the literal parser and width calculator the front ends use.
 #![forbid(unsafe_code)]
 
@@ -14,4 +15,5 @@ pub mod frontend;
 pub mod ir;
 pub mod literal;
 pub mod verilator;
+pub mod version;
 pub mod width;

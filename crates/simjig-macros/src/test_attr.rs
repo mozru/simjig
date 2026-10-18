@@ -4,6 +4,8 @@
 //! ```text
 //! #[simjig::test]
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
+//! #[simjig::test(timeout = "none")]                 no time limit
+//! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>]) [-> <Output>] { ... }
 //! ```
 //! A parameter whose type is a shared reference is the test context; a parameter taken by
@@ -31,9 +33,20 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
 }
 
 /// The attribute's arguments.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Args {
-    timeout: Option<Timeout>,
+    /// `None` without the argument (the runner's default applies).
+    timeout: Option<TimeoutArg>,
+    /// The path the expansion reaches simjig by; `None` is `::simjig`.
+    krate: Option<syn::Path>,
+}
+
+/// A `timeout` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimeoutArg {
+    /// `timeout = "none"`.
+    Disabled,
+    Given(Timeout),
 }
 
 /// A simulation-time timeout, checked against the design's precision at run time.
@@ -72,10 +85,17 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             };
             args.timeout = Some(parse_timeout(&lit)?);
             Ok(())
+        } else if meta.path.is_ident("crate") {
+            if args.krate.is_some() {
+                return Err(meta.error("`crate` is given twice"));
+            }
+            args.krate = Some(meta.value()?.parse()?);
+            Ok(())
         } else {
             Err(meta.error(
-                "unknown `#[simjig::test]` argument; the only argument is \
-                 `timeout = \"<duration>\"`, for example `timeout = \"2ms\"`",
+                "unknown `#[simjig::test]` argument; the arguments are \
+                 `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`) and \
+                 `crate = <path to simjig>`",
             ))
         }
     });
@@ -83,10 +103,13 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
     Ok(args)
 }
 
-/// Parses `"2ms"`, `"10 us"` or `"1_000ns"`.
-fn parse_timeout(lit: &LitStr) -> syn::Result<Timeout> {
+/// Parses `"none"`, `"2ms"`, `"10 us"` or `"1_000ns"`.
+fn parse_timeout(lit: &LitStr) -> syn::Result<TimeoutArg> {
     let text = lit.value();
     let text = text.trim();
+    if text == "none" {
+        return Ok(TimeoutArg::Disabled);
+    }
     let split = text
         .find(|c: char| !(c.is_ascii_digit() || c == '_'))
         .unwrap_or(text.len());
@@ -96,7 +119,7 @@ fn parse_timeout(lit: &LitStr) -> syn::Result<Timeout> {
             lit.span(),
             format!(
                 "{why}: expected a simulation time like \"2ms\" \
-                 (an integer and one of the units fs, ps, ns, us, ms, s)"
+                 (an integer and one of the units fs, ps, ns, us, ms, s), or \"none\""
             ),
         )
     };
@@ -110,7 +133,7 @@ fn parse_timeout(lit: &LitStr) -> syn::Result<Timeout> {
     let Some(&(_, unit)) = UNITS.iter().find(|(suffix, _)| *suffix == unit) else {
         return Err(bad(&format!("`{unit}` is not a time unit")));
     };
-    Ok(Timeout { value, unit })
+    Ok(TimeoutArg::Given(Timeout { value, unit }))
 }
 
 /// A validated test function.
@@ -253,24 +276,31 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
         None => (quote!(_), None),
     };
     let call_args = sim_arg.into_iter().chain(dut_arg);
-    let timeout = if let Some(Timeout { value, unit }) = args.timeout {
-        let unit = format_ident!("{unit}");
-        quote!(::core::option::Option::Some(::simjig::__private::Timeout {
-            value: #value,
-            unit: ::simjig::TimeUnit::#unit,
-        }))
-    } else {
-        quote!(::core::option::Option::None)
+    let krate = args
+        .krate
+        .as_ref()
+        .map_or_else(|| quote!(::simjig), |path| quote!(#path));
+    let timeout = match args.timeout {
+        None => quote!(#krate::__private::TimeoutArg::Default),
+        Some(TimeoutArg::Disabled) => quote!(#krate::__private::TimeoutArg::Disabled),
+        Some(TimeoutArg::Given(Timeout { value, unit })) => {
+            let unit = format_ident!("{unit}");
+            quote!(#krate::__private::TimeoutArg::Given(#krate::__private::Timeout {
+                value: #value,
+                unit: #krate::TimeUnit::#unit,
+            }))
+        }
     };
     // Whether these fire depends on user code, so this is `allow`, not `expect` (an
     // unfulfilled `expect` would warn instead): a body need not await, and the test's
     // `simjig::Result` carries the plain-data `Failure`, which is large by design.
     let allow = quote!(#[allow(clippy::unused_async, clippy::result_large_err)]);
     let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
+    let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
     let output_check = match &sig.output {
         ReturnType::Default => quote!(),
         ReturnType::Type(_, ty) => quote_spanned!(ty.span()=>
-            ::simjig::__private::assert_test_output::<#ty>();
+            #krate::__private::assert_test_output::<#ty>();
         ),
     };
     quote! {
@@ -280,13 +310,14 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
             #allow
             #body
             #output_check
-            ::simjig::__private::run_test::<#dut_ty, _, _>(
-                &::simjig::__private::TestMeta {
+            #krate::__private::run_test::<#dut_ty, _, _>(
+                &#krate::__private::TestMeta {
                     module_path: ::core::module_path!(),
                     name: ::core::stringify!(#ident),
                     package: ::core::env!("CARGO_PKG_NAME"),
                     timeout: #timeout,
                     ignored: #ignored,
+                    should_panic: #should_panic,
                 },
                 |#sim_pat, #dut_pat| async move { #ident(#(#call_args),*).await },
             );
@@ -328,6 +359,22 @@ mod tests {
     }
 
     #[test]
+    fn expands_with_a_renamed_crate() {
+        insta::assert_snapshot!(render(
+            quote!(crate = ::sj, timeout = "1us"),
+            quote! { async fn renamed(dut: Counter) -> sj::Result { Ok(()) } }
+        ));
+    }
+
+    #[test]
+    fn expands_timeout_none() {
+        insta::assert_snapshot!(render(
+            quote!(timeout = "none"),
+            quote! { async fn soak() {} }
+        ));
+    }
+
+    #[test]
     fn expands_without_parameters_or_output() {
         insta::assert_snapshot!(render(
             quote!(),
@@ -350,28 +397,13 @@ mod tests {
     #[test]
     fn parses_timeouts() {
         let parse = |s: &str| parse_timeout(&LitStr::new(s, Span::call_site()));
-        assert_eq!(
-            parse("2ms").ok(),
-            Some(Timeout {
-                value: 2,
-                unit: "Ms"
-            })
-        );
-        assert_eq!(
-            parse(" 1_000 ns ").ok(),
-            Some(Timeout {
-                value: 1000,
-                unit: "Ns"
-            })
-        );
-        assert_eq!(
-            parse("3s").ok(),
-            Some(Timeout {
-                value: 3,
-                unit: "S"
-            })
-        );
+        let given = |value, unit| Some(TimeoutArg::Given(Timeout { value, unit }));
+        assert_eq!(parse("2ms").ok(), given(2, "Ms"));
+        assert_eq!(parse(" 1_000 ns ").ok(), given(1000, "Ns"));
+        assert_eq!(parse("3s").ok(), given(3, "S"));
+        assert_eq!(parse(" none ").ok(), Some(TimeoutArg::Disabled));
         for bad in [
+            "None",
             "",
             "ms",
             "0ns",

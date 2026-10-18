@@ -1,5 +1,5 @@
-//! The run directory: `<target>/simjig/runs/<test>/<seed>/`, written after every
-//! `#[simjig::test]` run, passed or failed.
+//! The run directory: `<target>/simjig/runs/<package>/<binary>/<test>/<seed>/`, written
+//! after every `#[simjig::test]` run, passed or failed.
 //!
 //! It holds two files, read by people and by later tools (`cargo simjig triage`):
 //! - `summary.json`: one object, schema `"simjig.run/1"` (fields in [`Summary`]);
@@ -8,14 +8,24 @@
 //!   The recorder keeps the most recent 4096 events; `summary.json` says how many were
 //!   recorded in total, and its `trace_hash` covers all of them.
 //!
-//! `<test>` is the libtest name with `::` replaced by `__`; `<seed>` is 16 hex digits.
+//! `<package>` is the Cargo package and `<binary>` the test binary (`harness_tests`, as
+//! nextest names it), so same-named tests in two test files or packages never share a
+//! directory. `<test>` is the libtest name with `::` replaced by `__`; `<seed>` is 16 hex
+//! digits.
+//!
+//! The same test and seed can still run in two processes at once (two `cargo nextest`
+//! invocations). So a run is written into a temporary sibling (`.<seed>.tmp-<pid>-<n>`)
+//! and renamed into place: a reader sees the previous complete directory, none, or the
+//! new complete one, and the last writer wins. A process killed mid-write leaves its
+//! temporary sibling behind; names starting with `.` are never run directories.
 //! The JSON is written by hand (about 60 lines) so the runtime crate needs no serializer.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{TimeDisplay, TraceRecord};
+use crate::{Precision, SimTime, TraceRecord};
 
 use super::report::FailureReport;
 use super::seed::Seed;
@@ -38,11 +48,11 @@ impl Json {
         s.map_or(Self::Null, Self::str)
     }
 
-    /// `{"ticks": n, "display": "1250 ns"}`.
-    pub(crate) fn time(ticks: u64, display: TimeDisplay) -> Self {
+    /// `{"ticks": n, "display": "1250 ns"}`, displayed as reports print times.
+    pub(crate) fn time(time: SimTime, precision: Precision) -> Self {
         Self::Obj(vec![
-            ("ticks", Self::U64(ticks)),
-            ("display", Self::str(display.to_string())),
+            ("ticks", Self::U64(time.0)),
+            ("display", Self::str(time.display(precision).to_string())),
         ])
     }
 
@@ -121,10 +131,26 @@ pub(crate) fn event_line(record: &TraceRecord) -> String {
     out
 }
 
-/// The directory for one run under `root` (`<root>/<test>/<seed hex>`).
-pub(crate) fn run_dir(root: &Path, test: &str, seed: Seed) -> PathBuf {
-    root.join(test.replace("::", "__"))
+/// The directory for one run under `root`
+/// (`<root>/<package>/<binary>/<test>/<seed hex>`).
+pub(crate) fn run_dir(root: &Path, package: &str, binary: &str, test: &str, seed: Seed) -> PathBuf {
+    root.join(package)
+        .join(binary)
+        .join(test.replace("::", "__"))
         .join(format!("{:016x}", seed.value()))
+}
+
+/// The name of the running test binary as nextest's `binary()` filter matches it: the
+/// executable's name without Cargo's `-<16 hex digits>` suffix (`harness_tests`).
+pub(crate) fn binary_name(exe: &Path) -> Option<String> {
+    let stem = exe.file_stem()?.to_str()?;
+    let name = match stem.rsplit_once('-') {
+        Some((name, hash)) if hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            name
+        }
+        _ => stem,
+    };
+    Some(name.to_owned())
 }
 
 /// `<target>/simjig/runs`, where `<target>` is Cargo's target directory: the nearest
@@ -145,6 +171,8 @@ pub(crate) fn default_root() -> Option<PathBuf> {
 pub(crate) struct Summary<'a> {
     pub(crate) test: &'a str,
     pub(crate) package: &'a str,
+    /// What the repro command runs `cargo` through, if anything (`pixi run`).
+    pub(crate) launcher: Option<&'a str>,
     pub(crate) seed: Seed,
     pub(crate) verilator_seed: u32,
     /// `None` if the model could not be built.
@@ -163,7 +191,7 @@ impl Summary<'_> {
             Json::Obj(vec![
                 ("kind", Json::str(r.kind)),
                 ("signature", Json::str(r.signature.to_string())),
-                ("time", Json::time(r.time.0, r.time.display(r.precision))),
+                ("time", Json::time(r.time, r.precision)),
                 ("task", Json::opt_str(r.task.clone())),
                 ("location", Json::opt_str(r.location.clone())),
                 ("message", Json::str(r.message.clone())),
@@ -183,6 +211,7 @@ impl Summary<'_> {
             ("schema", Json::str("simjig.run/1")),
             ("test", Json::str(self.test)),
             ("package", Json::str(self.package)),
+            ("launcher", Json::opt_str(self.launcher)),
             (
                 "status",
                 Json::str(if self.failure.is_some() {
@@ -207,29 +236,93 @@ impl Summary<'_> {
     }
 }
 
-/// Replaces `dir` with a fresh `summary.json` and, if given, `events.jsonl`.
+/// Replaces `dir` with a fresh `summary.json` and, if given, `events.jsonl`, atomically
+/// (see the module docs).
 pub(crate) fn write(
     dir: &Path,
     summary: &Summary<'_>,
     events: Option<&[TraceRecord]>,
 ) -> io::Result<()> {
-    if dir.exists() {
-        fs::remove_dir_all(dir)?; // Our own output from an earlier run of this test and seed.
+    let (parent, name) = match (dir.parent(), dir.file_name()) {
+        (Some(parent), Some(name)) => (parent, name.to_string_lossy()),
+        _ => return Err(io::Error::other("not a run directory path")),
+    };
+    fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(".{name}.tmp-{}", unique()));
+    let written = fill(&tmp, summary, events).and_then(|()| replace(&tmp, dir));
+    if written.is_err() {
+        fs::remove_dir_all(&tmp).ok(); // Best effort: the error being returned matters more.
     }
-    fs::create_dir_all(dir)?;
+    written
+}
+
+/// `<pid>-<n>`: unique among concurrent writers on this machine.
+fn unique() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn fill(tmp: &Path, summary: &Summary<'_>, events: Option<&[TraceRecord]>) -> io::Result<()> {
+    fs::create_dir(tmp)?;
     let mut text = String::new();
     summary.to_json().write(&mut text, Some(0));
     text.push('\n');
-    fs::write(dir.join("summary.json"), text)?;
+    fs::write(tmp.join("summary.json"), text)?;
     if let Some(events) = events {
         let mut text = String::new();
         for record in events {
             text.push_str(&event_line(record));
             text.push('\n');
         }
-        fs::write(dir.join("events.jsonl"), text)?;
+        fs::write(tmp.join("events.jsonl"), text)?;
     }
     Ok(())
+}
+
+/// Renames `tmp` to `dir`. `rename` cannot replace a non-empty directory, so an existing
+/// `dir` (an earlier run, or a concurrent writer that got there first) is renamed aside,
+/// and deleted once `tmp` is in place. Another writer can move `dir` between our two
+/// renames, so a failed rename is retried.
+fn replace(tmp: &Path, dir: &Path) -> io::Result<()> {
+    const ATTEMPTS: usize = 16;
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    let mut aside = Vec::new();
+    let mut result = Err(io::Error::other("the run directory kept changing"));
+    for _ in 0..ATTEMPTS {
+        match fs::rename(tmp, dir) {
+            Ok(()) => {
+                result = Ok(());
+                break;
+            }
+            // POSIX `rename` reports a non-empty target as ENOTEMPTY or EEXIST.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::DirectoryNotEmpty | io::ErrorKind::AlreadyExists
+                ) || dir.is_dir() => {}
+            Err(e) => {
+                result = Err(e);
+                break;
+            }
+        }
+        let old = dir.with_file_name(format!(".{name}.old-{}", unique()));
+        match fs::rename(dir, &old) {
+            Ok(()) => aside.push(old),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {} // Another writer moved it.
+            Err(e) => {
+                result = Err(e);
+                break;
+            }
+        }
+    }
+    for old in aside {
+        fs::remove_dir_all(old).ok(); // Best effort: a leftover is named `.<seed>.old-*`.
+    }
+    result
 }
 
 #[cfg(test)]
@@ -262,8 +355,22 @@ mod tests {
     fn run_dirs_are_named_by_test_and_seed() {
         let seed = Seed::new(0xab, super::super::seed::SeedSource::Env);
         assert_eq!(
-            run_dir(Path::new("r"), "m::t", seed),
-            Path::new("r/m__t/00000000000000ab")
+            run_dir(Path::new("r"), "p", "b", "m::t", seed),
+            Path::new("r/p/b/m__t/00000000000000ab")
         );
+    }
+
+    #[test]
+    fn binary_names_drop_cargo_hashes() {
+        let name = |p: &str| binary_name(Path::new(p));
+        assert_eq!(
+            name("t/debug/deps/harness_tests-b88c319aa24eca27").as_deref(),
+            Some("harness_tests")
+        );
+        assert_eq!(
+            name("t/debug/deps/simjig_bits-5ff542379917abd3.exe").as_deref(),
+            Some("simjig_bits")
+        );
+        assert_eq!(name("t/debug/my-tool").as_deref(), Some("my-tool"));
     }
 }

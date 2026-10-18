@@ -13,28 +13,34 @@ use super::abi::{AbiError, ModelVtable};
 
 /// A model's C vtable, as returned by its `simjig_vtable_<prefix>` symbol; opaque to Rust code
 /// outside simjig.
+///
+/// It is a pointer, not a reference: a model built against an older header exports a
+/// shorter table, and a `&ModelVtable` over it would be undefined behaviour before its `size`
+/// is even read. Loading reads the leading fields through the pointer (`raw::check_vtable`)
+/// and only then hands out a reference. Rust code outside simjig cannot build one: the field is private,
+/// and the only constructor is a model's symbol declared by
+/// [`link_model!`](crate::__link_model).
 #[repr(transparent)]
-pub struct Vtable(ModelVtable);
+#[derive(Clone, Copy)]
+pub struct Vtable(*const ModelVtable);
 
 impl Vtable {
-    pub(crate) fn as_abi(&self) -> &ModelVtable {
-        &self.0
+    /// The table's address; read only by `raw::check_vtable`.
+    pub(crate) fn as_ptr(self) -> *const ModelVtable {
+        self.0
     }
 
     /// A vtable built in Rust (the fake model of the backend's unit tests), leaked.
     #[cfg(test)]
-    pub(crate) fn leak(vt: ModelVtable) -> &'static Self {
-        Box::leak(Box::new(Self(vt)))
+    pub(crate) fn leak(vt: ModelVtable) -> Self {
+        Self(Box::leak(Box::new(vt)))
     }
 }
 
 impl fmt::Debug for Vtable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Vtable")
-            .field("prefix", &self.0.prefix())
-            .field("abi_version", &self.0.abi_version)
-            .field("ir_hash", &format_args!("{:#018x}", self.0.ir_hash))
-            .finish_non_exhaustive()
+        // Nothing is read through the pointer before `check`.
+        f.debug_tuple("Vtable").field(&self.0).finish()
     }
 }
 
@@ -113,7 +119,7 @@ pub struct SignalMeta {
 #[derive(Clone, Copy)]
 pub struct ModelMeta {
     /// The model's vtable symbol, declared with [`link_model!`](crate::__link_model).
-    pub vtable: fn() -> &'static Vtable,
+    pub vtable: fn() -> Vtable,
     /// Verilator `--prefix`; must equal the vtable's.
     pub prefix: &'static str,
     /// The IR hash the generated Rust was made from (`Dut::IR_HASH`); must equal the
@@ -216,6 +222,33 @@ impl LoadError {
                 model,
                 expected,
             },
+            AbiError::Row { id, .. } | AbiError::RowShape { id, .. } => Self::SignalTable {
+                prefix,
+                slot: id as usize,
+                problem: row_problem(e),
+            },
+        }
+    }
+}
+
+/// What is wrong with a signal-table row that [`Signal::decode`](super::abi::Signal::decode)
+/// rejected.
+pub(crate) fn row_problem(e: &AbiError) -> String {
+    match *e {
+        AbiError::Row { unknown, .. } => {
+            format!("{} {} is not a known value", unknown.what, unknown.value)
+        }
+        AbiError::RowShape {
+            width,
+            storage,
+            words,
+            ..
+        } => format!(
+            "storage {storage:?} and {words} words do not match width {width} (expected {:?})",
+            super::abi::Storage::for_width(width)
+        ),
+        AbiError::Version { .. } | AbiError::Size { .. } | AbiError::IrHash { .. } => {
+            format!("{e:?}")
         }
     }
 }
@@ -279,7 +312,7 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-/// Declares `fn $name() -> &'static Vtable` returning the model's C vtable, from the symbol
+/// Declares `fn $name() -> Vtable` returning the model's C vtable, from the symbol
 /// `simjig_vtable_<prefix>` that the generated C++ shim exports. For generated code only.
 ///
 /// The `unsafe extern` block lives in this macro, so a user crate with
@@ -289,14 +322,16 @@ impl std::error::Error for LoadError {}
 #[macro_export]
 macro_rules! __link_model {
     ($vis:vis fn $name:ident = $symbol:literal) => {
-        $vis fn $name() -> &'static $crate::__private::Vtable {
+        $vis fn $name() -> $crate::__private::Vtable {
             // SAFETY: `$symbol` is defined by `SIMJIG_EXPORT_VTABLE` in the model's generated
             // C++ shim. It takes no arguments, cannot fail or unwind, and returns the address
             // of a `static constexpr simjig_model_vtable`: non-null, aligned, immutable and
-            // valid for the whole program, which is what `&'static Vtable` promises.
+            // valid for the whole program, which is what `Vtable::check` requires. It is
+            // returned as a pointer (`Vtable`), never a reference, because the table may be
+            // shorter than this runtime's mirror.
             unsafe extern "C" {
                 #[link_name = $symbol]
-                safe fn vtable() -> &'static $crate::__private::Vtable;
+                safe fn vtable() -> $crate::__private::Vtable;
             }
             vtable()
         }

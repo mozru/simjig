@@ -134,6 +134,7 @@ pub fn through_wrapper(name: &str, sources: Vec<PathBuf>, iface: IfaceTop) -> Ca
         config: CodegenConfig {
             probes: Vec::new(),
             iface_top: Some(iface),
+            ..CodegenConfig::default()
         },
         sources,
     }
@@ -198,9 +199,39 @@ pub fn wide() -> Case {
         config: CodegenConfig {
             probes: wide_probes(),
             iface_top: None,
+            ..CodegenConfig::default()
         },
         sources,
     }
+}
+
+/// `cases/nested_anon`: anonymous structs and unions nested in a package struct and in an
+/// anonymous struct port. Not in [`all`]: only the layout check is about it.
+pub fn nested_anon() -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/nested_anon/design.sv")];
+    Case {
+        name: "nested_anon".into(),
+        design: pass(&sources, "nested_top"),
+        config: CodegenConfig::default(),
+        sources,
+    }
+}
+
+/// `cases/iface_param`: a parameterised interface-ported DUT, `K = 3`, through the wrapper.
+/// Not in [`all`]: the parameter and probe tests use it.
+pub fn iface_param() -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/iface_param/design.sv")];
+    let iface = IfaceTop {
+        dut: "r_dut".into(),
+        params: vec![("K".into(), "3".into())],
+        bindings: vec![IfaceBinding {
+            port: "bus".into(),
+            interface: "r_if".into(),
+            params: Vec::new(),
+            modport: None,
+        }],
+    };
+    through_wrapper("iface_param", sources, iface)
 }
 
 /// Every case: the fixtures, then the Verilator-elaborated ones.

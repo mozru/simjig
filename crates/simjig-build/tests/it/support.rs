@@ -64,6 +64,39 @@ impl Sandbox {
         self.path().join("verilator.log")
     }
 
+    /// Every command line the logging wrapper ran, one per line.
+    pub(crate) fn verilator_calls(&self) -> String {
+        std::fs::read_to_string(self.log()).unwrap_or_default()
+    }
+
+    /// Puts a fake `verilator` first on the process `PATH` (and returns that `PATH`). It
+    /// answers `--version` like the pinned release and fails on anything else, so a run
+    /// of the wrong Verilator fails the build.
+    pub(crate) fn fake_verilator_first_on_path(&self) -> std::ffi::OsString {
+        let dir = self.path().join("fake-bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_script(
+            &dir.join("verilator"),
+            "#!/bin/sh
+if [ \"$1\" = --version ]; then
+  \
+             echo 'Verilator 5.052 2026-09-05 rev fake'
+  exit 0
+fi
+\
+             echo 'the fake verilator on PATH ran' >&2
+exit 1
+",
+        );
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        let path =
+            std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&old))).unwrap();
+        // SAFETY: nextest runs every test in its own process, and the test calls this
+        // before starting any thread that could read the environment.
+        unsafe { std::env::set_var("PATH", &path) };
+        path
+    }
+
     /// How many times Verilator was asked to verilate (`--cc`), as opposed to the
     /// `--version`/`--getenv` queries every build makes.
     pub(crate) fn verilations(&self) -> usize {

@@ -4,7 +4,8 @@
 use std::fmt;
 
 /// A design or configuration the code generator cannot handle.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// The IR uses a construct that has no generated form yet.
     Unsupported {
@@ -50,3 +51,10 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// The message: `Debug` is what `fn main() -> Result<..>` and `unwrap` print.
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::error::debug_chain(self, f)
+    }
+}

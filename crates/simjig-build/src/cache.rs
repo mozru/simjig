@@ -24,7 +24,6 @@
 //! discards its copy).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dut::{CacheStatus, GeneratedInput};
@@ -113,7 +112,7 @@ impl Cache {
         }
         let work = self.work_dir()?;
         let obj = work.join("obj");
-        let mut cmd = Command::new(&verilator.exe);
+        let mut cmd = verilator.command();
         cmd.arg("-Mdir").arg(&obj).args(args);
         if let Err(e) = verilator::run(&mut cmd) {
             remove_best_effort(&work);

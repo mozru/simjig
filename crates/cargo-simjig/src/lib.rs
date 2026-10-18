@@ -5,10 +5,11 @@
 //!
 //! - [`doctor`] checks that Verilator, the C++ toolchain and the test runner are usable
 //!   and pinned, and says how to fix each problem.
-//! - [`verilator`] holds the table of supported Verilator versions.
+//!
+//! The supported Verilator versions are `svtypes::version::SUPPORTED`, the table every
+//! build-time crate shares.
 
 #![forbid(unsafe_code)]
 
 pub mod doctor;
 mod json;
-pub mod verilator;

@@ -30,11 +30,11 @@ mod writer;
 pub use config::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 pub use error::Error;
 pub use layout::{LAYOUT_CHECK_FLAGS, emit_layout_check};
-pub use lower::{elab_module, lower, lower_wrapper, wrapper_module};
+pub use lower::{DUT_INSTANCE, elab_module, lower, lower_wrapper, wrapper_module};
 pub use lowered::{
     Access, Bundle, BundleMember, Const, ConstGroup, ConstValue, DutField, EnumVariant, Item,
-    ItemKind, Layout, LayoutCheck, LayoutMember, LayoutValue, Lowered, RustType, Signal,
-    SignalTarget, StructField, UnionView, Wrapper, WrapperIface, WrapperPort,
+    ItemKind, Layout, LayoutCheck, LayoutMember, LayoutTypedef, LayoutValue, Lowered, RustType,
+    Signal, SignalTarget, StructField, UnionView, Wrapper, WrapperIface, WrapperPort,
 };
 pub use rust::{RustOptions, emit_rust};
 pub use shim::{ShimOptions, emit_shim};

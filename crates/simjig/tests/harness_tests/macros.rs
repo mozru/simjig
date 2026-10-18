@@ -68,3 +68,41 @@ async fn a_returned_failure_fails_the_test() -> simjig::Result {
 async fn a_panic_reports_its_location() {
     panic!("boom");
 }
+
+#[simjig::test(timeout = "none")]
+async fn timeout_none_runs_past_the_default() {
+    Timer::new(simjig::ms(20)).await;
+}
+
+#[simjig::test]
+#[should_panic(expected = "(the default for #[simjig::test]")]
+async fn the_default_timeout_fails_a_hang() {
+    loop {
+        Timer::new(simjig::ms(1)).await;
+    }
+}
+
+/// Runs one test of this binary in a child process, output uncaptured.
+fn run_uncaptured(test: &str) -> std::process::Output {
+    std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", test, "--nocapture"])
+        .env_remove("SIMJIG_SEED")
+        .output()
+        .expect("the child runs")
+}
+
+#[test]
+fn a_passing_should_panic_test_prints_no_report() {
+    let output = run_uncaptured("macros::timeout_fails_the_test");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("FAIL macros::"), "{stderr}");
+}
+
+// `::simjig` resolves here too, so this checks that the expansion compiles through `::sj`;
+// the macro's snapshot (`expands_with_a_renamed_crate`) checks it uses no other path.
+#[simjig::test(crate = ::sj, timeout = "1us")]
+async fn a_renamed_crate_is_reached_through_its_path() -> sj::Result {
+    sj::yield_now().await;
+    Ok(())
+}

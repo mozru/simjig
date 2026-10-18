@@ -18,6 +18,7 @@ zlib = ">=1.3.2,<2"
 
 [tasks]
 duts-lint = { cmd = "bash tests/duts/lint.sh", description = "Lint every design in tests/duts with Verilator -Wall" }
+cpp-tests = { cmd = "bash crates/simjig-build/cpp/tests/run.sh", description = "C-level tests of FST tracing, coverage and per-model isolation (docs/notes/tracecov.md)" }
 spikes = { cmd = "cargo nextest run --release", cwd = "tests/spikes", description = "Stage 3 de-risking spikes (docs/notes/spikes.md); add --no-capture for the SPIKE measurements" }
 
 # Golden-reference environment for the scheduler conformance suite (tests/conformance).

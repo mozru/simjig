@@ -1,16 +1,17 @@
 //! [`RawModel`]: the owner of one live model handle, and the only place outside `abi` that
-//! calls through a [`ModelVtable`].
+//! calls through a [`ModelVtable`] (or turns a model's vtable pointer into a reference,
+//! [`check_vtable`]).
 //!
 //! Invariants that make every method here safe to call:
 //! - `handle` is non-null and live from [`RawModel::create`] until `Drop`, which destroys it
 //!   exactly once. The type is `!Send` and `!Sync` (it holds a `NonNull`), so no entry point
 //!   ever runs concurrently with another, and none is reentrant (model code never calls back
 //!   into Rust: `$display` text goes to the C++ message ring).
-//! - `signals` is a copy of the model's table, validated once at creation: every row is
-//!   readable, has a non-null pointer aligned for its storage type, and its `storage` and
-//!   `words` are exactly what Verilator uses for its `width`. `read` and `write` index it and check the buffer length
-//!   and the write bit before touching model memory, so the `abi` raw accessors' preconditions
-//!   hold.
+//! - `signals` is the model's table decoded once at creation ([`Signal::decode`]): every
+//!   row is readable, has a non-null pointer aligned for its storage type, and its storage
+//!   class and `words` are exactly what Verilator uses for its `width`. `read` and `write`
+//!   index it, match on its typed [`Cell`], and check the buffer length and the write bit
+//!   before touching model memory, so the `abi` raw accessors' preconditions hold.
 //! - Drained message strings are copied out before the next entry point call.
 //!
 //! No Rust reference into model memory is ever created; `abi` reads and writes members
@@ -24,16 +25,27 @@ use std::ffi::{CString, c_char};
 use std::ptr::{self, NonNull};
 
 use super::abi::{
-    self, ACCESS_READ, ACCESS_WRITE, CreateOpts, Handle, ModelVtable, Msg, OwnedMsg, Signal,
-    Storage,
+    self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Handle, ModelVtable, Msg,
+    Narrow, OwnedMsg, Signal,
 };
+use super::meta::{Vtable, row_problem};
 
-/// One live model: its vtable, its handle and a validated copy of its signal table.
+/// Checks the vtable a model's symbol returned ([`ModelVtable::check`]: ABI version, size,
+/// IR hash) and only then returns it as a reference.
+pub(crate) fn check_vtable(vt: Vtable, ir_hash: u64) -> Result<&'static ModelVtable, AbiError> {
+    // SAFETY: a `Vtable` comes only from a model's `simjig_vtable_<prefix>` symbol
+    // (`link_model!`, whose contract makes it non-null, aligned and static) or, in unit tests,
+    // from `Vtable::leak` (a whole, leaked `ModelVtable`); either way at least `abi_version`,
+    // `size` and `size` bytes in all stay valid and unmodified for the program.
+    unsafe { ModelVtable::check(vt.as_ptr(), ir_hash) }
+}
+
+/// One live model: its vtable, its handle and its validated, decoded signal table.
 #[derive(Debug)]
 pub(crate) struct RawModel {
     vt: &'static ModelVtable,
     handle: NonNull<Handle>,
-    signals: Box<[Signal]>,
+    signals: Box<[Decoded]>,
     names: Box<[String]>,
 }
 
@@ -88,23 +100,28 @@ impl RawModel {
             // destroy; they are copied (plain integers and pointers) before any other call.
             unsafe { std::slice::from_raw_parts(table, count as usize) }.into()
         };
-        // SAFETY: the rows come from this live model's table, whose names are static.
-        let names = rows.iter().map(|row| unsafe { row.name() }).collect();
-        let model = Self {
+        let mut model = Self {
             vt,
             handle,
-            signals: rows,
-            names,
+            signals: Box::default(),
+            names: Box::default(),
         };
         // Validate after `model` owns the handle, so an error destroys it.
-        for (slot, row) in model.signals.iter().enumerate() {
-            validate(slot, row).map_err(|problem| CreateError::BadRow { slot, problem })?;
-        }
+        let decoded = rows
+            .iter()
+            .enumerate()
+            .map(|(slot, row)| {
+                validate(slot, row).map_err(|problem| CreateError::BadRow { slot, problem })
+            })
+            .collect::<Result<Box<[Decoded]>, _>>()?;
+        // SAFETY: the rows come from this live model's table, whose names are static.
+        model.names = decoded.iter().map(|row| unsafe { row.name() }).collect();
+        model.signals = decoded;
         Ok((model, status))
     }
 
     /// The validated signal table, in slot order.
-    pub(crate) fn signals(&self) -> &[Signal] {
+    pub(crate) fn signals(&self) -> &[Decoded] {
         &self.signals
     }
 
@@ -176,13 +193,14 @@ impl RawModel {
     pub(crate) fn read(&self, slot: usize, out: &mut [u32]) {
         let row = &self.signals[slot];
         assert_eq!(out.len(), row.words as usize, "read buffer size");
-        if row.storage == Storage::W as u8 {
+        match row.cell {
             // SAFETY: a validated, readable W row of this live model; `out` has `words` words.
-            unsafe { abi::read_wide(row, out) }
-        } else {
-            // SAFETY: a validated, readable narrow row of this live model.
-            let value = unsafe { abi::read_narrow(row) };
-            split(value, out);
+            Cell::Wide(p) => unsafe { abi::read_wide(p, out) },
+            Cell::Narrow(cell) => {
+                // SAFETY: a validated, readable narrow row of this live model.
+                let value = unsafe { abi::read_narrow(cell) };
+                split(value, out);
+            }
         }
     }
 
@@ -201,15 +219,16 @@ impl RawModel {
             self.names[slot]
         );
         assert_eq!(value.len(), row.words as usize, "write buffer size");
-        if row.storage == Storage::W as u8 {
+        match row.cell {
             // SAFETY: a validated, writable W row of this live model; `value` has `words`
             // words; the top word is masked by write_wide.
-            unsafe { abi::write_wide(row, value) }
-        } else {
-            let low = u64::from(value[0]);
-            let high = value.get(1).map_or(0, |&w| u64::from(w));
-            // SAFETY: a validated, writable narrow row; write_narrow masks to the width.
-            unsafe { abi::write_narrow(row, high << 32 | low) }
+            Cell::Wide(p) => unsafe { abi::write_wide(p, row.width, value) },
+            Cell::Narrow(cell) => {
+                let low = u64::from(value[0]);
+                let high = value.get(1).map_or(0, |&w| u64::from(w));
+                // SAFETY: a validated, writable narrow row; write_narrow masks to the width.
+                unsafe { abi::write_narrow(cell, row.width, high << 32 | low) }
+            }
         }
     }
 }
@@ -222,45 +241,35 @@ impl Drop for RawModel {
     }
 }
 
-/// Checks one row against the ABI contract that `abi`'s raw accessors rely on.
-fn validate(slot: usize, row: &Signal) -> Result<(), String> {
+/// Decodes one row ([`Signal::decode`]: storage class, direction, width and word count)
+/// and checks the rest of the ABI contract that `abi`'s raw accessors rely on.
+fn validate(slot: usize, row: &Signal) -> Result<Decoded, String> {
     if row.id as usize != slot {
         return Err(format!("its id is {}", row.id));
     }
-    if row.width == 0 {
-        return Err("its width is 0".to_owned());
-    }
-    let storage = Storage::for_width(row.width);
-    if row.storage != storage as u8 {
-        return Err(format!(
-            "storage class {} does not match width {} (expected {storage:?})",
-            row.storage, row.width
-        ));
-    }
-    if row.words != row.width.div_ceil(32) {
-        return Err(format!("{} words for width {}", row.words, row.width));
-    }
+    let decoded = row.decode().map_err(|e| row_problem(&e))?;
     if row.ptr.is_null() {
         return Err("its member pointer is null".to_owned());
     }
     // `abi`'s accessors read the member as its storage type (`VlWide` as `u32` words), so
     // the pointer must be aligned for it; the shim's static_asserts cannot check addresses.
-    let align = match storage {
-        Storage::C => align_of::<u8>(),
-        Storage::S => align_of::<u16>(),
-        Storage::I | Storage::W => align_of::<u32>(),
-        Storage::Q => align_of::<u64>(),
+    let (aligned, align) = match decoded.cell {
+        Cell::Narrow(Narrow::C(p)) => (p.is_aligned(), align_of::<u8>()),
+        Cell::Narrow(Narrow::S(p)) => (p.is_aligned(), align_of::<u16>()),
+        Cell::Narrow(Narrow::I(p)) | Cell::Wide(p) => (p.is_aligned(), align_of::<u32>()),
+        Cell::Narrow(Narrow::Q(p)) => (p.is_aligned(), align_of::<u64>()),
     };
-    if !row.ptr.addr().is_multiple_of(align) {
+    if !aligned {
         return Err(format!(
-            "its member pointer {:p} is not {align}-byte aligned, as {storage:?} storage needs",
-            row.ptr
+            "its member pointer {:p} is not {align}-byte aligned, as {:?} storage needs",
+            row.ptr,
+            decoded.cell.storage()
         ));
     }
     if row.access & ACCESS_READ == 0 {
         return Err("it is not readable".to_owned());
     }
-    Ok(())
+    Ok(decoded)
 }
 
 /// Splits a narrow value into `out` (one or two words).
@@ -411,6 +420,19 @@ pub(crate) mod fake {
         Status::Unsupported as i32
     }
 
+    extern "C" fn trace_open_ex(
+        _h: *mut Handle,
+        _path: *const std::ffi::c_char,
+        _depth: u32,
+        _flags: u64,
+    ) -> i32 {
+        Status::Unsupported as i32
+    }
+
+    extern "C" fn rng_seed(_h: *mut Handle, _seed: u64) -> i32 {
+        Status::Unsupported as i32
+    }
+
     extern "C" fn cov(_h: *mut Handle, _count: *mut usize) -> *mut u32 {
         ptr::null_mut()
     }
@@ -419,7 +441,7 @@ pub(crate) mod fake {
     pub(crate) fn vtable() -> ModelVtable {
         ModelVtable {
             abi_version: ABI_VERSION,
-            size: 136,
+            size: 192,
             prefix: c"Vfake".as_ptr(),
             verilator_version: c"fake".as_ptr(),
             ir_hash: 7,
@@ -436,6 +458,13 @@ pub(crate) mod fake {
             trace_dump,
             trace_close: unsupported,
             cov_counters: cov,
+            features: 0,
+            trace_open_ex,
+            trace_flush: unsupported,
+            trace_reopen: trace_open,
+            cov_zero: unsupported,
+            cov_write: trace_open,
+            rng_seed,
         }
     }
 
@@ -449,7 +478,7 @@ pub(crate) mod fake {
 mod tests {
     use std::ffi::c_void;
 
-    use super::super::abi::Dir;
+    use super::super::abi::{Dir, Storage};
     use super::*;
 
     /// A readable row of `width` bits whose member is at `offset` bytes into `base`.
@@ -476,8 +505,11 @@ mod tests {
         let mut base = [0u64; 4];
         // (width, storage alignment): C 1, S 2, I 4, Q 8, W 4 (u32 words).
         for (width, align) in [(8, 1), (16, 2), (32, 4), (64, 8), (96, 4)] {
-            assert_eq!(validate(0, &row_at(width, &mut base, 0)), Ok(()), "{width}");
-            assert_eq!(validate(0, &row_at(width, &mut base, align)), Ok(()));
+            assert!(validate(0, &row_at(width, &mut base, 0)).is_ok(), "{width}");
+            assert!(
+                validate(0, &row_at(width, &mut base, align)).is_ok(),
+                "{width}"
+            );
             if align > 1 {
                 let error = validate(0, &row_at(width, &mut base, 1)).unwrap_err();
                 assert!(

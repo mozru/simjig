@@ -50,11 +50,41 @@ fn verilator_errors_carry_command_and_stderr() {
     else {
         panic!("expected a tool error, got {err}");
     };
+    assert!(command.starts_with("verilator --json-only"), "{command}");
     assert!(
-        command.starts_with("verilator --json-only --no-timing"),
+        command.contains("--no-timing --top-module no_such_module"),
         "{command}"
     );
-    assert!(command.contains("--top-module no_such_module"), "{command}");
     assert!(status.is_some_and(|s| s != 0), "{status:?}");
     assert!(stderr.contains("no_such_module"), "{stderr}");
+}
+
+/// X/Z constants are recorded as unrepresentable, with the reason, instead of failing
+/// the whole design; the two-state ones beside them decode as usual.
+#[test]
+fn four_state_constants_are_recorded_not_fatal() {
+    let rtl = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/rtl");
+    let design = json_pass(&JsonPassOpts {
+        sources: vec![rtl.join("xz_params.sv")],
+        top: "xz_params".into(),
+        ..JsonPassOpts::default()
+    })
+    .unwrap();
+    let pkg = design.packages.iter().find(|p| p.name == "xz_pkg").unwrap();
+    let names = |ps: &[svtypes::ir::Param]| ps.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&pkg.params), ["OK"]);
+    let skipped: Vec<_> = pkg
+        .unrepresentable
+        .iter()
+        .map(|u| (u.name.as_str(), u.value.as_str()))
+        .collect();
+    assert_eq!(skipped, [("XV", "4'b10x1"), ("ZV", "4'bzz00")]);
+    assert!(
+        pkg.unrepresentable[0].reason.contains("X or Z"),
+        "{:?}",
+        pkg.unrepresentable[0]
+    );
+    let top = design.top_module();
+    assert!(top.params.is_empty(), "{:?}", top.params);
+    assert_eq!(top.unrepresentable[0].name, "P");
 }

@@ -170,7 +170,7 @@ mod inv_ffi {
     include!(concat!(env!("OUT_DIR"), "/test_vtables/inv.rs"));
 }
 
-fn inv_vtable() -> &'static simjig::__private::Vtable {
+fn inv_vtable() -> simjig::__private::Vtable {
     inv_ffi::vtable()
 }
 

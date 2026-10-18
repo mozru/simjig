@@ -3,7 +3,7 @@ source: crates/svtypes/tests/it/fixtures.rs
 expression: json
 ---
 {
-  "schema": 2,
+  "schema": 3,
   "producer": {
     "tool": "verilator",
     "version": "5.052"
@@ -374,7 +374,77 @@ expression: json
         }
       ],
       "iface_ports": [],
-      "modports": []
+      "modports": [],
+      "variables": [
+        {
+          "name": "clk",
+          "kind": "Signal"
+        },
+        {
+          "name": "b8",
+          "kind": "Signal"
+        },
+        {
+          "name": "b9",
+          "kind": "Signal"
+        },
+        {
+          "name": "b16",
+          "kind": "Signal"
+        },
+        {
+          "name": "b17",
+          "kind": "Signal"
+        },
+        {
+          "name": "b32",
+          "kind": "Signal"
+        },
+        {
+          "name": "b33",
+          "kind": "Signal"
+        },
+        {
+          "name": "b64",
+          "kind": "Signal"
+        },
+        {
+          "name": "b65",
+          "kind": "Signal"
+        },
+        {
+          "name": "b96",
+          "kind": "Signal"
+        },
+        {
+          "name": "wide",
+          "kind": "Signal"
+        },
+        {
+          "name": "two_state",
+          "kind": "Signal"
+        },
+        {
+          "name": "ascending",
+          "kind": "Signal"
+        },
+        {
+          "name": "negative_lsb",
+          "kind": "Signal"
+        },
+        {
+          "name": "bidir",
+          "kind": "Signal"
+        },
+        {
+          "name": "esc$name",
+          "kind": "Signal"
+        },
+        {
+          "name": "char",
+          "kind": "Signal"
+        }
+      ]
     }
   ],
   "packages": []

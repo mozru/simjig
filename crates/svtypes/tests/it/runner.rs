@@ -88,3 +88,39 @@ fn four_state_constants_are_recorded_not_fatal() {
     assert!(top.params.is_empty(), "{:?}", top.params);
     assert_eq!(top.unrepresentable[0].name, "P");
 }
+
+/// Each module lists its instances and the variables of its body, with their kind, so a
+/// build can check a probe path (instance names, variable, parameter or not) before
+/// verilating.
+#[test]
+fn modules_record_instances_and_variables() {
+    use svtypes::ir::VariableKind;
+    let rtl = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/rtl");
+    let design = json_pass(&JsonPassOpts {
+        sources: vec![rtl.join("hierarchy.sv")],
+        top: "hierarchy".into(),
+        ..JsonPassOpts::default()
+    })
+    .unwrap();
+    let top = design.top_module();
+    let vars: Vec<_> = top
+        .variables
+        .iter()
+        .map(|v| (v.name.as_str(), v.kind))
+        .collect();
+    assert_eq!(
+        vars,
+        [
+            ("P", VariableKind::Parameter),
+            ("clk", VariableKind::Signal),
+            ("y", VariableKind::Signal),
+            ("LP", VariableKind::Localparam),
+            ("r", VariableKind::Signal),
+        ]
+    );
+    let [inst] = top.instances.as_slice() else {
+        panic!("{:?}", top.instances)
+    };
+    assert_eq!(inst.name, "u_leaf");
+    assert_eq!(design.module(inst.module).orig_name, "hier_leaf");
+}

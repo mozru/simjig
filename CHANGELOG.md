@@ -13,3 +13,7 @@ the public API, the generated code or simulation semantics.
   - `cargo-simjig`: `doctor`.
 - C ABI version 1, vtable size 192, with trace, coverage and RNG slots.
 - IR schema 2: adds `unrepresentable` constants.
+- IR schema 3: `Module::instances` (`Instance { name, module }`) and `Module::variables`
+  (`Variable { name, kind: VariableKind::{Signal, Parameter, Localparam} }`), both omitted
+  from the JSON when empty. Every IR hash, and so every generated `IR_HASH`/`kIrHash`,
+  changes once.

@@ -47,8 +47,14 @@ const RATES: [u64; 3] = [10, 50, 90];
 trait Payload: Packed<Raw: RawWords> + PartialEq + Debug {}
 impl<T: Packed<Raw: RawWords> + PartialEq + Debug> Payload for T {}
 
-/// One FIFO's handles, whichever model they come from. The two models have the same ports
-/// but distinct `Dut` types, so the testbench copies the handles into one struct.
+/// One FIFO's handles, whichever model they come from.
+///
+/// Why this struct exists: `build.rs` builds two models of `sync_fifo` (the raw 8-bit one
+/// and `item_fifo`), and every test here should run the same driver, monitor and
+/// [`Model`] on either. But each generated `Dut` is its own type, with no trait in common,
+/// and their payloads differ (`Bits<8>` and `Item`). Copying the handles into one
+/// `Fifo<T>` is the smallest code that lets the testbench be written once, generic only
+/// in the payload; the alternative is a second copy of every helper per model.
 #[derive(Clone, Copy, Debug)]
 struct Fifo<T: 'static> {
     clk: In<Bit>,
@@ -104,6 +110,7 @@ impl Fifo<Item> {
 #[derive(Clone, Copy, Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "one field per 1-bit port")]
 struct Sample<T> {
+    rst: bool,
     push: bool,
     wr: T,
     pop: bool,
@@ -116,6 +123,7 @@ struct Sample<T> {
 impl<T: Payload> Fifo<T> {
     fn sample(self) -> Sample<T> {
         Sample {
+            rst: self.rst.get().to_bool(),
             push: self.push.get().to_bool(),
             wr: self.wr.get(),
             pop: self.pop.get().to_bool(),
@@ -139,6 +147,9 @@ struct Stats {
     empty: u32,
     /// Pushes taken together with a pop while full: the case that needs `|| do_pop`.
     push_pop_full: u32,
+    /// Reset edges after the first reset, and the entries they discarded.
+    resets: u32,
+    flushed: u32,
 }
 
 /// The reference model: the FIFO's entries, and what `rd` must show.
@@ -147,9 +158,9 @@ struct Model<T> {
     depth: usize,
     fwft: bool,
     entries: VecDeque<T>,
-    /// Registered read only: the entry the last pop removed, which `rd` holds; `None`
-    /// before the first pop, when `rd` holds its reset value.
-    shown: Option<T>,
+    /// Registered read only: what `rd` holds, the entry the last pop removed (its reset
+    /// value, zero, before the first pop after a reset).
+    shown: T,
     stats: Stats,
 }
 
@@ -160,12 +171,13 @@ impl<T: Payload> Model<T> {
             depth: fifo.depth,
             fwft: fifo.fwft,
             entries: entries.iter().copied().collect(),
-            shown: None,
+            shown: zero(),
             stats: Stats::default(),
         }
     }
 
-    /// Checks the outputs sampled just before an edge, then applies that edge.
+    /// Checks the outputs sampled just before an edge, then applies that edge: a reset,
+    /// which discards every entry whatever `push` and `pop` say, or the push and pop.
     fn step(&mut self, s: &Sample<T>) {
         let len = self.entries.len();
         assert_eq!(s.count, len, "count");
@@ -174,15 +186,22 @@ impl<T: Payload> Model<T> {
         let want = if self.fwft {
             self.entries.front()
         } else {
-            self.shown.as_ref()
+            Some(&self.shown)
         };
         if let Some(want) = want {
             assert_eq!(s.rd, *want, "rd");
         }
+        if s.rst {
+            self.stats.resets += 1;
+            self.stats.flushed += u32::try_from(len).unwrap();
+            self.entries.clear();
+            self.shown = zero();
+            return;
+        }
         let pop = s.pop && len > 0;
         let push = s.push && (len < self.depth || pop);
         if pop {
-            let head = self.entries.pop_front();
+            let head = self.entries.pop_front().unwrap();
             if !self.fwft {
                 self.shown = head;
             }
@@ -246,6 +265,12 @@ async fn cycle<T: Payload>(fifo: Fifo<T>, push: Option<T>, pop: bool) -> Sample<
     fifo.clk.rising().await;
     ReadOnly::new().await;
     fifo.sample()
+}
+
+/// The all-zero value of a payload: a registered `rd`'s reset value.
+fn zero<T: Payload>() -> T {
+    // Four words cover any payload up to 128 bits; `from_words` reads only its own.
+    T::from_raw(T::Raw::from_words(&[0; 4]))
 }
 
 fn pick(rng: &mut Rng, rates: &[u64]) -> u64 {
@@ -317,6 +342,73 @@ async fn random_traffic<T: Payload>(ctx: &TestCtx, fifo: Fifo<T>, item: fn(&mut 
     assert_eq!(st.pops, st.pushes, "every entry pushed was popped once");
     assert!(st.full > 0 && st.empty > 0, "{st:?}");
     assert!(st.dropped > 0 && st.push_pop_full > 0, "{st:?}");
+}
+
+/// Resets the FIFO in the middle of random traffic, from a state Verilator's all-zero
+/// start never shows: entries inside and both pointers away from zero. Right after the
+/// reset edge the FIFO is empty (`count` 0, `rd` zero in registered mode); then traffic
+/// goes on against the model, which the reset restarted empty.
+async fn reset_during_traffic<T: Payload>(ctx: &TestCtx, fifo: Fifo<T>, item: fn(&mut Rng) -> T) {
+    let board = start(fifo).await;
+    let resetter = spawn("resetter", reset_when_busy(fifo, Rc::clone(&board)));
+    let rng = [ctx.rng("producer"), ctx.rng("consumer")];
+    traffic(fifo, rng, CYCLES, item).await;
+    let after = resetter.await;
+    assert_eq!(
+        (after.count, after.empty, after.full),
+        (0, true, false),
+        "{after:?}"
+    );
+    if !fifo.fwft {
+        assert_eq!(after.rd, zero(), "rd after reset");
+    }
+    let model = board.borrow();
+    let st = model.stats;
+    assert_eq!(st.resets, 1);
+    assert!(st.flushed > 0, "{st:?}");
+    assert_eq!(st.pops + st.flushed, st.pushes, "{st:?}");
+    assert!(st.full > 0 && st.empty > 0, "{st:?}");
+}
+
+/// Waits, checking at each falling edge, until the FIFO holds two entries or more and
+/// neither pointer is at zero; then holds `rst` for one edge while the producer and
+/// consumer keep driving `push` and `pop`. Returns the outputs right after that edge.
+async fn reset_when_busy<T: Payload>(fifo: Fifo<T>, board: Rc<RefCell<Model<T>>>) -> Sample<T> {
+    // The pointers count modulo 2 * DEPTH (one wrap bit above the index).
+    let wrap = u32::try_from(2 * fifo.depth).unwrap();
+    let busy = async {
+        loop {
+            fifo.clk.falling().await;
+            let model = board.borrow();
+            let st = model.stats;
+            if model.entries.len() >= 2
+                && !st.pops.is_multiple_of(wrap)
+                && !st.pushes.is_multiple_of(wrap)
+            {
+                break;
+            }
+        }
+    };
+    with_timeout(us(5), busy)
+        .await
+        .expect("the FIFO holds entries with both pointers moved within 5 us");
+    fifo.rst.set(1);
+    fifo.clk.rising().await;
+    ReadOnly::new().await;
+    let after = fifo.sample();
+    fifo.clk.falling().await;
+    fifo.rst.set(0);
+    after
+}
+
+#[simjig::test(timeout = "100us")]
+async fn a_reset_during_traffic_empties_the_fifo(ctx: &TestCtx, dut: sync_fifo::Dut) {
+    reset_during_traffic(ctx, Fifo::raw(dut), random_bits).await;
+}
+
+#[simjig::test(timeout = "100us")]
+async fn a_reset_during_item_traffic_empties_the_fifo(ctx: &TestCtx, dut: item_fifo::Dut) {
+    reset_during_traffic(ctx, Fifo::items(dut), random_item).await;
 }
 
 fn random_bits(rng: &mut Rng) -> Bits<8> {

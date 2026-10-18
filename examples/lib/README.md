@@ -74,7 +74,8 @@ A full FIFO takes a push only in a cycle that also pops; an empty FIFO ignores a
 
 `build.rs` builds two models: `sync_fifo` (8 bits, 4 deep, registered read) and
 `item_fifo` (`Item`, 4 deep, FWFT). `tests/sync_fifo.rs` copies either model's handles into
-one `Fifo<T>` struct, so one driver, monitor and model serve both.
+one `Fifo<T>` struct, so one driver, monitor and model serve both. The monitor's model
+honours `rst` too: a reset edge discards its entries, so any test may reset mid-run.
 
 | Test | Checks |
 |---|---|
@@ -82,6 +83,7 @@ one `Fifo<T>` struct, so one driver, monitor and model serve both.
 | `fills_to_full_and_drains_to_empty` | `count` and `full` while filling, the dropped fifth push, order, a pop of an empty FIFO |
 | `push_and_pop_in_one_cycle` | when empty, in between, and when full |
 | `registered_read_waits_for_a_pop`, `first_word_falls_through` | the two read modes |
+| `a_reset_during_traffic_empties_the_fifo`, `a_reset_during_item_traffic_empties_the_fifo` | `rst` for one edge mid-traffic, with entries inside and both pointers away from zero: right after it `count` is 0, `empty` set, `full` clear, a registered `rd` zero; the model restarts empty and traffic goes on, checked as before |
 | `random_continuations_from_full` | fills once, then `fork::run_from_checkpoint` runs four random branches from that full state, each with its own seed (needs nextest) |
 | `parameters_are_checked_at_elaboration` | runs `verilator --lint-only -Wall` on other parameter sets, and on a DEPTH or WIDTH it must refuse (`$fatal`) |
 

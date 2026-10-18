@@ -1,6 +1,7 @@
 //! Kernel integration tests, all against `FakeModel` (no Verilator needed).
 #![expect(clippy::unwrap_used, reason = "test helpers outside #[test] functions")]
 
+mod bench;
 mod cancel;
 mod clocks;
 mod conflog;

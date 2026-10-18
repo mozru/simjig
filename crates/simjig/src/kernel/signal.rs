@@ -215,13 +215,14 @@ impl RawSig {
             );
             let low = u32::try_from(value & 0xffff_ffff).or_invariant("invariant: masked");
             let high = u32::try_from(value >> 32).or_invariant("invariant: shifted");
-            let n = words(width);
-            let mut buf = vec![0u32; n];
-            buf[0] = low;
-            if n > 1 {
-                buf[1] = high;
-            }
-            write(k, slot, &buf, Writer::current(k), Some(location));
+            let buf = [low, high];
+            write(
+                k,
+                slot,
+                &buf[..words(width)],
+                Writer::current(k),
+                Some(location),
+            );
         });
     }
 }
@@ -236,6 +237,7 @@ pub(crate) enum Writer {
 }
 
 impl Writer {
+    #[inline]
     fn current(k: &Kernel) -> Self {
         k.current.get().map_or(Self::Kernel, Self::Task)
     }
@@ -252,21 +254,57 @@ impl Writer {
 #[derive(Debug)]
 struct Entry {
     slot: u32,
-    /// Everyone who wrote the entry's current value this delta.
-    writers: Vec<Writer>,
-    start: usize,
-    len: usize,
+    /// The first writer of the entry's current value this delta; writers that agreed with
+    /// it are in [`WriteLog::agreeing`].
+    writer: Writer,
+    start: u32,
+    len: u32,
+}
+
+impl Entry {
+    fn range(&self) -> std::ops::Range<usize> {
+        self.start as usize..(self.start + self.len) as usize
+    }
 }
 
 /// Writes waiting for the next eval, in write order.
+///
+/// The hot path (one write of a slot not yet written this delta) allocates nothing once
+/// the buffers have grown: entries and words are reused across deltas, see
+/// [`take`](Self::take) and [`recycle`](Self::recycle).
 #[derive(Debug)]
 pub(crate) struct WriteLog {
     entries: Vec<Entry>,
     words: Vec<u32>,
-    /// Current delta number; bumped by every `drain`.
+    /// Current delta number; bumped by every `take`.
     epoch: u64,
     /// Per slot: (epoch of its last write, index into `entries`).
     last: Vec<(u64, usize)>,
+    /// `(entry index, writer)` of every further writer that wrote an entry's current
+    /// value this delta; rare (agreeing writers), so kept out of the entries.
+    agreeing: Vec<(usize, Writer)>,
+    /// Emptied buffers of the last batch, kept for their capacity.
+    spare: Option<Batch>,
+}
+
+/// The writes of one delta, in write order; see [`WriteLog::take`].
+#[derive(Debug, Default)]
+pub(crate) struct Batch {
+    entries: Vec<Entry>,
+    words: Vec<u32>,
+}
+
+impl Batch {
+    /// `(slot, value)` of every write, in write order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &[u32])> {
+        self.entries
+            .iter()
+            .map(|e| (e.slot, &self.words[e.range()]))
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 impl WriteLog {
@@ -276,34 +314,48 @@ impl WriteLog {
             words: Vec::new(),
             epoch: 1,
             last: vec![(0, 0); slots],
+            agreeing: Vec::new(),
+            spare: None,
         }
     }
 
     /// Appends a write. Returns another writer of `slot` this delta if it wrote a
     /// different value.
+    #[inline]
     fn push(&mut self, slot: u32, value: &[u32], writer: Writer) -> Result<(), Writer> {
         let (epoch, index) = self.last[slot as usize];
         if epoch == self.epoch {
-            let entry = &mut self.entries[index];
-            let current = &mut self.words[entry.start..entry.start + entry.len];
+            let entry = &self.entries[index];
+            let current = &mut self.words[entry.range()];
+            let first = entry.writer;
+            let mut others = self
+                .agreeing
+                .iter()
+                .filter(|(i, _)| *i == index)
+                .map(|&(_, w)| w);
             if current == value {
-                if !entry.writers.contains(&writer) {
-                    entry.writers.push(writer);
+                if first != writer && !others.any(|w| w == writer) {
+                    self.agreeing.push((index, writer));
                 }
                 return Ok(());
             }
-            if let Some(&other) = entry.writers.iter().find(|&&w| w != writer) {
+            if first != writer {
+                return Err(first);
+            }
+            if let Some(other) = others.find(|&w| w != writer) {
                 return Err(other);
             }
             current.copy_from_slice(value);
             return Ok(());
         }
         self.last[slot as usize] = (self.epoch, self.entries.len());
+        let start = u32::try_from(self.words.len()).or_invariant("invariant: < 2^32 words");
+        let len = u32::try_from(value.len()).or_invariant("invariant: < 2^32 words");
         self.entries.push(Entry {
             slot,
-            writers: vec![writer],
-            start: self.words.len(),
-            len: value.len(),
+            writer,
+            start,
+            len,
         });
         self.words.extend_from_slice(value);
         Ok(())
@@ -314,18 +366,30 @@ impl WriteLog {
         self.entries.iter().map(|e| e.slot).collect()
     }
 
-    /// Takes every logged write as `(slot, value)` in write order and starts a new delta.
-    pub(crate) fn drain(&mut self) -> Vec<(u32, Vec<u32>)> {
+    /// Takes every logged write and starts a new delta; hand the batch back with
+    /// [`recycle`](Self::recycle) once applied.
+    pub(crate) fn take(&mut self) -> Batch {
         self.epoch += 1;
-        let words = std::mem::take(&mut self.words);
-        self.entries
-            .drain(..)
-            .map(|e| (e.slot, words[e.start..e.start + e.len].to_vec()))
-            .collect()
+        self.agreeing.clear();
+        let mut spare = self.spare.take().unwrap_or_default();
+        std::mem::swap(&mut spare.entries, &mut self.entries);
+        std::mem::swap(&mut spare.words, &mut self.words);
+        spare
+    }
+
+    /// Keeps an applied batch's buffers for the next delta.
+    pub(crate) fn recycle(&mut self, mut batch: Batch) {
+        batch.entries.clear();
+        batch.words.clear();
+        self.spare = Some(batch);
     }
 }
 
 /// Logs a write by `writer`, enforcing the phase and conflict rules.
+///
+/// `#[inline]` here and on the log's `push`: the hot path is a few loads and two vector
+/// pushes, and the call is made from `RawSig` methods inlined into the user's crate.
+#[inline]
 pub(crate) fn write(
     k: &Kernel,
     slot: u32,
@@ -333,41 +397,97 @@ pub(crate) fn write(
     writer: Writer,
     location: Option<&'static Location<'static>>,
 ) {
-    let task = match writer {
-        Writer::Task(key) => Some(key),
-        Writer::Clock | Writer::Kernel => None,
-    };
-    let name = &k.names[slot as usize];
     match k.phase.get() {
-        Phase::Ended => return,
-        Phase::ReadOnly => {
-            k.fail(
-                FailureKind::WriteInReadOnly {
-                    signal: name.to_string(),
-                },
-                task,
-                location.map(Into::into),
-                format!("signal `{name}` written during the ReadOnly phase"),
-            );
-            return;
-        }
         Phase::Active => {}
+        Phase::Ended => return,
+        Phase::ReadOnly => return write_in_read_only(k, slot, writer, location),
     }
     let pushed = k.log.borrow_mut().push(slot, value, writer);
     if let Err(first) = pushed {
-        let (first, second) = (first.label(k, slot), writer.label(k, slot));
-        k.fail(
-            FailureKind::WriteConflict {
-                signal: name.to_string(),
-                first: first.clone(),
-                second: second.clone(),
-            },
-            task,
-            location.map(Into::into),
-            format!(
-                "signal `{name}` written with different values by {first} and by {second} \
-                 in the same delta"
-            ),
+        conflict(k, slot, first, writer, location);
+    }
+}
+
+const fn task_of(writer: Writer) -> Option<Key> {
+    match writer {
+        Writer::Task(key) => Some(key),
+        Writer::Clock | Writer::Kernel => None,
+    }
+}
+
+#[cold]
+fn write_in_read_only(
+    k: &Kernel,
+    slot: u32,
+    writer: Writer,
+    location: Option<&'static Location<'static>>,
+) {
+    let name = &k.names[slot as usize];
+    k.fail(
+        FailureKind::WriteInReadOnly {
+            signal: name.to_string(),
+        },
+        task_of(writer),
+        location.map(Into::into),
+        format!("signal `{name}` written during the ReadOnly phase"),
+    );
+}
+
+#[cold]
+fn conflict(
+    k: &Kernel,
+    slot: u32,
+    first: Writer,
+    second: Writer,
+    location: Option<&'static Location<'static>>,
+) {
+    let name = &k.names[slot as usize];
+    let (first, second_label) = (first.label(k, slot), second.label(k, slot));
+    k.fail(
+        FailureKind::WriteConflict {
+            signal: name.to_string(),
+            first: first.clone(),
+            second: second_label.clone(),
+        },
+        task_of(second),
+        location.map(Into::into),
+        format!(
+            "signal `{name}` written with different values by {first} and by {second_label} \
+             in the same delta"
+        ),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(index: u32) -> Writer {
+        Writer::Task(Key { index, gen_: 0 })
+    }
+
+    #[test]
+    fn the_log_keeps_the_last_value_and_names_a_disagreeing_writer() {
+        let (a, b, c) = (task(1), task(2), task(3));
+        let mut log = WriteLog::new(2);
+        assert_eq!(log.push(0, &[5], a), Ok(()));
+        assert_eq!(log.push(0, &[6], a), Ok(()), "one writer: last write wins");
+        assert_eq!(
+            log.push(0, &[6], b),
+            Ok(()),
+            "agreeing writers are accepted"
         );
+        // `a` changing its value now conflicts with `b`, who agreed on 6.
+        assert_eq!(log.push(0, &[7], a), Err(b));
+        assert_eq!(log.push(0, &[7], b), Err(a));
+        assert_eq!(log.push(0, &[8], c), Err(a));
+        assert_eq!(log.push(1, &[1], Writer::Clock), Ok(()));
+        let batch = log.take();
+        let applied: Vec<(u32, Vec<u32>)> = batch.iter().map(|(s, v)| (s, v.to_vec())).collect();
+        assert_eq!(applied, [(0, vec![6]), (1, vec![1])]);
+        log.recycle(batch);
+        // A new delta: the old writers no longer count.
+        assert_eq!(log.push(0, &[9], c), Ok(()));
+        assert_eq!(log.take().iter().count(), 1);
     }
 }

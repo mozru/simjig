@@ -224,28 +224,30 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
 /// Applies the write log, then wakes waiters of watched slots that changed since the
 /// previous comparison. Returns whether any write was applied.
 fn apply_and_compare(k: &Kernel) -> bool {
-    let writes = k.log.borrow_mut().drain();
+    let writes = k.log.borrow_mut().take();
     {
         let mut model = k.models.borrow_mut();
-        for (slot, value) in &writes {
-            model.write(*slot, value);
+        for (slot, value) in writes.iter() {
+            model.write(slot, value);
         }
     }
-    for (slot, value) in &writes {
+    for (slot, value) in writes.iter() {
         let low = value
             .iter()
             .take(2)
             .rev()
             .fold(0u64, |a, &w| a << 32 | u64::from(w));
-        k.record(TraceKind::Write, None, u64::from(*slot), low);
+        k.record(TraceKind::Write, None, u64::from(slot), low);
     }
+    let applied = !writes.is_empty();
+    k.log.borrow_mut().recycle(writes);
     let mut wakes = Vec::new();
     {
         let model = k.models.borrow();
         k.waits.borrow_mut().compare(&model, &mut wakes);
     }
     wake_sorted(wakes);
-    !writes.is_empty()
+    applied
 }
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next

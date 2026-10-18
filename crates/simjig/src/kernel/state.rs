@@ -238,6 +238,7 @@ pub(crate) fn with_sim<R>(sim_gen: u32, f: impl FnOnce(&Kernel) -> R) -> Option<
 }
 
 /// The flat slot of `model`'s own `slot`, given each model's first flat slot.
+#[inline]
 pub(crate) fn flat_slot(starts: &[u32], model: usize, slot: u32) -> Option<u32> {
     let (start, end) = (*starts.get(model)?, *starts.get(model + 1)?);
     let flat = start.checked_add(slot)?;

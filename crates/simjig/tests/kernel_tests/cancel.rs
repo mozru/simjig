@@ -1,0 +1,175 @@
+//! Cancellation is dropping: cleanup runs in `Drop`, triggers deregister, scopes cancel
+//! their subtree.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use simjig::{Timer, rising, scope, spawn, with_timeout};
+
+use super::{assert_clean, clocked, dut, ticks};
+
+/// Drives `valid` high while alive and low again when dropped, like a bus driver guard.
+struct DriveWhileAlive(simjig::RawSig);
+
+impl DriveWhileAlive {
+    fn new(sig: simjig::RawSig) -> Self {
+        sig.write_u64(1);
+        Self(sig)
+    }
+}
+
+impl Drop for DriveWhileAlive {
+    fn drop(&mut self) {
+        self.0.write_u64(0);
+    }
+}
+
+#[test]
+fn dropping_a_task_handle_cancels_it_and_runs_drop_cleanup() {
+    let mut d = clocked();
+    let (clk, a) = (d.clk, d.a);
+    let seen = d.sim.run(async move {
+        let driver = spawn("driver", async move {
+            let _guard = DriveWhileAlive::new(a);
+            loop {
+                rising(clk).await;
+            }
+        });
+        Timer::new(ticks(12)).await;
+        let during = a.read_u64();
+        drop(driver);
+        Timer::new(ticks(1)).await;
+        (during, a.read_u64())
+    });
+    assert_eq!(
+        seen.unwrap(),
+        (1, 0),
+        "the guard's write went through the write log"
+    );
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn detached_children_die_with_their_parent() {
+    let mut d = clocked();
+    let clk = d.clk;
+    let ticks_seen = Rc::new(RefCell::new(0));
+    let seen = Rc::clone(&ticks_seen);
+    d.sim
+        .run(async move {
+            let parent = spawn("parent", async move {
+                spawn("ticker", async move {
+                    loop {
+                        rising(clk).await;
+                        *seen.borrow_mut() += 1;
+                    }
+                })
+                .detach();
+                Timer::new(ticks(25)).await; // edges at 0, 10, 20
+            });
+            parent.await;
+            Timer::new(ticks(100)).await; // the ticker must be gone by now
+        })
+        .unwrap();
+    assert_eq!(*ticks_seen.borrow(), 3);
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn a_timed_out_scope_cancels_its_whole_subtree() {
+    let mut d = clocked();
+    let (clk, a) = (d.clk, d.a);
+    let out = d.sim.run(async move {
+        let result = with_timeout(
+            ticks(15),
+            scope("work", async move {
+                spawn("deep", async move {
+                    let _guard = DriveWhileAlive::new(a);
+                    loop {
+                        rising(clk).await;
+                    }
+                })
+                .detach();
+                Timer::new(ticks(1000)).await;
+            }),
+        )
+        .await;
+        Timer::new(ticks(1)).await;
+        (result.is_err(), a.read_u64(), simjig::now().ticks())
+    });
+    assert_eq!(out.unwrap(), (true, 0, 16));
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn awaiting_a_task_returns_its_result_even_if_already_done() {
+    let mut d = dut();
+    let out = d.sim.run(async {
+        let quick = spawn("quick", async { 40 });
+        let slow = spawn("slow", async {
+            Timer::new(ticks(3)).await;
+            2
+        });
+        Timer::new(ticks(1)).await;
+        assert!(quick.is_finished());
+        assert_eq!(quick.name(), "main.quick");
+        quick.await + slow.await
+    });
+    assert_eq!(out.unwrap(), 42);
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn tasks_left_running_are_cancelled_when_main_returns() {
+    struct SetOnDrop(Rc<RefCell<bool>>);
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) {
+            *self.0.borrow_mut() = true;
+        }
+    }
+    let mut d = clocked();
+    let (clk, a) = (d.clk, d.a);
+    let cleaned = Rc::new(RefCell::new(false));
+    let flag = Rc::clone(&cleaned);
+    d.sim
+        .run(async move {
+            spawn("forever", async move {
+                let _flag = SetOnDrop(flag);
+                let _guard = DriveWhileAlive::new(a);
+                loop {
+                    rising(clk).await;
+                }
+            })
+            .detach();
+            Timer::new(ticks(30)).await;
+        })
+        .unwrap();
+    assert!(*cleaned.borrow());
+    assert_clean(&d.sim);
+}
+
+#[test]
+fn a_panic_in_drop_cleanup_is_a_task_panic() {
+    struct PanicOnDrop;
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("cleanup failed");
+        }
+    }
+    let mut d = dut();
+    let f = d
+        .sim
+        .run(async {
+            let t = spawn("fragile", async {
+                let _p = PanicOnDrop;
+                Timer::new(ticks(100)).await;
+            });
+            Timer::new(ticks(1)).await;
+            drop(t);
+            Timer::new(ticks(1)).await;
+        })
+        .unwrap_err();
+    assert_eq!(f.task.as_deref(), Some("main.fragile"));
+    assert!(f.message.contains("cleanup failed"), "{f}");
+    assert_clean(&d.sim);
+}

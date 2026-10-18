@@ -1,0 +1,16 @@
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"rst","value":1}
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"en","value":1}
+{"time":10000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"rst","value":0}
+{"time":13000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(3ns))","task":"main","op":"note","signal":"first","value":"Timer(3ns)"}
+{"time":13000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(3ns))","task":"main","op":"read","signal":"clk","value":0}
+{"time":13000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(3ns))","task":"main","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(8ns))","task":"main","op":"note","signal":"first","value":"RisingEdge(clk)"}
+{"time":15000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(8ns))","task":"main","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(8ns))","task":"main","op":"read","signal":"count","value":0}
+{"time":25000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(10ns))","task":"main","op":"note","signal":"first","value":"Timer(10ns)"}
+{"time":25000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(10ns))","task":"main","op":"read","signal":"clk","value":0}
+{"time":25000,"phase":"active","trigger":"First(RisingEdge(clk),Timer(10ns))","task":"main","op":"read","signal":"count","value":1}
+{"time":38000,"phase":"active","trigger":"Combine(ClockCycles(clk,2),Timer(13ns))","task":"main","op":"read","signal":"clk","value":1}
+{"time":38000,"phase":"active","trigger":"Combine(ClockCycles(clk,2),Timer(13ns))","task":"main","op":"read","signal":"count","value":3}
+{"time":45000,"phase":"active","trigger":"Combine(RisingEdge(clk),Timer(1ns))","task":"main","op":"read","signal":"clk","value":1}
+{"time":45000,"phase":"active","trigger":"Combine(RisingEdge(clk),Timer(1ns))","task":"main","op":"read","signal":"count","value":3}

@@ -160,7 +160,17 @@ fn an_include_edited_while_verilating_is_not_cached() {
     );
     assert!(warned(&first, &defs, "the front end ran"));
     assert!(first.obj_dir.join(format!("{}.h", first.prefix)).is_file());
+    let unpublished = env.out_dir.join("simjig-unpublished");
+    assert!(
+        first.obj_dir.starts_with(&unpublished),
+        "{:?}",
+        first.obj_dir
+    );
     assert_eq!(entries(&s.path().join("cache/models")), 0, "nothing cached");
+    // Nor the model archive compiled from it: its sources' path names no entry.
+    assert!(model_archive(&first).starts_with(&unpublished));
+    assert_eq!(entries(&s.path().join("cache/archives")), 0);
+    let first_text = model_text(&first);
 
     let second = build();
     assert_eq!(
@@ -169,7 +179,13 @@ fn an_include_edited_while_verilating_is_not_cached() {
         "the next build verilates the edited include"
     );
     assert!(no_warning(&second), "{:?}", second.directives);
-    assert_ne!(model_text(&first), model_text(&second));
+    assert_ne!(first_text, model_text(&second));
+    assert_eq!(entries(&s.path().join("cache/archives")), 1);
+    assert_eq!(
+        entries(&unpublished),
+        0,
+        "a good build removes what the earlier one kept"
+    );
     let third = build();
     assert_eq!((third.cache, s.verilations()), (CacheStatus::Hit, 2));
     assert_eq!(third.obj_dir, second.obj_dir);

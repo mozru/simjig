@@ -27,7 +27,9 @@
 //! directories that build the same configuration share one model archive.
 //!
 //! An input edited while the compiler reads it leaves the archive out of the cache (see
-//! `manifest`): it is linked from `OUT_DIR/simjig-unpublished/` by that build alone.
+//! `manifest`): it is linked from `OUT_DIR/simjig-unpublished/` by that build alone. So is
+//! a model archive compiled from a verilation kept out of the cache that way: its
+//! sources' path is in its pre key, and names no entry a later build finds.
 //!
 //! A Verilator runtime is looked up once per build script ([`RUNTIMES`]): every model of
 //! the script links the same one, and its sources do not change while the script runs.
@@ -126,9 +128,29 @@ impl Toolchain<'_> {
 
     fn cached_archive_keyed(&self, spec: &Spec<'_>, pre: &str) -> Result<Archive, Error> {
         let cache = self.i.cache;
+        let out_dir = &self.i.env.out_dir;
         let manifest = cache.root().join("manifests").join(pre);
-        let known = match lookup(cache, spec, pre, &manifest) {
-            Ok(hit) => return Ok(hit),
+        let label = format!("{}-{}", spec.kind, spec.what);
+        // Per DUT (see `cache::drop_unpublished`).
+        let owned = spec.kind == "archives";
+        // Compiled from an output kept out of the cache (a model verilated while its input
+        // changed): its path names no entry a later build finds, so neither is this.
+        let transient = spec
+            .sources
+            .iter()
+            .any(|s| cache.is_unpublished(s, out_dir));
+        let found = if transient {
+            Err(None)
+        } else {
+            lookup(cache, spec, pre, &manifest)
+        };
+        let known = match found {
+            Ok(hit) => {
+                if owned {
+                    cache::drop_unpublished(out_dir, &label);
+                }
+                return Ok(hit);
+            }
             Err(known) => known,
         };
         let work = cache.work_dir()?;
@@ -142,33 +164,29 @@ impl Toolchain<'_> {
             }
         };
         let recorded = match Manifest::record(&deps, &snapshot) {
-            Recorded::Stable(m) => m,
-            Recorded::Changed(path) => {
-                let label = format!("{}-{}", spec.kind, spec.what);
-                let dir = cache::keep_unpublished(&work, &self.i.env.out_dir, &label)?;
+            Recorded::Stable(m) if !transient => m,
+            unpublished => {
+                let dir = cache::keep_unpublished(&work, out_dir, &label)?;
+                let changed = match unpublished {
+                    Recorded::Changed(path) => Some(path),
+                    Recorded::Stable(_) => None,
+                };
                 return Ok(Archive {
                     dir,
                     name: provisional_name(spec.what),
                     deps,
-                    changed: Some(path),
+                    changed,
                 });
             }
         };
         let full = recorded.recorded_key(DEPS_DOMAIN, pre);
-        let name = archive_name(spec.what, &full);
-        // Publish the archive alone: its objects are inside it.
-        let out = cache.work_dir()?;
-        let dst = out.join(format!("lib{name}.a"));
-        std::fs::rename(&lib, &dst).map_err(Error::io("renaming into", &dst))?;
-        cache::remove_best_effort(&work);
-        let entry = cache.root().join(spec.kind).join(&full);
-        if entry.is_dir() && !entry.join(format!("lib{name}.a")).is_file() {
-            cache::remove_best_effort(&entry);
-        }
-        Cache::publish(&out, &entry)?;
+        let (dir, name) = publish(cache, spec, &full, &lib, &work)?;
         cache.write_atomic(&manifest, &recorded.text())?;
+        if owned {
+            cache::drop_unpublished(out_dir, &label);
+        }
         Ok(Archive {
-            dir: entry,
+            dir,
             name,
             deps,
             changed: None,
@@ -337,6 +355,29 @@ fn lookup(
         deps: m.paths(),
         changed: None,
     })
+}
+
+/// Publishes the archive `lib` that `spec` compiled in `work` as the entry for the full
+/// key `full`; returns the entry and the archive's name. The entry holds the archive
+/// alone: its objects are inside it.
+fn publish(
+    cache: &Cache,
+    spec: &Spec<'_>,
+    full: &str,
+    lib: &Path,
+    work: &Path,
+) -> Result<(PathBuf, String), Error> {
+    let name = archive_name(spec.what, full);
+    let out = cache.work_dir()?;
+    let dst = out.join(format!("lib{name}.a"));
+    std::fs::rename(lib, &dst).map_err(Error::io("renaming into", &dst))?;
+    cache::remove_best_effort(work);
+    let entry = cache.root().join(spec.kind).join(full);
+    if entry.is_dir() && !entry.join(format!("lib{name}.a")).is_file() {
+        cache::remove_best_effort(&entry);
+    }
+    Cache::publish(&out, &entry)?;
+    Ok((entry, name))
 }
 
 /// The name of an archive before its full key is known.

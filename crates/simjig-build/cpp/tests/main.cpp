@@ -38,6 +38,7 @@ const simjig_model_vtable* simjig_vtable_Vtc_plain_param_rw(void);
 const simjig_model_vtable* simjig_vtable_Vtc_plain_rd_as_rw(void);
 const simjig_model_vtable* simjig_vtable_Vtc_hier(void);
 const simjig_model_vtable* simjig_vtable_Vtc_timing(void);
+const simjig_model_vtable* simjig_vtable_Vtc_cg(void);
 }
 
 namespace {
@@ -622,6 +623,61 @@ void counters_of_every_module_object_are_runs() {
     CHECK_EQ(dat_total(slurp(dat), &points), 0u);
 }
 
+// Counters are noted only while create constructs the model: a covergroup created by `new`
+// (or any coverage point registered later) must not make the runtime keep collecting
+// pointers it will never hand out.
+void cov_noting_stops_after_create() {
+    uint32_t counters[4] = {};
+    simjig::Runtime rt{nullptr, false};
+    {
+        const simjig::Scope scope{rt};
+        simjig::note_cov_counter(&counters[0]);
+        simjig::note_cov_counter(&counters[1]);
+    }
+    const std::vector<simjig_cov_run> runs = rt.cov_runs(counters, sizeof counters);
+    CHECK(runs.size() == 1 && runs[0].counters == counters && runs[0].len == 2);
+    {
+        const simjig::Scope scope{rt};
+        simjig::note_cov_counter(&counters[2]);  // what an eval-time registration does
+    }
+    CHECK(rt.cov_runs(counters, sizeof counters).empty());
+}
+
+// A covergroup's bins are registered when `new` runs, in the first eval, in counters
+// Verilator allocates on the heap: they are in no run (the runs are fixed at create), but
+// cov_write writes them and cov_zero clears them.
+void covergroup_bins_are_written_but_not_in_runs() {
+    Model m{simjig_vtable_Vtc_cg(), "TOP"};
+    CHECK_EQ(m.created(), SIMJIG_OK);
+    size_t n = 0;
+    const uint64_t before = runs_total(m, &n);
+    CHECK(n > 0);
+    CHECK_EQ(before, 0u);
+    const simjig_signal* s = m.vt()->signals(m.h(), nullptr);
+    for (uint64_t t = 0; t < 80; t += 5) {
+        *static_cast<uint8_t*>(s[0].ptr) = (t / 5) % 2;
+        *static_cast<uint8_t*>(s[1].ptr) = static_cast<uint8_t>((t / 10) % 4);
+        m.vt()->set_time(m.h(), t);
+        CHECK_EQ(m.vt()->eval(m.h()), SIMJIG_OK);
+    }
+    size_t after_n = 0;
+    const uint64_t live = runs_total(m, &after_n);
+    CHECK_EQ(after_n, n);  // the runs did not change
+    const std::string dat = path("cg.dat");
+    CHECK_EQ(m.vt()->cov_write(m.h(), dat.c_str()), SIMJIG_OK);
+    const std::string text = slurp(dat);
+    size_t points = 0;
+    const uint64_t total = dat_total(text, &points);
+    CHECK(text.find("covergroup") != std::string::npos);
+    CHECK(live > 0);
+    CHECK(total > live);  // the bins' hits are in coverage.dat, not in the runs
+    if (!(total > live)) std::fprintf(stderr, "  live %llu total %llu\n%s\n",
+        static_cast<unsigned long long>(live), static_cast<unsigned long long>(total), text.c_str());
+    CHECK_EQ(m.vt()->cov_zero(m.h()), SIMJIG_OK);
+    CHECK_EQ(m.vt()->cov_write(m.h(), dat.c_str()), SIMJIG_OK);
+    CHECK_EQ(dat_total(slurp(dat), &points), 0u);
+}
+
 std::vector<uint32_t> draws(Model& m, int n) {
     std::vector<uint32_t> out;
     for (int i = 0; i < n; ++i) out.push_back(m.cycle());
@@ -750,6 +806,9 @@ int main(int argc, char** argv) {
         {"devnull_redirect_finds_descriptors_above_the_limit",
          devnull_redirect_finds_descriptors_above_the_limit},
         {"counters_of_every_module_object_are_runs", counters_of_every_module_object_are_runs},
+        {"cov_noting_stops_after_create", cov_noting_stops_after_create},
+        {"covergroup_bins_are_written_but_not_in_runs",
+         covergroup_bins_are_written_but_not_in_runs},
         {"urandom_streams_are_per_model_and_reproducible",
          urandom_streams_are_per_model_and_reproducible},
         {"display_is_attributed_to_its_model", display_is_attributed_to_its_model},

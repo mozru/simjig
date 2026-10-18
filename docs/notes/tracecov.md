@@ -7,11 +7,12 @@ Agent `tracecov`, branch `w3/tracecov`. Checked against the installed Verilator 
 ```sh
 pixi run cpp-tests      # crates/simjig-build/cpp/tests/run.sh: 18 C++ tests, about 1 min
 ```
-`run.sh` verilates four models (`Vtc_full` with `--trace-fst --coverage`, `Vtc_plain`,
-`Vtc_hier` with `--coverage-line`, `Vtc_timing` with `--timing --trace-fst`) into one
+`run.sh` verilates five models (`Vtc_full` with `--trace-fst --coverage`, `Vtc_plain`,
+`Vtc_hier` with `--coverage-line`, `Vtc_timing` with `--timing --trace-fst`, `Vtc_cg` with a
+covergroup and `--coverage-line`) into one
 executable, the same way `cpp/spike/run.sh` does. `traits.cpp` writes their traits the way
-the shim emitter does. The tests use only the vtable. The run is not part of
-`cargo xtask ci`; the Rust-side shim tests in `tests/codegen_it/verilator.rs` are.
+the shim emitter does. The tests use only the vtable. `cargo xtask ci`
+runs it (since s1c2fix).
 
 ## The ABI after this change (`SIMJIG_ABI_VERSION` stays 1)
 `simjig_model_vtable` grows from 136 to **192 bytes**, append-only. The first 136 bytes keep
@@ -137,6 +138,27 @@ Mapping, for a flat model (`tc`, `-O` defaults inline everything; `--flatten` fo
 
 Each handle has its own context and so its own `VerilatedCovContext`: `coverage.dat` is per
 model.
+
+## Covergroup bins and `cov_runs` (s1c3fix)
+`cov_runs` (`docs/notes/s1c2fix.md`) hands out the counter arrays that lie inside the
+`V<prefix>__Syms` object. A covergroup's bins are not there: 5.052 registers them through
+`VL_COVER_INSERT` when the covergroup is constructed, which for `cg inst = new;` is the model's
+first eval (static initialisers run in `_eval_static`), into counters it allocates on the
+heap. Decision: **document, not expose.** The ABI comment of `cov_runs` now says the runs hold
+every *code* coverage counter (line, branch, toggle, expression, FSM, user) exactly once and
+no covergroup bin; `cov_write` and `cov_zero` include the bins. Why not expose them: they
+appear after create, one allocation per covergroup instance, so a run list fixed at create
+cannot hold them, and a list that grows during evals would hand out pointers whose layout
+changes with the simulation.
+
+The noting itself now stops when create calls `Runtime::cov_runs` (`m_cov_closed`). Before,
+every registration during an eval (each covergroup `new`) was appended to a vector that was
+never read again, for the model's lifetime.
+
+Tests: `cov_noting_stops_after_create` (a registration after `cov_runs` is not kept; fails
+without the flag) and `covergroup_bins_are_written_but_not_in_runs` (`Vtc_cg`: the runs do not
+change across evals, `coverage.dat` has the covergroup points and a higher total than the
+runs, `cov_zero` clears them).
 
 ## Per-model isolation
 - **Thread context**: every `Scope` (every entry point that runs model code, trace and

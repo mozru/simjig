@@ -60,12 +60,14 @@ const char* or_empty(const char* s) { return s != nullptr ? s : ""; }
 Runtime* active() noexcept { return t_active; }
 
 void note_cov_counter(uint32_t* countp) noexcept {
-    // Points register while the model is constructed, inside create's Scope. A model built
-    // outside simjig has no active runtime and nobody to tell.
+    // Points register while the model is constructed, inside create's Scope (and, for a
+    // covergroup, when `new` runs, inside an eval's Scope: Runtime ignores those). A model
+    // built outside simjig has no active runtime and nobody to tell.
     if (t_active != nullptr) t_active->note_cov_counter(countp);
 }
 
 void Runtime::note_cov_counter(uint32_t* countp) noexcept {
+    if (m_cov_closed) return;
     try {
         m_cov_counters.push_back(countp);
     } catch (...) {
@@ -76,6 +78,7 @@ void Runtime::note_cov_counter(uint32_t* countp) noexcept {
 std::vector<simjig_cov_run> Runtime::cov_runs(const void* begin, size_t size) {
     std::vector<uint32_t*> seen = std::move(m_cov_counters);
     m_cov_counters.clear();
+    m_cov_closed = true;
     if (m_cov_lost) return {};
     const auto* lo = static_cast<const char*>(begin);
     const auto inside = [lo, size](uint32_t* p) {

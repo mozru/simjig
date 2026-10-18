@@ -30,3 +30,6 @@ the public API, the generated code or simulation semantics.
   Vec<ProbeSite>` (the probes the shim binds; `codegen_emitter` fills it, `Emitted::default()`
   leaves it empty), a breaking change for emitters that build `Emitted` without
   `..Emitted::default()`.
+- C ABI: `cov_runs` is documented to cover code coverage counters only; covergroup bins
+  (allocated when `new` runs) are in no run, while `cov_write` and `cov_zero` include them.
+  The runtime stops noting coverage counters once create has built the runs.

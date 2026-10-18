@@ -83,7 +83,9 @@ public:
     // instances of a module, which is a function-local static). The counters are sorted by
     // address, which is symbol-table member order, deduplicated (an object-local and a
     // symbol-table counter are each registered once per point) and merged into maximal
-    // contiguous runs. Consumes the noted counters.
+    // contiguous runs. Consumes the noted counters, and ends the noting: a point registered
+    // later (a covergroup's bins, when `new` runs during an eval) is not recorded, so the
+    // list cannot grow for the model's lifetime, and the runs stay what create returned.
     void note_cov_counter(uint32_t* countp) noexcept;
     std::vector<simjig_cov_run> cov_runs(const void* begin, size_t size);
 
@@ -105,6 +107,7 @@ private:
     std::vector<Record> m_drained;  // backs the string pointers handed out by drain()
     std::vector<uint32_t*> m_cov_counters;
     bool m_cov_lost = false;
+    bool m_cov_closed = false;  // cov_runs() ran: later registrations are not noted
     size_t m_dropped = 0;
     size_t m_hook_mark = 0;  // m_ring.size() right after the last hook record
     bool m_echo = false;

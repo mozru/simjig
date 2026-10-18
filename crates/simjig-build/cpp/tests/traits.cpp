@@ -1,5 +1,8 @@
 // Traits for the test models, written exactly as simjig-build's shim emitter writes them
 // (crates/simjig-build/src/codegen/shim.rs; compare its snapshots).
+#include "Vtc_cg.h"
+#include "Vtc_cg__Syms.h"
+#include "Vtc_cg___024root.h"
 #include "Vtc_full.h"
 #include "Vtc_full__Syms.h"
 #include "Vtc_full___024root.h"
@@ -115,6 +118,19 @@ struct HierTraits {
     }
 };
 
+struct CgTraits {
+    using Model = Vtc_cg;
+    static constexpr const char* kPrefix = "Vtc_cg";
+    static constexpr uint64_t kIrHash = 0x7c00000000000009ull;
+    static constexpr bool kTiming = false;
+    static constexpr bool kTraceFst = false;
+    static constexpr bool kCoverage = true;
+    static void bind(Vtc_cg& m, simjig::SignalTable& t) {
+        SIMJIG_SIGNAL(t, m.clk, "tc_cg.clk", 1, SIMJIG_DIR_IN, kReadWrite);
+        SIMJIG_SIGNAL(t, m.a, "tc_cg.a", 2, SIMJIG_DIR_IN, kReadWrite);
+    }
+};
+
 struct TimingTraits {
     using Model = Vtc_timing;
     static constexpr const char* kPrefix = "Vtc_timing";
@@ -136,4 +152,5 @@ SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rd, ParamReadTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_param_rw, ParamWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_plain_rd_as_rw, ReadOnlyWriteTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_hier, HierTraits)
+SIMJIG_EXPORT_VTABLE(Vtc_cg, CgTraits)
 SIMJIG_EXPORT_VTABLE(Vtc_timing, TimingTraits)

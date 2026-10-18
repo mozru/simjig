@@ -184,13 +184,17 @@ typedef struct simjig_model_vtable {
     /* Writes the trace's header and closes it. No-op (OK) when no trace is open. */
     simjig_status (*trace_close)(simjig_handle* h);
     /* Coverage counters (--coverage): *count runs that together hold every counter of the
-     * model exactly once, valid until destroy; NULL with *count = 0 without --coverage or
-     * without points. Verilator keeps one counter array per module object (the root, each
-     * module instance it did not inline, each interface instance) plus one in the symbol
-     * table; a run is a maximal contiguous range of them, and the runs come in symbol-table
-     * order (the order of the objects in V<prefix>__Syms). The run layout and an index's
-     * coverage point are fixed for one build (docs/notes/s1c2fix.md has the mapping).
-     * (Before the first release this slot was `cov_counters`, one array or NULL.) */
+     * model's code coverage (line, branch, toggle, expression, FSM and user points) exactly
+     * once, valid until destroy; NULL with *count = 0 without --coverage or without points.
+     * Verilator keeps one counter array per module object (the root, each module instance it
+     * did not inline, each interface instance) plus one in the symbol table; a run is a
+     * maximal contiguous range of them, and the runs come in symbol-table order (the order of
+     * the objects in V<prefix>__Syms). The run layout and an index's coverage point are fixed
+     * for one build (docs/notes/s1c2fix.md has the mapping), and the runs are fixed at create.
+     * Covergroup bins are NOT in any run: Verilator allocates them on the heap when the
+     * covergroup's `new` runs (during an eval), outside the symbol table. cov_write and
+     * cov_zero do include them. (Before the first release this slot was `cov_counters`,
+     * one array or NULL.) */
     const simjig_cov_run* (*cov_runs)(simjig_handle* h, size_t* count);
 
     /* ---- Appended after size 136 (SIMJIG_ABI_VERSION 1). ---- */
@@ -215,9 +219,11 @@ typedef struct simjig_model_vtable {
      * cannot be created. The child must never close, flush or destroy an inherited trace
      * before this call. */
     simjig_status (*trace_reopen)(simjig_handle* h, const char* path);
-    /* Sets every coverage counter of the model to 0. UNSUPPORTED without --coverage. */
+    /* Sets every coverage counter of the model to 0, covergroup bins included. UNSUPPORTED
+     * without --coverage. */
     simjig_status (*cov_zero)(simjig_handle* h);
-    /* Writes Verilator's coverage.dat for this model (VerilatedCovContext::write) to `path`;
+    /* Writes Verilator's coverage.dat for this model (VerilatedCovContext::write), every
+     * point including covergroup bins, to `path`;
      * NULL means Verilator's default (`coverage.dat`, or +verilator+coverage+file+). IO_ERROR
      * if the file cannot be created. UNSUPPORTED without --coverage. */
     simjig_status (*cov_write)(simjig_handle* h, const char* path);

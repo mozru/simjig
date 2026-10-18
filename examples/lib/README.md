@@ -113,18 +113,12 @@ interface instance in the generated wrapper. `stream_if` has its own `WIDTH` par
 which `.param("WIDTH", ..)` on the module does not reach, so the binding sets it:
 
 ```rust
-let stream = |port: &str, modport: &str| IfaceBinding {
-    port: port.into(),
-    interface: "stream_if".into(),
-    params: vec![("WIDTH".into(), "16".into())],
-    modport: Some(modport.into()),
-};
 Dut::new("skid_buffer")
     .sources(["rtl/stream_if.sv", "rtl/skid_buffer.sv"])
     .top("skid_buffer")
     .param("WIDTH", 16)
-    .bind_iface_with(stream("up", "sink"))
-    .bind_iface_with(stream("down", "source"))
+    .bind_iface_with_params("up", "stream_if.sink", [("WIDTH", 16)])
+    .bind_iface_with_params("down", "stream_if.source", [("WIDTH", 16)])
     .build()?;
 ```
 

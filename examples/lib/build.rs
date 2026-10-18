@@ -7,7 +7,7 @@
 //! (`SIMJIG_WAVES_ON_FAIL=1`, or the report's `waves:` line). Tracing costs only build
 //! time: a run is traced only when it is replayed for waves.
 
-use simjig_build::{Dut, Error, IfaceBinding};
+use simjig_build::{Dut, Error};
 
 /// Verilator arguments shared by every DUT of this crate.
 const LINT: [&str; 1] = ["-Wall"];
@@ -56,18 +56,13 @@ const SKID_WIDTH: u32 = 16;
 /// interface's `WIDTH` is its own parameter: `.param` sets only the module's, so each
 /// binding passes it too (`bind_iface` alone would give the interface its default, 8).
 fn skid_buffer() -> Result<(), Error> {
-    let stream = |port: &str, modport: &str| IfaceBinding {
-        port: port.into(),
-        interface: "stream_if".into(),
-        params: vec![("WIDTH".into(), SKID_WIDTH.to_string())],
-        modport: Some(modport.into()),
-    };
+    let width = [("WIDTH", SKID_WIDTH)];
     Dut::new("skid_buffer")
         .sources(["rtl/stream_if.sv", "rtl/skid_buffer.sv"])
         .top("skid_buffer")
         .param("WIDTH", SKID_WIDTH)
-        .bind_iface_with(stream("up", "sink"))
-        .bind_iface_with(stream("down", "source"))
+        .bind_iface_with_params("up", "stream_if.sink", width)
+        .bind_iface_with_params("down", "stream_if.source", width)
         .trace_fst(true)
         .verilator_args(LINT)
         .build()?;

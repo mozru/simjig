@@ -709,6 +709,19 @@ impl Dut {
     /// Binds an interface port of the top to the interface the generated wrapper
     /// instantiates for it: `iface` is `interface` or `interface.modport`.
     pub fn bind_iface(self, port: impl Into<String>, iface: &str) -> Self {
+        self.bind_iface_with_params(port, iface, None::<(String, u32)>)
+    }
+
+    /// Binds an interface port like [`Dut::bind_iface`], overriding parameters of the
+    /// interface the wrapper instantiates, with values written like [`Dut::param`]'s:
+    /// `.bind_iface_with_params("up", "beat_if.sink", [("WIDTH", 8)])`. A module
+    /// parameter the interface also has (`WIDTH` of both) is set in each separately.
+    pub fn bind_iface_with_params<N: Into<String>, V: Display>(
+        self,
+        port: impl Into<String>,
+        iface: &str,
+        params: impl IntoIterator<Item = (N, V)>,
+    ) -> Self {
         let (interface, modport) = match iface.split_once('.') {
             Some((i, m)) => (i.to_owned(), Some(m.to_owned())),
             None => (iface.to_owned(), None),
@@ -716,7 +729,10 @@ impl Dut {
         self.bind_iface_with(IfaceBinding {
             port: port.into(),
             interface,
-            params: Vec::new(),
+            params: params
+                .into_iter()
+                .map(|(n, v)| (n.into(), v.to_string()))
+                .collect(),
             modport,
         })
     }
@@ -1473,7 +1489,8 @@ mod tests {
                 ProbeAccess::Read,
             )
             .bind_iface("s_axis", "axis_if.sink")
-            .bind_iface("m_axis", "axis_if");
+            .bind_iface("m_axis", "axis_if")
+            .bind_iface_with_params("up", "beat_if.sink", [("WIDTH", 8), ("DEPTH", 2)]);
         assert_eq!(
             d.config().probes,
             [Probe {
@@ -1493,7 +1510,16 @@ mod tests {
             modports,
             [
                 (&"axis_if".to_owned(), &Some("sink".to_owned())),
-                (&"axis_if".to_owned(), &None)
+                (&"axis_if".to_owned(), &None),
+                (&"beat_if".to_owned(), &Some("sink".to_owned()))
+            ]
+        );
+        assert_eq!(d.config().ifaces[0].params.len(), 0);
+        assert_eq!(
+            d.config().ifaces[2].params,
+            [
+                ("WIDTH".to_owned(), "8".to_owned()),
+                ("DEPTH".to_owned(), "2".to_owned())
             ]
         );
     }

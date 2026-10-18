@@ -548,3 +548,24 @@ fn a_failed_duplicate_name_keeps_the_built_module() {
         .unwrap_err();
     assert_eq!(generated(&s, "counter"), before);
 }
+
+/// Two DUT names differing only in case would share one generated file on a
+/// case-insensitive filesystem: the second is refused, and leaves the first's module.
+#[test]
+fn dut_names_differing_only_in_case_are_refused() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    counter(&rtl).build_in(&s.env()).unwrap();
+    let before = generated(&s, "counter");
+    let e = Dut::new("Counter")
+        .sources([rtl.join("counter.sv")])
+        .top("counter")
+        .build_in(&s.env())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("already built a DUT named `counter`, which differs only in case"),
+        "{e}"
+    );
+    assert_eq!(generated(&s, "counter"), before);
+}

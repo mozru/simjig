@@ -75,8 +75,26 @@ fn config_error(config: &DutConfig, msg: String) -> Error {
 }
 
 /// Records the DUT, or checks that a DUT of the same name had the same configuration.
+/// Two names that differ only in case are refused: they name one generated file on a
+/// case-insensitive filesystem (macOS and Windows by default), so the second would
+/// overwrite the first's module, and the build would differ between machines.
 pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Result<(), Error> {
     let mut built = built();
+    if let Some(m) = built.iter().find(|m| {
+        m.out_dir == env.out_dir
+            && m.name != config.name
+            && m.name.eq_ignore_ascii_case(&config.name)
+    }) {
+        return Err(config_error(
+            config,
+            format!(
+                "this build script already built a DUT named `{}`, which differs only in \
+                 case: both would generate `OUT_DIR/simjig/{}.rs` on a case-insensitive \
+                 filesystem; rename one",
+                m.name, config.name
+            ),
+        ));
+    }
     match built
         .iter()
         .find(|m| m.out_dir == env.out_dir && m.name == config.name)
@@ -103,11 +121,12 @@ pub(crate) fn claim_name(env: &BuildEnv, config: &DutConfig, prefix: &str) -> Re
 }
 
 /// Whether this build script (its `OUT_DIR`, `out_dir`) already claimed the DUT name
-/// `name`.
+/// `name`, or one differing only in case (which [`claim_name`] refuses, and whose
+/// generated file may be the same one).
 pub(crate) fn claimed(out_dir: &Path, name: &str) -> bool {
     built()
         .iter()
-        .any(|m| m.out_dir == out_dir && m.name == name)
+        .any(|m| m.out_dir == out_dir && m.name.eq_ignore_ascii_case(name))
 }
 
 /// The other models of this build script (not `prefix` itself).

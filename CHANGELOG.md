@@ -24,6 +24,9 @@ the public API, the generated code or simulation semantics.
 - Probe paths may go through generate blocks (`top.g_x.u.x`, `top.genblk2.u.x`,
   `top.g[0].u.x`); naming a generate-for loop without an index, or an instance array, is
   a `codegen::Error::Config` that names the fix.
+- A probe whose module is a typo names the closest module ("did you mean `core`?"), and a
+  probe path that ends at an instance or generate block says that it must end at a
+  variable.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

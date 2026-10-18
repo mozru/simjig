@@ -65,6 +65,17 @@ fn probe_path_mistakes_fail_the_build() {
             "lp",
             "`lp.u_core` is an instance of `lp_core`, not of `lp` as the probe declares",
         ),
+        (
+            "lp.u_core.result",
+            "lp_cor",
+            "no module `lp_cor` in the design; did you mean `lp_core`?",
+        ),
+        (
+            "lp.u_core",
+            "lp_core",
+            "`lp.u_core` is an instance, not a variable; a probe path ends at a variable, \
+             e.g. `lp.u_core.<variable>`",
+        ),
     ] {
         // One sandbox each: a build script may build one DUT name in one configuration.
         let s = Sandbox::new();

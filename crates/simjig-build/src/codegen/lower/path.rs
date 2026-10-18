@@ -147,7 +147,12 @@ fn check_spelling(
         return Err(format!("`{var}` is not a plain identifier"));
     }
     if !design.modules.iter().any(|m| m.orig_name == probe.module) {
-        return Err(format!("no module `{}` in the design", probe.module));
+        let names = design.modules.iter().map(|m| m.orig_name.as_str());
+        return Err(format!(
+            "no module `{}` in the design{}",
+            probe.module,
+            hint(&probe.module, names)
+        ));
     }
     Ok(())
 }
@@ -196,6 +201,11 @@ fn step<'a>(
 fn check_variable(probe: &Probe, level: &Level<'_>, var: &str, scope: &str) -> Result<(), String> {
     let module = level.module;
     let found = level.variables.iter().find(|v| v.name == var);
+    if found.is_none()
+        && let Some(why) = names_a_scope(level, var, scope)
+    {
+        return Err(why);
+    }
     if module.orig_name != probe.module {
         return Err(format!(
             "`{scope}` is an instance of `{}`, not of `{}` as the probe declares; pass `\"{}\"` \
@@ -219,6 +229,21 @@ fn check_variable(probe: &Probe, level: &Level<'_>, var: &str, scope: &str) -> R
         ));
     }
     Ok(())
+}
+
+/// When the path stops one level short, at an instance or generate block `var`: why.
+fn names_a_scope(level: &Level<'_>, var: &str, scope: &str) -> Option<String> {
+    let kind = if level.instance(var).is_some() {
+        "an instance"
+    } else if level.block_named(var).is_some() || level.loop_iteration(var).is_some() {
+        "a generate block"
+    } else {
+        return None;
+    };
+    Some(format!(
+        "`{scope}.{var}` is {kind}, not a variable; a probe path ends at a variable, e.g. \
+         `{scope}.{var}.<variable>`"
+    ))
 }
 
 /// Why `var` is not a variable of `level`, with the closest variable name.

@@ -178,10 +178,11 @@ fn a_real_error_under_wall_is_not_buried_by_the_generated_top() {
         "interface w_if;\n  logic v;\n  modport sink (input v);\nendinterface\n",
     )
     .unwrap();
-    let outs: String = (0..12).map(|i| format!(", output logic o{i}")).collect();
-    let assigns: String = (0..12)
-        .map(|i| format!("  assign o{i} = in.v;\n"))
-        .collect();
+    let (mut outs, mut assigns) = (String::new(), String::new());
+    for i in 0..12 {
+        outs += &format!(", output logic o{i}");
+        assigns += &format!("  assign o{i} = in.v;\n");
+    }
     std::fs::write(
         &top,
         format!(

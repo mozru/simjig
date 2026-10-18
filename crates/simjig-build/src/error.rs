@@ -254,7 +254,7 @@ const EXCERPT_LINES: usize = 40;
 /// `.. N error(s), M warning(s)` otherwise).
 fn is_error_line(line: &str) -> bool {
     line.starts_with("%Error")
-        && !(line.starts_with("%Error: Exiting due to") && !line.contains("error(s)"))
+        && (!line.starts_with("%Error: Exiting due to") || line.contains("error(s)"))
 }
 
 /// The stderr kept in an [`Error::Command`]: all of it when it is short, else every
@@ -276,10 +276,11 @@ fn excerpt(stderr: &str) -> String {
                 out.push_str(line);
                 out.push('\n');
             }
-            out.push_str(&format!(
-                "--- the first {EXCERPT_LINES} of {} lines:\n",
-                lines.len()
-            ));
+            out.push_str("--- the first ");
+            out.push_str(&EXCERPT_LINES.to_string());
+            out.push_str(" of ");
+            out.push_str(&lines.len().to_string());
+            out.push_str(" lines:\n");
         }
     }
     for line in lines.iter().take(EXCERPT_LINES) {
@@ -652,8 +653,9 @@ mod tests {
     fn errors_after_many_warnings_lead_the_excerpt() {
         let mut stderr = String::new();
         for i in 0..30 {
-            stderr +=
-                &format!("%Warning-PINMISSING: /r/e.sv:5:29: missing pin 'p{i}'\n    5 | x\n");
+            stderr.push_str("%Warning-PINMISSING: /r/e.sv:5:29: missing pin 'p");
+            stderr.push_str(&i.to_string());
+            stderr.push_str("'\n    5 | x\n");
         }
         stderr += "%Error: /r/d.sv:39:30: Can't find definition of variable: 'nosuch'\n\
                    %Error: Exiting due to 1 error(s), 30 warning(s)\n";

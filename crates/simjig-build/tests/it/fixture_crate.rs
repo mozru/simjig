@@ -89,3 +89,8 @@ fn fst_tracing_links_and_writes_a_trace() {
 fn two_models_share_one_binary() {
     run_fixture_test("two_models_share_one_binary");
 }
+
+#[test]
+fn integration_test_without_the_lib_links_the_model() {
+    run_fixture_test("standalone_test_links_the_model");
+}

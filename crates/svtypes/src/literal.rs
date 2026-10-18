@@ -239,6 +239,24 @@ impl FromStr for Literal {
     }
 }
 
+/// An X or Z digit (`?` is Z, IEEE 1800 §5.7.1).
+fn is_unknown_digit(c: char) -> bool {
+    matches!(c.to_ascii_lowercase(), 'x' | 'z' | '?')
+}
+
+/// Whether the sized literal `input` (`4'b10x1`) has X or Z digits, i.e. is a
+/// four-state value that a [`Literal`] cannot hold. Front ends use it to tell such a
+/// value from a malformed one.
+#[must_use]
+pub fn is_four_state(input: &str) -> bool {
+    input.split_once('\'').is_some_and(|(_, rest)| {
+        rest.trim_start_matches(['s', 'S'])
+            .chars()
+            .skip(1)
+            .any(is_unknown_digit)
+    })
+}
+
 /// Accumulates `digits` in `radix` into `ceil(width / 64)` little-endian words.
 fn parse_digits(digits: &str, radix: u32, width: u32) -> Result<Vec<u64>, String> {
     let mut words = vec![0u64; word_count(width)];
@@ -247,7 +265,7 @@ fn parse_digits(digits: &str, radix: u32, width: u32) -> Result<Vec<u64>, String
         if c == '_' {
             continue;
         }
-        if matches!(c.to_ascii_lowercase(), 'x' | 'z' | '?') {
+        if is_unknown_digit(c) {
             return Err("X and Z digits are not supported yet".into());
         }
         let digit = c
@@ -340,6 +358,17 @@ mod tests {
         for (text, reason) in cases {
             let e = text.parse::<Literal>().unwrap_err();
             assert!(e.reason.contains(reason), "{text}: {e}");
+        }
+    }
+
+    #[test]
+    fn four_state_literals_are_told_from_malformed_ones() {
+        for text in ["4'b10x1", "8'hzz", "4'sb?0_01", "2'BX1"] {
+            assert!(is_four_state(text), "{text}");
+        }
+        // Not X or Z: the `x` of a hex base letter, a decimal, or no digits at all.
+        for text in ["8'hff", "8'd12", "8'q1", "ff", "x'h1", "8'h"] {
+            assert!(!is_four_state(text), "{text}");
         }
     }
 

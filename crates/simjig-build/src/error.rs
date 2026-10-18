@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use crate::header::PortMismatch;
-use crate::verilator::VerilatorVersion;
 
 /// Errors from configuring, verilating or compiling a DUT.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// The `Dut` configuration is invalid (for example an empty source list).
     #[error("invalid DUT `{dut}` configuration: {msg}")]
@@ -50,19 +50,18 @@ pub enum Error {
         /// Every location that was checked, in order.
         searched: Vec<PathBuf>,
     },
-    /// The Verilator found is not in the supported-version table.
+    /// The Verilator found is not in the supported-version table
+    /// ([`svtypes::version::SUPPORTED`]).
     #[error(
         "unsupported Verilator at {}: `{found}`; supported versions: {}",
         path.display(),
-        display_versions(supported)
+        svtypes::version::supported_list()
     )]
     UnsupportedVerilator {
         /// The executable that was queried.
         path: PathBuf,
         /// Its `--version` output (first line).
         found: String,
-        /// The versions this release of `simjig-build` supports.
-        supported: &'static [VerilatorVersion],
     },
     /// An external tool ran but failed.
     #[error("{}", display_command_failure(command, status, stderr, path.as_deref()))]
@@ -112,16 +111,18 @@ pub enum Error {
         /// The `cc` error; its message carries the compiler command line and output.
         source: cc::Error,
     },
-    /// The JSON pass (`svtypes`) could not decode the design.
-    #[error("reading the type IR of DUT `{dut}`: {source}")]
+    /// The JSON pass (`svtypes`) could not decode the design. The cause is the
+    /// [`source`](std::error::Error::source), not part of the message.
+    #[error("reading the type IR of DUT `{dut}`")]
     Ir {
         /// The DUT name.
         dut: String,
         /// The `svtypes` error; it names the JSON node and the source location.
         source: svtypes::error::Error,
     },
-    /// The code generator cannot handle this design or configuration.
-    #[error("generating code for DUT `{dut}`: {source}")]
+    /// The code generator cannot handle this design or configuration. The cause is the
+    /// [`source`](std::error::Error::source), not part of the message.
+    #[error("generating code for DUT `{dut}`")]
     Codegen {
         /// The DUT name.
         dut: String,
@@ -226,14 +227,6 @@ fn display_paths(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
-fn display_versions(versions: &[VerilatorVersion]) -> String {
-    versions
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn display_command_failure(
     command: &str,
     status: &str,
@@ -267,6 +260,19 @@ mod tests {
         );
         check("%Error: Cannot find file containing module: 'foo'", None);
         check("some other text", None);
+    }
+
+    #[test]
+    fn ir_errors_keep_their_cause_out_of_the_message() {
+        let err = Error::json_pass(
+            "d",
+            svtypes::error::Error::UnsupportedVersion {
+                version: "Verilator 9.000".into(),
+            },
+        );
+        assert_eq!(err.to_string(), "reading the type IR of DUT `d`");
+        let source = std::error::Error::source(&err).map(ToString::to_string);
+        assert!(source.is_some_and(|s| s.contains("Verilator 9.000")));
     }
 
     #[test]

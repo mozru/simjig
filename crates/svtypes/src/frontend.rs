@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::ir::Design;
+use crate::version::VerilatorVersion;
 
 /// Decodes Verilator `--json-only` output into a [`Design`].
 ///
@@ -22,9 +23,11 @@ use crate::ir::Design;
 /// [`Error::UnsupportedVersion`] when no dialect matches, [`Error::Json`] when the document
 /// does not parse or contains a node or field this dialect does not know.
 pub fn parse(tree_json: &str, meta_json: &str, version: &str) -> Result<Design> {
-    let short = short_version(version).ok_or_else(|| Error::UnsupportedVersion {
+    let unsupported = || Error::UnsupportedVersion {
         version: version.to_owned(),
-    })?;
+    };
+    let parsed = parse_version(version).ok_or_else(unsupported)?;
+    let short = parsed.to_string();
     let json_err = |what: &str, e: serde_json::Error| Error::Json {
         path: "/".into(),
         source_loc: None,
@@ -34,11 +37,9 @@ pub fn parse(tree_json: &str, meta_json: &str, version: &str) -> Result<Design> 
     let tree: Value = serde_json::from_str(tree_json).map_err(|e| json_err(".tree.json", e))?;
     let meta: Value =
         serde_json::from_str(meta_json).map_err(|e| json_err(".tree.meta.json", e))?;
-    match dialect(&short) {
+    match dialect(parsed) {
         Some(Dialect::V5_05x) => v5_05x::decode(&tree, &meta, &short),
-        None => Err(Error::UnsupportedVersion {
-            version: version.to_owned(),
-        }),
+        None => Err(unsupported()),
     }
 }
 
@@ -49,26 +50,16 @@ enum Dialect {
     V5_05x,
 }
 
-fn dialect(short: &str) -> Option<Dialect> {
-    let (major, minor) = short.split_once('.')?;
-    match (major.parse::<u32>().ok()?, minor.parse::<u32>().ok()?) {
+fn dialect(version: VerilatorVersion) -> Option<Dialect> {
+    match (version.major(), version.minor()) {
         (5, 50..=59) => Some(Dialect::V5_05x),
         _ => None,
     }
 }
 
-/// `5.052` from `Verilator 5.052 2026-09-05 rev ...` or from `5.052` itself.
-fn short_version(version: &str) -> Option<String> {
-    version
-        .split_whitespace()
-        .find(|tok| {
-            tok.split_once('.').is_some_and(|(a, b)| {
-                !a.is_empty()
-                    && !b.is_empty()
-                    && a.chars().chain(b.chars()).all(|c| c.is_ascii_digit())
-            })
-        })
-        .map(str::to_owned)
+/// The version in a `verilator --version` banner, or in a bare `5.052`.
+fn parse_version(version: &str) -> Option<VerilatorVersion> {
+    VerilatorVersion::from_banner(version).or_else(|| version.trim().parse().ok())
 }
 
 #[cfg(test)]
@@ -90,11 +81,7 @@ mod tests {
             ("Verilator", None),
         ];
         for (text, expect) in cases {
-            assert_eq!(
-                short_version(text).as_deref().and_then(dialect),
-                expect,
-                "{text}"
-            );
+            assert_eq!(parse_version(text).and_then(dialect), expect, "{text}");
         }
     }
 

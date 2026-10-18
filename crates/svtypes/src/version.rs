@@ -1,11 +1,14 @@
-//! Verilator versions: parsing and the supported table.
+//! Verilator versions: the one parser and the one supported-version table.
 //!
 //! Verilator numbers releases `MAJOR.MINOR` with a three-digit minor (`5.052`); conda-forge
 //! writes the same release as `5.52`. Both parse to the same [`VerilatorVersion`], and it
 //! always displays in Verilator's own spelling.
 //!
-//! simjig reads Verilator's generated C++ and `--json-only` output, whose shape changes
-//! between releases, so only versions listed in [`SUPPORTED`] are accepted.
+//! simjig decodes Verilator's output (the `--json-only` AST, the header port macros,
+//! `_classes.mk`) and links against its runtime, and those change between releases, so
+//! only the versions in [`SUPPORTED`] are accepted. Every build-time crate (the JSON front
+//! end, `simjig-build`, `cargo simjig doctor`) reads this table; adding a version means
+//! adding fixtures for it.
 
 use std::fmt;
 use std::str::FromStr;
@@ -27,10 +30,23 @@ impl VerilatorVersion {
         Self { major, minor }
     }
 
+    /// The major release number (`5` for `5.052`).
+    #[must_use]
+    pub const fn major(self) -> u32 {
+        self.major
+    }
+
+    /// The minor release number (`52` for `5.052`).
+    #[must_use]
+    pub const fn minor(self) -> u32 {
+        self.minor
+    }
+
     /// Parses the first line of `verilator --version`, such as
     /// `Verilator 5.052 2026-09-05 rev conda-forge build`.
     ///
-    /// Returns `None` when the text is not a Verilator version banner.
+    /// Returns `None` when the text is not a Verilator version banner. A development
+    /// build's `5.053-devel` is not a release number, so it returns `None` too.
     #[must_use]
     pub fn from_banner(banner: &str) -> Option<Self> {
         let mut words = banner.lines().next()?.split_whitespace();
@@ -45,6 +61,16 @@ impl VerilatorVersion {
     pub fn is_supported(self) -> bool {
         SUPPORTED.contains(&self)
     }
+}
+
+/// [`SUPPORTED`] as a comma-separated list, for messages: `5.052`.
+#[must_use]
+pub fn supported_list() -> String {
+    SUPPORTED
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl fmt::Display for VerilatorVersion {
@@ -104,7 +130,16 @@ mod tests {
     #[test]
     fn rejects_malformed_versions() {
         for text in [
-            "", "5", "5.", ".052", "5.052.1", "v5.052", "5.05x", "5.-1", "+5.1",
+            "",
+            "5",
+            "5.",
+            ".052",
+            "5.052.1",
+            "v5.052",
+            "5.05x",
+            "5.-1",
+            "+5.1",
+            "5.053-devel",
         ] {
             assert!(text.parse::<VerilatorVersion>().is_err(), "{text}");
         }
@@ -114,6 +149,7 @@ mod tests {
     #[test]
     fn displays_three_digit_minor() {
         assert_eq!(VerilatorVersion::new(5, 52).to_string(), "5.052");
+        assert_eq!(VerilatorVersion::new(5, 2).to_string(), "5.002");
         assert_eq!(VerilatorVersion::new(4, 228).to_string(), "4.228");
     }
 
@@ -129,6 +165,7 @@ mod tests {
             "Verilator 5.053 devel rev v5.052-40-g1234",
             Some(VerilatorVersion::new(5, 53)),
         );
+        check("Verilator 5.053-devel rev v5.052-12-g1", None);
         check("", None);
         check("verilator 5.052", None);
         check("Verilator", None);
@@ -141,5 +178,6 @@ mod tests {
         assert!(VerilatorVersion::new(5, 52).is_supported());
         assert!(!VerilatorVersion::new(5, 53).is_supported());
         assert!(!VerilatorVersion::new(5, 51).is_supported());
+        assert_eq!(supported_list(), "5.052");
     }
 }

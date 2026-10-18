@@ -16,6 +16,15 @@ use std::process::ExitCode;
 
 use crate::json;
 
+/// The usage text of the subcommand.
+pub const USAGE: &str = concat!(
+    "  doctor    check that Verilator, the C++ toolchain and nextest are usable\n",
+    "            cargo simjig doctor [--json]\n",
+    "            --json    print one JSON object instead of text\n",
+    "            --help    print this help\n",
+    "            exits 1 if any check fails",
+);
+
 /// How [`run`] prints the report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

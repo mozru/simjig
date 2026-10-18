@@ -127,7 +127,7 @@ fn waves_help_prints_its_usage_and_a_bad_window_is_a_usage_error() {
         .args(["simjig", "waves", "--help"])
         .output()
         .expect("runs");
-    let text = String::from_utf8_lossy(&help.stderr);
+    let text = String::from_utf8_lossy(&help.stdout);
     assert!(help.status.success(), "{text}");
     assert!(text.starts_with("  waves     replay one test"), "{text}");
     let bad = Command::new(binary)
@@ -140,4 +140,58 @@ fn waves_help_prints_its_usage_and_a_bad_window_is_a_usage_error() {
         text.starts_with("error: --window \"1.5\": a window is"),
         "{text}"
     );
+}
+
+/// `cargo-simjig simjig <args>`, as Cargo runs it, with its exit code and stdout.
+fn simjig(args: &[&str]) -> (Option<i32>, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-simjig"))
+        .arg("simjig")
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("cannot start cargo-simjig: {error}"));
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    (output.status.code(), stdout)
+}
+
+/// Help that was asked for prints to stdout and exits 0: the whole help, or one
+/// command's own.
+#[test]
+fn help_exits_zero_and_each_command_has_its_own() {
+    for args in [&["--help"][..], &["-h"], &["help"]] {
+        let (code, stdout) = simjig(args);
+        assert_eq!(code, Some(0), "{args:?}");
+        for command in ["  doctor ", "  waves ", "  show "] {
+            assert!(stdout.contains(command), "{args:?}: {stdout}");
+        }
+    }
+    for command in ["doctor", "waves", "show"] {
+        for args in [
+            &[command, "--help"][..],
+            &[command, "-h"],
+            &["help", command],
+        ] {
+            let (code, stdout) = simjig(args);
+            assert_eq!(code, Some(0), "{args:?}");
+            assert!(
+                stdout.starts_with(&format!("  {command} ")),
+                "{args:?}: {stdout}"
+            );
+            let others = ["doctor", "waves", "show"].map(|c| format!("  {c} "));
+            assert_eq!(
+                others
+                    .iter()
+                    .filter(|o| stdout.contains(o.as_str()))
+                    .count(),
+                1
+            );
+        }
+    }
+    for args in [
+        &[][..],
+        &["nosuch"],
+        &["help", "nosuch"],
+        &["doctor", "--jsn"],
+    ] {
+        assert_eq!(simjig(args).0, Some(2), "{args:?}");
+    }
 }

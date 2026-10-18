@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `cargo simjig doctor --help` (and `-h`, `help doctor`) prints the doctor's own help
+  and exits 0, like `waves` and `show`; `cargo simjig help <command>` prints one
+  command's help. Help that was asked for now goes to stdout (it went to stderr); a
+  usage error still goes to stderr with exit status 2.
 - The hint for a build that failed on lint warnings recommends waiving the one code
   (`-Wno-<CODE>`, `lint_off`) first, and says that `-Wno-fatal` also hides width
   mismatches between an interface and the module bound to it.

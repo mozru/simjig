@@ -13,6 +13,7 @@
 
 mod path;
 mod sv;
+mod sweep;
 mod types;
 mod wrapper;
 
@@ -21,6 +22,7 @@ use svtypes::width::packed_storage;
 
 use self::path::check_probe_path;
 use self::sv::{LayoutSpeller, nameable};
+pub use self::sweep::{PORTS_TRAIT, lower_sweep};
 use self::types::{Root, Types, Use, bits, lower_types};
 use self::wrapper::dut_module;
 pub use self::wrapper::{DUT_INSTANCE, elab_module, lower_wrapper, wrapper_module};

@@ -244,6 +244,52 @@ pub fn probe_paths() -> Case {
     }
 }
 
+/// `cases/sweep` with `W` and `N` set: one member of the sweep tests.
+pub fn sweep_member(name: &str, w: u32, n: u32) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/sweep/design.sv")];
+    let design = json_pass(&JsonPassOpts {
+        sources: sources.clone(),
+        top: "sw_top".to_owned(),
+        params: vec![("W".into(), w.to_string()), ("N".into(), n.to_string())],
+        ..JsonPassOpts::default()
+    })
+    .unwrap_or_else(|e| panic!("{name}: {e}"));
+    Case {
+        name: name.to_owned(),
+        design,
+        config: CodegenConfig::default(),
+        sources,
+    }
+}
+
+/// The two members of the `sw` sweep: `W` 8 and `N` 2, and `W` 200 (wide) and `N` 3.
+pub fn sweep_members() -> Vec<Case> {
+    vec![
+        sweep_member("sw_small", 8, 2),
+        sweep_member("sw_big", 200, 3),
+    ]
+}
+
+/// `cases/iface_param` with `K` set, and the interface's `W` when given: a member of the
+/// interface sweep tests.
+pub fn iface_sweep_member(name: &str, k: u32, w: Option<u32>) -> Case {
+    let sources = vec![manifest().join("tests/codegen_it/cases/iface_param/design.sv")];
+    let iface = IfaceTop {
+        dut: "r_dut".into(),
+        params: vec![("K".into(), k.to_string())],
+        bindings: vec![IfaceBinding {
+            port: "bus".into(),
+            interface: "r_if".into(),
+            params: w
+                .map(|w| ("W".to_owned(), w.to_string()))
+                .into_iter()
+                .collect(),
+            modport: None,
+        }],
+    };
+    through_wrapper(name, sources, iface)
+}
+
 /// Every case: the fixtures, then the Verilator-elaborated ones.
 pub fn all() -> Vec<Case> {
     let mut cases: Vec<Case> = fixture_names().iter().map(|n| fixture(n)).collect();

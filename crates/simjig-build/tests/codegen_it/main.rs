@@ -26,4 +26,5 @@ mod dpi;
 mod errors;
 mod probes;
 mod snapshots;
+pub mod sweep;
 mod verilator;

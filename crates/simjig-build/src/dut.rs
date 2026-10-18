@@ -656,7 +656,7 @@ impl Dut {
             &self.config.include_dirs,
             &env.out_dir,
         )?;
-        let mut warnings = Vec::new();
+        let mut warnings: Vec<String> = env.unshared_cache_warning().into_iter().collect();
         warnings.extend(
             model
                 .changed

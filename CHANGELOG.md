@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The shared cache is found in a target directory without Cargo's `CACHEDIR.TAG` too, by
+  `OUT_DIR`'s layout (`<target>/[<triple>/]<profile>/build/<pkg>-<hash>/out`): a target
+  directory another tool created first (`--target-dir target/rust-analyzer` creates
+  `target/`) has no tag, and every crate fell back to its own `OUT_DIR/simjig-cache`. A
+  build that still falls back warns (`cargo::warning`).
 - Breaking: the runtime's enums that may grow are `#[non_exhaustive]`, so a `match` on them
   outside `simjig` needs a wildcard arm: `simjig::{FailureKind, TraceKind, ClockError,
   TimeError}`.

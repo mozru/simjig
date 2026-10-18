@@ -4,8 +4,8 @@
 // headers and this file, defines a traits struct and exports the vtable:
 //
 //   #include "Vcounter.h"
-//   #include "Vcounter___024root.h"   // only if public internal signals are bound
-//   #include "Vcounter__Syms.h"        // only with kCoverage (the counter arrays live there)
+//   #include "Vcounter___024root.h"   // only with kCoverage (with __Syms.h: the counter arrays)
+//   #include "Vcounter__Syms.h"        // only with kCoverage
 //   #include "simjig_model.h"
 //   struct CounterTraits {
 //       using Model = Vcounter;
@@ -16,8 +16,8 @@
 //       static constexpr bool kCoverage = false; // verilated with --coverage*? (default false)
 //       static void bind(Vcounter& m, simjig::SignalTable& t) {
 //           SIMJIG_SIGNAL(t, m.clk, "clk", 1, SIMJIG_DIR_IN, SIMJIG_ACCESS_READ | SIMJIG_ACCESS_WRITE);
-//           SIMJIG_SIGNAL(t, m.rootp->counter__DOT__state, "counter.state", 4,
-//                         SIMJIG_DIR_INTERNAL, SIMJIG_ACCESS_READ);
+//           SIMJIG_PROBE(t, m, "counter.u_core", "state", "counter.u_core.state", 4,
+//                        SIMJIG_ACCESS_READ);
 //       }
 //   };
 //   SIMJIG_EXPORT_VTABLE(Vcounter, CounterTraits)
@@ -25,9 +25,12 @@
 // Invariants:
 // - Member addresses are taken once, right after construction, in IR slot order; slot i of the
 //   table has id i. Verilator members never move while the model lives.
-// - Each SIMJIG_SIGNAL statically checks that the member's C++ type is exactly the storage
-//   type Verilator uses for that width (so a width/type drift fails the C++ build, not the
-//   simulation).
+// - Each SIMJIG_SIGNAL (a port) statically checks that the member's C++ type is exactly the
+//   storage type Verilator uses for that width (so a width/type drift fails the C++ build, not
+//   the simulation).
+// - Each SIMJIG_PROBE (an internal public_flat variable) is looked up in Verilator's scope
+//   table, which knows its address whether or not its module was inlined, and is checked
+//   there for storage class, exact width and packing (find_probe); a mismatch fails create.
 // - No model code runs outside simjig::guard().
 // - Trace and coverage code is compiled only for kTraceFst / kCoverage models (`if constexpr`
 //   in templates), so a model without them needs neither verilated_fst_c.cpp nor
@@ -224,9 +227,6 @@ struct Vtable final {
             const char* name = opts != nullptr && opts->name != nullptr ? opts->name : "TOP";
             h->model = std::make_unique<Model>(&ctx, name);
             Traits::bind(*h->model, h->table);
-            for (const simjig_signal& s : h->table.signals()) {
-                if (s.dir == SIMJIG_DIR_INTERNAL) check_probe(ctx, h->model->name(), s);
-            }
         });
     }
 
@@ -453,6 +453,13 @@ struct Vtable final {
                       "simjig: size of " name_ " does not match its width");                 \
         (table_).add((width_), (dir_), (access_), (name_), static_cast<void*>(&(member_)));  \
     } while (0)
+
+// Binds one probe: the public_flat variable `var_` of scope `<model name>.<scope_>`, found and
+// checked against `width_` at create (simjig::find_probe throws on a mismatch).
+#define SIMJIG_PROBE(table_, model_, scope_, var_, name_, width_, access_)                   \
+    (table_).add((width_), SIMJIG_DIR_INTERNAL, (access_), (name_),                          \
+                 ::simjig::find_probe(*(model_).contextp(), (model_).name(), (scope_), (var_),  \
+                                      (name_), (width_)))
 
 // Exports the model's single C symbol, `simjig_vtable_<PREFIX>`.
 #define SIMJIG_EXPORT_VTABLE(PREFIX, TRAITS)                                     \

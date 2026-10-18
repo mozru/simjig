@@ -11,7 +11,6 @@
 //!
 //! Type names are decided in [`types`], identifier rules in [`names`](super::names).
 
-mod inlining;
 mod sv;
 mod types;
 mod wrapper;
@@ -40,7 +39,6 @@ use super::{
 /// ports, enums above 128 bits, ...); [`Error::Config`] when probes or interface bindings
 /// do not match the design.
 pub fn lower(design: &Design, config: &CodegenConfig) -> Result<Lowered, Error> {
-    inlining::check(config)?;
     let top = design.top_module();
     let wrapper = config
         .iface_top
@@ -302,7 +300,7 @@ fn slot(index: usize) -> u32 {
 /// The path starts at the DUT the testbench sees. For an interface-ported DUT that is the
 /// DUT module, not the wrapper Verilator elaborates as top: the wrapper is an
 /// implementation detail, so its name is rejected, and the path is rewritten under the
-/// wrapper's [`DUT_INSTANCE`] to find the C++ member.
+/// wrapper's [`DUT_INSTANCE`] to name the scope Verilator registers.
 fn lower_probe(
     design: &Design,
     types: &Types,
@@ -346,25 +344,22 @@ fn lower_probe(
     }
     let storage: Storage = packed_storage(width).map_err(|e| Error::unsupported(item(), e.0))?;
     let var = segments[segments.len() - 1].to_owned();
-    let model_path: Vec<&str> = match wrapper {
+    // Verilator names scopes by the plain instance names (`u__0` stays `u__0`), unlike
+    // C++ members, so the path needs no encoding.
+    let scope_path: Vec<&str> = match wrapper {
         Some(w) => [w.module.as_str(), DUT_INSTANCE]
             .into_iter()
-            .chain(segments[1..].iter().copied())
+            .chain(segments[1..segments.len() - 1].iter().copied())
             .collect(),
-        None => segments.clone(),
+        None => segments[..segments.len() - 1].to_vec(),
     };
-    let root_member = model_path
-        .iter()
-        .map(|s| encode_name(s))
-        .collect::<Vec<_>>()
-        .join("__DOT__");
     let signal = Signal {
         slot,
         name: probe.path.clone(),
         target: SignalTarget::Probe {
             module: probe.module.clone(),
             var,
-            root_member,
+            scope: scope_path.join("."),
         },
         ty,
         width,
@@ -381,12 +376,6 @@ fn lower_probe(
 fn is_simple_ident(s: &str) -> bool {
     s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-/// Verilator's C++ encoding of a plain identifier (`AstNode::encodeName`, 5.052): a `__`
-/// pair becomes `___05F`.
-fn encode_name(name: &str) -> String {
-    name.replace("__", "___05F")
 }
 
 /// Package parameters, one group per package that has any.
@@ -624,9 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn names_are_encoded_like_verilator() {
-        assert_eq!(encode_name("a__b"), "a___05Fb");
-        assert_eq!(encode_name("u_core"), "u_core");
+    fn probe_segments_are_plain_identifiers() {
         assert!(is_simple_ident("_x1") && !is_simple_ident("1x") && !is_simple_ident("a$b"));
     }
 }

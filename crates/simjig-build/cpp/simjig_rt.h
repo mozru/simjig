@@ -142,13 +142,15 @@ int redirect_to_devnull(const FileId& id) noexcept;
 // WARNING naming `what` and the reason, and returns false.
 bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept;
 
-// Checks a probe (a SIMJIG_DIR_INTERNAL signal) against the model's own metadata: the
-// public_flat_rd/_rw variable `<path>` must exist in scope `<model_name>.<path's scope>`,
-// live at `s.ptr`, be packed only, and be exactly `s.width` bits wide. The C++ type check in
-// SIMJIG_SIGNAL only sees the storage class (an 8-bit CData also holds a 5-bit signal), and
-// Verilator's width exists only in these runtime tables (V<prefix>__Syms__Slow.cpp), so the
-// check runs at create. Throws std::runtime_error naming the probe on a mismatch.
-void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s);
+// The address of a probe: the public_flat_rd/_rw variable `var` of scope `<model_name>.<scope>`
+// in the model's scope table (V<prefix>__Syms__Slow.cpp). Verilator registers it there with
+// its real address whether its module was inlined into the root or kept as its own object, so
+// this is the one way to find a probe that does not depend on inlining (V3Inline.cpp in 5.052
+// keeps large multi-use modules, modules with classes and no_inline_module ones apart). The
+// variable must have the storage class Verilator uses for `width`, exactly `width` bits and no
+// unpacked dimension. Throws std::runtime_error naming the probe (`display`) otherwise.
+void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
+                 const char* var, const char* display, uint32_t width);
 
 }  // namespace simjig
 

@@ -53,8 +53,11 @@ fn generated_files_reach_out_dir_verilator_and_the_compiler() {
         .out_dir
         .join(format!("simjig/{}_shim.cpp", built.prefix));
     let shim = std::fs::read_to_string(shim).unwrap();
-    // The probe compiled only because the `.vlt` made the member public.
-    assert!(shim.contains("struct_pipe__DOT__s1_valid"), "{shim}");
+    // The probe is found at create in the scope table that the `.vlt` fills.
+    assert!(
+        shim.contains(r#"SIMJIG_PROBE(t, m, "struct_pipe", "s1_valid""#),
+        "{shim}"
+    );
     assert!(exports_vtable(&env.out_dir, &built));
 }
 

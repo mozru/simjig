@@ -132,25 +132,33 @@ bool probe_writable(Runtime& rt, const char* path, const char* what) noexcept {
     return false;
 }
 
-void check_probe(VerilatedContext& ctx, const char* model_name, const simjig_signal& s) {
-    const std::string path = or_empty(s.name);
-    const size_t dot = path.rfind('.');
-    const std::string scope_name =
-        std::string{or_empty(model_name)} + "." + (dot == std::string::npos ? "" : path.substr(0, dot));
-    const std::string var_name = dot == std::string::npos ? path : path.substr(dot + 1);
+void* find_probe(VerilatedContext& ctx, const char* model_name, const char* scope,
+                 const char* var, const char* display, uint32_t width) {
+    const std::string scope_name = std::string{or_empty(model_name)} + "." + or_empty(scope);
     const auto fail = [&](const std::string& why) {
-        throw std::runtime_error("simjig: probe '" + path + "': " + why);
+        throw std::runtime_error("simjig: probe '" + std::string{or_empty(display)} + "': " + why);
     };
-    const VerilatedScope* scope = ctx.scopeFind(scope_name.c_str());
-    if (scope == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
-    const VerilatedVar* var = scope->varFind(var_name.c_str());
-    if (var == nullptr) fail("no public variable '" + var_name + "' in scope '" + scope_name + "'");
-    if (var->datap() != s.ptr) fail("bound to a different member than the model's variable");
-    if (var->udims() != 0) fail("the model's variable is an unpacked array");
-    if (var->entBits() != s.width) {
-        fail("the model's variable is " + std::to_string(var->entBits()) + " bits wide, but it is bound as "
-             + std::to_string(s.width) + " bits");
+    const VerilatedScope* s = ctx.scopeFind(scope_name.c_str());
+    if (s == nullptr) fail("no scope '" + scope_name + "' in the model (not public_flat?)");
+    const VerilatedVar* v = s->varFind(or_empty(var));
+    if (v == nullptr) {
+        fail("no public variable '" + std::string{or_empty(var)} + "' in scope '" + scope_name
+             + "' (a probe inside a hierarchical block, hier_block, is in another model)");
     }
+    if (v->udims() != 0) fail("the model's variable is an unpacked array");
+    if (v->entBits() != static_cast<int>(width)) {
+        fail("the model's variable is " + std::to_string(v->entBits())
+             + " bits wide, but it is bound as " + std::to_string(width) + " bits");
+    }
+    // verilated_sym_props.h: the storage class Verilator chose for the variable.
+    const VerilatedVarType expected = width <= 8    ? VLVT_UINT8
+                                      : width <= 16 ? VLVT_UINT16
+                                      : width <= 32 ? VLVT_UINT32
+                                      : width <= 64 ? VLVT_UINT64
+                                                    : VLVT_WDATA;
+    if (v->vltype() != expected) fail("the model's variable is not stored as a packed vector");
+    if (v->datap() == nullptr) fail("the model's variable has no address");
+    return v->datap();
 }
 
 Runtime::Runtime(const simjig_create_opts* opts, bool coroutines)

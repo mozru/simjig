@@ -103,7 +103,7 @@ fn iface_dut_parameters_become_dut_consts() {
 }
 
 /// A probe below an interface-ported DUT is spelled from the DUT (`r_dut.u_core.acc`); the
-/// lowering finds it under the wrapper's `dut` instance, which Verilator then exposes.
+/// lowering names its scope under the wrapper's `dut` instance, which Verilator registers.
 #[test]
 fn iface_dut_probes_are_spelled_from_the_dut() {
     let mut case = cases::iface_param();
@@ -117,19 +117,19 @@ fn iface_dut_probes_are_spelled_from_the_dut() {
     let lowered = lower(&case.design, &case.config).unwrap();
     let signal = lowered.signals.last().unwrap();
     assert_eq!(signal.name, "r_dut.u_core.acc");
-    let SignalTarget::Probe { root_member, .. } = &signal.target else {
+    let SignalTarget::Probe { scope, var, .. } = &signal.target else {
         panic!("not a probe: {signal:?}")
     };
     assert_eq!(
-        root_member,
-        "simjig_wrap_r_dut__DOT__dut__DOT__u_core__DOT__acc"
+        (scope.as_str(), var.as_str()),
+        ("simjig_wrap_r_dut.dut.u_core", "acc")
     );
     assert!(matches!(
         lowered.fields.last(),
         Some(DutField::Signal { name, .. }) if name == "u_core_acc"
     ));
 
-    // Verilator declares exactly that root member.
+    // Verilator registers exactly that scope and variable.
     let dir = cases::scratch("iface_param_probe");
     let vlt = dir.join("probes.vlt");
     fs::write(&vlt, emit_vlt(&lowered)).unwrap();
@@ -150,8 +150,9 @@ fn iface_dut_probes_are_spelled_from_the_dut() {
         &files,
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let root = fs::read_to_string(mdir.join("Vp___024root.h")).unwrap();
-    assert!(root.contains(&format!(" {root_member};")), "{root}");
+    let syms = fs::read_to_string(mdir.join("Vp__Syms__Slow.cpp")).unwrap();
+    assert!(syms.contains(&format!("\"{scope}\"")), "{syms}");
+    assert!(syms.contains(&format!("{{\"{var}\", offsetof")), "{syms}");
 
     // The wrapper's own name is an implementation detail and is rejected.
     case.config.probes = vec![probe("simjig_wrap_r_dut.dut.u_core.acc")];

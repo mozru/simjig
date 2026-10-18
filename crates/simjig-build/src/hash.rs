@@ -65,9 +65,7 @@ impl KeyHasher {
 /// The IR hash that the generated Rust and the C++ shim both carry, so a model built from
 /// another IR is rejected at load: the first 64 bits of a [`KeyHasher`] digest of the IR
 /// (as JSON, the IR's versioned form) and of every field of `config` that shapes the
-/// generated code. `verilator_args` and `control_files` are left out: `lower` reads them
-/// only to reject a configuration, so they never change the generated Rust or C++ (and
-/// the model's cache key already covers the build's arguments and files).
+/// generated code.
 pub(crate) fn ir_hash(design: &Design, config: &CodegenConfig) -> u64 {
     let mut h = KeyHasher::new("simjig-ir-hash-v1");
     // Serialising plain derived structs to a Vec cannot fail.
@@ -241,20 +239,6 @@ mod tests {
             ir_hash(&design("t"), &base),
             ir_hash(&design("t"), &base.clone())
         );
-    }
-
-    #[test]
-    fn ir_hash_ignores_the_reject_only_fields() {
-        let base = CodegenConfig {
-            probes: vec![probe(ProbeAccess::Read)],
-            ..CodegenConfig::default()
-        };
-        let with = CodegenConfig {
-            verilator_args: vec!["-fno-inline".into()],
-            control_files: vec!["`verilator_config\n".into()],
-            ..base.clone()
-        };
-        assert_eq!(ir_hash(&design("t"), &base), ir_hash(&design("t"), &with));
     }
 
     #[test]

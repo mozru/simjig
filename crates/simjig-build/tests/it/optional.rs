@@ -55,7 +55,8 @@ fn command(krate: &Path, target: &Path, args: &[&str]) -> Command {
         // simjig's own test models are for its repository; the fixture builds none.
         .env("SIMJIG_TEST_MODELS", "0")
         .env_remove("SIMJIG_CACHE_DIR")
-        .env_remove("FIXTURE_BREAK");
+        .env_remove("FIXTURE_BREAK")
+        .env_remove("FIXTURE_FATAL");
     command
 }
 
@@ -106,6 +107,15 @@ fn a_failed_optional_dut_is_a_compile_error_or_gated_off() {
     );
     let out = text(&gated);
     assert!(gated.status.success(), "{out}");
+    // The cause is warned once, by `Dut::build`; the script's own warning only says what
+    // it skipped.
+    let warned = |what: &str| {
+        out.lines()
+            .filter(|l| l.starts_with("warning: ") && l.contains(what))
+            .count()
+    };
+    assert_eq!(warned("simjig: elaborating DUT `opt` failed"), 1, "{out}");
+    assert_eq!(warned("Cannot find file"), 1, "{out}");
     assert!(out.contains("optional DUT `opt` skipped"), "{out}");
     assert!(out.contains("test opt_skipped ... ok"), "{out}");
     assert!(!out.contains("opt_built"), "{out}");
@@ -138,4 +148,50 @@ fn a_failed_optional_dut_is_a_compile_error_or_gated_off() {
         assert!(out.contains(ran), "{ran}:\n{out}");
     }
     assert!(!out.contains("opt_skipped"), "{out}");
+}
+
+/// Whether `line` is one of Cargo's progress lines, which come before anything a build
+/// script printed.
+fn is_progress(line: &str) -> bool {
+    let line = line.trim_start();
+    line.is_empty()
+        || [
+            "Compiling ",
+            "Blocking ",
+            "Locking ",
+            "Adding ",
+            "Checking ",
+        ]
+        .iter()
+        .any(|p| line.starts_with(p))
+}
+
+/// A script that returns a failed DUT's error: Cargo prints its warnings, then dumps its
+/// whole stdout (every `rerun-if` line, which a handled failure needs and a script cannot
+/// hold back until it knows its exit status), and last its stderr, the error. The cause
+/// leads anyway: the first line after Cargo's progress is `Dut::build`'s warning of the
+/// headline, above the dump.
+#[test]
+fn a_failed_scripts_output_leads_with_the_cause() {
+    let (krate, target, _lock) = fixture();
+    let out = command(&krate, &target, &["build", "--offline", "--tests"])
+        .env("FIXTURE_BREAK", "1")
+        .env("FIXTURE_FATAL", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    let first = stderr.lines().find(|l| !is_progress(l)).unwrap_or_default();
+    let missing = krate.join("duts/inv/missing.sv");
+    assert_eq!(
+        first,
+        format!(
+            "warning: simjig-fixture-optional@0.0.0: simjig: elaborating DUT `opt` failed \
+             (exit status: 1): Cannot find file containing module: '{}'",
+            missing.display()
+        ),
+        "{stderr}"
+    );
+    let dump = stderr.find("--- stdout").expect(&stderr);
+    assert!(stderr.find(first).unwrap() < dump, "{stderr}");
 }

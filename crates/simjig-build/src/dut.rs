@@ -891,13 +891,19 @@ impl Dut {
     /// On success the directives include `cargo::rustc-cfg=simjig_dut_<name>` (with its
     /// `rustc-check-cfg`), so code can be gated on the model: `#[cfg(simjig_dut_<name>)]`.
     ///
-    /// On failure it returns the error, and prints only `rerun-if-changed` and
+    /// On failure it returns the error, and prints first the cause as `cargo::warning=`
+    /// lines (its hints, its headline and, when the headline cannot carry it, the first
+    /// diagnostic), which Cargo shows above everything else the script printed, whether
+    /// the script then fails or handles the error. Then only `rerun-if-changed` and
     /// `rerun-if-env-changed` lines for the inputs the configuration names (sources,
     /// include directories, `-f`/`-F` option files and the sources, `-v` files, `-y` and
     /// include directories they or the extra arguments name, the recipe's files) and the variables
     /// that locate Verilator, and the `rustc-check-cfg` line (no `rustc-cfg`): the script
-    /// decides. Returned from `main` with `?` (or unwrapped), the error is printed on
-    /// stderr, which Cargo shows last, after its dump of the script's stdout. A script
+    /// decides. Returned from `main` with `?` (or unwrapped), the error is printed in full
+    /// on stderr, which Cargo shows last, after its dump of the script's stdout; that dump
+    /// repeats every line above, the reruns included, and nothing a script prints can
+    /// shorten it (the reruns cannot wait for the script's exit status, which a handled
+    /// failure needs them for). A script
     /// that handles the error (an optional model) and exits 0 builds, and reruns when the
     /// failed DUT's inputs change: without those lines Cargo would rerun it only for the
     /// other DUTs' inputs. No `cargo::error=` line: it would fail the build even when the
@@ -920,7 +926,12 @@ impl Dut {
                 }
             })
             .and_then(|env| self.build_in(&env))
-            .inspect_err(|_| {
+            .inspect_err(|e| {
+                // Cargo prints warnings above its dump of a failed script's stdout, so
+                // the cause leads the output as well as ending it (on stderr).
+                for line in e.summary() {
+                    println!("cargo::warning=simjig: {line}");
+                }
                 for line in &reruns {
                     println!("{line}");
                 }

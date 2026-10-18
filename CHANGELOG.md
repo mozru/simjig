@@ -4,6 +4,12 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A failed `Dut::build` prints its cause first, as `cargo::warning=simjig: ..` lines: its
+  hints, its headline and, when the headline cannot carry it (a fatal `%Warning-` under
+  the default lint), that diagnostic. Cargo shows the warnings above its dump of a failed
+  script's stdout, so the cause now leads the output as well as ending it. A script that
+  handles the error gets the same warning: one that also warns the error's first line,
+  as the README's optional-DUT example used to, now warns it twice and can drop it.
 - A build that stops on a width diagnostic (`%Warning-WIDTHTRUNC` under the default
   fatal lint, or an `-Werror-WIDTH*` in the JSON pass) of a DUT whose module and a bound
   interface default a shared parameter to different values starts its error with

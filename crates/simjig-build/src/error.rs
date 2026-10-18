@@ -235,6 +235,39 @@ impl Error {
             hints: Box::default(),
         }
     }
+
+    /// The lines that say why the build failed, short enough to print as warnings above
+    /// Cargo's dump of a failed script's stdout: the hints and the headline (the message
+    /// up to its first line that is not a `hint:`), then, for a tool run whose headline
+    /// could not carry the first diagnostic (a fatal `%Warning-`, which Verilator's
+    /// default lint stops on), that diagnostic's line.
+    pub(crate) fn summary(&self) -> Vec<String> {
+        let text = self.to_string();
+        let mut out = Vec::new();
+        for line in text.lines() {
+            out.push(line.to_owned());
+            if !line.starts_with("hint: ") {
+                break;
+            }
+        }
+        if let Self::Command { stderr, .. } = self
+            && first_error(stderr).and_then(parse_error).is_none()
+            && let Some(d) = stderr.lines().find(|l| {
+                (l.starts_with("%Error") || l.starts_with("%Warning-"))
+                    && !l.starts_with("%Error: Exiting due to")
+            })
+        {
+            out.push(d.to_owned());
+        }
+        out
+    }
+}
+
+/// The first `%Error` line of a Verilator `stderr`, which the headline carries.
+fn first_error(stderr: &str) -> Option<&str> {
+    stderr
+        .lines()
+        .find(|l| is_error_line(l) && !l.starts_with("%Error: Exiting due to"))
 }
 
 impl fmt::Debug for Error {
@@ -461,9 +494,7 @@ fn display_command_failure(
     // The headline (the first line after any hints) is what a build script reporting a
     // handled failure prints, so it carries the first error; the excerpt then shows it
     // once, in the headline.
-    let first = stderr
-        .lines()
-        .find(|l| is_error_line(l) && !l.starts_with("%Error: Exiting due to"));
+    let first = first_error(stderr);
     let headline = match first.and_then(parse_error) {
         Some((code, Some(loc), msg)) => {
             let code = code.map(|c| format!("{c}: ")).unwrap_or_default();
@@ -651,6 +682,43 @@ mod tests {
             err.to_string(),
             "hint: one\nhint: two\nverilating DUT `d` failed (exit status: 1) at \
              /r/d.sv:2:3: WIDTHTRUNC: too wide\ncommand: verilator --cc d.sv"
+        );
+    }
+
+    /// The summary is the hints and the headline, and the first diagnostic only when the
+    /// headline cannot carry it: a fatal `%Warning-` under the default lint.
+    #[test]
+    fn the_summary_is_the_hints_the_headline_and_an_unparsed_diagnostic() {
+        let command = |stderr: &str, hints: Vec<String>| Error::Command {
+            what: "verilating DUT `d`".into(),
+            command: "verilator --cc d.sv".into(),
+            status: Some(1),
+            stderr: stderr.into(),
+            path: None,
+            hints: Box::new(hints),
+        };
+        let lint = "%Warning-WIDTHTRUNC: /r/d.sv:2:3: too wide\n    2 | x\n\
+                    %Error: Exiting due to 1 warning(s)\n";
+        assert_eq!(
+            command(lint, vec!["one".into()]).summary(),
+            [
+                "hint: one",
+                "verilating DUT `d` failed (exit status: 1)",
+                "%Warning-WIDTHTRUNC: /r/d.sv:2:3: too wide",
+            ]
+        );
+        let error = "%Error: /r/d.sv:2:3: syntax error\n    2 | x\n";
+        assert_eq!(
+            command(error, Vec::new()).summary(),
+            ["verilating DUT `d` failed (exit status: 1) at /r/d.sv:2:3: syntax error"]
+        );
+        let config = Error::Config {
+            dut: "d".into(),
+            msg: "no sources\nhint: add one".into(),
+        };
+        assert_eq!(
+            config.summary(),
+            ["invalid DUT `d` configuration: no sources"]
         );
     }
 

@@ -13,9 +13,9 @@ fn main() -> Result<(), Error> {
     dut("inv").build()?;
     dut("flop").build()?;
     // No sources: a configuration error, found before anything is built.
-    if let Err(e) = Dut::new("optional").top("optional").build() {
-        let first = e.to_string().lines().next().unwrap_or_default().to_owned();
-        println!("cargo::warning=optional DUT skipped: {first}");
+    // `Dut::build` printed the cause as a warning already.
+    if Dut::new("optional").top("optional").build().is_err() {
+        println!("cargo::warning=optional DUT skipped");
     }
     Ok(())
 }

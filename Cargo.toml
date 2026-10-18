@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-svtypes = { path = "crates/svtypes" }
+svtypes = { path = "crates/svtypes", version = "0.0.0" }
 simjig-bits = { path = "crates/simjig-bits" }
 simjig-build = { path = "crates/simjig-build" }
 simjig-macros = { path = "crates/simjig-macros", version = "=0.0.0" }

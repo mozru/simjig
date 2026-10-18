@@ -23,8 +23,13 @@ pub struct BuildEnv {
     pub target: String,
     /// Host triple (`HOST`).
     pub host: String,
-    /// Optimisation level for the C++ (`OPT_LEVEL`: `0`-`3`, `s` or `z`).
-    pub opt_level: String,
+    /// Optimisation level for all C++ (`-O<cxx_opt>`): `SIMJIG_CXX_OPT` when set, else
+    /// [`BuildEnv::DEFAULT_CXX_OPT`]. Deliberately *not* Cargo's `OPT_LEVEL`: a dev build
+    /// compiles Verilator output at `-O0`, which makes models unusably slow, and model
+    /// code is not what a testbench author debugs. `CXXFLAGS` from the environment come
+    /// after it on the compiler command line (the `cc` crate's order), so an `-O` there
+    /// still wins.
+    pub cxx_opt: String,
     /// Whether to emit debug info in the C++ (`DEBUG`).
     pub debug: bool,
     /// `PATH`, searched for `verilator` and `ccache`.
@@ -46,20 +51,37 @@ pub struct BuildEnv {
     pub cxxstdlib: Option<OsString>,
     /// `CARGO_TARGET_DIR`, used for the shared cache when it is an absolute path.
     pub cargo_target_dir: Option<PathBuf>,
+    /// `CONDA_PREFIX` (set by `pixi run`): its `lib/` is searched for the FST tracing
+    /// libraries (lz4, zlib).
+    pub conda_prefix: Option<PathBuf>,
+    /// `LDFLAGS`: its `-L` directories are searched for the FST tracing libraries.
+    pub ldflags: Option<OsString>,
 }
 
 impl BuildEnv {
     /// Variables whose change must rerun the build script.
+    ///
+    /// `PATH` is among them because `verilator` and `ccache` are looked up on it. The
+    /// cost is a rerun whenever a shell changes `PATH`; the alternative, missing a switch
+    /// to a different Verilator, would silently keep a stale model.
     pub const TRACKED_VARS: &'static [&'static str] = &[
+        "PATH",
         "VERILATOR_ROOT",
         "SIMJIG_VERILATOR",
         "SIMJIG_CACHE_DIR",
         "SIMJIG_CCACHE",
+        "SIMJIG_CXX_OPT",
         "CARGO_TARGET_DIR",
+        "CONDA_PREFIX",
+        "LDFLAGS",
         "CXX",
         "CXXFLAGS",
         "CXXSTDLIB",
     ];
+
+    /// The C++ optimisation level when `SIMJIG_CXX_OPT` is not set: Verilator's own
+    /// recommendation for model code.
+    pub const DEFAULT_CXX_OPT: &'static str = "2";
 
     /// Reads the environment Cargo gives a build script.
     pub fn from_cargo() -> Result<Self, Error> {
@@ -70,7 +92,7 @@ impl BuildEnv {
             out_dir: PathBuf::from(req("OUT_DIR")?),
             target: req("TARGET")?,
             host: req("HOST")?,
-            opt_level: req("OPT_LEVEL")?,
+            cxx_opt: cxx_opt(opt("SIMJIG_CXX_OPT"))?,
             debug: req("DEBUG")? != "false",
             path: opt("PATH"),
             verilator_root: opt("VERILATOR_ROOT").map(PathBuf::from),
@@ -80,7 +102,27 @@ impl BuildEnv {
             cxx: opt("CXX"),
             cxxstdlib: std::env::var_os("CXXSTDLIB"),
             cargo_target_dir: opt("CARGO_TARGET_DIR").map(PathBuf::from),
+            conda_prefix: opt("CONDA_PREFIX").map(PathBuf::from),
+            ldflags: opt("LDFLAGS"),
         })
+    }
+
+    /// Directories to search for native libraries the model needs beyond the C++
+    /// standard library: the `-L` directories of `LDFLAGS`, then `$CONDA_PREFIX/lib`.
+    pub(crate) fn lib_dirs(&self) -> Vec<PathBuf> {
+        let ldflags = self
+            .ldflags
+            .as_ref()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut dirs: Vec<PathBuf> = ldflags
+            .split_whitespace()
+            .filter_map(|f| f.strip_prefix("-L"))
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        dirs.extend(self.conda_prefix.as_ref().map(|p| p.join("lib")));
+        dirs
     }
 
     /// The shared cache directory, in this order: `SIMJIG_CACHE_DIR`;
@@ -115,6 +157,23 @@ impl BuildEnv {
     }
 }
 
+/// Validates `SIMJIG_CXX_OPT`: the levels both GCC and Clang accept.
+fn cxx_opt(value: Option<OsString>) -> Result<String, Error> {
+    let Some(value) = value else {
+        return Ok(BuildEnv::DEFAULT_CXX_OPT.to_owned());
+    };
+    let v = value.to_string_lossy();
+    if ["0", "1", "2", "3", "s", "z", "g"].contains(&v.as_ref()) {
+        Ok(v.into_owned())
+    } else {
+        Err(Error::BadEnv {
+            var: "SIMJIG_CXX_OPT",
+            value: v.into_owned(),
+            expected: "one of 0, 1, 2, 3, s, z, g (the `-O` level for model C++)",
+        })
+    }
+}
+
 /// Cargo writes `CACHEDIR.TAG` at the root of every target (and build) directory.
 fn target_dir_above(out_dir: &Path) -> Option<&Path> {
     out_dir
@@ -145,7 +204,7 @@ mod tests {
             out_dir: out_dir.to_path_buf(),
             target: String::new(),
             host: String::new(),
-            opt_level: "0".into(),
+            cxx_opt: "2".into(),
             debug: false,
             path: None,
             verilator_root: None,
@@ -155,7 +214,43 @@ mod tests {
             cxx: None,
             cxxstdlib: None,
             cargo_target_dir: None,
+            conda_prefix: None,
+            ldflags: None,
         }
+    }
+
+    #[test]
+    fn cxx_opt_defaults_to_o2_and_validates_overrides() {
+        assert_eq!(cxx_opt(None).unwrap(), "2");
+        assert_eq!(cxx_opt(Some("0".into())).unwrap(), "0");
+        assert_eq!(cxx_opt(Some("s".into())).unwrap(), "s");
+        assert_eq!(
+            cxx_opt(Some("-O3".into())).unwrap_err().to_string(),
+            "environment variable `SIMJIG_CXX_OPT` is `-O3`; expected one of 0, 1, 2, 3, s, z, g \
+             (the `-O` level for model C++)"
+        );
+    }
+
+    #[test]
+    fn path_and_cxx_opt_are_tracked() {
+        for var in ["PATH", "SIMJIG_CXX_OPT", "CONDA_PREFIX", "LDFLAGS"] {
+            assert!(BuildEnv::TRACKED_VARS.contains(&var), "{var}");
+        }
+    }
+
+    #[test]
+    fn lib_dirs_come_from_ldflags_then_conda() {
+        let mut e = env(Path::new("/o"));
+        e.ldflags = Some("-Wl,-rpath,/x -L/a/lib -O1 -L/b".into());
+        e.conda_prefix = Some(PathBuf::from("/conda"));
+        assert_eq!(
+            e.lib_dirs(),
+            [
+                PathBuf::from("/a/lib"),
+                PathBuf::from("/b"),
+                PathBuf::from("/conda/lib")
+            ]
+        );
     }
 
     #[test]

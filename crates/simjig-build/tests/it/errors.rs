@@ -11,6 +11,7 @@ fn verilator_errors_name_the_command_and_file() {
     let broken = rtl.join("broken.sv");
     let err = Dut::new("broken")
         .sources([&broken])
+        .top("broken")
         .build_in(&s.env())
         .unwrap_err();
     let Error::Command {
@@ -22,12 +23,9 @@ fn verilator_errors_name_the_command_and_file() {
     else {
         panic!("expected a command error, got {err}");
     };
+    // The JSON pass runs first, so it is the one that reports the syntax error.
     assert!(
-        command.starts_with(&s.wrapper().display().to_string()),
-        "{command}"
-    );
-    assert!(
-        command.contains(" --cc ") && command.contains("broken.sv"),
+        command.contains(" --json-only ") && command.contains("broken.sv"),
         "{command}"
     );
     assert!(stderr.contains("%Error"), "{stderr}");
@@ -62,7 +60,11 @@ fn unsupported_verilator_versions_are_rejected() {
     );
     let mut env = s.env();
     env.simjig_verilator = Some(fake.clone());
-    let err = Dut::new("c").sources(["x.sv"]).build_in(&env).unwrap_err();
+    let err = Dut::new("c")
+        .sources(["x.sv"])
+        .top("c")
+        .build_in(&env)
+        .unwrap_err();
     assert_eq!(
         err.to_string(),
         format!(
@@ -79,7 +81,11 @@ fn an_explicit_verilator_that_does_not_exist_is_an_error() {
     let mut env = s.env();
     let missing = s.path().join("nope/verilator");
     env.simjig_verilator = Some(missing.clone());
-    let err = Dut::new("c").sources(["x.sv"]).build_in(&env).unwrap_err();
+    let err = Dut::new("c")
+        .sources(["x.sv"])
+        .top("c")
+        .build_in(&env)
+        .unwrap_err();
     assert!(
         matches!(&err, Error::VerilatorNotFound { searched } if searched == &[missing]),
         "{err}"
@@ -88,6 +94,10 @@ fn an_explicit_verilator_that_does_not_exist_is_an_error() {
     // Without overrides, PATH is searched and every candidate is reported.
     env.simjig_verilator = None;
     env.path = Some(s.path().join("empty-bin").into_os_string());
-    let err = Dut::new("c").sources(["x.sv"]).build_in(&env).unwrap_err();
+    let err = Dut::new("c")
+        .sources(["x.sv"])
+        .top("c")
+        .build_in(&env)
+        .unwrap_err();
     assert!(err.to_string().contains("empty-bin/verilator"), "{err}");
 }

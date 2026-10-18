@@ -1,52 +1,33 @@
 //! The `build.rs`-facing description of one design under test, and the build pipeline.
 //!
-//! [`Dut`] records configuration only. [`Dut::build`] then runs the pipeline in a fixed
-//! order: locate Verilator, verilate through the content-hash cache, cross-check the
-//! header ports, compile the C++ and emit Cargo directives.
+//! [`Dut`] records configuration only. [`Dut::build_in`] then runs the pipeline in a
+//! fixed order:
+//! 1. locate and version-check Verilator;
+//! 2. claim the prefix (see `pipeline::claim`): two configurations must never share one;
+//! 3. the JSON pass (`svtypes::verilator::json_pass`) with the same sources, `-I`, `-D`,
+//!    `-G` and extra arguments, always `--no-timing`, giving the type IR. A DUT with
+//!    interface ports takes two passes through generated tops (`pipeline::design_ir`);
+//! 4. the [`Emitter`] turns the IR into the Rust bindings, the C++ shim, a `.vlt` file
+//!    and a layout check (see [`crate::emit`] for where each goes), and the layout check
+//!    is linted;
+//! 5. verilate (`--cc`) through the content-hash cache, with the `.vlt` and wrapper;
+//! 6. cross-check the header's ports against the IR's (or the emitter's);
+//! 7. compile and link the C++ (see `compile`), and collect the `cargo::` directives.
 //!
-//! Seams for the emitters (which are not written yet): they read [`DutConfig`] (probes,
-//! interface bindings, the model prefix) and plug results back in through three inputs,
-//! all of which are hashed into the cache keys:
-//! - [`Dut::verilator_input`]: generated Verilator inputs (`.vlt`, wrapper SV);
-//! - [`Dut::recipe`]: the [`CppRecipe`] (runtime sources, shim, defines);
-//! - [`Dut::expect_ports`]: the ports the IR expects, checked against the header.
+//! The IR comes before verilation because the emitters' outputs are Verilator inputs.
 
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
+use svtypes::ir::Design;
+
+use crate::codegen::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 use crate::compile::{self, CppRecipe};
+use crate::emit::{self, Emitter};
 use crate::hash::KeyHasher;
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error, cache};
-
-/// How a probed internal signal may be accessed from Rust.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Access {
-    /// Read only (`public_flat_rd`).
-    Rd,
-    /// Read and write (`public_flat_rw`).
-    Rw,
-}
-
-/// An internal signal the testbench wants to see, e.g. `u_ctl.state`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Probe {
-    /// Hierarchical path below the top module.
-    pub path: String,
-    /// Requested access.
-    pub access: Access,
-}
-
-/// Binds an interface-typed top-level port to the interface that the generated wrapper
-/// instantiates for it (DECISION.md §2 #9).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IfaceBinding {
-    /// The top-level port name, e.g. `s_axis`.
-    pub port: String,
-    /// The interface (or `interface.modport`) to instantiate, e.g. `axis_if`.
-    pub iface: String,
-}
+use crate::{BuildEnv, Error, cache, pipeline};
 
 /// A file generated before verilation (a `.vlt` control file or a wrapper module). It is
 /// stored content-addressed in the shared cache, so its path is the same in every crate.
@@ -71,11 +52,11 @@ pub struct DutConfig {
     pub defines: Vec<(String, String)>,
     /// Top-level parameter overrides (`-G`).
     pub params: Vec<(String, String)>,
-    /// Top module; Verilator picks it when `None`.
+    /// Top module. Required by [`Dut::build`]: the JSON pass and the emitters need it.
     pub top: Option<String>,
     /// Internal signals to expose.
     pub probes: Vec<Probe>,
-    /// Interface-port bindings.
+    /// Interface-port bindings; non-empty makes the generated wrapper the model top.
     pub ifaces: Vec<IfaceBinding>,
     /// `--timing` instead of `--no-timing`.
     pub timing: bool,
@@ -94,8 +75,8 @@ impl DutConfig {
     /// variants of one design can link into one binary.
     ///
     /// It covers every setting that changes the model's code (sources by path, flags,
-    /// params, probes, bindings) but not file contents or generated inputs, so emitters
-    /// can compute it before generating anything.
+    /// params, probes, bindings, user-supplied generated inputs) but not file contents
+    /// or emitter outputs, so emitters can compute it before generating anything.
     pub fn prefix(&self) -> String {
         let mut h = KeyHasher::new("simjig-prefix-v1");
         h.str(&self.name);
@@ -110,10 +91,10 @@ impl DutConfig {
             h.str(k).str(v);
         }
         for p in &self.probes {
-            h.str(&p.path).str(&format!("{:?}", p.access));
+            h.str(&format!("{p:?}"));
         }
         for b in &self.ifaces {
-            h.str(&b.port).str(&b.iface);
+            h.str(&format!("{b:?}"));
         }
         h.field(&[
             u8::from(self.timing),
@@ -123,12 +104,21 @@ impl DutConfig {
         for a in &self.verilator_args {
             h.str(a);
         }
+        for g in &self.generated {
+            h.str(&g.file_name).str(&g.contents);
+        }
         format!("V{}_{}", self.name, &h.finish()[..8])
     }
 
-    /// The Verilator arguments, without `-Mdir`. `generated` are the on-disk paths of
-    /// [`DutConfig::generated`].
-    pub(crate) fn verilator_args(&self, prefix: &str, generated: &[PathBuf]) -> Vec<String> {
+    /// The Verilator arguments, without `-Mdir`. `top` is the module to verilate (the
+    /// user's top or the emitted wrapper); `generated` are the on-disk paths of the
+    /// generated inputs, passed before the sources.
+    pub(crate) fn verilator_args(
+        &self,
+        prefix: &str,
+        top: &str,
+        generated: &[PathBuf],
+    ) -> Vec<String> {
         let mut a: Vec<String> = ["--cc", "--MMD", "--prefix", prefix]
             .map(str::to_owned)
             .into();
@@ -146,16 +136,18 @@ impl DutConfig {
         if self.coverage {
             a.push("--coverage".to_owned());
         }
-        if let Some(top) = &self.top {
-            a.extend(["--top-module".to_owned(), top.clone()]);
-        }
+        a.extend(["--top-module".to_owned(), top.to_owned()]);
         a.extend(
             self.include_dirs
                 .iter()
                 .map(|d| format!("-I{}", d.display())),
         );
         a.extend(self.defines.iter().map(|(k, v)| format!("-D{k}={v}")));
-        a.extend(self.params.iter().map(|(k, v)| format!("-G{k}={v}")));
+        // With interface ports the wrapper is the top, so `-G` would reach the wrapper:
+        // the DUT's parameters go into the wrapper instead (`IfaceTop::params`).
+        if self.ifaces.is_empty() {
+            a.extend(self.params.iter().map(|(k, v)| format!("-G{k}={v}")));
+        }
         a.extend(
             generated
                 .iter()
@@ -166,7 +158,51 @@ impl DutConfig {
         a
     }
 
-    fn validate(&self) -> Result<(), Error> {
+    /// What [`crate::codegen::lower`] needs besides the IR.
+    pub fn codegen_config(&self) -> CodegenConfig {
+        CodegenConfig {
+            probes: self.probes.clone(),
+            iface_top: self.iface_top(),
+        }
+    }
+
+    /// The wrapper plan's inputs, when the DUT has interface ports.
+    pub(crate) fn iface_top(&self) -> Option<IfaceTop> {
+        (!self.ifaces.is_empty()).then(|| IfaceTop {
+            dut: self.top.clone().unwrap_or_default(),
+            params: self.params.clone(),
+            bindings: self.ifaces.clone(),
+        })
+    }
+
+    /// The JSON pass inputs: the same design as the model build sees. `extra` sources
+    /// (generated tops) come after the user's; `-G` is passed only without a wrapper.
+    pub(crate) fn json_pass_opts(
+        &self,
+        top: &str,
+        extra: &[PathBuf],
+    ) -> svtypes::verilator::JsonPassOpts {
+        let params = if self.ifaces.is_empty() {
+            self.params.clone()
+        } else {
+            Vec::new()
+        };
+        svtypes::verilator::JsonPassOpts {
+            sources: self.sources.iter().chain(extra).cloned().collect(),
+            top: top.to_owned(),
+            defines: self
+                .defines
+                .iter()
+                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                .collect(),
+            params,
+            include_dirs: self.include_dirs.clone(),
+            extra_args: self.verilator_args.clone(),
+        }
+    }
+
+    /// Checks the configuration and returns the top module.
+    fn validate(&self) -> Result<&str, Error> {
         let fail = |msg: String| {
             Err(Error::Config {
                 dut: self.name.clone(),
@@ -193,7 +229,10 @@ impl DutConfig {
         {
             return fail("a source or include path is empty".to_owned());
         }
-        Ok(())
+        match self.top.as_deref() {
+            Some(top) if !top.is_empty() => Ok(top),
+            _ => fail("no top module; set it with `.top(\"module\")`".to_owned()),
+        }
     }
 }
 
@@ -210,6 +249,10 @@ pub struct Built {
     pub cache: CacheStatus,
     /// The Verilator that was used.
     pub verilator: Verilator,
+    /// The type IR of the user's design, from the JSON pass.
+    pub design: Design,
+    /// `OUT_DIR/simjig/<name>.rs`, when the emitter generated Rust.
+    pub rust_file: Option<PathBuf>,
     /// The `cargo::` lines this build needs, in order. [`Dut::build`] prints them.
     pub directives: Vec<String>,
 }
@@ -233,21 +276,32 @@ impl Built {
 /// A design under test, configured from `build.rs`.
 ///
 /// ```no_run
-/// use simjig_build::{Access, Dut};
+/// use simjig_build::{Dut, ProbeAccess, ProbeType};
 /// // In build.rs:
 /// Dut::new("fifo")
 ///     .sources(["rtl/fifo.sv"])
+///     .top("fifo")
 ///     .param("DEPTH", 16)
-///     .probe("u_ctl.state", Access::Rd)
+///     .probe("fifo.u_ctl.state", "fifo_ctl", ProbeType::Bits { width: 2 }, ProbeAccess::Read)
 ///     .build()?;
 /// # Ok::<(), simjig_build::Error>(())
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[must_use]
 pub struct Dut {
     config: DutConfig,
     recipe: CppRecipe,
-    expected_ports: Option<Vec<HeaderPort>>,
+    emitter: Emitter,
+}
+
+impl Default for Dut {
+    fn default() -> Self {
+        Self {
+            config: DutConfig::default(),
+            recipe: CppRecipe::default(),
+            emitter: emit::DEFAULT_EMITTER,
+        }
+    }
 }
 
 impl Dut {
@@ -297,17 +351,43 @@ impl Dut {
         self
     }
 
-    /// Exposes an internal signal (a hierarchical path below the top).
-    pub fn probe(mut self, path: impl Into<String>, access: Access) -> Self {
-        let path = path.into();
-        self.config.probes.push(Probe { path, access });
+    /// Exposes an internal signal. `path` starts at the top module
+    /// (`counter.u_core.state`); `module` is the module that declares the variable and
+    /// `ty` its type, because the type IR has no internal variables to look them up in.
+    pub fn probe(
+        mut self,
+        path: impl Into<String>,
+        module: impl Into<String>,
+        ty: ProbeType,
+        access: ProbeAccess,
+    ) -> Self {
+        self.config.probes.push(Probe {
+            path: path.into(),
+            module: module.into(),
+            ty,
+            access,
+        });
         self
     }
 
-    /// Binds an interface-typed top-level port to the interface to instantiate for it.
-    pub fn bind_iface(mut self, port: impl Into<String>, iface: impl Into<String>) -> Self {
-        let (port, iface) = (port.into(), iface.into());
-        self.config.ifaces.push(IfaceBinding { port, iface });
+    /// Binds an interface port of the top to the interface the generated wrapper
+    /// instantiates for it: `iface` is `interface` or `interface.modport`.
+    pub fn bind_iface(self, port: impl Into<String>, iface: &str) -> Self {
+        let (interface, modport) = match iface.split_once('.') {
+            Some((i, m)) => (i.to_owned(), Some(m.to_owned())),
+            None => (iface.to_owned(), None),
+        };
+        self.bind_iface_with(IfaceBinding {
+            port: port.into(),
+            interface,
+            params: Vec::new(),
+            modport,
+        })
+    }
+
+    /// Binds an interface port with full control (interface parameter overrides).
+    pub fn bind_iface_with(mut self, binding: IfaceBinding) -> Self {
+        self.config.ifaces.push(binding);
         self
     }
 
@@ -351,15 +431,15 @@ impl Dut {
         self
     }
 
-    /// Replaces the C++ compile recipe (seam for the C ABI runtime and shim).
+    /// Adds to the C++ compile recipe (the C ABI recipe itself is always applied).
     pub fn recipe(mut self, recipe: CppRecipe) -> Self {
         self.recipe = recipe;
         self
     }
 
-    /// Requires the header's ports to equal `ports` (seam for the IR cross-check).
-    pub fn expect_ports(mut self, ports: Vec<HeaderPort>) -> Self {
-        self.expected_ports = Some(ports);
+    /// Replaces the code generator (default: [`emit::DEFAULT_EMITTER`]).
+    pub fn emitter(mut self, emitter: Emitter) -> Self {
+        self.emitter = emitter;
         self
     }
 
@@ -379,26 +459,29 @@ impl Dut {
         Ok(built)
     }
 
-    /// Runs the whole pipeline in an explicit environment and returns the directives
-    /// instead of printing them.
+    /// Runs the whole pipeline (see the module docs) in an explicit environment and
+    /// returns the directives instead of printing them.
     pub fn build_in(self, env: &BuildEnv) -> Result<Built, Error> {
-        self.config.validate()?;
+        let top = self.config.validate()?;
         let verilator = Verilator::locate(env)?;
         let cache = cache::Cache::open(env.cache_dir())?;
         let prefix = self.config.prefix();
-        let generated = self
-            .config
-            .generated
-            .iter()
-            .map(|g| cache.store_input(g))
-            .collect::<Result<Vec<_>, _>>()?;
-        let args = self.config.verilator_args(&prefix, &generated);
+        pipeline::claim(env, &cache, &self.config, &prefix)?;
+        let ir = pipeline::design_ir(&self.config, top, &verilator, &cache)?;
+        let emitted = (self.emitter)(&ir.design, &self.config)?;
+        let placed = emit::place(emitted, &ir.design, &self.config, &env.out_dir)?;
+        if let Some(check) = &placed.layout_check {
+            pipeline::layout_check(&self.config, &verilator, &cache, check)?;
+        }
+        let mut generated = ir.wrapper.into_iter().collect::<Vec<_>>();
+        for g in placed.inputs.iter().chain(&self.config.generated) {
+            generated.push(cache.store_input(g)?);
+        }
+        let args = self.config.verilator_args(&prefix, &ir.top, &generated);
         let model = cache.verilate(&verilator, &args, &self.config.include_dirs)?;
         let header_ports =
             header::read_header_ports(&verilator::output_file(&model.obj_dir, &prefix, ".h"))?;
-        if let Some(expected) = &self.expected_ports {
-            header::check_ports(&header_ports, expected)?;
-        }
+        header::check_ports(&header_ports, &placed.ports)?;
         let mut directives = compile::compile(&compile::Inputs {
             env,
             cache: &cache,
@@ -406,6 +489,7 @@ impl Dut {
             prefix: &prefix,
             obj_dir: &model.obj_dir,
             recipe: &self.recipe,
+            model_sources: &placed.model_sources,
         })?;
         directives.extend(rerun_directives(&model.deps, &self.recipe));
         Ok(Built {
@@ -414,6 +498,8 @@ impl Dut {
             header_ports,
             cache: model.status,
             verilator,
+            design: ir.design,
+            rust_file: placed.rust,
             directives,
         })
     }
@@ -465,7 +551,7 @@ mod tests {
         .trace_fst(true)
         .verilator_args(["-Wno-WIDTH"])
         .config;
-        let args = c.verilator_args("Vfifo_1234abcd", &[PathBuf::from("/c/p.vlt")]);
+        let args = c.verilator_args("Vfifo_1234abcd", "fifo", &[PathBuf::from("/c/p.vlt")]);
         assert_eq!(
             args.join(" "),
             "--cc --MMD --prefix Vfifo_1234abcd --no-timing --trace-fst --top-module fifo \
@@ -477,12 +563,12 @@ mod tests {
         };
         assert!(
             timing
-                .verilator_args("V", &[])
+                .verilator_args("V", "fifo", &[])
                 .contains(&"--timing".to_owned())
         );
         assert!(
             !timing
-                .verilator_args("V", &[])
+                .verilator_args("V", "fifo", &[])
                 .contains(&"--no-timing".to_owned())
         );
     }
@@ -521,22 +607,35 @@ mod tests {
             },
             DutConfig {
                 probes: vec![Probe {
-                    path: "u.s".into(),
-                    access: Access::Rd,
+                    path: "fifo.u.s".into(),
+                    module: "u".into(),
+                    ty: ProbeType::Bits { width: 4 },
+                    access: ProbeAccess::Read,
                 }],
                 ..cfg()
             },
             DutConfig {
                 probes: vec![Probe {
-                    path: "u.s".into(),
-                    access: Access::Rw,
+                    path: "fifo.u.s".into(),
+                    module: "u".into(),
+                    ty: ProbeType::Bits { width: 4 },
+                    access: ProbeAccess::ReadWrite,
+                }],
+                ..cfg()
+            },
+            DutConfig {
+                generated: vec![GeneratedInput {
+                    file_name: "a.vlt".into(),
+                    contents: "x".into(),
                 }],
                 ..cfg()
             },
             DutConfig {
                 ifaces: vec![IfaceBinding {
                     port: "s".into(),
-                    iface: "i".into(),
+                    interface: "i".into(),
+                    params: vec![],
+                    modport: None,
                 }],
                 ..cfg()
             },
@@ -557,35 +656,40 @@ mod tests {
             assert!(!seen.contains(&p), "{v:?} collides");
             seen.push(p);
         }
-        // Generated inputs are derived from the config, so they must not change it.
-        let generated = DutConfig {
-            generated: vec![GeneratedInput {
-                file_name: "a.vlt".into(),
-                contents: "x".into(),
-            }],
-            ..cfg()
-        };
-        assert_eq!(generated.prefix(), base);
     }
 
     #[test]
     fn builder_records_probes_and_bindings() {
         let d = Dut::new("top")
-            .probe("u_ctl.state", Access::Rd)
-            .bind_iface("s_axis", "axis_if");
+            .probe(
+                "top.u_ctl.state",
+                "ctl",
+                ProbeType::Named("pkg::state_t".into()),
+                ProbeAccess::Read,
+            )
+            .bind_iface("s_axis", "axis_if.sink")
+            .bind_iface("m_axis", "axis_if");
         assert_eq!(
             d.config().probes,
             [Probe {
-                path: "u_ctl.state".into(),
-                access: Access::Rd
+                path: "top.u_ctl.state".into(),
+                module: "ctl".into(),
+                ty: ProbeType::Named("pkg::state_t".into()),
+                access: ProbeAccess::Read,
             }]
         );
+        let modports: Vec<_> = d
+            .config()
+            .ifaces
+            .iter()
+            .map(|b| (&b.interface, &b.modport))
+            .collect();
         assert_eq!(
-            d.config().ifaces,
-            [IfaceBinding {
-                port: "s_axis".into(),
-                iface: "axis_if".into()
-            }]
+            modports,
+            [
+                (&"axis_if".to_owned(), &Some("sink".to_owned())),
+                (&"axis_if".to_owned(), &None)
+            ]
         );
     }
 
@@ -605,6 +709,10 @@ mod tests {
                 ..cfg()
             }),
             "invalid DUT `fifo` configuration: no sources; add them with `.sources([..])`"
+        );
+        assert_eq!(
+            msg(DutConfig { top: None, ..cfg() }),
+            "invalid DUT `fifo` configuration: no top module; set it with `.top(\"module\")`"
         );
     }
 }

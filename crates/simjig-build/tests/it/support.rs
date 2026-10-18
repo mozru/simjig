@@ -74,13 +74,13 @@ impl Sandbox {
             .count()
     }
 
-    /// A build environment like Cargo's for a host build at opt-level 0.
+    /// A build environment like Cargo's for a host build.
     pub(crate) fn env(&self) -> BuildEnv {
         BuildEnv {
             out_dir: self.path().join("out"),
             target: host_triple(),
             host: host_triple(),
-            opt_level: "0".into(),
+            cxx_opt: "2".into(),
             debug: false,
             path: std::env::var_os("PATH"),
             verilator_root: None,
@@ -90,6 +90,8 @@ impl Sandbox {
             cxx: std::env::var_os("CXX"),
             cxxstdlib: None,
             cargo_target_dir: None,
+            conda_prefix: std::env::var_os("CONDA_PREFIX").map(PathBuf::from),
+            ldflags: std::env::var_os("LDFLAGS"),
         }
     }
 
@@ -118,4 +120,28 @@ pub(crate) fn copy_dir(src: &Path, dst: &Path) {
             std::fs::copy(e.path(), to).unwrap();
         }
     }
+}
+
+/// `tests/duts/<name>` in the repository.
+pub(crate) fn dut(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/duts")
+        .join(name)
+}
+
+/// A stand-in for ccache that records each compiler command line in its own file under
+/// the returned directory (one file per process: parallel compiles appending to a shared
+/// log would interleave long lines) and runs it.
+pub(crate) fn logging_ccache(s: &Sandbox) -> (PathBuf, PathBuf) {
+    let script = s.path().join("fake-ccache");
+    let log = s.path().join("cxx-log");
+    std::fs::create_dir_all(&log).unwrap();
+    write_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'/$$\nexec \"$@\"\n",
+            log.display()
+        ),
+    );
+    (script, log)
 }

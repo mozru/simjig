@@ -127,11 +127,11 @@ fn codegen_errors_name_the_dut() {
         .build_in(&s.env())
         .unwrap_err();
     assert!(matches!(err, Error::Codegen { .. }), "{err}");
-    assert!(
-        err.to_string()
-            .starts_with("generating code for DUT `inv`: codegen: "),
-        "{err}"
-    );
+    // The cause is the `source()`, not part of the message, so a reporter that walks
+    // the chain prints it once.
+    assert_eq!(err.to_string(), "generating code for DUT `inv`");
+    let source = std::error::Error::source(&err).expect("the codegen error");
+    assert!(source.to_string().starts_with("codegen: "), "{source}");
 }
 
 /// The header is checked against the IR's ports; also compare them here, sorted.

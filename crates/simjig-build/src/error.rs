@@ -110,16 +110,18 @@ pub enum Error {
         /// The `cc` error; its message carries the compiler command line and output.
         source: cc::Error,
     },
-    /// The JSON pass (`svtypes`) could not decode the design.
-    #[error("reading the type IR of DUT `{dut}`: {source}")]
+    /// The JSON pass (`svtypes`) could not decode the design. The cause is the
+    /// [`source`](std::error::Error::source), not part of the message.
+    #[error("reading the type IR of DUT `{dut}`")]
     Ir {
         /// The DUT name.
         dut: String,
         /// The `svtypes` error; it names the JSON node and the source location.
         source: svtypes::error::Error,
     },
-    /// The code generator cannot handle this design or configuration.
-    #[error("generating code for DUT `{dut}`: {source}")]
+    /// The code generator cannot handle this design or configuration. The cause is the
+    /// [`source`](std::error::Error::source), not part of the message.
+    #[error("generating code for DUT `{dut}`")]
     Codegen {
         /// The DUT name.
         dut: String,
@@ -257,6 +259,19 @@ mod tests {
         );
         check("%Error: Cannot find file containing module: 'foo'", None);
         check("some other text", None);
+    }
+
+    #[test]
+    fn ir_errors_keep_their_cause_out_of_the_message() {
+        let err = Error::json_pass(
+            "d",
+            svtypes::error::Error::UnsupportedVersion {
+                version: "Verilator 9.000".into(),
+            },
+        );
+        assert_eq!(err.to_string(), "reading the type IR of DUT `d`");
+        let source = std::error::Error::source(&err).map(ToString::to_string);
+        assert!(source.is_some_and(|s| s.contains("Verilator 9.000")));
     }
 
     #[test]

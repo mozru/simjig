@@ -1,7 +1,14 @@
-//! Calls the models' exported vtables through a hand-written mirror of `simjig_abi.h`.
-//! The simjig runtime crate is deliberately not used: this checks the build pipeline only.
+//! Calls the models' exported vtables through a hand-written mirror of `simjig_abi.h`,
+//! and checks them against the generated Rust. The simjig runtime crate is deliberately
+//! not used: this checks the build pipeline only.
 #![cfg(test)]
-#![expect(unsafe_code, reason = "calling the C ABI directly is the point of this crate")]
+#![allow(dead_code, reason = "the generated APIs are used only in part")]
+
+// Generated code names `::simjig::__private`; here that is the codegen tests' stub.
+extern crate self as simjig;
+
+#[path = "stub.rs"]
+mod __private;
 
 use core::ffi::{CStr, c_char, c_void};
 
@@ -76,6 +83,23 @@ impl Model {
         m
     }
 
+    /// The vtable agrees with the generated Rust: same IR hash, same signals in slot order.
+    fn check_against(&self, ir_hash: u64, signals: &[__private::SignalMeta]) {
+        assert_eq!(self.vt.ir_hash, ir_hash, "shim and Rust come from one lowering");
+        let mut n = 0;
+        // SAFETY: a live handle; the table has `n` entries.
+        let table = unsafe {
+            let p = (self.vt.signals)(self.h, &raw mut n);
+            core::slice::from_raw_parts(p, n as usize)
+        };
+        assert_eq!(table.len(), signals.len());
+        for (row, meta) in table.iter().zip(signals) {
+            // SAFETY: a static NUL-terminated name.
+            let name = unsafe { CStr::from_ptr(row.name) }.to_str().unwrap();
+            assert_eq!((name, row.id, row.width), (meta.name, meta.slot, meta.width));
+        }
+    }
+
     fn prefix(&self) -> &str {
         // SAFETY: a static NUL-terminated string.
         unsafe { CStr::from_ptr(self.vt.prefix) }.to_str().unwrap()
@@ -131,7 +155,8 @@ impl Drop for Model {
 
 #[test]
 fn counter_vtable_end_to_end() {
-    let m = Model::new(counter::vtable(), counter::PREFIX);
+    let m = Model::new(counter::ffi::vtable(), counter::PREFIX);
+    m.check_against(counter::Dut::IR_HASH, counter::Dut::SIGNALS);
     assert_eq!(m.signal("counter.count").width, 12, "WIDTH=12 reached the model");
     let clock = |n: u32| {
         for _ in 0..n {
@@ -152,7 +177,8 @@ fn counter_vtable_end_to_end() {
 
 #[test]
 fn timing_model_schedules_its_own_events() {
-    let m = Model::new(timing_dut::vtable(), timing_dut::PREFIX);
+    let m = Model::new(timing_dut::ffi::vtable(), timing_dut::PREFIX);
+    m.check_against(timing_dut::Dut::IR_HASH, timing_dut::Dut::SIGNALS);
     assert_eq!(m.eval(), OK);
     // SAFETY: a live handle.
     let next = unsafe { (m.vt.next_time_slot)(m.h) };
@@ -172,12 +198,12 @@ fn timing_model_schedules_its_own_events() {
 
 #[test]
 fn fst_tracing_links_and_writes_a_trace() {
-    let m = Model::new(counter_fst::vtable(), counter_fst::PREFIX);
+    let m = Model::new(counter_fst::ffi::vtable(), counter_fst::PREFIX);
     assert_eq!(m.eval(), OK);
     let path = std::env::temp_dir().join(format!("simjig-fixture-{}.fst", std::process::id()));
     let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
     // SAFETY: a valid NUL-terminated path.
-    assert_eq!(unsafe { counter_fst::fst_dump(c_path.as_ptr()) }, 0);
+    assert_eq!(unsafe { counter_fst::ffi::fst_dump(c_path.as_ptr()) }, 0);
     let bytes = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
     // An FST file starts with its header block (FST_BL_HDR = 0), and the value-change
@@ -188,8 +214,10 @@ fn fst_tracing_links_and_writes_a_trace() {
 
 #[test]
 fn two_models_share_one_binary() {
-    let inv = Model::new(inv::vtable(), inv::PREFIX);
-    let flop = Model::new(flop::vtable(), flop::PREFIX);
+    let inv = Model::new(inv::ffi::vtable(), inv::PREFIX);
+    let flop = Model::new(flop::ffi::vtable(), flop::PREFIX);
+    inv.check_against(inv::Dut::IR_HASH, inv::Dut::SIGNALS);
+    flop.check_against(flop::Dut::IR_HASH, flop::Dut::SIGNALS);
     assert_ne!(inv.prefix(), flop.prefix());
     inv.set("inv.a", 0);
     assert_eq!(inv.eval(), OK);

@@ -1,131 +1,139 @@
-//! The emitter seam: what an emitter returns reaches Verilator, the compiler and `OUT_DIR`.
+//! The emitter seam with the real code generator: what it returns reaches Verilator, the
+//! compiler and `OUT_DIR`, and the interface-port flow makes the generated wrapper the top.
 
 use std::path::Path;
 use std::process::Command;
 
 use simjig_build::svtypes::ir::Design;
 use simjig_build::{
-    Dut, DutConfig, Emitted, Error, HeaderPort, PortDir, Storage, Wrapper, ir_ports,
+    Built, Dut, DutConfig, Emitted, Error, ProbeAccess, ProbeType, SvModule, codegen_emitter,
+    ir_ports,
 };
 
 use crate::support::{Sandbox, dut};
 
-/// Wraps `counter` in `counter_wrap`, which ties `en` high, and exports a vtable.
-#[expect(clippy::unnecessary_wraps, reason = "the `Emitter` signature")]
-fn wrapping_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
-    let prefix = config.prefix();
-    assert_eq!(
-        design.top_module().name,
-        "counter",
-        "the IR is the user's top"
-    );
-    let wrapper = "module counter_wrap (input logic clk, input logic rst, \
-                   output logic [7:0] count);\n  counter u (.clk, .rst, .en(1'b1), .count);\n\
-                   endmodule\n";
-    let shim = format!(
-        "#include \"{prefix}.h\"\n#include \"simjig_model.h\"\n\
-         namespace {{ struct T {{ using Model = {prefix};\n\
-         static constexpr const char* kPrefix = \"{prefix}\";\n\
-         static constexpr uint64_t kIrHash = 0; static constexpr bool kTiming = false;\n\
-         static void bind({prefix}& m, simjig::SignalTable& t) {{\n\
-         SIMJIG_SIGNAL(t, m.count, \"count\", 8, SIMJIG_DIR_OUT, SIMJIG_ACCESS_READ); }} }}; }}\n\
-         SIMJIG_EXPORT_VTABLE({prefix}, T)\n"
-    );
-    let port = |name: &str, dir, msb| HeaderPort {
-        name: name.into(),
-        dir,
-        msb,
-        lsb: 0,
-        storage: Storage::C8,
-    };
-    Ok(Emitted {
-        rust: Some(format!("pub const PREFIX: &str = {prefix:?};\n")),
-        shim_cpp: Some(shim),
-        // A waiver the build needs: without it, -Wall's DECLFILENAME is fatal.
-        vlt: Some("`verilator_config\nlint_off -rule DECLFILENAME\n".into()),
-        wrapper: Some(Wrapper {
-            module: "counter_wrap".into(),
-            contents: wrapper.into(),
-        }),
-        ports: Some(vec![
-            port("clk", PortDir::In, 0),
-            port("rst", PortDir::In, 0),
-            port("count", PortDir::Out, 7),
-        ]),
-    })
-}
-
-#[test]
-fn emitted_files_reach_verilator_the_compiler_and_out_dir() {
-    let s = Sandbox::new();
-    let env = s.env();
-    let built = Dut::new("counter")
-        .sources([dut("counter").join("counter.sv")])
-        .top("counter")
-        .verilator_args(["-Wall"])
-        .emitter(wrapping_emitter)
-        .build_in(&env)
-        .unwrap();
-
-    // The wrapper is the top: the header has its ports (no `en`).
-    let names: Vec<&str> = built.header_ports.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, ["clk", "rst", "count"]);
-    // The IR still describes the user's top.
-    assert_eq!(built.design.top_module().name, "counter");
-
-    let rust = built.rust_file.as_deref().unwrap();
-    assert_eq!(rust, env.out_dir.join("simjig/counter.rs"));
-    assert!(
-        std::fs::read_to_string(rust)
-            .unwrap()
-            .contains(&built.prefix)
-    );
-    let shim = env
-        .out_dir
-        .join(format!("simjig/{}_shim.cpp", built.prefix));
-    assert!(shim.is_file());
-
-    // The shim was compiled into the model archive.
-    let archive = env.out_dir.join(format!(
+/// The model archive of `built` exports its vtable symbol.
+fn exports_vtable(env_out: &Path, built: &Built) -> bool {
+    let archive = env_out.join(format!(
         "simjig-{p}/libsimjig_model_{p}.a",
         p = built.prefix
     ));
     let nm = Command::new("nm").arg(&archive).output().unwrap();
-    let symbols = String::from_utf8_lossy(&nm.stdout);
-    assert!(
-        symbols.contains(&format!("simjig_vtable_{}", built.prefix)),
-        "{symbols}"
-    );
+    String::from_utf8_lossy(&nm.stdout).contains(&format!("simjig_vtable_{}", built.prefix))
 }
 
 #[test]
-fn a_wrapper_without_ports_is_rejected() {
-    #[expect(clippy::unnecessary_wraps, reason = "the `Emitter` signature")]
-    fn emitter(_: &Design, _: &DutConfig) -> Result<Emitted, Error> {
-        Ok(Emitted {
-            wrapper: Some(Wrapper {
-                module: "w".into(),
-                contents: "module w; endmodule\n".into(),
-            }),
-            ..Emitted::default()
-        })
-    }
+fn generated_files_reach_out_dir_verilator_and_the_compiler() {
+    let s = Sandbox::new();
+    let env = s.env();
+    let d = dut("struct_pipe");
+    let built = Dut::new("struct_pipe")
+        .sources([d.join("struct_pipe_pkg.sv"), d.join("struct_pipe.sv")])
+        .top("struct_pipe")
+        .probe(
+            "struct_pipe.s1_valid",
+            "struct_pipe",
+            ProbeType::Bits { width: 1 },
+            ProbeAccess::Read,
+        )
+        .build_in(&env)
+        .unwrap();
+    let rust = std::fs::read_to_string(built.rust_file.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        built.rust_file.as_deref(),
+        Some(env.out_dir.join("simjig/struct_pipe.rs").as_path())
+    );
+    assert!(rust.contains("pub struct Dut"), "{rust}");
+    assert!(
+        rust.contains("pub struct Beat"),
+        "the package struct: {rust}"
+    );
+    let shim = env
+        .out_dir
+        .join(format!("simjig/{}_shim.cpp", built.prefix));
+    let shim = std::fs::read_to_string(shim).unwrap();
+    // The probe compiled only because the `.vlt` made the member public.
+    assert!(shim.contains("struct_pipe__DOT__s1_valid"), "{shim}");
+    assert!(exports_vtable(&env.out_dir, &built));
+}
+
+#[test]
+fn an_interface_ported_dut_is_built_through_the_generated_wrapper() {
+    let s = Sandbox::new();
+    let env = s.env();
+    let d = dut("iface_top");
+    let built = Dut::new("iface_top")
+        .sources([
+            d.join("iface_pkg.sv"),
+            d.join("bus_if.sv"),
+            d.join("iface_top.sv"),
+        ])
+        .top("iface_top")
+        .bind_iface("in_bus", "bus_if")
+        .bind_iface("out_bus", "bus_if")
+        .build_in(&env)
+        .unwrap();
+    assert_eq!(built.design.top_module().name, "simjig_wrap_iface_top");
+    let names: Vec<&str> = built.header_ports.iter().map(|p| p.name.as_str()).collect();
+    assert!(
+        names.contains(&"in_bus_valid") && names.contains(&"out_bus_data"),
+        "{names:?}"
+    );
+    assert!(exports_vtable(&env.out_dir, &built));
+}
+
+fn failing_layout(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
+    let mut e = codegen_emitter(design, config)?;
+    e.layout_check = Some(SvModule {
+        module: "bad_layout".into(),
+        contents: "module bad_layout;\n  if ($bits(logic [3:0]) != 5) \
+                   $fatal(1, \"layout of x differs\");\nendmodule\n"
+            .into(),
+    });
+    Ok(e)
+}
+
+#[test]
+fn a_failing_layout_check_stops_the_build_before_verilating() {
     let s = Sandbox::new();
     let err = Dut::new("inv")
         .sources([dut("inv").join("inv.sv")])
         .top("inv")
-        .emitter(emitter)
+        .emitter(failing_layout)
         .build_in(&s.env())
         .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "generating code for DUT `inv`: the emitter generated wrapper `w` but not its ports \
-         (`Emitted::ports`)"
+    let msg = err.to_string();
+    assert!(
+        matches!(err, Error::Command { .. }) && msg.contains("layout of x differs"),
+        "{msg}"
     );
-    assert_eq!(s.verilations(), 0, "nothing was verilated");
+    assert!(msg.contains("-Werror-USERFATAL"), "{msg}");
+    assert_eq!(s.verilations(), 0);
 }
 
-/// With the default (no-op) emitter, the header is checked against the IR's ports.
+#[test]
+fn codegen_errors_name_the_dut() {
+    let s = Sandbox::new();
+    let err = Dut::new("inv")
+        .sources([dut("inv").join("inv.sv")])
+        .top("inv")
+        .probe(
+            "inv.nope",
+            "inv",
+            ProbeType::Named("no::such_t".into()),
+            ProbeAccess::Read,
+        )
+        .build_in(&s.env())
+        .unwrap_err();
+    assert!(matches!(err, Error::Codegen { .. }), "{err}");
+    assert!(
+        err.to_string()
+            .starts_with("generating code for DUT `inv`: codegen: "),
+        "{err}"
+    );
+}
+
+/// The header is checked against the IR's ports; also compare them here, sorted.
 fn ir_matches_header(s: &Sandbox, name: &str, sources: &[&Path], top: &str) {
     let built = Dut::new(name)
         .sources(sources)

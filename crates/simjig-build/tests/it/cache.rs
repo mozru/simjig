@@ -43,7 +43,10 @@ fn second_build_hits_the_cache_without_running_verilator() {
     assert_eq!((third.cache, s.verilations()), (CacheStatus::Hit, 1));
 
     // A different parameter is a different model, but reuses the same libverilated.
-    let wide = counter(&rtl, 16).build_in(&env).unwrap();
+    // (Another crate: one build script may not reuse a DUT name for another config.)
+    let mut wide_crate = env.clone();
+    wide_crate.out_dir = s.path().join("wide-out");
+    let wide = counter(&rtl, 16).build_in(&wide_crate).unwrap();
     assert_eq!((wide.cache, s.verilations()), (CacheStatus::Miss, 2));
     assert_ne!(wide.prefix, first.prefix);
     assert_eq!(count_entries(&s.path().join("cache/libverilated")), 1);
@@ -90,4 +93,39 @@ fn editing_an_included_file_misses_and_reverting_hits() {
     std::fs::write(rtl.join("new.svh"), "").unwrap();
     let shadowed = counter(&rtl, 8).build_in(&env).unwrap();
     assert_eq!((shadowed.cache, s.verilations()), (CacheStatus::Miss, 3));
+}
+
+#[test]
+fn a_dut_name_is_one_configuration_per_build_script() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let env = s.env();
+    counter(&rtl, 8).build_in(&env).unwrap();
+    let err = counter(&rtl, 16).build_in(&env).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid DUT `counter` configuration: a DUT of this name was already built with a \
+         different configuration in this build script; give each configuration its own name"
+    );
+}
+
+#[test]
+fn a_prefix_owned_by_another_configuration_is_rejected() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let dut = counter(&rtl, 8);
+    let prefix = dut.config().prefix();
+    // What a hash collision with another crate's configuration leaves in the cache.
+    let owners = s.path().join("cache/prefixes");
+    std::fs::create_dir_all(&owners).unwrap();
+    std::fs::write(owners.join(&prefix), "someone-else").unwrap();
+    let err = dut.build_in(&s.env()).unwrap_err();
+    assert!(
+        err.to_string().contains(&format!(
+            "model prefix `{prefix}` is already used by a different configuration (identity \
+             someone-else"
+        )),
+        "{err}"
+    );
+    assert_eq!(s.verilations(), 0);
 }

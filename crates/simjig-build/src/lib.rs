@@ -26,12 +26,14 @@ mod env;
 mod error;
 mod hash;
 mod header;
+mod pipeline;
 mod runtime;
 mod verilator;
 
+pub use codegen::{IfaceBinding, Probe, ProbeAccess, ProbeType};
 pub use compile::CppRecipe;
-pub use dut::{Access, Built, CacheStatus, Dut, DutConfig, GeneratedInput, IfaceBinding, Probe};
-pub use emit::{Emitted, Emitter, Wrapper, ir_ports, noop_emitter};
+pub use dut::{Built, CacheStatus, Dut, DutConfig, GeneratedInput};
+pub use emit::{Emitted, Emitter, SvModule, codegen_emitter, ir_ports, noop_emitter};
 pub use env::BuildEnv;
 pub use error::Error;
 pub use header::{

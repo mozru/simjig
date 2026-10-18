@@ -1,5 +1,5 @@
-# A minimal user crate: its build.rs builds models from tests/duts with simjig-build and a
-# small emitter of its own, and its tests call the exported vtables through a hand-written
+# A minimal user crate: its build.rs builds models from tests/duts with simjig-build and
+# the real code generator, and its tests call the exported vtables through a hand-written
 # mirror of the C ABI, without the simjig runtime crate. The integration test
 # (tests/it/fixture_crate.rs) copies this directory together with the DUTs, points the
 # simjig-build path at the crate under test, and runs `cargo test` in it.
@@ -8,6 +8,16 @@ name = "simjig-fixture-vtable"
 version = "0.0.0"
 edition = "2024"
 publish = false
+
+# The generated Rust names `::simjig::__private`; src/lib.rs provides it from the
+# codegen tests' stub (tests/codegen_it/stub.rs, copied in as src/stub.rs), which needs
+# simjig-bits.
+[dependencies]
+simjig-bits = { path = "../../../../simjig-bits" }
+
+# Used by src/stub.rs, which exists only in the test's copy of this crate.
+[package.metadata.cargo-machete]
+ignored = ["simjig-bits"]
 
 [build-dependencies]
 simjig-build = { path = "../../.." }

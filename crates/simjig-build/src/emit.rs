@@ -1,22 +1,23 @@
 //! The emitter seam: where code generation plugs into the build pipeline.
 //!
 //! An [`Emitter`] runs after the JSON pass and before verilation. It receives the type IR
-//! of the user's design and the [`DutConfig`], and returns [`Emitted`] text. The pipeline
-//! (not the emitter) decides where each output goes, so emitters stay pure functions of
-//! their inputs and every output path is fixed in one place:
+//! of the model top and the [`DutConfig`], and returns [`Emitted`] text. For a DUT with
+//! interface ports the model top is the generated wrapper (the pipeline writes it, see
+//! `crate::dut`), so the IR the emitter sees is the wrapper's. The pipeline (not the
+//! emitter) decides where each output goes, so emitters stay pure functions of their
+//! inputs and every output path is fixed in one place:
 //!
 //! | Output | Written to | Used as |
 //! |---|---|---|
 //! | [`Emitted::rust`] | `OUT_DIR/simjig/<name>.rs` | `include!`d by the user crate |
 //! | [`Emitted::shim_cpp`] | `OUT_DIR/simjig/<prefix>_shim.cpp` | compiled into the model archive |
 //! | [`Emitted::vlt`] | cache `inputs/<hash>/<prefix>.vlt` | Verilator control file |
-//! | [`Emitted::wrapper`] | cache `inputs/<hash>/<module>.sv` | extra source; becomes the top |
+//! | [`Emitted::layout_check`] | cache `inputs/<hash>/<module>.sv` | `--lint-only` run before verilating |
 //!
 //! The header cross-check compares the generated header with [`Emitted::ports`] when the
-//! emitter supplies them, else with the IR top module's ports ([`ir_ports`]). An emitter
-//! that supplies a wrapper must supply its ports: the IR describes the user's top, not
-//! the wrapper.
+//! emitter supplies them, else with the IR top module's ports ([`ir_ports`]).
 //!
+//! The default is [`codegen_emitter`], the real code generator ([`crate::codegen`]).
 //! Why a plain `fn` and not a trait: emitters need no state beyond their two inputs (the
 //! prefix is [`DutConfig::prefix`]), and a function pointer keeps [`crate::Dut`] `Clone`
 //! and `Debug` without boxing.
@@ -26,6 +27,7 @@ use std::path::{Path, PathBuf};
 use svtypes::ir::{Design, Direction, TypeKind};
 
 use crate::Error;
+use crate::codegen::{self, ShimOptions};
 use crate::dut::{DutConfig, GeneratedInput};
 use crate::header::{HeaderPort, PortDir, Storage};
 
@@ -43,16 +45,19 @@ pub struct Emitted {
     pub shim_cpp: Option<String>,
     /// A Verilator control file (`public_flat_rd` for probes, lint waivers).
     pub vlt: Option<String>,
-    /// A wrapper module that becomes the Verilator top (DECISION.md §2 #9).
-    pub wrapper: Option<Wrapper>,
+    /// A module that fails elaboration (`$fatal`) if Verilator lays a type out
+    /// differently from the IR. The pipeline lints it with the model's flags plus
+    /// [`codegen::LAYOUT_CHECK_FLAGS`] and without `-G` (its types are spelled with
+    /// elaborated widths); a failure stops the build before any model memory is touched.
+    pub layout_check: Option<SvModule>,
     /// The ports the model header must declare; `None` means the IR top's ports.
     pub ports: Option<Vec<HeaderPort>>,
 }
 
-/// A generated SystemVerilog wrapper around the user's top module.
+/// A generated SystemVerilog module.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Wrapper {
-    /// The wrapper's module name, passed as `--top-module`.
+pub struct SvModule {
+    /// The module name (also the file stem), passed as `--top-module`.
     pub module: String,
     /// Its source text.
     pub contents: String,
@@ -64,8 +69,32 @@ pub fn noop_emitter(_design: &Design, _config: &DutConfig) -> Result<Emitted, Er
     Ok(Emitted::default())
 }
 
+/// The code generator: [`codegen::lower`] once, then the Rust bindings, the shim, the
+/// `.vlt` file and the layout check from the same [`codegen::Lowered`].
+pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, Error> {
+    let fail = |source| Error::Codegen {
+        dut: config.name.clone(),
+        source,
+    };
+    let lowered = codegen::lower(design, &config.codegen_config()).map_err(fail)?;
+    let opts = ShimOptions {
+        prefix: config.prefix(),
+        timing: config.timing,
+    };
+    Ok(Emitted {
+        rust: Some(codegen::emit_rust(&lowered)),
+        shim_cpp: Some(codegen::emit_shim(&lowered, &opts).map_err(fail)?),
+        vlt: Some(codegen::emit_vlt(&lowered)),
+        layout_check: Some(SvModule {
+            module: lowered.layout.module.clone(),
+            contents: codegen::emit_layout_check(&lowered),
+        }),
+        ports: None,
+    })
+}
+
 /// The emitter [`crate::Dut`] uses unless [`crate::Dut::emitter`] replaces it.
-pub const DEFAULT_EMITTER: Emitter = noop_emitter;
+pub const DEFAULT_EMITTER: Emitter = codegen_emitter;
 
 /// The ports Verilator declares with a `VL_*` macro for the IR's top module, in IR order.
 ///
@@ -115,10 +144,10 @@ pub(crate) struct Placed {
     pub(crate) rust: Option<PathBuf>,
     /// Sources to compile with the model (the shim).
     pub(crate) model_sources: Vec<PathBuf>,
-    /// Verilator inputs to add before the user's sources.
+    /// Verilator inputs to add before the user's sources (the `.vlt`).
     pub(crate) inputs: Vec<GeneratedInput>,
-    /// The `--top-module` to verilate.
-    pub(crate) top: String,
+    /// The layout check to lint.
+    pub(crate) layout_check: Option<SvModule>,
     /// The ports the header must declare.
     pub(crate) ports: Vec<HeaderPort>,
 }
@@ -128,7 +157,6 @@ pub(crate) fn place(
     emitted: Emitted,
     design: &Design,
     config: &DutConfig,
-    top: &str,
     out_dir: &Path,
 ) -> Result<Placed, Error> {
     let prefix = config.prefix();
@@ -149,7 +177,7 @@ pub(crate) fn place(
         .transpose()?
         .into_iter()
         .collect();
-    let mut inputs: Vec<GeneratedInput> = emitted
+    let inputs = emitted
         .vlt
         .map(|contents| GeneratedInput {
             file_name: format!("{prefix}.vlt"),
@@ -157,35 +185,12 @@ pub(crate) fn place(
         })
         .into_iter()
         .collect();
-    let ports = match (emitted.ports, &emitted.wrapper) {
-        (Some(ports), _) => ports,
-        (None, None) => ir_ports(design),
-        (None, Some(w)) => {
-            return Err(Error::Emit {
-                dut: config.name.clone(),
-                msg: format!(
-                    "the emitter generated wrapper `{}` but not its ports (`Emitted::ports`)",
-                    w.module
-                ),
-            });
-        }
-    };
-    let top = match emitted.wrapper {
-        Some(w) => {
-            inputs.push(GeneratedInput {
-                file_name: format!("{}.sv", w.module),
-                contents: w.contents,
-            });
-            w.module
-        }
-        None => top.to_owned(),
-    };
     Ok(Placed {
         rust,
         model_sources,
         inputs,
-        top,
-        ports,
+        layout_check: emitted.layout_check,
+        ports: emitted.ports.unwrap_or_else(|| ir_ports(design)),
     })
 }
 

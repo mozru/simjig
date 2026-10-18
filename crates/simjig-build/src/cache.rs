@@ -5,6 +5,7 @@
 //! - `manifests/<pre key>`: the input list of the last build with that pre key.
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
 //! - `runtime/<hash>/`: the embedded C ABI runtime sources, content-addressed.
+//! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
 //! - `tmp/`: work directories, renamed into place when complete.
 //!
@@ -53,6 +54,7 @@ impl Cache {
             "manifests",
             "inputs",
             "runtime",
+            "prefixes",
             "libverilated",
             "tmp",
         ] {
@@ -176,6 +178,26 @@ impl Cache {
         std::fs::rename(&tmp, path).map_err(Error::io("renaming into", path))?;
         remove_best_effort(&work);
         Ok(())
+    }
+
+    /// Records that `identity` owns `prefix`, unless another identity already does: then
+    /// returns that one. A race between two different identities may let both pass;
+    /// a collision of the 32-bit prefix hash is already unlikely, and the loser's next
+    /// build reports it.
+    pub(crate) fn claim_prefix(
+        &self,
+        prefix: &str,
+        identity: &str,
+    ) -> Result<Option<String>, Error> {
+        let path = self.root.join("prefixes").join(prefix);
+        match std::fs::read_to_string(&path) {
+            Ok(owner) if owner == identity => Ok(None),
+            Ok(owner) => Ok(Some(owner)),
+            Err(_) => {
+                self.write_atomic(&path, identity)?;
+                Ok(None)
+            }
+        }
     }
 
     pub(crate) fn root(&self) -> &Path {

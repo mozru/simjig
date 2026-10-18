@@ -120,7 +120,15 @@ pub enum Error {
         /// The `svtypes` error; it names the JSON node and the source location.
         source: svtypes::error::Error,
     },
-    /// An emitter cannot generate code for this design.
+    /// The code generator cannot handle this design or configuration.
+    #[error("generating code for DUT `{dut}`: {source}")]
+    Codegen {
+        /// The DUT name.
+        dut: String,
+        /// What is unsupported or misconfigured.
+        source: crate::codegen::Error,
+    },
+    /// A custom emitter cannot generate code for this design.
     #[error("generating code for DUT `{dut}`: {msg}")]
     Emit {
         /// The DUT name.

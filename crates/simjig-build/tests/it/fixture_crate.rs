@@ -17,17 +17,28 @@ fn prepare(root: &Path) -> PathBuf {
     for d in ["counter", "timing_dut", "inv", "flop"] {
         copy_dir(&dut(d), &krate.join("duts").join(d));
     }
-    let manifest = krate.join("Cargo.toml");
-    let text = std::fs::read_to_string(&manifest).unwrap();
-    let this_crate = env!("CARGO_MANIFEST_DIR");
-    std::fs::write(
-        &manifest,
-        text.replace(r#"path = "../../..""#, &format!("path = {this_crate:?}")),
+    let this_crate = Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(
+        this_crate.join("tests/codegen_it/stub.rs"),
+        krate.join("src/stub.rs"),
     )
     .unwrap();
+    let manifest = krate.join("Cargo.toml");
+    let bits = this_crate.parent().unwrap().join("simjig-bits");
+    let text = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace(
+            r#"path = "../../..""#,
+            &format!("path = {:?}", this_crate.display().to_string()),
+        )
+        .replace(
+            r#"path = "../../../../simjig-bits""#,
+            &format!("path = {:?}", bits.display().to_string()),
+        );
+    std::fs::write(&manifest, text).unwrap();
     // Start from the workspace lock file so the build needs no network and uses
     // the same dependency versions.
-    let lock = Path::new(this_crate).join("../../Cargo.lock");
+    let lock = this_crate.join("../../Cargo.lock");
     std::fs::copy(lock, krate.join("Cargo.lock")).unwrap();
     krate
 }

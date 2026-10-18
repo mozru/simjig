@@ -265,6 +265,9 @@ impl ReadyQueue {
 /// already queued. The returned handle owns it: await it for the result,
 /// [`detach`](Task::detach) it, or [`cancel`](Task::cancel) it.
 ///
+/// Nothing spawned in `main`'s last poll runs, detached or not: the run ends when `main`
+/// returns, as cocotb kills a test's tasks when the test returns.
+///
 /// # Fire and forget
 /// cocotb's `cocotb.start_soon(monitor())` keeps running on its own; here that is
 /// `spawn(..).detach()`. Dropping the handle instead, as `let _ = spawn(..)` does,

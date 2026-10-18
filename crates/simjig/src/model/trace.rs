@@ -19,6 +19,13 @@
 //!   open trace before it frees the model).
 //! - A trace call that fails stops the trace (with one printed line), never the simulation.
 //!
+//! # Fork
+//! An open trace registers a [`ForkHook`]: in each `fork::run_from_checkpoint` child it
+//! detaches the inherited file and continues the waves in `<path stem>.branch-<i>.fst`
+//! next to it (`trace_reopen`; docs/notes/tracecov.md), so the parent's file is never
+//! written by a child, and it ends that file (last sample, header) before the child exits.
+//! The parent does not flush before forking (see `fork_hook`).
+//!
 //! # Window
 //! Samples before [`TraceOptions::start`] are skipped by the C side; its first real sample
 //! is a full dump, so the file is complete from there. After [`TraceOptions::end`] the trace
@@ -27,9 +34,13 @@
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
 use super::abi::{FEATURE_TRACE_FST, Status};
 use super::meta::LoadError;
-use super::raw::RawModel;
+use super::raw::{RawModel, TracePort};
+use crate::fork::{self, ForkHook, HookGuard};
 use crate::kernel::time::SimTime;
 
 /// What FST waves a Verilator model records, given to it when it is built
@@ -124,8 +135,20 @@ impl TraceOptions {
 }
 
 /// An open trace on one model; owned by the Verilator backend. See the module docs.
+///
+/// The state is shared with the trace's fork hook, which flushes it before a fork and, in a
+/// branch child, moves it to the branch's file and closes it before the child exits.
 #[derive(Debug)]
 pub(crate) struct Tracer {
+    state: Rc<RefCell<TraceState>>,
+    /// Keeps the fork hook registered while the trace lives.
+    _fork: HookGuard,
+}
+
+#[derive(Debug)]
+struct TraceState {
+    port: TracePort,
+    path: PathBuf,
     end: Option<SimTime>,
     /// The timestep evaluated since the last sample, whose state is still to be dumped.
     pending: Option<SimTime>,
@@ -156,54 +179,89 @@ impl Tracer {
             .map_err(|_nul| failed("the path contains a NUL byte".to_owned()))?;
         let status = raw.trace_open(&path, options.depth, options.start.ticks());
         match Status::try_from(status) {
-            Ok(Status::Ok) => Ok(Some(Self {
-                end: options.end,
-                pending: None,
-                open: true,
-            })),
+            Ok(Status::Ok) => {
+                let state = Rc::new(RefCell::new(TraceState {
+                    port: raw.trace_port(),
+                    path: options.path.clone(),
+                    end: options.end,
+                    pending: None,
+                    open: true,
+                }));
+                let hook = fork_hook(Rc::downgrade(&state));
+                Ok(Some(Self {
+                    state,
+                    _fork: fork::register_hook(hook),
+                }))
+            }
             Ok(Status::IoError) => Err(failed("the file cannot be created".to_owned())),
             other => Err(failed(format!("the model returned {other:?}"))),
         }
     }
 
     /// The model was evaluated at `now`; its state there is dumped when the timestep ends.
-    pub(crate) fn evaluated(&mut self, now: SimTime) {
-        self.pending = Some(now);
+    pub(crate) fn evaluated(&self, now: SimTime) {
+        self.state.borrow_mut().pending = Some(now);
     }
 
     /// A timestep ended (the next one starts, or the model is torn down): dumps its state.
-    pub(crate) fn end_timestep(&mut self, raw: &mut RawModel) {
+    pub(crate) fn end_timestep(&self) {
+        self.state.borrow_mut().end_timestep();
+    }
+
+    /// An eval failed: dumps what the model reached and flushes it to disk.
+    pub(crate) fn on_failure(&self) {
+        let mut state = self.state.borrow_mut();
+        state.end_timestep();
+        state.flush();
+    }
+
+    /// Closes the file (its header is written now); later calls do nothing.
+    pub(crate) fn close(&self) {
+        self.state.borrow_mut().close();
+    }
+
+    /// The model was poisoned: no trace call may reach it again (`destroy` closes the
+    /// file).
+    pub(crate) fn stop(&self) {
+        self.state.borrow_mut().open = false;
+    }
+}
+
+impl TraceState {
+    fn end_timestep(&mut self) {
         let Some(t) = self.pending.take().filter(|_| self.open) else {
             return;
         };
         if self.end.is_some_and(|end| t > end) {
-            self.close(raw);
+            self.close();
             return;
         }
-        let status = raw.trace_dump(t.ticks());
+        let status = self.port.dump(t.ticks());
         self.check(status, "dump");
     }
 
-    /// An eval failed: dumps what the model reached and flushes it to disk.
-    pub(crate) fn on_failure(&mut self, raw: &mut RawModel) {
-        self.end_timestep(raw);
+    fn flush(&mut self) {
         if self.open {
-            let status = raw.trace_flush();
+            let status = self.port.flush();
             self.check(status, "flush");
         }
     }
 
-    /// Closes the file (its header is written now); later calls do nothing.
-    pub(crate) fn close(&mut self, raw: &mut RawModel) {
+    fn close(&mut self) {
         if std::mem::replace(&mut self.open, false) {
-            let status = raw.trace_close();
+            let status = self.port.close();
             self.check(status, "close");
         }
     }
 
     /// Stops the trace after a failed call; a poisoned model fails every call silently,
-    /// because its failure is already being reported.
-    fn check(&mut self, status: i32, what: &str) {
+    /// because its failure is already being reported. A destroyed model (`None`) has
+    /// already closed its trace.
+    fn check(&mut self, status: Option<i32>, what: &str) {
+        let Some(status) = status else {
+            self.open = false;
+            return;
+        };
         match Status::try_from(status) {
             Ok(Status::Ok) => {}
             Ok(Status::Poisoned) => self.open = false,
@@ -215,6 +273,64 @@ impl Tracer {
             }
         }
     }
+
+    /// In a fork child: continues the waves in the branch's own file.
+    fn reopen(&mut self, index: usize) -> Result<(), String> {
+        if !self.open {
+            return Ok(());
+        }
+        let file = branch_path(&self.path, index);
+        let c_path = CString::new(file.as_os_str().as_encoded_bytes())
+            .map_err(|_nul| format!("{} contains a NUL byte", file.display()))?;
+        match self.port.reopen(&c_path).map(Status::try_from) {
+            None | Some(Ok(Status::Ok)) => {
+                self.path = file;
+                Ok(())
+            }
+            Some(other) => {
+                self.open = false;
+                Err(format!(
+                    "continuing the trace in {} returned {other:?}",
+                    file.display()
+                ))
+            }
+        }
+    }
+}
+
+/// The trace file of fork branch `index` for a trace written to `path`:
+/// `<dir>/<stem>.branch-<index>.fst`.
+pub(crate) fn branch_path(path: &Path, index: usize) -> PathBuf {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!("{stem}.branch-{index}.fst"))
+}
+
+/// The hook that keeps a fork child's waves out of the parent's file (see the module
+/// docs). It holds the state weakly: a trace dropped with its model leaves nothing to do.
+fn fork_hook(state: Weak<RefCell<TraceState>>) -> ForkHook {
+    let child = Weak::clone(&state);
+    let exiting = state;
+    ForkHook::new(
+        // Nothing to flush: the child's copy of the writer's buffer is discarded when
+        // `trace_reopen` detaches the inherited file, and the parent keeps its own. A flush
+        // would only split the value-change block, and fstcpp then repeats the current
+        // timestamp at the boundary (observed: one timestep sampled twice).
+        || Ok(()),
+        move |branch| {
+            child
+                .upgrade()
+                .map_or(Ok(()), |s| s.borrow_mut().reopen(branch.index()))
+        },
+    )
+    // A child exits without dropping the model, so the trace must end here: the last
+    // timestep is dumped and the header written.
+    .at_child_exit(move || {
+        if let Some(state) = exiting.upgrade() {
+            let mut state = state.borrow_mut();
+            state.end_timestep();
+            state.close();
+        }
+    })
 }
 
 #[expect(

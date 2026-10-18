@@ -373,6 +373,7 @@ impl<T> Branches<T> {
 pub struct ForkHook {
     before_fork: Box<dyn Fn() -> Result<(), String>>,
     in_child: ChildHook,
+    at_child_exit: Option<Box<dyn Fn()>>,
 }
 
 /// A [`ForkHook`]'s child half.
@@ -392,7 +393,17 @@ impl ForkHook {
         Self {
             before_fork: Box::new(before_fork),
             in_child: Box::new(in_child),
+            at_child_exit: None,
         }
+    }
+
+    /// Adds a third half, run in a branch child just before it exits (whatever the
+    /// branch's ending): the child `_exit`s without running destructors, so this is where
+    /// a resource is finished (a trace's last sample dumped and its file closed).
+    #[must_use]
+    pub fn at_child_exit(mut self, at_exit: impl Fn() + 'static) -> Self {
+        self.at_child_exit = Some(Box::new(at_exit));
+        self
     }
 }
 
@@ -675,6 +686,14 @@ mod imp {
     /// 1 for a failure) without running anything else of this process.
     pub(super) fn finish_child(report: &[u8]) -> ! {
         let code = i32::from(report.first() != Some(&0));
+        for hook in super::hooks() {
+            if let Some(at_exit) = &hook.at_child_exit {
+                // A panic here must not unwind past the branch's end; the report is sent.
+                drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    at_exit,
+                )));
+            }
+        }
         if let Some(mut socket) = CHANNEL.take() {
             // If the parent cannot read the report, it sees the exit code instead.
             drop(socket.write_all(report));

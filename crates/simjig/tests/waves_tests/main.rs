@@ -19,6 +19,9 @@ simjig::include_dut!(counter_fst);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(fifo_fst);
 
+#[cfg(simjig_test_models)]
+mod fork;
+#[cfg(simjig_test_models)]
 mod fst;
 #[cfg(simjig_test_models)]
 mod on_fail;

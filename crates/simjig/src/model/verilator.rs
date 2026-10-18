@@ -253,9 +253,9 @@ impl ModelBackend for VerilatorModel {
         // the model still holds the previous timestep's final state (`model::trace`).
         if time != self.now
             && self.poisoned.is_none()
-            && let Some(tracer) = &mut self.tracer
+            && let Some(tracer) = &self.tracer
         {
-            tracer.end_timestep(&mut self.raw);
+            tracer.end_timestep();
         }
         self.now = time;
         self.raw.set_time(time.ticks());
@@ -272,21 +272,28 @@ impl ModelBackend for VerilatorModel {
         // Before a DPI failure poisons the model on the Rust side: the C++ model is still
         // healthy, so the waves keep the timestep that failed.
         if self.poisoned.is_none()
-            && let Some(tracer) = &mut self.tracer
+            && let Some(tracer) = &self.tracer
         {
             tracer.evaluated(self.now);
             if result.is_err() || dpi_failure.is_some() {
-                tracer.on_failure(&mut self.raw);
+                tracer.on_failure();
             }
         }
-        match dpi_failure {
+        let result = match dpi_failure {
             // The DPI failure happened first: the design went on with a wrong value.
             Some(failure) => {
                 self.poisoned = Some(failure.message.clone());
                 Err(failure.into_model_error())
             }
             None => result,
+        };
+        // A poisoned model is never called again, its trace (and fork hook) included.
+        if self.poisoned.is_some()
+            && let Some(tracer) = &self.tracer
+        {
+            tracer.stop();
         }
+        result
     }
 
     fn events_pending(&self) -> bool {
@@ -309,8 +316,8 @@ fn dpi_scope<R>(dpi: Option<&mut ModelDpi>, f: impl FnOnce() -> R) -> (R, Option
 impl Drop for VerilatorModel {
     fn drop(&mut self) {
         if self.poisoned.is_none() {
-            if let Some(tracer) = &mut self.tracer {
-                tracer.end_timestep(&mut self.raw);
+            if let Some(tracer) = &self.tracer {
+                tracer.end_timestep();
             }
             let (status, dpi_failure) = dpi_scope(self.dpi.as_mut(), || self.raw.final_blocks());
             // A failure in a final block has no run left to fail; its message is printed.
@@ -323,9 +330,9 @@ impl Drop for VerilatorModel {
         }
         // A poisoned model refuses trace calls; `destroy` closes its trace instead.
         if self.poisoned.is_none()
-            && let Some(tracer) = &mut self.tracer
+            && let Some(tracer) = &self.tracer
         {
-            tracer.close(&mut self.raw);
+            tracer.close();
         }
     }
 }

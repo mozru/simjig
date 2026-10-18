@@ -13,6 +13,10 @@
 //!   index it, match on its typed [`Cell`], and check the buffer length and the write bit
 //!   before touching model memory, so the `abi` raw accessors' preconditions hold.
 //! - Drained message strings are copied out before the next entry point call.
+//! - A [`TracePort`] reaches the handle only while it is live: the model clears the shared
+//!   cell before `destroy`. It is `!Send` too, and its only caller (a fork hook, which runs
+//!   in the main task's poll, never inside an eval: the kernel refuses `fork` inside a DPI
+//!   call) never runs during another entry point.
 //!
 //! No Rust reference into model memory is ever created; `abi` reads and writes members
 //! through raw pointers at the moment of use.
@@ -21,8 +25,10 @@
     reason = "calls through the C vtable and the abi raw accessors (DECISION §2 row 12)"
 )]
 
+use std::cell::Cell as StdCell;
 use std::ffi::{CStr, CString, c_char};
 use std::ptr::{self, NonNull};
+use std::rc::Rc;
 
 use super::abi::{
     self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Handle, ModelVtable, Msg,
@@ -47,6 +53,52 @@ pub(crate) struct RawModel {
     handle: NonNull<Handle>,
     signals: Box<[Decoded]>,
     names: Box<[String]>,
+    /// The handle while it is live, shared with [`TracePort`]s; `None` from `Drop` on.
+    live: Rc<StdCell<Option<NonNull<Handle>>>>,
+}
+
+/// A model's trace entry points after `trace_open`, shared by its tracer and the tracer's
+/// fork hook (flush before a fork, reopen in the child, close before the child exits),
+/// which cannot borrow the backend the kernel owns. Every call is `None` once the model is
+/// destroyed.
+#[derive(Debug, Clone)]
+pub(crate) struct TracePort {
+    vt: &'static ModelVtable,
+    live: Rc<StdCell<Option<NonNull<Handle>>>>,
+}
+
+impl TracePort {
+    /// Writes one sample at `ticks`; the raw status, `None` if the model is gone.
+    pub(crate) fn dump(&self, ticks: u64) -> Option<i32> {
+        let handle = self.live.get()?;
+        // SAFETY: `live` holds the handle only while it is live (cleared before `destroy`),
+        // and no other entry point runs (module invariants).
+        Some(unsafe { (self.vt.trace_dump)(handle.as_ptr(), ticks) })
+    }
+
+    /// Closes the trace (writing its header); the raw status, `None` if the model is gone.
+    /// `destroy` also closes it.
+    pub(crate) fn close(&self) -> Option<i32> {
+        let handle = self.live.get()?;
+        // SAFETY: as in `dump`.
+        Some(unsafe { (self.vt.trace_close)(handle.as_ptr()) })
+    }
+
+    /// Flushes buffered samples to the file; the raw status, `None` if the model is gone.
+    pub(crate) fn flush(&self) -> Option<i32> {
+        let handle = self.live.get()?;
+        // SAFETY: as in `dump`.
+        Some(unsafe { (self.vt.trace_flush)(handle.as_ptr()) })
+    }
+
+    /// In a fork child: detaches the inherited trace and continues it in `path`; the raw
+    /// status, `None` if the model is gone.
+    pub(crate) fn reopen(&self, path: &CStr) -> Option<i32> {
+        let handle = self.live.get()?;
+        // SAFETY: as in `dump`; `path` is NUL-terminated and valid for the call, which
+        // copies it.
+        Some(unsafe { (self.vt.trace_reopen)(handle.as_ptr(), path.as_ptr()) })
+    }
 }
 
 /// Why [`RawModel::create`] failed.
@@ -105,6 +157,7 @@ impl RawModel {
             handle,
             signals: Box::default(),
             names: Box::default(),
+            live: Rc::new(StdCell::new(Some(handle))),
         };
         // Validate after `model` owns the handle, so an error destroys it.
         let decoded = rows
@@ -173,22 +226,12 @@ impl RawModel {
         unsafe { (self.vt.trace_open_ex)(self.handle.as_ptr(), path.as_ptr(), depth, start) }
     }
 
-    /// Writes one trace sample at `ticks`; the raw status (OK if no trace is open).
-    pub(crate) fn trace_dump(&mut self, ticks: u64) -> i32 {
-        // SAFETY: as in `eval`.
-        unsafe { (self.vt.trace_dump)(self.handle.as_ptr(), ticks) }
-    }
-
-    /// Writes the trace's buffered samples to its file; the raw status.
-    pub(crate) fn trace_flush(&mut self) -> i32 {
-        // SAFETY: as in `eval`.
-        unsafe { (self.vt.trace_flush)(self.handle.as_ptr()) }
-    }
-
-    /// Closes the trace (writing its header); the raw status. `destroy` also closes it.
-    pub(crate) fn trace_close(&mut self) -> i32 {
-        // SAFETY: as in `eval`.
-        unsafe { (self.vt.trace_close)(self.handle.as_ptr()) }
+    /// A second way to reach this model's trace, for a fork hook.
+    pub(crate) fn trace_port(&self) -> TracePort {
+        TracePort {
+            vt: self.vt,
+            live: Rc::clone(&self.live),
+        }
     }
 
     /// Moves every pending message into `out`, oldest first.
@@ -266,6 +309,7 @@ impl RawModel {
 
 impl Drop for RawModel {
     fn drop(&mut self) {
+        self.live.set(None);
         // SAFETY: `handle` is live and is destroyed exactly once, here; `destroy` accepts
         // poisoned handles (the ABI contract) and never unwinds.
         unsafe { (self.vt.destroy)(self.handle.as_ptr()) }

@@ -772,10 +772,11 @@ impl Dut {
 
     /// Binds an interface port like [`Dut::bind_iface`], overriding parameters of the
     /// interface the wrapper instantiates, with values written like [`Dut::param`]'s:
-    /// `.bind_iface_with_params("up", "beat_if.sink", [("WIDTH", 8)])`. A [`Dut::param`]
-    /// the interface also declares (`WIDTH` of both) reaches the interface without being
-    /// repeated here, and setting it here to another value is an error: a module and its
-    /// interface port must agree on it.
+    /// `.bind_iface_with_params("up", "beat_if.sink", [("WIDTH", 8)])`. A value set
+    /// here always wins. A [`Dut::param`] the interface also declares (`WIDTH` of both)
+    /// is its default: it reaches the interface when the binding leaves it unset. The
+    /// tie is by name only (interface port headers carry no parameters, IEEE 1800-2017
+    /// §25.5), so a module may read a wider interface through the port.
     pub fn bind_iface_with_params<N: Into<String>, V: Display>(
         self,
         port: impl Into<String>,

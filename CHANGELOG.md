@@ -24,13 +24,14 @@ the public API, the generated code or simulation semantics.
   earlier DUT (which failed)``, not ``already built``, when a corrected configuration
   of the same name (or a name differing only in case) is refused.
 - A `.param` that a bound interface also declares (`WIDTH` of `skid_buffer` and of its
-  `stream_if` ports) reaches the interface too: `.param("WIDTH", 16)` with
-  `.bind_iface("up", "stream_if.sink")` now gives the interface `WIDTH` 16, not its
-  default. A binding that sets the parameter to another value is refused (``interface
-  `acc_if` (bound to `up`) has `W` = 8, but `.param("W", 12)` makes module `acc`'s `W`
-  12; ..``): the mismatch was a port width mismatch that only lint reported, and under
-  `-Wno-fatal` the model built and extended or truncated it silently. This changes the
-  generated wrapper of a DUT that relied on the interface's default.
+  `stream_if` ports) is that interface parameter's default: `.param("WIDTH", 16)` with
+  `.bind_iface("up", "stream_if.sink")` now gives the interface `WIDTH` 16, not the
+  interface's own default. A value the binding sets
+  (`.bind_iface_with_params("out", "s_if.source", [("W", 16)])`) always wins, also when
+  it differs from the `.param`: interface port headers carry no parameters (IEEE
+  1800-2017 §25.5), so the shared name is only a heuristic, and a module may read a
+  wider interface through its port. This changes the generated wrapper of a DUT that
+  relied on the interface's default.
 - A misspelled interface parameter in `bind_iface_with_params("up", "acc_if.sink",
   [("WW", 12)])` fails like a misspelled `.param`: ``interface `acc_if` (bound to `up`)
   has no parameter `WW`; did you mean `W`? (it has W)``, instead of Verilator's

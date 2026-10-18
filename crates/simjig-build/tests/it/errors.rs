@@ -345,12 +345,12 @@ fn port_widths(b: &simjig_build::Built) -> Vec<(String, Option<u32>)> {
         .collect()
 }
 
-/// A module parameter and the same-named parameter of an interface it is bound to are
-/// one quantity: a binding that leaves it unset takes the `.param` value, and one that
-/// sets another value is refused, even under `-Wno-fatal`, where the 8-bit interface fed
-/// the 12-bit `q` silently (checked against 5.052 before this rule).
+/// A `.param` reaches a bound interface's same-named parameter when the binding leaves
+/// it unset (under `-Wno-fatal` the 8-bit interface fed the 12-bit `q` silently before
+/// this default; checked against 5.052). A value the binding sets wins, even when it
+/// differs from the `.param`: the shared name is only a heuristic.
 #[test]
-fn an_interface_parameter_follows_the_modules() {
+fn an_interface_parameter_defaults_to_the_modules() {
     let s = Sandbox::new();
     let built = acc(&s, "acc_tied", true)
         .param("W", 12)
@@ -363,24 +363,49 @@ fn an_interface_parameter_follows_the_modules() {
         [("q".to_owned(), Some(12)), ("up_d".to_owned(), Some(12))]
     );
     let s = Sandbox::new();
-    let same = acc(&s, "acc_same", true)
-        .param("W", 12)
-        .bind_iface_with_params("up", "acc_if.sink", [("W", "32'd12")])
-        .build_in(&s.env())
-        .unwrap();
-    assert_eq!(port_widths(&same)[1], ("up_d".to_owned(), Some(12)));
-    let s = Sandbox::new();
-    let err = acc(&s, "acc_apart", true)
+    let apart = acc(&s, "acc_apart", true)
         .param("W", 12)
         .bind_iface_with_params("up", "acc_if.sink", [("W", 8)])
         .verilator_args(["-Wno-fatal"])
         .build_in(&s.env())
-        .unwrap_err();
+        .unwrap();
     assert_eq!(
-        err.to_string(),
-        "invalid DUT `acc_apart` configuration: interface `acc_if` (bound to `up`) has `W` \
-         = 8, but `.param(\"W\", 12)` makes module `acc`'s `W` 12; they must agree (a port \
-         of the wrong width is extended or truncated silently under `-Wno-fatal`): leave \
-         `W` out of the binding, which then takes the `.param` value"
+        port_widths(&apart),
+        [("q".to_owned(), Some(12)), ("up_d".to_owned(), Some(8))]
+    );
+}
+
+/// A module whose output interface is legitimately wider than its `W` (it reads the
+/// width through the port, `out.W`). IEEE 1800-2017 §25.5 interface port headers
+/// carry no parameter assignments, so nothing in the module ties `out`'s `W` to the
+/// module's: the explicit binding value is the user's only say, and must be honoured.
+/// It was refused while a binding value had to equal the same-named `.param`, though it
+/// built with `.param("W", 8)` (the default) left out.
+#[test]
+fn an_explicit_interface_param_is_not_refused_by_name() {
+    let s = Sandbox::new();
+    let rtl = s.path().join("widen");
+    std::fs::create_dir_all(&rtl).unwrap();
+    std::fs::write(
+        rtl.join("widen.sv"),
+        "interface s_if #(parameter int W = 8);\n  logic [W-1:0] d;\n  \
+         modport sink(input d);\n  modport source(output d);\nendinterface\n\
+         module widen #(parameter int W = 8)(s_if.sink in, s_if.source out);\n  \
+         assign out.d = {in.d, in.d};\nendmodule\n",
+    )
+    .unwrap();
+    let dut = |name: &str, param: bool| {
+        let d = Dut::new(name).sources([rtl.join("widen.sv")]).top("widen");
+        let d = if param { d.param("W", 8) } else { d };
+        d.bind_iface("in", "s_if.sink")
+            .bind_iface_with_params("out", "s_if.source", [("W", 16)])
+    };
+    let default = dut("widen_default", false).build_in(&s.env());
+    assert!(default.is_ok(), "{:?}", default.err());
+    let explicit = dut("widen_explicit", true).build_in(&s.env());
+    assert!(
+        explicit.is_ok(),
+        "`.param(\"W\", 8)`, the default, must not refuse what builds without it: {}",
+        explicit.unwrap_err()
     );
 }

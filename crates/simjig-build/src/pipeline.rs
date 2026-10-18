@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use svtypes::ir::{Design, Module, ParamValue, VariableKind};
+use svtypes::ir::{Design, Module, VariableKind};
 
 use crate::cache::Cache;
 use crate::codegen;
@@ -95,7 +95,7 @@ pub(crate) fn design_ir(
         });
     };
     let codegen_err = |source| Error::codegen(&config.name, source);
-    let elab_ir = elaborate(config, &mut iface, cache, &json_pass)?;
+    let elab_ir = elaborate(&mut iface, cache, &json_pass)?;
     let plan = codegen::lower_wrapper(&elab_ir, &iface).map_err(codegen_err)?;
     let wrapper_top = codegen::wrapper_module(top);
     let wrapper = cache.store_input(&GeneratedInput {
@@ -110,18 +110,17 @@ pub(crate) fn design_ir(
     })
 }
 
-/// The elaboration top's IR for `iface`, after tying the interfaces' parameters to the
-/// DUT's: a [`crate::Dut::param`] that a bound interface also declares (`WIDTH` of
+/// The elaboration top's IR for `iface`, after defaulting the interfaces' parameters to
+/// the DUT's: a [`crate::Dut::param`] that a bound interface also declares (`WIDTH` of
 /// both) and its binding leaves unset is passed to the interface too, costing one more
-/// JSON pass when there is one; a binding that sets it to another value is refused.
+/// JSON pass when there is one. A value the binding sets always wins.
 ///
-/// Why: the two are one quantity in practice, and a mismatch is a width mismatch at the
-/// port, which only lint reports: under `-Wno-fatal` the model built and silently
-/// extended or truncated (checked against 5.052: a 12-bit `q = up.d` from an 8-bit
-/// interface). The rule is by name, so an interface parameter that merely shares a
-/// module parameter's name cannot be set apart from it.
+/// Why only a default: IEEE 1800-2017 §25.5 interface port headers carry no parameter
+/// assignments, so nothing in the design says that a module's `W` and its interface
+/// port's `W` are one quantity; the shared name is only a heuristic. A module may read a
+/// wider interface's width through the port (`out.W`), and the binding is then the
+/// user's only say.
 fn elaborate(
-    config: &DutConfig,
     iface: &mut codegen::IfaceTop,
     cache: &Cache,
     json_pass: &impl Fn(&str, &[PathBuf]) -> Result<Design, Error>,
@@ -134,17 +133,11 @@ fn elaborate(
         })?;
         json_pass(&elab_top, &[elab])
     };
-    let mut design = pass(iface)?;
+    let design = pass(iface)?;
     if tie_iface_params(&design, iface) {
-        design = pass(iface)?;
+        return pass(iface);
     }
-    match iface_param_mismatches(&design, iface) {
-        lines if lines.is_empty() => Ok(design),
-        lines => Err(Error::Config {
-            dut: config.name.clone(),
-            msg: lines.join("\n"),
-        }),
-    }
+    Ok(design)
 }
 
 /// The DUT module in the elaboration IR `design`.
@@ -186,52 +179,6 @@ fn tie_iface_params(design: &Design, iface: &mut codegen::IfaceTop) -> bool {
 fn declares(unit: &Module, name: &str) -> bool {
     unit.params.iter().any(|p| p.name == name)
         || unit.unrepresentable.iter().any(|p| p.name == name)
-}
-
-/// One line per binding parameter that elaborated to another value than the DUT's
-/// same-named [`crate::Dut::param`] (see [`elaborate`]).
-fn iface_param_mismatches(design: &Design, iface: &codegen::IfaceTop) -> Vec<String> {
-    let Some(dut) = dut_in(design, iface) else {
-        return Vec::new();
-    };
-    let value = |unit: &Module, name: &str| {
-        unit.params
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| shown(&p.value))
-    };
-    let mut lines = Vec::new();
-    for b in &iface.bindings {
-        let Some(unit) = bound(design, dut, &b.port) else {
-            continue;
-        };
-        for (name, set) in &iface.params {
-            let (Some(theirs), Some(ours)) = (value(unit, name), value(dut, name)) else {
-                continue;
-            };
-            if theirs != ours {
-                lines.push(format!(
-                    "interface `{}` (bound to `{}`) has `{name}` = {theirs}, but \
-                     `.param(\"{name}\", {set})` makes module `{}`'s `{name}` {ours}; they \
-                     must agree (a port of the wrong width is extended or truncated \
-                     silently under `-Wno-fatal`): leave `{name}` out of the binding, which \
-                     then takes the `.param` value",
-                    b.interface, b.port, iface.dut
-                ));
-            }
-        }
-    }
-    lines
-}
-
-/// A parameter value as the user wrote it: an integral one in decimal.
-fn shown(value: &ParamValue) -> String {
-    match value {
-        ParamValue::Bits(l) => l.to_u64().map_or_else(|| l.to_string(), |v| v.to_string()),
-        ParamValue::String(text) => format!("{text:?}"),
-        ParamValue::Real(text) => text.clone(),
-        other => format!("{other:?}"),
-    }
 }
 
 /// Verilator's diagnostics for a parameter override the design does not have (5.052): a

@@ -35,6 +35,13 @@ Every testbench here has the same parts:
   (`ctx.rng("producer")`), so a failure replays from the report's seed, and changing one
   driver does not change another's stimulus. Rates change in bursts, so queues fill and
   drain instead of hovering at half full.
+  The pattern, with a `Queue` as the scoreboard between driver and monitor:
+
+  ```rust
+  let (mut rng, sb) = (ctx.rng("stim"), Queue::new("sb", 0)); // 0: unbounded
+  if rng.bool() { sb.put(rng.below(256)).await; }             // the driver records each beat
+  assert_eq!(dut.q.get().to_u128(), u128::from(sb.get().await)); // the monitor checks in order
+  ```
 - **Directed corner cases** for what random traffic reaches rarely or must be pinned
   exactly (latency, a cycle count).
 - **`with_timeout`** around every wait that should end ("the FIFO drains within 1 us"),

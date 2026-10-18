@@ -137,6 +137,16 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `get_sim_time("ns")` | `simjig::now()`; print it with `simjig::now_display()` (`1250 ns`) |
 | `dut._log.info("x=%d", x)` | `simjig::tb_log!("x={x}")` (prints `[1250 ns main.monitor] x=3`) |
 | `Event`, `Queue`, `Lock` | `simjig::{Event, Queue, Lock}` |
+| `random.random() < 0.5`, `random.randrange(n)` | `rng.bool()`, `rng.below(n)` on a seeded `ctx.rng("name")` |
+
+A seeded stimulus stream and an in-order scoreboard, in a test taking `ctx: &TestCtx`
+(the report's seed replays the stream):
+
+```rust
+let (mut rng, sb) = (ctx.rng("stim"), Queue::new("sb", 0)); // 0: unbounded
+if rng.bool() { sb.put(rng.below(256)).await; }             // the driver records each beat
+assert_eq!(dut.q.get().to_u128(), u128::from(sb.get().await)); // the monitor checks in order
+```
 
 What to keep in mind:
 - **Dropping a `Task` cancels it, and `let _ = spawn(..)` fails the test.** `spawn`

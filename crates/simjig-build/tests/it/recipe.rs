@@ -1,7 +1,7 @@
 //! The C ABI compile recipe (docs/notes/abi.md), observed on the real compiler command
 //! lines through a logging ccache stand-in.
 
-use simjig_build::Dut;
+use simjig_build::{CppRecipe, Dut};
 
 use crate::support::{Sandbox, dut, logging_ccache};
 
@@ -180,4 +180,67 @@ fn editing_one_dut_recompiles_only_its_model() {
         !names.iter().any(|n| n.starts_with(&flop.prefix)),
         "the unchanged model is not: {names:?}"
     );
+}
+
+/// A recipe model source in `<sandbox>/src` that includes `header` (`K` is its value).
+fn recipe_source(s: &Sandbox, file: &str, header: &str) -> std::path::PathBuf {
+    let src = s.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let path = src.join(file);
+    std::fs::write(
+        &path,
+        format!(
+            "#include \"{header}\"\nint simjig_test_{}() {{ return K; }}\n",
+            &file[..file.len() - 4]
+        ),
+    )
+    .unwrap();
+    path
+}
+
+/// Builds `inv` with `recipe`; returns the names of the files compiled.
+fn build_inv(
+    s: &Sandbox,
+    env: &simjig_build::BuildEnv,
+    log: &std::path::Path,
+    recipe: CppRecipe,
+) -> (Vec<String>, Vec<String>) {
+    std::fs::remove_dir_all(log).unwrap();
+    std::fs::create_dir_all(log).unwrap();
+    let built = Dut::new("inv")
+        .sources([dut("inv").join("inv.sv")])
+        .top("inv")
+        .recipe(recipe)
+        .build_in(env)
+        .unwrap();
+    let _ = s;
+    (
+        compiles(log).into_iter().map(|(n, _)| n).collect(),
+        built.directives,
+    )
+}
+
+/// A header in a recipe include directory is part of the model's archive key: editing it
+/// compiles the model again.
+#[test]
+fn editing_a_header_in_a_recipe_include_dir_recompiles_the_model() {
+    let s = Sandbox::new();
+    let (ccache, log) = logging_ccache(&s);
+    let mut env = s.env();
+    env.simjig_ccache = Some(ccache.into());
+    let inc = s.path().join("inc");
+    std::fs::create_dir_all(&inc).unwrap();
+    std::fs::write(inc.join("k.h"), "#define K 1\n").unwrap();
+    let recipe = CppRecipe {
+        model_sources: vec![recipe_source(&s, "uses_k.cpp", "k.h")],
+        include_dirs: vec![inc.clone()],
+        ..CppRecipe::default()
+    };
+    let (first, _) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(first.contains(&"uses_k.cpp".to_owned()), "{first:?}");
+    let (again, _) = build_inv(&s, &env, &log, recipe.clone());
+    assert!(again.is_empty(), "nothing changed: {again:?}");
+    std::fs::write(inc.join("k.h"), "#define K 2\n").unwrap();
+    let (edited, _) = build_inv(&s, &env, &log, recipe);
+    assert!(edited.contains(&"uses_k.cpp".to_owned()), "{edited:?}");
 }

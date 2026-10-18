@@ -12,8 +12,9 @@
 //! Inputs edited while a run reads them. The dependencies are known, and hashed, only
 //! after the tool exits; an edit during the run would store the output of the old
 //! contents under the key of the new ones, a hit forever after. So, as ccache does, a run
-//! takes a [`Snapshot`] before it starts: the time (by the filesystem's clock) and the
-//! digests of the inputs a previous run listed. [`Manifest::record`] then refuses
+//! takes a [`Snapshot`] before it starts: the time (by the filesystem's clock, a tick
+//! after the run's work directory was created) and the digests of the inputs a previous
+//! run listed. [`Manifest::record`] then refuses
 //! ([`Recorded::Changed`]) when a dependency's modification or change time is not
 //! before the start, or its digest is not the one the snapshot saw; the caller uses the
 //! output for that build only and does not publish it, and the next build runs again. A
@@ -305,17 +306,17 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
-    /// Starts a run. `work` is a directory the caller has just created: its time is the
-    /// filesystem's clock, which may lag the system's (Linux stamps files with a clock
-    /// that ticks every few milliseconds), and the earlier of the two is the start.
-    /// `known` are the current digests of a previous run's dependencies, if any.
+    /// Starts a run. `work` is a directory the caller has just created. The start is the
+    /// filesystem's clock one tick after it (see [`next_fs_tick`]), or the system's
+    /// clock if that is earlier. `known` are the current digests of a previous run's
+    /// dependencies, if any.
     pub(crate) fn start(work: &Path, known: Option<Digests>) -> Self {
+        let fs_now = next_fs_tick(work);
         let now = SystemTime::now();
-        let fs_now = Stat::of(work).map_or(now, |(_, t)| t);
         let mut before = known.unwrap_or_default().0;
         before.sort();
         Self {
-            started: now.min(fs_now),
+            started: fs_now.map_or(now, |t| now.min(t)),
             before,
         }
     }
@@ -326,6 +327,46 @@ impl Snapshot {
             .binary_search_by(|(p, _)| p.as_path().cmp(path))
             .is_ok_and(|i| self.before[i].1 != digest)
     }
+}
+
+/// How many times [`next_fs_tick`] probes the filesystem's clock, a millisecond apart:
+/// past Linux's coarsest tick (10 ms, at 100 Hz).
+const TICK_PROBES: u32 = 50;
+
+/// The filesystem's clock at its first tick after `work` was created, read from the
+/// times of probe files written in `work`; `work`'s own time if the clock does not tick
+/// within [`TICK_PROBES`]; `None` when `work` cannot be read.
+///
+/// Why wait for a tick: Linux stamps files with a coarse clock (one tick is 1 to 10 ms),
+/// so an input written just before the run, such as the generated `.vlt` stored in
+/// `inputs/`, often has the very time of the work directory. [`Manifest::record`] must
+/// count a time equal to the start as changed, since an edit early in the run can have
+/// it too, so every fresh build on Linux was refused as changed and verilated again on
+/// the next build. After the tick, every file written before the start is strictly older
+/// than it. macOS stamps files with the nanosecond clock, so there the first probe is
+/// already past.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "waits for the filesystem clock's tick in a build script, not a testbench"
+)]
+fn next_fs_tick(work: &Path) -> Option<SystemTime> {
+    let (_, created) = Stat::of(work)?;
+    for n in 0..TICK_PROBES {
+        let probe = work.join(format!(".simjig-clock-{n}"));
+        let time = std::fs::File::create(&probe)
+            .ok()
+            .and_then(|_| Stat::of(&probe));
+        // A probe that cannot be written or removed: the work directory's time it is.
+        if std::fs::remove_file(&probe).is_err() {
+            break;
+        }
+        match time {
+            Some((_, t)) if t > created => return Some(t),
+            Some(_) => std::thread::sleep(Duration::from_millis(1)),
+            None => break,
+        }
+    }
+    Some(created)
 }
 
 fn key<'a>(domain: &str, pre: &str, deps: impl Iterator<Item = (&'a PathBuf, String)>) -> String {
@@ -446,6 +487,26 @@ mod tests {
             Manifest::record(&[old, gone.clone()], &later()),
             Recorded::Changed(p) if p == gone
         ));
+    }
+
+    /// An input written just before the run, in the same tick of a coarse filesystem
+    /// clock (Linux) as the work directory, is older than the start: a fresh build is
+    /// cached.
+    #[test]
+    fn a_dependency_written_just_before_the_start_is_stable() {
+        let t = tempfile::tempdir().unwrap();
+        for n in 0..20 {
+            let input = old_file(t.path(), &format!("p{n}.vlt"), "`verilator_config\n");
+            let work = t.path().join(format!("work{n}"));
+            std::fs::create_dir(&work).unwrap();
+            let started = Snapshot::start(&work, None);
+            stable(&[input], &started);
+            assert_eq!(
+                std::fs::read_dir(&work).unwrap().count(),
+                0,
+                "probes left behind"
+            );
+        }
     }
 
     /// An edit that keeps the times older than the run (`cp -p`, a coarse clock) still

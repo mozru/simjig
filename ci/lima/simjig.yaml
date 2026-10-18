@@ -1,0 +1,33 @@
+# Lima VM for running simjig's gate on Linux (aarch64) from a macOS arm64 host.
+# Used by ci/lima/run.sh; see CONTRIBUTING.md ("Linux"). Requires Lima >= 2.0.
+#
+# The host's home is mounted read-only (Lima's default mounts); the script clones the
+# checkout into VM-local storage so that target/ and .pixi/ never touch the mount.
+minimumLimaVersion: 2.0.0
+
+base:
+- template:_images/ubuntu-26.04   # Ubuntu 26.04 LTS, arm64 cloud image
+- template:_default/mounts        # ~ read-only, /tmp/lima writable
+
+vmType: vz
+arch: aarch64
+cpus: 4
+memory: 8GiB
+disk: 40GiB          # sparse: only what the guest writes is allocated on the host
+
+# No containers: skip downloading and installing nerdctl/containerd.
+containerd:
+  system: false
+  user: false
+
+# Only what pixi and rustup cannot provide: git to clone, curl and certs to download,
+# and a host C toolchain for rustup's own linker (cc) and for build scripts.
+provision:
+- mode: system
+  script: |
+    #!/bin/sh
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    command -v git >/dev/null && command -v cc >/dev/null && exit 0
+    apt-get update
+    apt-get install -y --no-install-recommends git curl ca-certificates build-essential

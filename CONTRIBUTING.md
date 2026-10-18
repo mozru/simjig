@@ -62,6 +62,28 @@ run) and `-Zmiri-strict-provenance`. Set `SIMJIG_MIRI_TOOLCHAIN` to use a nightl
 It takes minutes, so it is not part of `cargo xtask ci`. Run it after changing `unsafe`
 code, the executor or the waker.
 
+## Linux
+
+CI runs on macOS only. To run the gate on Linux from a macOS arm64 host, use the Lima VM
+in `ci/lima/simjig.yaml` (Ubuntu 26.04 LTS arm64, Virtualization.framework, 4 CPUs,
+8 GiB RAM, a sparse 40 GiB disk):
+
+```sh
+ci/lima/run.sh                                                    # pixi run cargo xtask ci
+ci/lima/run.sh pixi run -e conformance conformance-regen --check
+ci/lima/run.sh bash -c 'rustup toolchain install nightly --component miri && pixi run cargo xtask miri'
+```
+
+It needs `limactl` (Lima 2.x) on `PATH`. The script creates and starts the VM `simjig` if
+needed, clones the checkout's **committed `HEAD`** into the guest's `~/simjig` (the home
+mount is read-only, and `target/` and `.pixi/` stay on the guest's disk), installs pixi,
+rustup and the pinned cargo tools there, and runs the command. Uncommitted changes are
+not synced: commit first. The first run takes about 15 minutes (the cargo tools build
+from source). Stop the VM with `limactl stop simjig`; remove it with
+`limactl delete simjig`.
+
+This covers linux-aarch64 only. `pixi.lock` also locks linux-64, but nothing runs it.
+
 ## Self-hosted runner
 
 CI runs on a self-hosted macOS arm64 runner (labels `self-hosted, macOS, ARM64`).

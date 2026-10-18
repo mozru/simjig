@@ -72,6 +72,17 @@ the public API, the generated code or simulation semantics.
 - `Error::Command` has a new field, `hints`: what the configuration suggests about the
   failure, printed first, one `hint:` line each (breaking for a pattern or literal that
   names every field).
+- Linux: models link. The build script now also emits `-lm`, `-lpthread` and (GNU
+  targets) `-lgcc` after the C++ standard library; before, every test that linked a
+  model failed on Linux with `undefined reference to symbol 'exp2@@GLIBC_2.17'`, and on
+  aarch64 then with `undefined reference to '__aarch64_ldadd4_acq_rel'`. No change on
+  macOS.
+- Linux: a fresh build caches its Verilator and C++ outputs. Its start is now taken one
+  tick of the filesystem's clock after the work directory, so an input written just
+  before it (the generated `.vlt`) no longer has the same coarse time and is no longer
+  taken as changed during the run (`changed while verilating (or its time is in the
+  future)` for every DUT, and verilating again on the next build). On macOS the start is
+  unchanged.
 - `--threads` out of `int` range is read as 5.052 reads it, `(int)strtol(..)`:
   `--threads 4294967297` is one thread and passes; `--threads 4294967298` is two and is
   refused; `--threads 2147483648` is negative and left to Verilator's own error.

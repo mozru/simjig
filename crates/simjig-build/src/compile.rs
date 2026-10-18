@@ -34,7 +34,7 @@
 //!    Cached once per (Verilator version, compiler, target, flags, runtime sources);
 //!    the runtime sources include `simjig_vl_config.h`.
 //! 4. native libraries the extras need (`lz4`, `z` for FST), then the C++ standard
-//!    library.
+//!    library and, on Linux, libm, libpthread and libgcc (see [`system_libs`]).
 //!
 //! Each is emitted both as `rustc-link-lib` and as `rustc-link-arg` (see [`link_args`]),
 //! so the models link into every target of the package, whether or not it has a library.
@@ -294,7 +294,10 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
         .chain(&extras)
         .chain([&shared])
         .collect();
-    let stdlib = cxx_stdlib(i.env);
+    let libs: Vec<String> = cxx_stdlib(i.env)
+        .into_iter()
+        .chain(system_libs(&i.env.target).iter().map(|l| (*l).to_owned()))
+        .collect();
     let mut d = Vec::new();
     for a in &archives {
         d.push(format!(
@@ -306,8 +309,8 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
     for n in &natives {
         d.extend(n.directives());
     }
-    d.extend(stdlib.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
-    d.extend(link_args(&archives, &natives, stdlib.as_deref()));
+    d.extend(libs.iter().map(|l| format!("cargo::rustc-link-lib={l}")));
+    d.extend(link_args(&archives, &natives, &libs));
     d.extend(rerun_on_deps(i, &archives));
     for a in &archives {
         if let Some(path) = &a.changed {
@@ -398,10 +401,11 @@ fn rerun_on_deps(i: &Inputs<'_>, archives: &[&Archive]) -> Vec<String> {
 /// `rustc-link-lib` still carries the archives into the rlib for crates that depend on
 /// the library. Listing an archive twice links each object at most once (a static
 /// linker pulls an archive member only to resolve a symbol that is still undefined), so
-/// a target that does link the library gets no duplicate symbols. The natives and the
-/// C++ standard library are repeated after the archives because `--as-needed` linkers
-/// only keep a shared library for the references that come before it.
-fn link_args(archives: &[&Archive], natives: &[NativeLib], stdlib: Option<&str>) -> Vec<String> {
+/// a target that does link the library gets no duplicate symbols. The natives, the C++
+/// standard library and the [`system_libs`] are repeated after the archives because
+/// `--as-needed` linkers only keep a shared library for the references that come before
+/// it.
+fn link_args(archives: &[&Archive], natives: &[NativeLib], libs: &[String]) -> Vec<String> {
     let mut args: Vec<String> = archives
         .iter()
         .map(|a| a.dir.join(format!("lib{}.a", a.name)).display().to_string())
@@ -410,7 +414,7 @@ fn link_args(archives: &[&Archive], natives: &[NativeLib], stdlib: Option<&str>)
         args.extend(n.dir.as_ref().map(|dir| format!("-L{}", dir.display())));
         args.push(format!("-l{}", n.name));
     }
-    args.extend(stdlib.map(|l| format!("-l{l}")));
+    args.extend(libs.iter().map(|l| format!("-l{l}")));
     args.into_iter()
         .map(|a| format!("cargo::rustc-link-arg={a}"))
         .collect()
@@ -543,6 +547,34 @@ fn cxx_stdlib(env: &BuildEnv) -> Option<String> {
         Some("c++_shared".to_owned())
     } else {
         Some("stdc++".to_owned())
+    }
+}
+
+/// The libraries the C++ objects call that a `cc` link does not name, linked after the
+/// C++ standard library.
+///
+/// On Linux, `verilated.cpp` calls `exp2` and `log10` (libm) and `verilated_threads.cpp`
+/// `pthread_create` and `pthread_setaffinity_np` (libpthread, separate from libc before
+/// glibc 2.34; conda-forge's sysroot is 2.28). `g++` adds `-lm` by itself, and Verilator's
+/// makefiles add `-pthread -lpthread` (`CFG_LDLIBS_THREADS` in `verilated.mk`), but rustc
+/// links with `cc -nodefaultlibs`. Rust's std passes `-lm` and `-lpthread` too, but
+/// before the `rustc-link-arg` archives, where `--as-needed` drops a library nothing
+/// referenced yet: the link fails with `undefined reference to symbol
+/// 'exp2@@GLIBC_2.17'`.
+///
+/// With GNU toolchains, also libgcc (static), which the `gcc` driver adds to every link
+/// and `-nodefaultlibs` leaves out: GCC compiles C++ atomics on aarch64 to calls of its
+/// outline helpers (`__aarch64_ldadd4_acq_rel`, `-moutline-atomics`, the default since
+/// GCC 10). Rust's `compiler_builtins` defines them too, but its archive comes before
+/// ours, so a static linker never goes back to it. On Apple targets all of these are
+/// part of libSystem.
+fn system_libs(target: &str) -> &'static [&'static str] {
+    if !target.contains("linux") {
+        &[]
+    } else if target.contains("-gnu") {
+        &["m", "pthread", "gcc"]
+    } else {
+        &["m", "pthread"]
     }
 }
 
@@ -692,6 +724,38 @@ mod tests {
         let plain = MK.replace("VM_TRACE_FST = 1", "VM_TRACE_FST = 0");
         let mk = ClassesMk::parse(Path::new("Vx_classes.mk"), &plain).unwrap();
         assert_eq!(native_libs(&env, &mk), []);
+    }
+
+    /// Linux links libm, libpthread and (GNU) libgcc after the C++ standard library,
+    /// which follows the archives (see [`system_libs`]); Apple needs none of them.
+    #[test]
+    fn linux_links_libm_libpthread_and_libgcc_after_the_archives() {
+        assert_eq!(
+            system_libs("aarch64-unknown-linux-gnu"),
+            ["m", "pthread", "gcc"]
+        );
+        assert_eq!(
+            system_libs("x86_64-unknown-linux-gnu"),
+            ["m", "pthread", "gcc"]
+        );
+        assert_eq!(system_libs("aarch64-unknown-linux-musl"), ["m", "pthread"]);
+        assert_eq!(system_libs("aarch64-apple-darwin"), [""; 0]);
+        let a = Archive {
+            dir: PathBuf::from("/c/a"),
+            name: "simjig_verilated_1".into(),
+            deps: Vec::new(),
+            changed: None,
+        };
+        let libs = ["stdc++", "m", "pthread"].map(String::from);
+        assert_eq!(
+            link_args(&[&a], &[], &libs),
+            [
+                "cargo::rustc-link-arg=/c/a/libsimjig_verilated_1.a",
+                "cargo::rustc-link-arg=-lstdc++",
+                "cargo::rustc-link-arg=-lm",
+                "cargo::rustc-link-arg=-lpthread",
+            ]
+        );
     }
 
     #[test]

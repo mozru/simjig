@@ -71,8 +71,8 @@ handled (not reported).
 - (a) `archive::toolchain_dirs`: the compiler's `#include <...>` search list (`-E -x c++
   -v -` with the tool's arguments minus include-path flags, once per script and
   compiler) plus `<compiler prefix>/include`, each as named and canonical, compared
-  lexically (`bin/../include`). The fixture crate's script output went from about 1,200
-  `rerun-if-changed` lines (simjig's own build script here) to 77, 69 of them Verilator's
+  lexically (`bin/../include`). `simjig`'s own test build script went from 1,268 distinct
+  `rerun-if-changed` paths to 66; the rebuild fixture's prints 77, 69 of them Verilator's
   include directory and executable, which stay (keyed by the Verilator version only, not
   its identity; left as is). Risk named: a compiler installed inside a project tree
   (`<proj>/tools/bin/cc`) would hide edits to `<proj>/tools/include` from reruns (the

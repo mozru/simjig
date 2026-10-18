@@ -36,8 +36,8 @@ the public API, the generated code or simulation semantics.
   directory, SDK or sysroot) and the `include/` of the prefix the compiler is installed
   in (a conda environment's). They change only with the compiler, whose identity keys
   the archives and whose executable the script reruns on; the archive keys still hash
-  them. This was most of a failed build's `--- stdout` (about 1,200 lines per script
-  here, now under 100).
+  them. This was most of a failed build's `--- stdout` (`simjig`'s own test build
+  script: 1,268 distinct paths before, 66 after).
 - `Dut::param` set twice for one parameter keeps the last value (in the first call's
   place) instead of passing Verilator two `-G` options ("Duplicate parameter
   connection"), so a sweep member can override a base configuration. A second

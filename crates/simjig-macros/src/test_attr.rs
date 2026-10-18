@@ -5,6 +5,7 @@
 //! #[simjig::test]
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
 //! #[simjig::test(timeout = "none")]                 no time limit
+//! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<sim>: &<Ctx>,] [<dut>: <Dut>]) [-> <Output>] { ... }
 //! ```
 //! A parameter whose type is a shared reference is the test context; a parameter taken by
@@ -32,10 +33,12 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenS
 }
 
 /// The attribute's arguments.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Args {
     /// `None` without the argument (the runner's default applies).
     timeout: Option<TimeoutArg>,
+    /// The path the expansion reaches simjig by; `None` is `::simjig`.
+    krate: Option<syn::Path>,
 }
 
 /// A `timeout` argument.
@@ -82,10 +85,17 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             };
             args.timeout = Some(parse_timeout(&lit)?);
             Ok(())
+        } else if meta.path.is_ident("crate") {
+            if args.krate.is_some() {
+                return Err(meta.error("`crate` is given twice"));
+            }
+            args.krate = Some(meta.value()?.parse()?);
+            Ok(())
         } else {
             Err(meta.error(
-                "unknown `#[simjig::test]` argument; the only argument is \
-                 `timeout = \"<duration>\"`, for example `timeout = \"2ms\"`",
+                "unknown `#[simjig::test]` argument; the arguments are \
+                 `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`) and \
+                 `crate = <path to simjig>`",
             ))
         }
     });
@@ -266,14 +276,18 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
         None => (quote!(_), None),
     };
     let call_args = sim_arg.into_iter().chain(dut_arg);
+    let krate = args
+        .krate
+        .as_ref()
+        .map_or_else(|| quote!(::simjig), |path| quote!(#path));
     let timeout = match args.timeout {
-        None => quote!(::simjig::__private::TimeoutArg::Default),
-        Some(TimeoutArg::Disabled) => quote!(::simjig::__private::TimeoutArg::Disabled),
+        None => quote!(#krate::__private::TimeoutArg::Default),
+        Some(TimeoutArg::Disabled) => quote!(#krate::__private::TimeoutArg::Disabled),
         Some(TimeoutArg::Given(Timeout { value, unit })) => {
             let unit = format_ident!("{unit}");
-            quote!(::simjig::__private::TimeoutArg::Given(::simjig::__private::Timeout {
+            quote!(#krate::__private::TimeoutArg::Given(#krate::__private::Timeout {
                 value: #value,
-                unit: ::simjig::TimeUnit::#unit,
+                unit: #krate::TimeUnit::#unit,
             }))
         }
     };
@@ -286,7 +300,7 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
     let output_check = match &sig.output {
         ReturnType::Default => quote!(),
         ReturnType::Type(_, ty) => quote_spanned!(ty.span()=>
-            ::simjig::__private::assert_test_output::<#ty>();
+            #krate::__private::assert_test_output::<#ty>();
         ),
     };
     quote! {
@@ -296,8 +310,8 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
             #allow
             #body
             #output_check
-            ::simjig::__private::run_test::<#dut_ty, _, _>(
-                &::simjig::__private::TestMeta {
+            #krate::__private::run_test::<#dut_ty, _, _>(
+                &#krate::__private::TestMeta {
                     module_path: ::core::module_path!(),
                     name: ::core::stringify!(#ident),
                     package: ::core::env!("CARGO_PKG_NAME"),
@@ -341,6 +355,14 @@ mod tests {
                     dut.go(sim).await
                 }
             }
+        ));
+    }
+
+    #[test]
+    fn expands_with_a_renamed_crate() {
+        insta::assert_snapshot!(render(
+            quote!(crate = ::sj, timeout = "1us"),
+            quote! { async fn renamed(dut: Counter) -> sj::Result { Ok(()) } }
         ));
     }
 

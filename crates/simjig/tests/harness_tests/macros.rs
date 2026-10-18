@@ -98,3 +98,11 @@ fn a_passing_should_panic_test_prints_no_report() {
     assert!(output.status.success(), "{stderr}");
     assert!(!stderr.contains("FAIL macros::"), "{stderr}");
 }
+
+// `::simjig` resolves here too, so this checks that the expansion compiles through `::sj`;
+// the macro's snapshot (`expands_with_a_renamed_crate`) checks it uses no other path.
+#[simjig::test(crate = ::sj, timeout = "1us")]
+async fn a_renamed_crate_is_reached_through_its_path() -> sj::Result {
+    sj::yield_now().await;
+    Ok(())
+}

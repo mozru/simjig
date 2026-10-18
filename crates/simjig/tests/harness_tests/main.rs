@@ -6,6 +6,9 @@
 // `$OUT_DIR/simjig/counter.rs`); the `@from` form reads a hand-written file instead.
 simjig::include_dut!(@from concat!(env!("CARGO_MANIFEST_DIR"), "/tests/harness_tests/duts"), counter);
 
+// simjig under another name, the way a renamed dependency appears, for `crate = ::sj`.
+extern crate simjig as sj;
+
 mod concurrency;
 mod macros;
 mod reports;

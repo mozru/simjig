@@ -3,7 +3,7 @@
 //! This crate is a thin shell: each macro converts its input to `proc_macro2` and calls a
 //! module that holds all the logic, so the logic can be unit-tested and snapshot-tested
 //! outside the compiler. Users reach the macros through `simjig` (`#[simjig::test]`); the
-//! expansions refer only to `::simjig::...` paths.
+//! expansions refer only to `::simjig::...` paths, or to the path given by `crate = ...`.
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
@@ -27,6 +27,10 @@ mod test_attr;
 ///   whole number of the design's ticks. Without it, the budget is 10 ms of simulation
 ///   time (`simjig::__private::DEFAULT_TIMEOUT_MS`, rounded up to a whole tick), and the
 ///   `TimeLimit` report says it was the default; `timeout = "none"` removes the limit.
+/// - `crate = <path>`: how the expansion names simjig, for a crate that renamed the
+///   dependency (`sj = { package = "simjig", ... }` takes `crate = ::sj`). The default is
+///   `::simjig`. The DUT bindings that simjig-build generates (`include_dut!`) still
+///   name `::simjig`, so a crate with generated DUTs must keep the dependency's name.
 ///
 /// # Signature
 /// `async fn name([sim: &simjig::TestCtx,] [dut: D]) [-> simjig::Result]`, where `D`

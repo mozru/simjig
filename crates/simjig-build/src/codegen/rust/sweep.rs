@@ -177,7 +177,7 @@ fn emit_trait(w: &mut Writer, t: &PortsTrait) {
             String::new()
         } else {
             format!(
-                " (`{}` here: a supertrait has a method `{}`)",
+                " (`{}` here: a supertrait or a blanket impl has a method `{}`)",
                 m.name, m.field
             )
         };

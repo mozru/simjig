@@ -417,7 +417,7 @@ fn a_method_named_like_a_supertraits_gets_an_underscore() {
     let text = &files[0].1;
     assert!(text.contains("{ self.clone }"), "{text}");
     assert!(
-        text.contains("(`clone_` here: a supertrait has a method `clone`)"),
+        text.contains("(`clone_` here: a supertrait or a blanket impl has a method `clone`)"),
         "{text}"
     );
 }
@@ -493,6 +493,8 @@ pub mod fn_sweep {
 /// Bodies generic over `fs` and `fn_sweep` comparing a struct field with a port of the
 /// same type, and a nested struct with a port of its type, with no `where` clause.
 mod fields_body {
+    use simjig_bits::Bit;
+
     use crate::__private::{In, Out};
 
     /// `pa.beat.data` and `pb.beat.x` have `dout`'s type: a field's value is the port's.
@@ -512,8 +514,9 @@ mod fields_body {
         let _: Out<D::Inner> = dut.io();
         let inner = D::Inner::new(5);
         let outer = D::Outer::new(inner, 1);
-        let rw = D::Rw::new(outer.i().a(), 0);
-        (inner == outer.i(), rw.raw().to_u128())
+        let rw = D::Rw::new(outer.i().a(), 0, 1);
+        let _: Out<Bit> = dut.from_();
+        (inner == outer.i() && rw.into_() == 1, rw.raw().to_u128())
     }
 }
 
@@ -551,4 +554,34 @@ fn a_fields_traits_types_are_not_named_like_a_supertraits() {
         .unwrap();
     let names: Vec<&str> = rw.types.iter().map(|a| a.name.as_str()).collect();
     assert!(!names.contains(&"Raw"), "{names:?}");
+}
+
+/// A field or port named like a blanket impl's method (`Into::into`, `From::from`) gets a
+/// `_` appended, or `x.into()` is ambiguous (E0034): `rw.into_()`, `dut.from_()`.
+#[test]
+fn a_method_named_like_a_blanket_impls_gets_an_underscore() {
+    let (sweep, _) = files(
+        "fn",
+        &[
+            cases::nested_fields_member("fn_a", 8),
+            cases::nested_fields_member("fn_b", 16),
+        ],
+    );
+    let rw = sweep
+        .fields_traits
+        .iter()
+        .find(|f| f.name == "RwFields")
+        .unwrap();
+    let into = rw.fields.iter().find(|f| f.name == "into").unwrap();
+    assert_eq!(
+        (into.getter.as_str(), into.setter.as_str()),
+        ("into_", "with_into")
+    );
+    let from = sweep
+        .ports
+        .methods
+        .iter()
+        .find(|m| m.field == "from")
+        .unwrap();
+    assert_eq!(from.name, "from_");
 }

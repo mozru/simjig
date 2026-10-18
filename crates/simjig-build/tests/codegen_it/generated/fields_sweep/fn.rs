@@ -30,6 +30,8 @@ pub trait Ports: ::core::marker::Copy + ::core::fmt::Debug + 'static {
     fn io(self) -> ::simjig::__private::Out<Self::Inner>;
     /// `fn_top.rw`: output.
     fn rw(self) -> ::simjig::__private::Out<Self::Rw>;
+    /// `fn_top.from`: output (`from_` here: a supertrait or a blanket impl has a method `from`).
+    fn from_(self) -> ::simjig::__private::Out<::simjig::__private::bits::Bit>;
 }
 
 /// The fields of SystemVerilog `fn_top.inner_t`, a packed struct whose field types differ between
@@ -81,15 +83,20 @@ pub trait RwFields: ::simjig::__private::Value {
     fn raw(self) -> Self::Raw2;
     /// Field `other`.
     fn other(self) -> Self::Other;
+    /// Field `into`.
+    fn into_(self) -> ::simjig::__private::bits::Bit;
     /// The value with these fields, in declaration order (the first most significant).
     #[must_use]
-    fn new(raw: impl ::core::convert::Into<Self::Raw2>, other: impl ::core::convert::Into<Self::Other>) -> Self;
+    fn new(raw: impl ::core::convert::Into<Self::Raw2>, other: impl ::core::convert::Into<Self::Other>, into: impl ::core::convert::Into<::simjig::__private::bits::Bit>) -> Self;
     /// `self` with field `raw` replaced.
     #[must_use]
     fn with_raw(self, raw: impl ::core::convert::Into<Self::Raw2>) -> Self;
     /// `self` with field `other` replaced.
     #[must_use]
     fn with_other(self, other: impl ::core::convert::Into<Self::Other>) -> Self;
+    /// `self` with field `into` replaced.
+    #[must_use]
+    fn with_into(self, into: impl ::core::convert::Into<::simjig::__private::bits::Bit>) -> Self;
 }
 
 /// Configuration `fn_a` of `fn_top`: `W` = 8.
@@ -107,6 +114,7 @@ impl Ports for fn_a::Dut {
     fn o(self) -> ::simjig::__private::Out<Self::Outer> { self.o }
     fn io(self) -> ::simjig::__private::Out<Self::Inner> { self.io }
     fn rw(self) -> ::simjig::__private::Out<Self::Rw> { self.rw }
+    fn from_(self) -> ::simjig::__private::Out<::simjig::__private::bits::Bit> { self.from }
 }
 
 impl InnerFields for fn_a::Inner {
@@ -130,9 +138,11 @@ impl RwFields for fn_a::Rw {
     type Other = ::simjig::__private::bits::Bits<9>;
     fn raw(self) -> Self::Raw2 { self.raw }
     fn other(self) -> Self::Other { self.other }
-    fn new(raw: impl ::core::convert::Into<Self::Raw2>, other: impl ::core::convert::Into<Self::Other>) -> Self { Self { raw: raw.into(), other: other.into() } }
+    fn into_(self) -> ::simjig::__private::bits::Bit { self.into }
+    fn new(raw: impl ::core::convert::Into<Self::Raw2>, other: impl ::core::convert::Into<Self::Other>, into: impl ::core::convert::Into<::simjig::__private::bits::Bit>) -> Self { Self { raw: raw.into(), other: other.into(), into: into.into() } }
     fn with_raw(mut self, raw: impl ::core::convert::Into<Self::Raw2>) -> Self { self.raw = raw.into(); self }
     fn with_other(mut self, other: impl ::core::convert::Into<Self::Other>) -> Self { self.other = other.into(); self }
+    fn with_into(mut self, into: impl ::core::convert::Into<::simjig::__private::bits::Bit>) -> Self { self.into = into.into(); self }
 }
 
 /// Configuration `fn_b` of `fn_top`: `W` = 16.
@@ -150,6 +160,7 @@ impl Ports for fn_b::Dut {
     fn o(self) -> ::simjig::__private::Out<Self::Outer> { self.o }
     fn io(self) -> ::simjig::__private::Out<Self::Inner> { self.io }
     fn rw(self) -> ::simjig::__private::Out<Self::Rw> { self.rw }
+    fn from_(self) -> ::simjig::__private::Out<::simjig::__private::bits::Bit> { self.from }
 }
 
 impl InnerFields for fn_b::Inner {
@@ -173,7 +184,9 @@ impl RwFields for fn_b::Rw {
     type Other = ::simjig::__private::bits::Bits<17>;
     fn raw(self) -> Self::Raw2 { self.raw }
     fn other(self) -> Self::Other { self.other }
-    fn new(raw: impl ::core::convert::Into<Self::Raw2>, other: impl ::core::convert::Into<Self::Other>) -> Self { Self { raw: raw.into(), other: other.into() } }
+    fn into_(self) -> ::simjig::__private::bits::Bit { self.into }
+    fn new(raw: impl ::core::convert::Into<Self::Raw2>, other: impl ::core::convert::Into<Self::Other>, into: impl ::core::convert::Into<::simjig::__private::bits::Bit>) -> Self { Self { raw: raw.into(), other: other.into(), into: into.into() } }
     fn with_raw(mut self, raw: impl ::core::convert::Into<Self::Raw2>) -> Self { self.raw = raw.into(); self }
     fn with_other(mut self, other: impl ::core::convert::Into<Self::Other>) -> Self { self.other = other.into(); self }
+    fn with_into(mut self, into: impl ::core::convert::Into<::simjig::__private::bits::Bit>) -> Self { self.into = into.into(); self }
 }

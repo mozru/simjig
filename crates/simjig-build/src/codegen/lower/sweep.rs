@@ -32,7 +32,8 @@
 //!   body. A fields trait's own types are its fields' only (`OuterFields::Inner` is
 //!   bounded by `InnerFields` alone): a body over `Ports` sees them tied through it;
 //! - **method names**: a trait method named like one of its supertraits' (`clone`, `fmt`;
-//!   for a fields trait also `Value`'s, `new` and another field's setter) gets `_`
+//!   for a fields trait also `Value`'s, `new` and another field's setter) or a blanket
+//!   impl's (`into`, `from`, `to_owned`, ...) gets `_`
 //!   appended (`clone_`), and its docs say so; a fields trait's associated type named
 //!   like a supertrait's (`Packed::Raw`) is numbered (`Raw2`);
 //! - **runtime traits**: `Value`, `Vector` and `Packed`, re-exported by the sweep module
@@ -304,14 +305,38 @@ enum Typed {
     },
 }
 
-/// Methods every `Ports` and bundle trait has from its supertraits (`Copy`, `Debug`).
-const HANDLE_METHODS: &[&str] = &["clone", "clone_from", "fmt"];
+/// Methods every `Ports` and bundle trait has from its supertraits (`Copy`, `Debug`), and
+/// every type has from the standard library's blanket impls (`Into`, `From`, `TryInto`,
+/// `TryFrom`, `ToOwned`, `Borrow`, `BorrowMut`): a trait method of one of these names
+/// makes a call like `x.into()` ambiguous (E0034).
+const HANDLE_METHODS: &[&str] = &[
+    "clone",
+    "clone_from",
+    "fmt",
+    "into",
+    "from",
+    "try_into",
+    "try_from",
+    "to_owned",
+    "clone_into",
+    "borrow",
+    "borrow_mut",
+];
 
-/// Methods a [`FieldsTrait`] has from its supertraits (`Value` and its own) and itself.
+/// Methods a [`FieldsTrait`] has from its supertraits (`Value` and its own), the blanket
+/// impls ([`HANDLE_METHODS`]) and itself.
 const VALUE_METHODS: &[&str] = &[
     "clone",
     "clone_from",
     "fmt",
+    "into",
+    "from",
+    "try_into",
+    "try_from",
+    "to_owned",
+    "clone_into",
+    "borrow",
+    "borrow_mut",
     "eq",
     "ne",
     "default",

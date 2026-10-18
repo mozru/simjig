@@ -99,28 +99,32 @@ impl FnTopOuter {
 /// SystemVerilog `fn_top::outer_t` (17 bits).
 pub type Outer = FnTopOuter;
 
-/// SystemVerilog `fn_top.rw_t`: a packed struct of 33 bits, first field most significant.
+/// SystemVerilog `fn_top.rw_t`: a packed struct of 34 bits, first field most significant.
 #[derive(::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::hash::Hash, ::core::default::Default, ::core::fmt::Debug)]
 pub struct FnTopRw {
-    /// `raw`, bits `[32:17]`.
+    /// `raw`, bits `[33:18]`.
     pub raw: ::simjig::__private::bits::Bits<16>,
-    /// `other`, bits `[16:0]`.
+    /// `other`, bits `[17:1]`.
     pub other: ::simjig::__private::bits::Bits<17>,
+    /// `into`, bits `[0:0]`.
+    pub into: ::simjig::__private::bits::Bit,
 }
 
 const _: () = {
     ::core::assert!(<::simjig::__private::bits::Bits<16> as ::simjig::__private::bits::Packed>::WIDTH == 16, "fn_top.rw_t.raw must be 16 bits wide");
     ::core::assert!(<::simjig::__private::bits::Bits<17> as ::simjig::__private::bits::Packed>::WIDTH == 17, "fn_top.rw_t.other must be 17 bits wide");
+    ::core::assert!(<::simjig::__private::bits::Bit as ::simjig::__private::bits::Packed>::WIDTH == 1, "fn_top.rw_t.into must be 1 bits wide");
 };
 
 impl ::simjig::__private::bits::Packed for FnTopRw {
-    const WIDTH: ::core::primitive::u32 = 33;
+    const WIDTH: ::core::primitive::u32 = 34;
     type Raw = ::core::primitive::u64;
 
     fn to_raw(self) -> ::core::primitive::u64 {
         let mut words: [::core::primitive::u32; 2] = [0; 2];
-        ::simjig::__private::pack_field(&mut words, 17, self.raw);
-        ::simjig::__private::pack_field(&mut words, 0, self.other);
+        ::simjig::__private::pack_field(&mut words, 18, self.raw);
+        ::simjig::__private::pack_field(&mut words, 1, self.other);
+        ::simjig::__private::pack_field(&mut words, 0, self.into);
         ::simjig::__private::RawWords::from_words(&words)
     }
 
@@ -128,8 +132,9 @@ impl ::simjig::__private::bits::Packed for FnTopRw {
         let mut words: [::core::primitive::u32; 2] = [0; 2];
         ::simjig::__private::RawWords::to_words(raw, &mut words);
         Self {
-            raw: ::simjig::__private::unpack_field(&words, 17),
-            other: ::simjig::__private::unpack_field(&words, 0),
+            raw: ::simjig::__private::unpack_field(&words, 18),
+            other: ::simjig::__private::unpack_field(&words, 1),
+            into: ::simjig::__private::unpack_field(&words, 0),
         }
     }
 }
@@ -146,11 +151,14 @@ impl FnTopRw {
         if self.other != other.other {
             diffs.push(::simjig::__private::FieldDiff::new("other", &self.other, &other.other));
         }
+        if self.into != other.into {
+            diffs.push(::simjig::__private::FieldDiff::new("into", &self.into, &other.into));
+        }
         diffs
     }
 }
 
-/// SystemVerilog `fn_top::rw_t` (33 bits).
+/// SystemVerilog `fn_top::rw_t` (34 bits).
 pub type Rw = FnTopRw;
 
 /// The signals of model `fn_top`: its ports in declaration order, then its probes.
@@ -160,14 +168,16 @@ pub struct Dut {
     pub o: ::simjig::__private::Out<Outer>,
     /// `fn_top.io`: output, 16 bits.
     pub io: ::simjig::__private::Out<Inner>,
-    /// `fn_top.rw`: output, 33 bits.
+    /// `fn_top.rw`: output, 34 bits.
     pub rw: ::simjig::__private::Out<Rw>,
+    /// `fn_top.from`: output, 1 bit.
+    pub from: ::simjig::__private::Out<::simjig::__private::bits::Bit>,
 }
 
 impl Dut {
     /// Hash of the IR and configuration this code was generated from; the model's
     /// vtable carries the same value.
-    pub const IR_HASH: ::core::primitive::u64 = 0x2b9f_722c_fb3e_79b7;
+    pub const IR_HASH: ::core::primitive::u64 = 0xd44_7d2e_2d4f_3150;
 
     /// Every signal, indexed by slot.
     pub const SIGNALS: &'static [::simjig::__private::SignalMeta] = &[
@@ -188,8 +198,15 @@ impl Dut {
         ::simjig::__private::SignalMeta {
             name: "fn_top.rw",
             slot: 2,
-            width: 33,
+            width: 34,
             storage: ::simjig::__private::Storage::QData,
+            access: ::simjig::__private::Access::Out,
+        },
+        ::simjig::__private::SignalMeta {
+            name: "fn_top.from",
+            slot: 3,
+            width: 1,
+            storage: ::simjig::__private::Storage::CData,
             access: ::simjig::__private::Access::Out,
         },
     ];
@@ -203,6 +220,7 @@ impl Dut {
             o: ::simjig::__private::Binder::output(binder, &Self::SIGNALS[0]),
             io: ::simjig::__private::Binder::output(binder, &Self::SIGNALS[1]),
             rw: ::simjig::__private::Binder::output(binder, &Self::SIGNALS[2]),
+            from: ::simjig::__private::Binder::output(binder, &Self::SIGNALS[3]),
         }
     }
 }

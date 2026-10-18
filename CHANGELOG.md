@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Sweep modules (generated code): a `Ports`, bundle or fields trait method named like a
+  blanket impl's (`into`, `from`, `try_into`, `try_from`, `to_owned`, `clone_into`,
+  `borrow`, `borrow_mut`) gets `_` appended like `clone_`, as `x.into()` was ambiguous
+  (E0034). The rename note now reads "a supertrait or a blanket impl has a method".
 - Sweep modules (generated code, reviewed snapshots `codegen_it::sweep`): a fields
   trait's associated types are `Ports`' and the bundle traits' too, fixed by the bound
   (`type Beat: BeatFields<Data = Self::Din, Tag = Self::Tag>`), recursively through

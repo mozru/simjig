@@ -179,16 +179,20 @@ impl Cache {
         Ok(())
     }
 
-    /// Records that `identity` owns `prefix`, unless another identity already does: then
+    /// Records that `identity` owns `prefix` under identity `scheme` (see
+    /// `pipeline::claim`), unless another identity already does: then
     /// returns that one. A race between two different identities may let both pass;
     /// a collision of the 32-bit prefix hash is already unlikely, and the loser's next
     /// build reports it.
     pub(crate) fn claim_prefix(
         &self,
+        scheme: &str,
         prefix: &str,
         identity: &str,
     ) -> Result<Option<String>, Error> {
-        let path = self.root.join("prefixes").join(prefix);
+        let dir = self.root.join("prefixes").join(scheme);
+        std::fs::create_dir_all(&dir).map_err(Error::io("creating", &dir))?;
+        let path = dir.join(prefix);
         match std::fs::read_to_string(&path) {
             Ok(owner) if owner == identity => Ok(None),
             Ok(owner) => Ok(Some(owner)),

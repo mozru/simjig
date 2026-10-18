@@ -115,10 +115,17 @@ fn a_prefix_owned_by_another_configuration_is_rejected() {
     let rtl = s.rtl();
     let dut = counter(&rtl, 8);
     let prefix = dut.config().prefix();
+    // The claims live under a directory naming the identity scheme; find this one's.
+    counter(&rtl, 8).build_in(&s.env()).unwrap();
+    let verilated = s.verilations();
+    let claims: Vec<_> = std::fs::read_dir(s.path().join("cache/prefixes"))
+        .unwrap()
+        .map(|scheme| scheme.unwrap().path().join(&prefix))
+        .filter(|claim| claim.is_file())
+        .collect();
+    assert_eq!(claims.len(), 1, "{claims:?}");
     // What a hash collision with another crate's configuration leaves in the cache.
-    let owners = s.path().join("cache/prefixes");
-    std::fs::create_dir_all(&owners).unwrap();
-    std::fs::write(owners.join(&prefix), "someone-else").unwrap();
+    std::fs::write(&claims[0], "someone-else").unwrap();
     let err = dut.build_in(&s.env()).unwrap_err();
     assert!(
         err.to_string().contains(&format!(
@@ -127,5 +134,5 @@ fn a_prefix_owned_by_another_configuration_is_rejected() {
         )),
         "{err}"
     );
-    assert_eq!(s.verilations(), 0);
+    assert_eq!(s.verilations(), verilated, "rejected before verilating");
 }

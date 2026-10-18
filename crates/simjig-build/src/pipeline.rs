@@ -21,9 +21,14 @@ use crate::{BuildEnv, Error, script};
 /// docs/notes/spikes.md), so one model would run the other's code. Two checks:
 /// - in this build script, a DUT name may be built again only with the same
 ///   configuration ([`script::claim_name`]);
-/// - across crates sharing the cache, `prefixes/<prefix>` records the full identity of
-///   the configuration that first used the prefix; a different one with the same prefix
-///   (a collision of its 32-bit hash) is an error.
+/// - across crates sharing the cache, `prefixes/<scheme>/<prefix>` records the full
+///   identity of the configuration that first used the prefix; a different one with the
+///   same prefix (a collision of its 32-bit hash) is an error.
+///
+/// The identity hashes the configuration's `Debug` form, which changes whenever
+/// simjig-build changes [`DutConfig`] (a new field). `<scheme>` ([`identity_scheme`])
+/// changes with it, so a cache written by another simjig-build is not mistaken for a
+/// collision of every one of its prefixes.
 pub(crate) fn claim(
     env: &BuildEnv,
     cache: &Cache,
@@ -38,13 +43,21 @@ pub(crate) fn claim(
         })
     };
     script::claim_name(env, config, &identity, prefix)?;
-    match cache.claim_prefix(prefix, &identity)? {
+    match cache.claim_prefix(&identity_scheme(), prefix, &identity)? {
         None => Ok(()),
         Some(other) => fail(format!(
             "model prefix `{prefix}` is already used by a different configuration (identity \
              {other}, this one {identity}); rename the DUT"
         )),
     }
+}
+
+/// What [`identity`] means: the simjig-build version and the shape of [`DutConfig`].
+fn identity_scheme() -> String {
+    let mut h = KeyHasher::new("simjig-dut-identity-scheme-v1");
+    h.str(env!("CARGO_PKG_VERSION"))
+        .str(&format!("{:?}", DutConfig::default()));
+    h.finish()[..16].to_owned()
 }
 
 /// A hash of the whole configuration: equal exactly when two configurations are equal.
@@ -203,5 +216,20 @@ mod tests {
         };
         assert_eq!(identity(&a), identity(&a.clone()));
         assert_ne!(identity(&a), identity(&b));
+    }
+
+    #[test]
+    fn a_claim_from_another_identity_scheme_is_not_a_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().to_path_buf()).unwrap();
+        assert_eq!(cache.claim_prefix("old", "Vc_1", "id-a").unwrap(), None);
+        // The same configuration as seen by a simjig-build with another `DutConfig`.
+        assert_eq!(cache.claim_prefix("new", "Vc_1", "id-b").unwrap(), None);
+        // A real collision within one scheme is still found.
+        assert_eq!(
+            cache.claim_prefix("new", "Vc_1", "id-c").unwrap(),
+            Some("id-b".to_owned())
+        );
+        assert_eq!(identity_scheme().len(), 16);
     }
 }

@@ -18,9 +18,13 @@ const MAX_DEPTH: u32 = 16;
 /// The first word of the option files `args` name (nested ones too) that `refused`
 /// accepts, with the file it is in.
 pub(crate) fn find(args: &[String], refused: fn(&str) -> bool) -> Option<(PathBuf, String)> {
-    walk(args, None, 0, &mut |path, words| {
-        let w = words.iter().find(|w| refused(w))?;
-        Some((path.to_path_buf(), w.clone()))
+    traverse(args, &mut |item| match item {
+        Item::Word {
+            word,
+            file: Some(file),
+            ..
+        } if refused(word) => Some((file.to_path_buf(), word.to_owned())),
+        _ => None,
     })
 }
 
@@ -38,7 +42,35 @@ pub(crate) fn find(args: &[String], refused: fn(&str) -> bool) -> Option<(PathBu
 /// take a value (`--timescale 1ns/1ps`); a word it misses is not tracked.
 pub(crate) fn inputs(args: &[String]) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    collect(args, None, 0, &mut out);
+    // `-v` or `-y` waiting for its value, the next word of the same list.
+    let mut takes_value = false;
+    traverse(args, &mut |item| -> Option<()> {
+        match item {
+            Item::File(path) => {
+                takes_value = false;
+                out.push(path.to_path_buf());
+            }
+            Item::Word { word, base, .. } => {
+                let resolve = |w: &str| base.map_or_else(|| PathBuf::from(w), |d| d.join(w));
+                let flag = word.strip_prefix("--").or_else(|| word.strip_prefix('-'));
+                if std::mem::take(&mut takes_value) {
+                    out.push(resolve(word));
+                } else if matches!(flag, Some("v" | "y")) {
+                    takes_value = true;
+                } else if let Some(dir) = word.strip_prefix("-I").filter(|d| !d.is_empty()) {
+                    out.push(resolve(dir));
+                } else if let Some(dirs) = word.strip_prefix("+incdir+") {
+                    out.extend(dirs.split('+').filter(|d| !d.is_empty()).map(resolve));
+                } else if flag.is_none()
+                    && !word.starts_with('+')
+                    && SOURCE_SUFFIXES.iter().any(|s| word.ends_with(s))
+                {
+                    out.push(resolve(word));
+                }
+            }
+        }
+        None
+    });
     out
 }
 
@@ -48,52 +80,35 @@ const SOURCE_SUFFIXES: [&str; 10] = [
     ".v", ".sv", ".vh", ".svh", ".vlt", ".cpp", ".cxx", ".cc", ".c", ".sp",
 ];
 
-/// [`inputs`] of `args` with relative paths joined to `base` (an `-F` file's directory).
-fn collect(args: &[String], base: Option<&Path>, depth: u32, out: &mut Vec<PathBuf>) {
-    if depth > MAX_DEPTH {
-        return;
-    }
-    let resolve = |word: &str| base.map_or_else(|| PathBuf::from(word), |dir| dir.join(word));
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        let flag = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'));
-        match flag {
-            Some(f @ ("f" | "F")) => {
-                let Some(named) = it.next() else { return };
-                let path = resolve(named);
-                out.push(path.clone());
-                let words =
-                    std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words(&t));
-                let dir = if f == "F" { path.parent() } else { base };
-                collect(&words, dir, depth + 1, out);
-            }
-            Some("v" | "y") => out.extend(it.next().map(|v| resolve(v))),
-            _ => {
-                if let Some(dir) = arg.strip_prefix("-I").filter(|d| !d.is_empty()) {
-                    out.push(resolve(dir));
-                } else if let Some(dirs) = arg.strip_prefix("+incdir+") {
-                    out.extend(dirs.split('+').filter(|d| !d.is_empty()).map(resolve));
-                } else if flag.is_none()
-                    && !arg.starts_with('+')
-                    && SOURCE_SUFFIXES.iter().any(|s| arg.ends_with(s))
-                {
-                    out.push(resolve(arg));
-                }
-            }
-        }
-    }
+/// What [`traverse`] visits, in Verilator's reading order.
+enum Item<'a> {
+    /// An option file (`-f`/`-F`), before its words; it may not exist.
+    File(&'a Path),
+    /// Any other word. `base` is the directory its relative paths join (an `-F` file's),
+    /// `None` for the working directory; `file` is the option file it is in.
+    Word {
+        word: &'a str,
+        base: Option<&'a Path>,
+        file: Option<&'a Path>,
+    },
 }
 
-/// Calls `visit` on each option file `args` name, depth first in order, with its words
-/// (none for a file that cannot be read), until `visit` returns `Some`.
-///
-/// `base`: the directory relative paths are joined to (an `-F` file's), else the
-/// working directory.
-fn walk<T>(
+/// The one walk over `args` and the option files they name (nested ones too), depth
+/// first in order, until `visit` returns `Some`. Verilator 5.052 (`V3Options`, the `-f`
+/// and `-F` options): the file an `-f`/`-F` names resolves like any path of the list it
+/// is in; the paths inside an `-F` file resolve against its directory, inside an `-f`
+/// file against the working directory, even when that `-f` is inside an `-F` file
+/// (`parseOptsFile(.., false)` sets the option directory to `.`).
+fn traverse<T>(args: &[String], visit: &mut impl FnMut(Item<'_>) -> Option<T>) -> Option<T> {
+    traverse_in(args, None, None, 0, visit)
+}
+
+fn traverse_in<T>(
     args: &[String],
     base: Option<&Path>,
+    file: Option<&Path>,
     depth: u32,
-    visit: &mut impl FnMut(&Path, &[String]) -> Option<T>,
+    visit: &mut impl FnMut(Item<'_>) -> Option<T>,
 ) -> Option<T> {
     if depth > MAX_DEPTH {
         return None;
@@ -103,16 +118,26 @@ fn walk<T>(
         let relative = match arg.strip_prefix("--").or_else(|| arg.strip_prefix('-')) {
             Some("f") => false,
             Some("F") => true,
-            _ => continue,
+            _ => {
+                let found = visit(Item::Word {
+                    word: arg,
+                    base,
+                    file,
+                });
+                if found.is_some() {
+                    return found;
+                }
+                continue;
+            }
         };
         let named = Path::new(it.next()?);
         let path = base.map_or_else(|| named.to_path_buf(), |dir| dir.join(named));
-        let words = std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words(&t));
-        if let Some(found) = visit(&path, &words) {
+        if let Some(found) = visit(Item::File(&path)) {
             return Some(found);
         }
+        let words = std::fs::read_to_string(&path).map_or_else(|_| Vec::new(), |t| words(&t));
         let dir = if relative { path.parent() } else { base };
-        if let Some(found) = walk(&words, dir, depth + 1, visit) {
+        if let Some(found) = traverse_in(&words, dir, Some(&path), depth + 1, visit) {
             return Some(found);
         }
     }

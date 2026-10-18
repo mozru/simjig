@@ -57,7 +57,8 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
   record the fatal and return FATAL after eval, because throwing out of a coroutine
   aborts. An internal Verilator fatal inside a coroutine still aborts the process, and
   nextest's process-per-test contains it.
-- **Failures are data** (`Failure { kind, time, component, task, location, signature }`),
+- **Failures are data** (`Failure { kind, time, precision, task, location, message }`;
+  the harness's report adds the seed, the signature and the repro),
   with an actionable `Display`, a one-line repro, and waves from a deterministic replay.
   The replay doubles as the determinism check. Retries are never used.
 - **The framework's own tests** use a pure-Rust fake model behind the same ABI (A) or
@@ -81,7 +82,7 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
 | 9 | Interface-ported tops | Wrapper (parameters unspecified) | `build.rs` `.iface_port(..)` | `.bind_iface(..)`, and if missing, an error that prints the line to add | **C** | The testbench is the real instantiator. The error tells the user exactly what to write. |
 | 10 | libverilated | Per-model `verilator --build`, cached | A `-sys` crate builds it once per workspace via `links` | Per model build | **Built once per (Verilator version, hook defines) in the shared cache**, by `simjig-build` | Gets B's build-time win without a sys crate. |
 | 11 | Tooling CLI | — | `svtypes` CLI | `cargo simjig doctor/triage/waves/regress/new-vip` | **C, reduced to:** `doctor` (M0), `waves` (Stage 2); the methodology commands (`regress`, `new-vip`) are out of scope | Supportability is a stated goal. `doctor` makes setup reproducible. |
-| 12 | `unsafe` location | 3 modules in `simjig` | `-sys` plus one module | One crate | **A:** `simjig::{model::raw, kernel::waker, fork}` only. Everything else `forbid(unsafe_code)`. | Same safety without an extra crate. |
+| 12 | `unsafe` location | 3 modules in `simjig` | `-sys` plus one module | One crate | **A:** `simjig::{model::abi, model::raw, kernel::waker}`, plus `fork` when present. Everything else `forbid(unsafe_code)`. | Same safety without an extra crate. |
 
 ## 3. Crate layout (v1)
 ```

@@ -389,14 +389,12 @@ fn summary<'a>(
         seed: run.seed,
         verilator_seed: options.verilator_seed,
         precision: precision.map(|p| p.to_string()),
-        end_time: sim.map_or(Json::Null, |s| {
-            Json::time(s.now().0, s.now().display(s.precision()))
-        }),
+        end_time: sim.map_or(Json::Null, |s| Json::time(s.now(), s.precision())),
         timeout: match (timeout, precision) {
             (Some(t), Some(p)) => {
                 let ticks = t.duration.ticks();
                 let source = if t.is_default { "default" } else { "attribute" };
-                let mut json = Json::time(ticks, SimTime(ticks).display(p));
+                let mut json = Json::time(SimTime(ticks), p);
                 if let Json::Obj(fields) = &mut json {
                     fields.push(("source", Json::str(source)));
                 }

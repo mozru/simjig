@@ -58,7 +58,7 @@ fn a_fatal_is_a_failure_report_with_a_repro_line() {
     let report = child(None);
     let header = report.lines().find(|l| l.starts_with("FAIL ")).unwrap();
     assert!(header.contains("fatal_tb::fatal_child"), "{report}");
-    assert!(header.contains("t=10000 ps"), "{report}");
+    assert!(header.contains("t=10 ns"), "{report}");
     assert!(header.contains("[ModelFatal sig="), "{report}");
     assert!(
         report.contains("$fatal in TOP.fatal at ")

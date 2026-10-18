@@ -113,6 +113,35 @@ fn sv_literal_end(chars: &[char], at: usize) -> Option<usize> {
     (digits > 0).then_some(i + digits)
 }
 
+/// `time` in the largest unit that shows it exactly: `1 us`, `250 ns`, `1250 ns`.
+///
+/// The kernel's [`SimTime::display`] prints ticks scaled to the precision's unit
+/// (`1000000 ps`); a report is read by people, so it picks the unit per value. Zero
+/// prints in the precision's unit.
+#[must_use]
+pub(crate) fn human_time(time: SimTime, precision: Precision) -> String {
+    const UNITS: [(&str, u32); 6] = [
+        ("s", 15),
+        ("ms", 12),
+        ("us", 9),
+        ("ns", 6),
+        ("ps", 3),
+        ("fs", 0),
+    ];
+    if time.0 == 0 {
+        return time.display(precision).to_string();
+    }
+    // Femtoseconds per tick: 10^(exponent + 15), with exponent in -15..=0.
+    let per_tick = 10u128.pow(u32::from((precision.exponent() + 15).unsigned_abs()));
+    let fs = u128::from(time.0) * per_tick;
+    let (unit, scale) = UNITS
+        .iter()
+        .map(|&(unit, e)| (unit, 10u128.pow(e)))
+        .find(|&(_, scale)| fs % scale == 0)
+        .unwrap_or(("fs", 1));
+    format!("{} {unit}", fs / scale)
+}
+
 /// Which test run a report belongs to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunIdentity {
@@ -282,7 +311,7 @@ fn details(
             })
             .collect(),
         FailureKind::TimeLimit { limit } => {
-            let mut lines = vec![format!("limit:    t={}", limit.display(precision))];
+            let mut lines = vec![format!("limit:    t={}", human_time(*limit, precision))];
             if let Some(timeout) = timeout {
                 let from = if timeout.is_default {
                     "(the default for #[simjig::test]; change it with \
@@ -292,7 +321,7 @@ fn details(
                 };
                 lines.push(format!(
                     "timeout:  {} {from}",
-                    SimTime(timeout.duration.ticks()).display(precision)
+                    human_time(SimTime(timeout.duration.ticks()), precision)
                 ));
             }
             lines
@@ -307,7 +336,7 @@ impl fmt::Display for FailureReport {
             "FAIL {}  seed={}  t={}  [{} sig={}]",
             self.run.test,
             self.run.seed,
-            self.time.display(self.precision),
+            human_time(self.time, self.precision),
             self.kind,
             self.signature
         )?;
@@ -351,6 +380,20 @@ mod tests {
             mask_numbers("8'h08 != 8'hff, 4'sb1x0z 32'D7 9'h0_05; 3' 2'q it's"),
             "# != #, # # #; #' #'q it's"
         );
+    }
+
+    #[test]
+    fn human_times_pick_the_largest_exact_unit() {
+        let ps = |t| human_time(SimTime(t), Precision::PS);
+        assert_eq!(ps(1_000_000), "1 us");
+        assert_eq!(ps(250_000), "250 ns");
+        assert_eq!(ps(1_250_000), "1250 ns");
+        assert_eq!(ps(7), "7 ps");
+        assert_eq!(ps(0), "0 ps");
+        assert_eq!(ps(3_000_000_000_000), "3 s");
+        let ten_ps = Precision::from_exponent(-11).unwrap_or(Precision::PS);
+        assert_eq!(human_time(SimTime(100), ten_ps), "1 ns");
+        assert_eq!(human_time(SimTime(u64::MAX), Precision::NS).len(), 23);
     }
 
     #[test]

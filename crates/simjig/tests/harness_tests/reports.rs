@@ -228,3 +228,21 @@ fn the_signature_is_stable_across_seeds_and_values() {
     };
     assert_eq!(at(0x13, 10), at(0x99, 999));
 }
+
+#[test]
+fn times_print_in_the_largest_exact_unit() {
+    let f = Failure {
+        time: SimTime(1_000_000),
+        precision: Precision::PS,
+        ..failure(
+            FailureKind::TimeLimit {
+                limit: SimTime(250_000),
+            },
+            None,
+            "past the limit",
+        )
+    };
+    let text = render(&f, None);
+    assert!(text.contains("  t=1 us  "), "{text}");
+    assert!(text.contains("limit:    t=250 ns\n"), "{text}");
+}

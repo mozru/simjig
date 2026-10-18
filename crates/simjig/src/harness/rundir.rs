@@ -25,9 +25,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{TimeDisplay, TraceRecord};
+use crate::{Precision, SimTime, TraceRecord};
 
-use super::report::FailureReport;
+use super::report::{FailureReport, human_time};
 use super::seed::Seed;
 
 /// A JSON value, enough for the run directory's files.
@@ -48,11 +48,11 @@ impl Json {
         s.map_or(Self::Null, Self::str)
     }
 
-    /// `{"ticks": n, "display": "1250 ns"}`.
-    pub(crate) fn time(ticks: u64, display: TimeDisplay) -> Self {
+    /// `{"ticks": n, "display": "1250 ns"}`, displayed as reports print times.
+    pub(crate) fn time(time: SimTime, precision: Precision) -> Self {
         Self::Obj(vec![
-            ("ticks", Self::U64(ticks)),
-            ("display", Self::str(display.to_string())),
+            ("ticks", Self::U64(time.0)),
+            ("display", Self::str(human_time(time, precision))),
         ])
     }
 
@@ -191,7 +191,7 @@ impl Summary<'_> {
             Json::Obj(vec![
                 ("kind", Json::str(r.kind)),
                 ("signature", Json::str(r.signature.to_string())),
-                ("time", Json::time(r.time.0, r.time.display(r.precision))),
+                ("time", Json::time(r.time, r.precision)),
                 ("task", Json::opt_str(r.task.clone())),
                 ("location", Json::opt_str(r.location.clone())),
                 ("message", Json::str(r.message.clone())),

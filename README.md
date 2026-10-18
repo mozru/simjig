@@ -149,7 +149,11 @@ What to keep in mind:
 - **`set` takes** `impl Into<T>`: an integer literal (as `u128`) for any `Bit`/`Bits<N>`/
   `WideBits` signal, a `bool` for a `Bit`, a value of the signal's own type, or a generated
   enum's constant or packed struct. A literal that does not fit panics, naming the signal
-  and its width.
+  and its width. A typed integer converts with `u128::from`: `sig.set(u128::from(byte))`
+  for a `byte: u8`. Comparisons work the same way: `x.get() == 0x12` and `0x12 == x.get()`
+  infer the literal; a typed integer is compared as `x.get() == u128::from(byte)`.
+  (`From<u8>` for `Bits<N>`, or `PartialEq<Bits<N>>` for `u8`, would make
+  `set(1)` and `assert_eq!(n, xs.iter().sum())` fail to infer, so neither exists.)
 - **Every test has a 10 ms simulation-time budget** (`#[simjig::test(timeout = "...")]`
   changes it, `"none"` removes it); cocotb has none. A timestep that never settles fails
   instead of hanging: more than `DELTA_MAX` (64) evals between `ReadWrite` rounds, or more
@@ -180,6 +184,11 @@ simjig_build::Dut::new("core")
     .coverage(true)    // --coverage: Sim::coverage, write_coverage, zero_coverage
     .build()?;
 ```
+
+If any source declares a `timeunit` (or `` `timescale ``), every module, interface and
+package must, a package included: Verilator stops on a mix with `%Warning-TIMESCALEMOD`
+(IEEE 1800-2023 §3.14.2.3). Add the `timeunit`, or give the rest a default with
+`.verilator_args(["--timescale", "1ns/1ps"])`.
 
 ### Waves on failure
 A run is never traced while it first runs. When waves are asked for, the harness replays

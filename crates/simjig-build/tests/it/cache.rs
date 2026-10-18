@@ -1,0 +1,92 @@
+//! The content-hash cache: hits skip Verilator, edits to any input miss.
+
+use simjig_build::{CacheStatus, Dut};
+
+use crate::support::Sandbox;
+
+fn counter(rtl: &std::path::Path, width: u32) -> Dut {
+    Dut::new("counter")
+        .sources([rtl.join("counter.sv")])
+        .include_dirs([rtl])
+        .param("WIDTH", width)
+}
+
+fn count_entries(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir).unwrap().count()
+}
+
+#[test]
+fn second_build_hits_the_cache_without_running_verilator() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let env = s.env();
+    let first = counter(&rtl, 8).build_in(&env).unwrap();
+    assert_eq!((first.cache, s.verilations()), (CacheStatus::Miss, 1));
+
+    let second = counter(&rtl, 8).build_in(&env).unwrap();
+    assert_eq!(
+        (second.cache, s.verilations()),
+        (CacheStatus::Hit, 1),
+        "Verilator ran again"
+    );
+    assert_eq!(second.obj_dir, first.obj_dir);
+    assert_eq!(
+        second.directives, first.directives,
+        "a hit emits the same directives"
+    );
+
+    // Another crate (another OUT_DIR) sharing the cache also hits.
+    let mut other_crate = env.clone();
+    other_crate.out_dir = s.path().join("other-out");
+    let third = counter(&rtl, 8).build_in(&other_crate).unwrap();
+    assert_eq!((third.cache, s.verilations()), (CacheStatus::Hit, 1));
+
+    // A different parameter is a different model, but reuses the same libverilated.
+    let wide = counter(&rtl, 16).build_in(&env).unwrap();
+    assert_eq!((wide.cache, s.verilations()), (CacheStatus::Miss, 2));
+    assert_ne!(wide.prefix, first.prefix);
+    assert_eq!(count_entries(&s.path().join("cache/libverilated")), 1);
+    assert_eq!(
+        count_entries(&s.path().join("cache/tmp")),
+        0,
+        "work dirs are cleaned up"
+    );
+}
+
+#[test]
+fn editing_an_included_file_misses_and_reverting_hits() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let mut env = s.env();
+    env.simjig_ccache = Some("0".into());
+    let defs = rtl.join("defs.svh");
+    let original = std::fs::read_to_string(&defs).unwrap();
+
+    let first = counter(&rtl, 8).build_in(&env).unwrap();
+    assert!(
+        !s.path().join("out/simjig-cxx-ccache").exists(),
+        "SIMJIG_CCACHE=0 disables ccache"
+    );
+    std::fs::write(&defs, "`define STEP 2\n").unwrap();
+    let edited = counter(&rtl, 8).build_in(&env).unwrap();
+    assert_eq!(
+        (edited.cache, s.verilations()),
+        (CacheStatus::Miss, 2),
+        "the include changed"
+    );
+    assert_ne!(first.obj_dir, edited.obj_dir);
+    assert_eq!(
+        first.prefix, edited.prefix,
+        "contents do not change the prefix"
+    );
+
+    std::fs::write(&defs, original).unwrap();
+    let reverted = counter(&rtl, 8).build_in(&env).unwrap();
+    assert_eq!((reverted.cache, s.verilations()), (CacheStatus::Hit, 2));
+    assert_eq!(reverted.obj_dir, first.obj_dir);
+
+    // A new file in an include directory could shadow an include: it must miss.
+    std::fs::write(rtl.join("new.svh"), "").unwrap();
+    let shadowed = counter(&rtl, 8).build_in(&env).unwrap();
+    assert_eq!((shadowed.cache, s.verilations()), (CacheStatus::Miss, 3));
+}

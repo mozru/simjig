@@ -27,6 +27,8 @@ mod vlt;
 mod wrapper;
 mod writer;
 
+pub(crate) use names::closest;
+
 pub use config::{CodegenConfig, IfaceBinding, IfaceTop, Probe, ProbeAccess, ProbeType};
 pub use error::Error;
 pub use layout::{LAYOUT_CHECK_FLAGS, emit_layout_check};

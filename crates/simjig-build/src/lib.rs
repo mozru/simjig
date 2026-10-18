@@ -29,12 +29,13 @@ mod header;
 mod pipeline;
 mod runtime;
 mod script;
+mod syms;
 mod verilator;
 
 pub use codegen::{IfaceBinding, Probe, ProbeAccess, ProbeType};
 pub use compile::CppRecipe;
 pub use dut::{Built, CacheStatus, Dut, DutConfig, Features, GeneratedInput};
-pub use emit::{Emitted, Emitter, SvModule, codegen_emitter, ir_ports, noop_emitter};
+pub use emit::{Emitted, Emitter, ProbeSite, SvModule, codegen_emitter, ir_ports, noop_emitter};
 pub use env::BuildEnv;
 pub use error::Error;
 pub use header::{

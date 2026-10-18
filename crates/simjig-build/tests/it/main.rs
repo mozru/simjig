@@ -12,6 +12,7 @@ mod errors;
 mod fixture_crate;
 mod header;
 mod pipeline;
+mod probes;
 mod recipe;
 mod support;
 mod ui;

@@ -23,3 +23,10 @@ the public API, the generated code or simulation semantics.
   `codegen::Error::Config` errors, so the build fails before verilating.
 - C ABI runtime: `create` refuses a probe bound for writing when its variable is a
   parameter (constant storage) or only `public_flat_rd` (`EXCEPTION`, model poisoned).
+- After verilating, the build checks each probe the shim binds against Verilator's scope
+  table (`V<prefix>__Syms__Slow.cpp`): a wrong width, an unpacked variable, a missing
+  public scope or variable, or a writable probe of a constant fails the build
+  (`Error::Config`) instead of the first `create`. `Emitted` has a new field `probes:
+  Vec<ProbeSite>` (the probes the shim binds; `codegen_emitter` fills it, `Emitted::default()`
+  leaves it empty), a breaking change for emitters that build `Emitted` without
+  `..Emitted::default()`.

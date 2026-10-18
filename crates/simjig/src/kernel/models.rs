@@ -15,9 +15,12 @@
 //!   true; `next_time_slot()` is never called on any other.
 
 use std::fmt;
+use std::panic::{self, AssertUnwindSafe};
 
 use super::OrInvariant;
 use super::backend::{EvalStatus, ModelBackend, ModelError};
+use super::panics;
+use super::tasks::panic_message;
 use super::time::{Precision, SimTime};
 
 /// Why a set of models cannot share one simulation.
@@ -149,9 +152,22 @@ impl Models {
 
     /// Evaluates every model in declaration order, stopping at the first that does not
     /// report `Running`; returns that model's index with its status.
+    ///
+    /// A panic inside a model's eval (a [`FakeModel`](super::fake::FakeModel) closure) is
+    /// a fatal error of that model, naming the panic and its line: the model is left
+    /// mid-eval, so the run must stop as it does for `$fatal`.
     pub(crate) fn eval(&mut self) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
         for (model, backend) in self.backends.iter_mut().enumerate() {
-            match backend.eval() {
+            panics::forget();
+            let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval()));
+            let status = outcome.unwrap_or_else(|payload| {
+                let at = panics::take().map_or_else(String::new, |l| format!(" at {l}"));
+                Err(ModelError::fatal(format!(
+                    "the model panicked during eval: {}{at}",
+                    panic_message(&*payload)
+                )))
+            });
+            match status {
                 Ok(EvalStatus::Running) => {}
                 other => return Err((model, other)),
             }

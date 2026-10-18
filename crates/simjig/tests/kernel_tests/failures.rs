@@ -396,3 +396,27 @@ fn values_that_do_not_fit_are_rejected_at_the_call() {
         "{message}"
     );
 }
+
+#[test]
+fn a_panicking_fake_model_closure_is_a_model_fatal() {
+    let mut m = FakeModel::new(Precision::NS);
+    let a = m.signal("a", 8);
+    m.comb(move |s| assert!(s.get(a) != 3, "a must never be 3"));
+    let mut sim = Sim::from_fake(m);
+    let a = sim.signal("a").unwrap();
+    let f = sim
+        .run(async move {
+            a.write_u64(3);
+            Timer::new(ticks(1)).await;
+        })
+        .unwrap_err();
+    let FailureKind::ModelFatal { message } = &f.kind else {
+        panic!("{f}")
+    };
+    assert!(message.contains("a must never be 3"), "{message}");
+    assert!(
+        message.contains("failures.rs"),
+        "names the panicking line: {message}"
+    );
+    assert_clean(&sim);
+}

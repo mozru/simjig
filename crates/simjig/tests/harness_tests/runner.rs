@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use simjig::__private::{RunEnv, TestMeta, TestOutcome, Timeout, run};
+use simjig::__private::{RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, run};
 use simjig::{
     DutModel, Failure, FakeModel, ModelOptions, Precision, Seed, SeedSource, Sim, SimTime, TestCtx,
     TimeUnit, rising, yield_now,
@@ -17,8 +17,9 @@ fn meta(name: &'static str) -> TestMeta {
         module_path: "harness_tests::runner",
         name,
         package: "simjig",
-        timeout: None,
+        timeout: TimeoutArg::Default,
         ignored: false,
+        should_panic: false,
     }
 }
 
@@ -30,6 +31,8 @@ fn env(seed: Option<u64>, dir: &str) -> RunEnv {
                 .join("harness")
                 .join(dir),
         ),
+        launcher: None,
+        binary: Some("harness_tests".to_owned()),
     }
 }
 
@@ -82,7 +85,7 @@ fn an_env_seed_overrides_the_test_name_seed() {
 #[test]
 fn a_timeout_becomes_the_time_limit() {
     let mut meta = meta("timeout");
-    meta.timeout = Some(Timeout {
+    meta.timeout = TimeoutArg::Given(Timeout {
         value: 100,
         unit: TimeUnit::Ns,
     });
@@ -102,11 +105,54 @@ fn a_timeout_becomes_the_time_limit() {
 #[should_panic(expected = "is not a whole number of ticks")]
 fn a_timeout_finer_than_the_precision_is_rejected() {
     let mut meta = meta("fine");
-    meta.timeout = Some(Timeout {
+    meta.timeout = TimeoutArg::Given(Timeout {
         value: 1,
         unit: TimeUnit::Fs,
     });
     run::<counter::Dut, _, _>(&meta, &env(None, "fine"), |_, _| async {});
+}
+
+async fn tick_forever() {
+    loop {
+        simjig::Timer::new(simjig::ms(1)).await;
+    }
+}
+
+#[test]
+fn a_test_without_a_timeout_stops_at_the_default() {
+    let outcome = run::<(), _, _>(&meta("default"), &env(None, "default"), |_, ()| {
+        tick_forever()
+    });
+    let report = outcome.failure.expect("the default timeout fires");
+    assert_eq!(report.kind, "TimeLimit");
+    let line = report
+        .details
+        .iter()
+        .find(|l| l.starts_with("timeout:"))
+        .unwrap_or_else(|| panic!("no timeout line in\n{report}"));
+    assert!(
+        line.contains("the default") && line.contains("timeout = \"none\""),
+        "{line}"
+    );
+    // An empty model runs at 1 ps; the default is 10 ms.
+    assert_eq!(outcome.end_time.map(SimTime::ticks), Some(10_000_000_000));
+    let dir = outcome.run_dir.expect("written");
+    let summary = read_json(&dir.join("summary.json"));
+    assert_eq!(summary["timeout"]["source"], "default");
+}
+
+async fn run_20ms() {
+    simjig::Timer::new(simjig::ms(20)).await;
+}
+
+#[test]
+fn timeout_none_disables_the_default() {
+    let mut meta = meta("none");
+    meta.timeout = TimeoutArg::Disabled;
+    let outcome = run::<(), _, _>(&meta, &env(None, "none"), |_, ()| run_20ms());
+    assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+    let summary = read_json(&outcome.run_dir.expect("written").join("summary.json"));
+    assert_eq!(summary["timeout"], Value::Null);
 }
 
 async fn forever(dut: counter::Dut) {
@@ -134,6 +180,44 @@ fn a_task_panic_reports_its_source_location() {
         "{location}"
     );
     assert_eq!(report.task.as_deref(), Some("main"));
+}
+
+/// Panics with the same message as [`main_panics_after_detaching`], at another line.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("boom");
+    }
+}
+
+/// The line of the `panic!` in [`main_panics_after_detaching`].
+const MAIN_PANIC_LINE: u32 = line!() + 9;
+
+async fn main_panics_after_detaching() {
+    simjig::spawn("b", async {
+        let _guard = PanicsOnDrop;
+        std::future::pending::<()>().await;
+    })
+    .detach();
+    yield_now().await;
+    panic!("boom");
+}
+
+#[test]
+fn a_later_panic_with_the_same_message_does_not_move_the_location() {
+    // `main` fails first; cancelling `b` then panics "boom" again, in its `Drop`. The
+    // report must keep the kernel's location of the first panic.
+    let outcome = run::<(), _, _>(&meta("drop_boom"), &env(None, "drop_boom"), |_, ()| {
+        main_panics_after_detaching()
+    });
+    let report = outcome.failure.expect("main panics");
+    assert_eq!(report.task.as_deref(), Some("main"));
+    let location = report.location.as_deref().unwrap_or_default();
+    assert!(
+        location.ends_with(&format!("harness_tests/runner.rs:{MAIN_PANIC_LINE}:5")),
+        "{location}"
+    );
 }
 
 /// A DUT whose model has none of the signals it looks for.
@@ -212,7 +296,7 @@ fn the_run_dir_holds_the_summary_and_the_events() {
     let report = outcome.failure.expect("the body panics");
     let dir = outcome.run_dir.expect("written");
     assert!(
-        dir.ends_with("runner__dir/0000000000000abc"),
+        dir.ends_with("simjig/harness_tests/runner__dir/0000000000000abc"),
         "{}",
         dir.display()
     );
@@ -234,7 +318,7 @@ fn the_run_dir_holds_the_summary_and_the_events() {
         summary["end_time"]["ticks"],
         outcome.end_time.map(SimTime::ticks).unwrap_or_default()
     );
-    assert_eq!(summary["timeout"], Value::Null);
+    assert_eq!(summary["timeout"]["source"], "default");
     let hash = format!("{:#018x}", outcome.trace_hash.unwrap_or_default());
     assert_eq!(summary["trace_hash"], hash.as_str());
     let failure = &summary["failure"];
@@ -275,4 +359,64 @@ fn a_passing_run_writes_a_passing_summary() {
     assert_eq!(summary["status"], "pass");
     assert_eq!(summary["failure"], Value::Null);
     assert_eq!(summary["seed_source"], "test-name");
+}
+
+/// Compares a random byte with a fixed one, the way a scoreboard assertion would.
+async fn compare_bits(ctx: TestCtx) {
+    yield_now().await;
+    let got = simjig_bits::Bits::<8>::new_truncating(u128::from(ctx.rng("stim").below(200)));
+    let want = simjig_bits::Bits::<8>::new_truncating(0xff);
+    assert_eq!(got, want, "beat {} mismatched", ctx.seed().value() % 7);
+}
+
+#[test]
+fn bits_values_do_not_change_the_signature() {
+    let report = |seed| {
+        run::<(), _, _>(&meta("bits"), &env(Some(seed), "bits"), |ctx, ()| {
+            compare_bits(ctx)
+        })
+        .failure
+        .expect("never 0xff")
+    };
+    let (a, b) = (report(1), report(2));
+    assert_ne!(a.message, b.message, "the values differ");
+    assert!(a.message.contains("8'h"), "{}", a.message);
+    assert_eq!(a.signature, b.signature, "{}\n{}", a.message, b.message);
+}
+
+/// The lines of the two `rng("stim")` calls in [`reuses_a_stream`].
+const FIRST_RNG_LINE: u32 = line!() + 4;
+const SECOND_RNG_LINE: u32 = line!() + 6;
+
+async fn reuses_a_stream(ctx: TestCtx) {
+    let mut a = ctx.rng("stim");
+    let _other = ctx.rng("ready");
+    yield_now().await;
+    let mut b = ctx.rng("stim");
+    // Without the check, `b` silently repeats `a`'s values.
+    assert_ne!(a.next_u64(), b.next_u64());
+}
+
+#[test]
+fn reusing_a_stream_path_fails_at_the_second_call() {
+    let outcome = run::<(), _, _>(&meta("reuse"), &env(None, "reuse"), |ctx, ()| {
+        reuses_a_stream(ctx)
+    });
+    let report = outcome.failure.expect("the second rng(\"stim\") panics");
+    assert_eq!(report.kind, "TaskPanic");
+    let location = report.location.as_deref().unwrap_or_default();
+    assert!(
+        location.ends_with(&format!("harness_tests/runner.rs:{SECOND_RNG_LINE}:21")),
+        "{location}"
+    );
+    assert!(
+        report
+            .message
+            .contains("the random stream \"stim\" was already taken")
+            && report
+                .message
+                .contains(&format!("harness_tests/runner.rs:{FIRST_RNG_LINE}:21")),
+        "{}",
+        report.message
+    );
 }

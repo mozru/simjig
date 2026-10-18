@@ -58,7 +58,7 @@ fn a_fatal_is_a_failure_report_with_a_repro_line() {
     let report = child(None);
     let header = report.lines().find(|l| l.starts_with("FAIL ")).unwrap();
     assert!(header.contains("fatal_tb::fatal_child"), "{report}");
-    assert!(header.contains("t=10000 ps"), "{report}");
+    assert!(header.contains("t=10 ns"), "{report}");
     assert!(header.contains("[ModelFatal sig="), "{report}");
     assert!(
         report.contains("$fatal in TOP.fatal at ")
@@ -66,10 +66,19 @@ fn a_fatal_is_a_failure_report_with_a_repro_line() {
         "{report}"
     );
     let seed = field(&report, "seed=");
-    let repro = format!(
-        "repro:    SIMJIG_SEED={seed} cargo nextest run -p simjig --run-ignored all -E 'test(=fatal_tb::fatal_child)'"
+    // The repro may start with `pixi run` (the harness's own tests check when).
+    let repro = report
+        .lines()
+        .find_map(|l| l.strip_prefix("  repro:    "))
+        .unwrap_or_else(|| panic!("no repro line in:\n{report}"));
+    assert!(
+        repro.starts_with(&format!("SIMJIG_SEED={seed} "))
+            && repro.ends_with(
+                "cargo nextest run -p simjig --run-ignored all \
+                 -E 'binary(=e2e_dut) & test(=fatal_tb::fatal_child)'"
+            ),
+        "unexpected repro line {repro:?} in:\n{report}"
     );
-    assert!(report.contains(&repro), "missing {repro:?} in:\n{report}");
 
     // The repro's seed reproduces the same failure.
     let again = child(Some(seed));

@@ -8,9 +8,10 @@
 //!   message:  <one line, continuation lines indented>
 //!   <kind-specific detail lines>
 //!   help:     <what to try>
-//!   repro:    SIMJIG_SEED=<seed> cargo nextest run -p <package> -E 'test(=<test>)'
+//!   repro:    SIMJIG_SEED=<seed> [pixi run ]cargo nextest run -p <package>
+//!             -E 'binary(=<binary>) & test(=<test>)'   (on one line)
 //!   waves:    <the same command with SIMJIG_WAVES=1>
-//!   run dir:  <target>/simjig/runs/<test>/<seed>/
+//!   run dir:  <target>/simjig/runs/<package>/<binary>/<test>/<seed>/
 //! ```
 //! Lines without data (`task`, `at`, `run dir`) are left out.
 //!
@@ -48,34 +49,97 @@ impl fmt::Display for Signature {
     }
 }
 
-/// Replaces every number in `text` with `#`: words that start with a digit (`42`,
-/// `0x1f`, `10ns`, `1_000`) and words made only of hex digits that contain a digit
-/// (`dead1234`). Other words (`u8`, `main.t3`) are kept.
+/// Replaces every number in `text` with `#`, so the values a failure prints do not split
+/// its triage bucket. A number is:
+/// - a word that starts with a digit (`42`, `0x1f`, `10ns`, `1_000`);
+/// - a sized SystemVerilog literal, `<digits>'[s]<base><digits>` with base `d b h o` in
+///   either case (`8'h08`, `4'sb1x0z`): how `simjig_bits` values print;
+/// - a word made only of hex digits that contains a digit (`dead1234`).
+///
+/// Other words (`u8`, `main.t3`, `beef`) are kept.
 #[must_use]
 pub(crate) fn mask_numbers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut out = String::with_capacity(text.len());
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut String| {
-        let starts_with_digit = word.starts_with(|c: char| c.is_ascii_digit());
-        let hexlike =
-            word.chars().all(|c| c.is_ascii_hexdigit()) && word.chars().any(|c| c.is_ascii_digit());
-        if starts_with_digit || hexlike {
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_word(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+        if chars[start].is_ascii_digit() {
+            i = sv_literal_end(&chars, i).unwrap_or(i);
+            out.push('#');
+            continue;
+        }
+        let word = &chars[start..i];
+        if word.iter().all(char::is_ascii_hexdigit) && word.iter().any(char::is_ascii_digit) {
             out.push('#');
         } else {
-            out.push_str(word);
-        }
-        word.clear();
-    };
-    for c in text.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            word.push(c);
-        } else {
-            flush(&mut word, &mut out);
-            out.push(c);
+            out.extend(word);
         }
     }
-    flush(&mut word, &mut out);
     out
+}
+
+/// If `chars[at..]` continues a size (`8`) into a SystemVerilog literal (`'h08`, `'sd5`),
+/// the index just past the literal.
+fn sv_literal_end(chars: &[char], at: usize) -> Option<usize> {
+    let mut i = at;
+    if chars.get(i) != Some(&'\'') {
+        return None;
+    }
+    i += 1;
+    if matches!(chars.get(i), Some('s' | 'S')) {
+        i += 1;
+    }
+    if !matches!(
+        chars.get(i),
+        Some('d' | 'b' | 'h' | 'o' | 'D' | 'B' | 'H' | 'O')
+    ) {
+        return None;
+    }
+    i += 1;
+    let digits = chars[i..]
+        .iter()
+        .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+        .count();
+    (digits > 0).then_some(i + digits)
+}
+
+/// `time` in the largest unit that shows it exactly: `1 us`, `250 ns`, `1250 ns`.
+///
+/// The kernel's [`SimTime::display`] prints ticks scaled to the precision's unit
+/// (`1000000 ps`); a report is read by people, so it picks the unit per value. Zero
+/// prints in the precision's unit.
+#[must_use]
+pub(crate) fn human_time(time: SimTime, precision: Precision) -> String {
+    const UNITS: [(&str, u32); 6] = [
+        ("s", 15),
+        ("ms", 12),
+        ("us", 9),
+        ("ns", 6),
+        ("ps", 3),
+        ("fs", 0),
+    ];
+    if time.0 == 0 {
+        return time.display(precision).to_string();
+    }
+    // Femtoseconds per tick: 10^(exponent + 15), with exponent in -15..=0.
+    let per_tick = 10u128.pow(u32::from((precision.exponent() + 15).unsigned_abs()));
+    let fs = u128::from(time.0) * per_tick;
+    let (unit, scale) = UNITS
+        .iter()
+        .map(|&(unit, e)| (unit, 10u128.pow(e)))
+        .find(|&(_, scale)| fs % scale == 0)
+        .unwrap_or(("fs", 1));
+    format!("{} {unit}", fs / scale)
 }
 
 /// Which test run a report belongs to.
@@ -89,6 +153,11 @@ pub struct RunIdentity {
     pub seed: Seed,
     /// Whether the test is `#[ignore]`d, so the repro must ask nextest to run it.
     pub ignored: bool,
+    /// What the repro runs `cargo` through (`pixi run`), when the test ran inside an
+    /// environment that a plain shell lacks; see `RunEnv::from_process`.
+    pub launcher: Option<String>,
+    /// The test binary (`harness_tests`), if known.
+    pub binary: Option<String>,
 }
 
 impl RunIdentity {
@@ -99,8 +168,18 @@ impl RunIdentity {
         } else {
             ""
         };
+        let launcher = self
+            .launcher
+            .as_deref()
+            .map_or_else(String::new, |l| format!("{l} "));
+        // `-p` limits the build; `binary(=...)` keeps a same-named test in another test
+        // file of the package out.
+        let binary = self
+            .binary
+            .as_deref()
+            .map_or_else(String::new, |b| format!("binary(={b}) & "));
         format!(
-            "cargo nextest run -p {}{ignored} -E 'test(={})'",
+            "{launcher}cargo nextest run -p {}{ignored} -E '{binary}test(={})'",
             self.package, self.test
         )
     }
@@ -121,6 +200,16 @@ impl RunIdentity {
             self.nextest()
         )
     }
+}
+
+/// The time limit a test ran under, named in its `TimeLimit` report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppliedTimeout {
+    /// The limit.
+    pub duration: SimDuration,
+    /// Whether it is the default of `#[simjig::test]` (no `timeout` argument), so the
+    /// report says how to change it.
+    pub is_default: bool,
 }
 
 /// Everything a failed test prints, as data; its `Display` is the report block.
@@ -153,15 +242,14 @@ pub struct FailureReport {
 impl FailureReport {
     /// The report of `failure` in `run`.
     ///
-    /// `location` overrides the failure's own location (the harness passes the panic
-    /// location of a `TaskPanic`, which the kernel does not capture). `timeout` is the
-    /// test's `timeout`, named in a `TimeLimit` report.
+    /// `location` overrides the failure's own location (`None` keeps the kernel's).
+    /// `timeout` is the test's `timeout`, named in a `TimeLimit` report.
     #[must_use]
     pub fn new(
         failure: &Failure,
         run: RunIdentity,
         location: Option<String>,
-        timeout: Option<SimDuration>,
+        timeout: Option<AppliedTimeout>,
     ) -> Self {
         let location = location.or_else(|| failure.location.map(ToString::to_string));
         let kind = failure.kind.name();
@@ -189,7 +277,11 @@ fn help(failure: &Failure) -> Option<String> {
 }
 
 /// Kind-specific detail lines, each `label: value`.
-fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration>) -> Vec<String> {
+fn details(
+    kind: &FailureKind,
+    precision: Precision,
+    timeout: Option<AppliedTimeout>,
+) -> Vec<String> {
     match kind {
         FailureKind::TaskPanic { .. }
         | FailureKind::ModelFatal { .. }
@@ -204,7 +296,8 @@ fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration
             second,
         } => vec![
             format!("signal:   {signal}"),
-            format!("writers:  `{first}`, then `{second}`"),
+            // The kernel's labels are already quoted (`task `main.a``, `the kernel`).
+            format!("writers:  {first}, then {second}"),
         ],
         FailureKind::WriteInReadOnly { signal } => vec![format!("signal:   {signal}")],
         FailureKind::Starved { blocked } | FailureKind::Deadlock { blocked } => blocked
@@ -219,11 +312,17 @@ fn details(kind: &FailureKind, precision: Precision, timeout: Option<SimDuration
             })
             .collect(),
         FailureKind::TimeLimit { limit } => {
-            let mut lines = vec![format!("limit:    t={}", limit.display(precision))];
+            let mut lines = vec![format!("limit:    t={}", human_time(*limit, precision))];
             if let Some(timeout) = timeout {
+                let from = if timeout.is_default {
+                    "(the default for #[simjig::test]; change it with \
+                     `#[simjig::test(timeout = \"50ms\")]`, or `timeout = \"none\"` for no limit)"
+                } else {
+                    "(from `#[simjig::test(timeout = ...)]`)"
+                };
                 lines.push(format!(
-                    "timeout:  {} (from `#[simjig::test(timeout = ...)]`)",
-                    SimTime(timeout.ticks()).display(precision)
+                    "timeout:  {} {from}",
+                    human_time(SimTime(timeout.duration.ticks()), precision)
                 ));
             }
             lines
@@ -238,7 +337,7 @@ impl fmt::Display for FailureReport {
             "FAIL {}  seed={}  t={}  [{} sig={}]",
             self.run.test,
             self.run.seed,
-            self.time.display(self.precision),
+            human_time(self.time, self.precision),
             self.kind,
             self.signature
         )?;
@@ -278,6 +377,24 @@ mod tests {
             mask_numbers("got 0x1f at 10ns (1_000 cycles), u8 main.t3 dead1234 beef"),
             "got # at # (# cycles), u8 main.t3 # beef"
         );
+        assert_eq!(
+            mask_numbers("8'h08 != 8'hff, 4'sb1x0z 32'D7 9'h0_05; 3' 2'q it's"),
+            "# != #, # # #; #' #'q it's"
+        );
+    }
+
+    #[test]
+    fn human_times_pick_the_largest_exact_unit() {
+        let ps = |t| human_time(SimTime(t), Precision::PS);
+        assert_eq!(ps(1_000_000), "1 us");
+        assert_eq!(ps(250_000), "250 ns");
+        assert_eq!(ps(1_250_000), "1250 ns");
+        assert_eq!(ps(7), "7 ps");
+        assert_eq!(ps(0), "0 ps");
+        assert_eq!(ps(3_000_000_000_000), "3 s");
+        let ten_ps = Precision::from_exponent(-11).unwrap_or(Precision::PS);
+        assert_eq!(human_time(SimTime(100), ten_ps), "1 ns");
+        assert_eq!(human_time(SimTime(u64::MAX), Precision::NS).len(), 23);
     }
 
     #[test]

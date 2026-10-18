@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use simjig::{
-    BlockedTask, Failure, FailureKind, FailureReport, Precision, RunIdentity, Seed, SeedSource,
-    SimDuration, SimTime,
+    AppliedTimeout, BlockedTask, Failure, FailureKind, FailureReport, Precision, RunIdentity, Seed,
+    SeedSource, SimDuration, SimTime,
 };
 
 fn run() -> RunIdentity {
@@ -13,6 +13,8 @@ fn run() -> RunIdentity {
         package: "fifo_tb".into(),
         seed: Seed::new(0x9e37_79b9_7f4a_7c15, SeedSource::Env),
         ignored: false,
+        launcher: None,
+        binary: None,
     }
 }
 
@@ -61,13 +63,20 @@ fn write_conflict() {
     let f = failure(
         FailureKind::WriteConflict {
             signal: "top.valid".into(),
-            first: "main.a".into(),
-            second: "main.b".into(),
+            // The kernel's writer labels, quoted by the kernel.
+            first: "task `main.a`".into(),
+            second: "the clock on `top.valid`".into(),
         },
         Some("main.b"),
-        "`top.valid` written with 1 by `main.a` and 0 by `main.b` in one delta",
+        "signal `top.valid` written with different values by task `main.a` and by the clock \
+         on `top.valid` in the same delta",
     );
-    insta::assert_snapshot!(render(&f, Some("tests/fifo.rs:7:5")));
+    let text = render(&f, Some("tests/fifo.rs:7:5"));
+    assert!(
+        text.contains("  writers:  task `main.a`, then the clock on `top.valid`\n"),
+        "{text}"
+    );
+    insta::assert_snapshot!(text);
 }
 
 #[test]
@@ -166,7 +175,15 @@ fn time_limit_with_the_run_dir() {
         None,
         "the next timestep, t=1250 ns, is past the time limit",
     );
-    let mut report = FailureReport::new(&f, run(), None, Some(SimDuration::from_ticks(1000)));
+    let mut report = FailureReport::new(
+        &f,
+        run(),
+        None,
+        Some(AppliedTimeout {
+            duration: SimDuration::from_ticks(1000),
+            is_default: false,
+        }),
+    );
     report.run_dir = Some(PathBuf::from(
         "target/simjig/runs/fifo__backpressure/9e3779b97f4a7c15",
     ));
@@ -187,6 +204,20 @@ fn the_repro_of_an_ignored_test_runs_ignored_tests() {
 }
 
 #[test]
+fn the_repro_names_the_test_binary() {
+    // `test(=...)` alone also matches a same-named test in another test file.
+    let run = RunIdentity {
+        binary: Some("fifo_tests".into()),
+        ..run()
+    };
+    assert_eq!(
+        run.repro(),
+        "SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb \
+         -E 'binary(=fifo_tests) & test(=fifo::backpressure)'"
+    );
+}
+
+#[test]
 fn the_signature_is_stable_across_seeds_and_values() {
     let at = |value: u32, time: u64| {
         let message = format!("expected 0x12, got {value:#x}");
@@ -203,4 +234,22 @@ fn the_signature_is_stable_across_seeds_and_values() {
         FailureReport::new(&f, run(), Some("tests/fifo.rs:42:9".into()), None).signature
     };
     assert_eq!(at(0x13, 10), at(0x99, 999));
+}
+
+#[test]
+fn times_print_in_the_largest_exact_unit() {
+    let f = Failure {
+        time: SimTime(1_000_000),
+        precision: Precision::PS,
+        ..failure(
+            FailureKind::TimeLimit {
+                limit: SimTime(250_000),
+            },
+            None,
+            "past the limit",
+        )
+    };
+    let text = render(&f, None);
+    assert!(text.contains("  t=1 us  "), "{text}");
+    assert!(text.contains("limit:    t=250 ns\n"), "{text}");
 }

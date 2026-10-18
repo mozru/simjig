@@ -15,8 +15,9 @@ fn b() {
             module_path: ::core::module_path!(),
             name: ::core::stringify!(b),
             package: ::core::env!("CARGO_PKG_NAME"),
-            timeout: ::core::option::Option::None,
+            timeout: ::simjig::__private::TimeoutArg::Default,
             ignored: false,
+            should_panic: false,
         },
         |__simjig_sim, _| async move { b(&__simjig_sim).await },
     );

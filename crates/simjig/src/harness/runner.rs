@@ -4,22 +4,19 @@
 //! reads the environment, runs, and turns a failure into a test failure. Keeping [`run`]
 //! free of process state (environment, panics) lets the harness's own tests drive it.
 //!
-//! The kernel records a `TaskPanic` without its source location (the panic hook prints it,
-//! the payload does not carry it). The harness wraps the panic hook to remember the
-//! location of each panic on the test's thread during a run, and attaches the one whose
-//! message matches the failure.
+//! A `TaskPanic`'s source location comes from the kernel (`kernel::panics` captures it
+//! for the exact poll or drop that panicked); the harness installs no panic hook of its
+//! own.
 
-use std::cell::RefCell;
 use std::future::Future;
 use std::panic;
-use std::path::PathBuf;
-use std::sync::Once;
+use std::path::{Path, PathBuf};
 
-use crate::{Failure, FailureKind, Sim, SimDuration, SimTime, TimeUnit};
+use crate::{Failure, Precision, Sim, SimDuration, SimTime, TimeUnit};
 
 use super::ctx::TestCtx;
 use super::dut::{DutModel, ModelOptions};
-use super::report::{FailureReport, RunIdentity};
+use super::report::{AppliedTimeout, FailureReport, RunIdentity};
 use super::rundir::{self, Json, Summary};
 use super::seed::{Seed, SeedSource, parse_seed};
 
@@ -32,6 +29,27 @@ pub struct Timeout {
     pub unit: TimeUnit,
 }
 
+/// The `timeout` argument of `#[simjig::test]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeoutArg {
+    /// No `timeout` argument: [`DEFAULT_TIMEOUT_MS`] applies.
+    Default,
+    /// `timeout = "none"`: no time limit.
+    Disabled,
+    /// `timeout = "<duration>"`.
+    Given(Timeout),
+}
+
+/// The simulation-time budget of a `#[simjig::test]` without a `timeout` argument, in
+/// milliseconds.
+///
+/// Without one, a test whose clock keeps running while a task waits forever never ends.
+/// 10 ms is 10^6 cycles of a 100 MHz clock: more than unit-level tests need, and still
+/// seconds of wall time. Longer tests say `timeout = "..."` or `timeout = "none"`; a
+/// test that hangs in wall time without advancing simulation time is nextest's
+/// `slow-timeout` to catch.
+pub const DEFAULT_TIMEOUT_MS: u64 = 10;
+
 /// What `#[simjig::test]` knows about the test at compile time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TestMeta {
@@ -42,9 +60,13 @@ pub struct TestMeta {
     /// `CARGO_PKG_NAME` of the crate holding the test.
     pub package: &'static str,
     /// The `timeout` argument.
-    pub timeout: Option<Timeout>,
+    pub timeout: TimeoutArg,
     /// Whether the test has an `#[ignore]` attribute.
     pub ignored: bool,
+    /// Whether the test has a `#[should_panic]` attribute: its failure is the expected
+    /// outcome, so the report is not printed (libtest shows the payload if the panic
+    /// does not match).
+    pub should_panic: bool,
 }
 
 impl TestMeta {
@@ -66,10 +88,17 @@ pub struct RunEnv {
     /// Where run directories go (`SIMJIG_RUNS_DIR`, else `<target>/simjig/runs`); `None`
     /// writes none.
     pub runs_root: Option<PathBuf>,
+    /// The command prefix the repro line needs (`pixi run`), detected by `RunEnv::from_process`.
+    pub launcher: Option<String>,
+    /// The test binary's name as nextest's `binary()` filter matches it
+    /// (`harness_tests`), from the executable's name.
+    pub binary: Option<String>,
 }
 
 impl RunEnv {
-    /// Reads `SIMJIG_SEED` and `SIMJIG_RUNS_DIR`.
+    /// Reads `SIMJIG_SEED`, `SIMJIG_RUNS_DIR`, and the pixi/conda variables that decide
+    /// the repro's launcher (`PIXI_WORKSPACE_ROOT`, `PIXI_PROJECT_ROOT`, `CONDA_PREFIX`,
+    /// ...; see `runner::launcher`).
     ///
     /// # Panics
     /// If `SIMJIG_SEED` is set but is not a seed (the message says what is accepted).
@@ -81,7 +110,82 @@ impl RunEnv {
         let runs_root = std::env::var_os("SIMJIG_RUNS_DIR")
             .map(PathBuf::from)
             .or_else(rundir::default_root);
-        Self { seed, runs_root }
+        let cwd = std::env::current_dir().ok();
+        let launcher = launcher(|name| std::env::var(name).ok(), cwd.as_deref());
+        let binary = std::env::current_exe()
+            .ok()
+            .and_then(|exe| rundir::binary_name(&exe));
+        Self {
+            seed,
+            runs_root,
+            launcher,
+            binary,
+        }
+    }
+}
+
+/// The prefix a repro command needs to run in the same environment as this test, or
+/// `None` for a plain shell.
+///
+/// A test that runs inside `pixi run` (or `pixi shell`) finds Verilator on `PATH`; the
+/// same `cargo` command in a plain shell reruns the build scripts without it and fails
+/// with `VerilatorNotFound`. So:
+/// - pixi (`PIXI_WORKSPACE_ROOT` or, before pixi 0.40, `PIXI_PROJECT_ROOT`): `pixi run`,
+///   with `--manifest-path` when `cwd` (Cargo runs a test in its package directory) is
+///   outside the pixi workspace, and `-e <env>` for an environment other than `default`;
+/// - a `CONDA_PREFIX` inside a pixi workspace (`<root>/.pixi/envs/<env>`): the same;
+/// - any other `CONDA_PREFIX`: `conda run -p <prefix>`.
+pub(crate) fn launcher(var: impl Fn(&str) -> Option<String>, cwd: Option<&Path>) -> Option<String> {
+    let pixi_root = var("PIXI_WORKSPACE_ROOT").or_else(|| var("PIXI_PROJECT_ROOT"));
+    let (root, manifest, env) = if let Some(root) = pixi_root {
+        let manifest = var("PIXI_WORKSPACE_MANIFEST").or_else(|| var("PIXI_PROJECT_MANIFEST"));
+        (PathBuf::from(root), manifest, var("PIXI_ENVIRONMENT_NAME"))
+    } else {
+        let prefix = PathBuf::from(var("CONDA_PREFIX")?);
+        match pixi_env_of(&prefix) {
+            Some((root, env)) => (root, None, Some(env)),
+            None => {
+                return Some(format!(
+                    "conda run -p {}",
+                    shell_word(&prefix.to_string_lossy())
+                ));
+            }
+        }
+    };
+    let mut out = "pixi run".to_owned();
+    if !cwd.is_some_and(|cwd| cwd.starts_with(&root)) {
+        let manifest = manifest.unwrap_or_else(|| root.to_string_lossy().into_owned());
+        out.push_str(" --manifest-path ");
+        out.push_str(&shell_word(&manifest));
+    }
+    if let Some(env) = env.filter(|e| e != "default") {
+        out.push_str(" -e ");
+        out.push_str(&shell_word(&env));
+    }
+    Some(out)
+}
+
+/// The workspace root and environment name of a pixi environment prefix
+/// (`<root>/.pixi/envs/<env>`).
+fn pixi_env_of(prefix: &Path) -> Option<(PathBuf, String)> {
+    let env = prefix.file_name()?.to_str()?;
+    let envs = prefix.parent()?;
+    let dot_pixi = envs.parent()?;
+    let root = dot_pixi.parent()?;
+    let layout = envs.file_name()? == "envs" && dot_pixi.file_name()? == ".pixi";
+    layout.then(|| (root.to_path_buf(), env.to_owned()))
+}
+
+/// `word`, single-quoted for a POSIX shell if it holds anything but `[A-Za-z0-9/._+-]`.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._+-".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
     }
 }
 
@@ -132,7 +236,7 @@ pub struct TestOutcome {
 /// What [`execute`] leaves behind.
 struct Executed {
     sim: Option<Sim>,
-    timeout: Option<SimDuration>,
+    timeout: Option<AppliedTimeout>,
     result: Result<(), Failure>,
 }
 
@@ -160,11 +264,11 @@ where
         package: meta.package.to_owned(),
         seed,
         ignored: meta.ignored,
+        launcher: env.launcher.clone(),
+        binary: env.binary.clone(),
     };
-    start_capture();
     let executed = execute(meta, &options, ctx, body);
-    let panics = finish_capture();
-    finish(run, env, &options, executed, &panics)
+    finish(run, env, &options, executed)
 }
 
 fn execute<D, F, Fut>(meta: &TestMeta, options: &ModelOptions, ctx: TestCtx, body: F) -> Executed
@@ -187,18 +291,9 @@ where
         Ok(dut) => dut,
         Err(failure) => return failed(Some(sim), Err(failure)),
     };
-    let timeout = meta.timeout.map(|t| {
-        sim.precision()
-            .duration(t.value, t.unit)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "#[simjig::test(timeout = ...)] of `{}`: {e}",
-                    ctx.test_name()
-                )
-            })
-    });
+    let timeout = time_limit(meta.timeout, sim.precision(), ctx.test_name());
     if let Some(timeout) = timeout {
-        sim.set_time_limit(SimTime(timeout.ticks()));
+        sim.set_time_limit(SimTime(timeout.duration.ticks()));
     }
     let result = sim.run(body(ctx, dut)).and_then(TestOutput::into_result);
     Executed {
@@ -208,28 +303,54 @@ where
     }
 }
 
+/// The time limit `timeout` asks for at `precision`.
+///
+/// # Panics
+/// If a given timeout is not a whole number of ticks.
+fn time_limit(timeout: TimeoutArg, precision: Precision, test: &str) -> Option<AppliedTimeout> {
+    match timeout {
+        TimeoutArg::Disabled => None,
+        TimeoutArg::Given(t) => {
+            let duration = precision
+                .duration(t.value, t.unit)
+                .unwrap_or_else(|e| panic!("#[simjig::test(timeout = ...)] of `{test}`: {e}"));
+            Some(AppliedTimeout {
+                duration,
+                is_default: false,
+            })
+        }
+        TimeoutArg::Default => {
+            // At a precision coarser than 1 ms, round up to whole ticks.
+            let ticks_per_ms = match precision.exponent() {
+                e @ ..=-3 => 10u64.pow(u32::from((-3 - e).unsigned_abs())),
+                _ => 1,
+            };
+            Some(AppliedTimeout {
+                duration: SimDuration::from_ticks(DEFAULT_TIMEOUT_MS * ticks_per_ms),
+                is_default: true,
+            })
+        }
+    }
+}
+
 fn finish(
     run: RunIdentity,
     env: &RunEnv,
     options: &ModelOptions,
     executed: Executed,
-    panics: &[(String, String)],
 ) -> TestOutcome {
     let Executed {
         sim,
         timeout,
         result,
     } = executed;
-    let dir = env
-        .runs_root
-        .as_ref()
-        .map(|root| rundir::run_dir(root, &run.test, run.seed));
+    let dir = env.runs_root.as_ref().map(|root| {
+        // `_`: only a harness test driving `run` directly has no binary name.
+        let binary = run.binary.as_deref().unwrap_or("_");
+        rundir::run_dir(root, &run.package, binary, &run.test, run.seed)
+    });
     let mut failure = result.err().map(|failure| {
-        let location = match &failure.kind {
-            FailureKind::TaskPanic { message } => panic_location(panics, message),
-            _ => None,
-        };
-        let mut report = FailureReport::new(&failure, run.clone(), location, timeout);
+        let mut report = FailureReport::new(&failure, run.clone(), None, timeout);
         report.run_dir.clone_from(&dir);
         report
     });
@@ -261,21 +382,28 @@ fn summary<'a>(
     run: &'a RunIdentity,
     options: &ModelOptions,
     sim: Option<&Sim>,
-    timeout: Option<SimDuration>,
+    timeout: Option<AppliedTimeout>,
     failure: Option<&'a FailureReport>,
 ) -> Summary<'a> {
     let precision = sim.map(Sim::precision);
     Summary {
         test: &run.test,
         package: &run.package,
+        launcher: run.launcher.as_deref(),
         seed: run.seed,
         verilator_seed: options.verilator_seed,
         precision: precision.map(|p| p.to_string()),
-        end_time: sim.map_or(Json::Null, |s| {
-            Json::time(s.now().0, s.now().display(s.precision()))
-        }),
+        end_time: sim.map_or(Json::Null, |s| Json::time(s.now(), s.precision())),
         timeout: match (timeout, precision) {
-            (Some(t), Some(p)) => Json::time(t.ticks(), SimTime(t.ticks()).display(p)),
+            (Some(t), Some(p)) => {
+                let ticks = t.duration.ticks();
+                let source = if t.is_default { "default" } else { "attribute" };
+                let mut json = Json::time(SimTime(ticks), p);
+                if let Json::Obj(fields) = &mut json {
+                    fields.push(("source", Json::str(source)));
+                }
+                json
+            }
             _ => Json::Null,
         },
         trace_hash: sim.map(Sim::trace_hash),
@@ -284,11 +412,7 @@ fn summary<'a>(
     }
 }
 
-fn write_run_dir(
-    dir: &std::path::Path,
-    mut summary: Summary<'_>,
-    sim: Option<&Sim>,
-) -> std::io::Result<()> {
+fn write_run_dir(dir: &Path, mut summary: Summary<'_>, sim: Option<&Sim>) -> std::io::Result<()> {
     let events = sim.map(Sim::recent_trace);
     summary.events = sim
         .zip(events.as_ref())
@@ -314,7 +438,9 @@ where
     }
     if let Some(report) = outcome.failure {
         let text = report.to_string();
-        eprintln!("{text}");
+        if !meta.should_panic {
+            eprintln!("{text}");
+        }
         // `resume_unwind` skips the panic hook, so the block is printed once, and without
         // a misleading "panicked at <harness file>" line.
         panic::resume_unwind(Box::new(text));
@@ -325,49 +451,54 @@ where
 /// spans the call at the user's return type, so the error points there.
 pub const fn assert_test_output<T: TestOutput>() {}
 
-/// Panics seen on this thread during the current run: `(message, file:line:col)`.
-const PANICS_KEPT: usize = 64;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-thread_local! {
-    static PANICS: RefCell<Option<Vec<(String, String)>>> = const { RefCell::new(None) };
-}
+    fn detect(vars: &[(&str, &str)], cwd: &str) -> Option<String> {
+        let var = |name: &str| {
+            vars.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| (*v).to_owned())
+        };
+        launcher(var, Some(Path::new(cwd)))
+    }
 
-static HOOK: Once = Once::new();
+    #[test]
+    fn a_plain_shell_needs_no_launcher() {
+        assert_eq!(detect(&[], "/w/crates/a"), None);
+    }
 
-/// Starts recording panic locations on this thread (installing the hook once per process;
-/// it chains to the previous hook, so panics still print as usual).
-fn start_capture() {
-    HOOK.call_once(|| {
-        let previous = panic::take_hook();
-        panic::set_hook(Box::new(move |info| {
-            let message = info
-                .payload_as_str()
-                .unwrap_or("<non-string panic payload>")
-                .to_owned();
-            let location = info.location().map(ToString::to_string);
-            PANICS.with_borrow_mut(|panics| {
-                if let (Some(panics), Some(location)) = (panics, location) {
-                    if panics.len() == PANICS_KEPT {
-                        panics.remove(0);
-                    }
-                    panics.push((message, location));
-                }
-            });
-            previous(info);
-        }));
-    });
-    PANICS.set(Some(Vec::new()));
-}
+    #[test]
+    fn pixi_runs_through_pixi_run() {
+        let pixi = [
+            ("PIXI_PROJECT_ROOT", "/w"),
+            ("PIXI_PROJECT_MANIFEST", "/w/pixi.toml"),
+            ("PIXI_ENVIRONMENT_NAME", "default"),
+            ("CONDA_PREFIX", "/w/.pixi/envs/default"),
+        ];
+        assert_eq!(detect(&pixi, "/w/crates/a").as_deref(), Some("pixi run"));
+        assert_eq!(
+            detect(&pixi, "/elsewhere").as_deref(),
+            Some("pixi run --manifest-path /w/pixi.toml")
+        );
+        let mut conformance = pixi;
+        conformance[2].1 = "conformance";
+        assert_eq!(
+            detect(&conformance, "/w").as_deref(),
+            Some("pixi run -e conformance")
+        );
+    }
 
-fn finish_capture() -> Vec<(String, String)> {
-    PANICS.take().unwrap_or_default()
-}
-
-/// The location of the most recent panic with `message`.
-fn panic_location(panics: &[(String, String)], message: &str) -> Option<String> {
-    panics
-        .iter()
-        .rev()
-        .find(|(m, _)| m == message)
-        .map(|(_, location)| location.clone())
+    #[test]
+    fn a_conda_prefix_alone_is_recognized() {
+        assert_eq!(
+            detect(&[("CONDA_PREFIX", "/w/.pixi/envs/lint")], "/x").as_deref(),
+            Some("pixi run --manifest-path /w -e lint")
+        );
+        assert_eq!(
+            detect(&[("CONDA_PREFIX", "/opt/my envs/eda")], "/x").as_deref(),
+            Some("conda run -p '/opt/my envs/eda'")
+        );
+    }
 }

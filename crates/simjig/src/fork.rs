@@ -47,7 +47,9 @@
 //! - **Open files** that a child must not share with its parent (a trace writer shares its
 //!   descriptor and file offset with the parent) are detached by a [`ForkHook`]: flushed
 //!   before the fork, and pointed at their own file in the child (for a Verilator FST, the
-//!   ABI's `trace_reopen`).
+//!   ABI's `trace_reopen`). A child finishes (`at_child_exit`) only the hooks whose child
+//!   half succeeded; when one fails, the later ones never run, and every resource not yet
+//!   detached is left exactly as inherited.
 //!
 //! # Cost
 //! Each [`BranchOutcome`] carries its [`BranchCost`]: the parent's `fork()` latency, the
@@ -444,6 +446,10 @@ impl ForkHook {
     /// Adds a third half, run in a branch child just before it exits (whatever the
     /// branch's ending): the child `_exit`s without running destructors, so this is where
     /// a resource is finished (a trace's last sample dumped and its file closed).
+    ///
+    /// It runs only if this hook's `in_child` succeeded in that child: after a failed
+    /// `in_child`, or when an earlier hook's failed first, the resource is still the
+    /// parent's, and is left untouched.
     #[must_use]
     pub fn at_child_exit(mut self, at_exit: impl Fn() + 'static) -> Self {
         self.at_child_exit = Some(Box::new(at_exit));
@@ -489,6 +495,49 @@ impl Drop for HookGuard {
 /// The hooks, cloned out so none is borrowed while one runs (a hook may register another).
 fn hooks() -> Vec<Rc<ForkHook>> {
     HOOKS.with_borrow(|hooks| hooks.iter().map(|(_, h)| Rc::clone(h)).collect())
+}
+
+thread_local! {
+    /// In a branch's child: the hooks whose `in_child` succeeded, in registration order.
+    static ARMED: RefCell<Vec<Rc<ForkHook>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Records that `hook`'s `in_child` succeeded in this child, so its `at_child_exit` runs.
+fn arm(hook: Rc<ForkHook>) {
+    ARMED.with_borrow_mut(|armed| armed.push(hook));
+}
+
+/// Runs the `at_child_exit` of every armed hook, once. A hook whose `in_child` failed or
+/// never ran (an earlier hook failed) is skipped: it still holds what the child inherited
+/// (a trace writer sharing the parent's descriptor and offset), and finishing that would
+/// write into the parent's resource.
+fn run_exit_hooks() {
+    for hook in ARMED.take() {
+        if let Some(at_exit) = &hook.at_child_exit {
+            // A panic here must not unwind past the branch's end; the report is sent.
+            drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                at_exit,
+            )));
+        }
+    }
+}
+
+/// Runs the child half of a fork without forking or exiting, for unit tests of hooks: the
+/// `in_child` of every hook until one fails, then the `at_child_exit` of those that
+/// succeeded, as a branch's child does. Returns the first failure.
+#[cfg(test)]
+pub(crate) fn run_child_hooks_in_place(index: usize) -> Result<(), String> {
+    let branch = Branch::new(Seed::new(1, crate::SeedSource::Env), index, index + 1);
+    let mut result = Ok(());
+    for hook in hooks() {
+        if let Err(message) = (hook.in_child)(&branch) {
+            result = Err(message);
+            break;
+        }
+        arm(hook);
+    }
+    run_exit_hooks();
+    result
 }
 
 /// Checks that the caller is the main task at a quiet point; returns the precision.
@@ -662,10 +711,13 @@ mod imp {
         if pid == 0 {
             drop(parent_end);
             CHANNEL.set(Some(child_end));
-            for hook in &hooks {
+            // A nested checkpoint's child inherits its parent branch's armed hooks.
+            super::ARMED.with_borrow_mut(Vec::clear);
+            for hook in hooks {
                 if let Err(message) = (hook.in_child)(branch) {
                     finish_child(&wire::failure_report(&hook_failure(&message)));
                 }
+                super::arm(hook);
             }
             return Ok(Forked::Child);
         }
@@ -730,14 +782,7 @@ mod imp {
     /// 1 for a failure) without running anything else of this process.
     pub(super) fn finish_child(report: &[u8]) -> ! {
         let code = i32::from(report.first() != Some(&0));
-        for hook in super::hooks() {
-            if let Some(at_exit) = &hook.at_child_exit {
-                // A panic here must not unwind past the branch's end; the report is sent.
-                drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    at_exit,
-                )));
-            }
-        }
+        super::run_exit_hooks();
         if let Some(mut socket) = CHANNEL.take() {
             // If the parent cannot read the report, it sees the exit code instead.
             drop(socket.write_all(report));
@@ -786,6 +831,36 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hook that logs its halves as `<name> in` and `<name> exit`; its child half fails
+    /// if `fails`.
+    fn logging(log: &Rc<RefCell<Vec<String>>>, name: &'static str, fails: bool) -> ForkHook {
+        let (child, exit) = (Rc::clone(log), Rc::clone(log));
+        ForkHook::new(
+            || Ok(()),
+            move |_| {
+                child.borrow_mut().push(format!("{name} in"));
+                if fails {
+                    Err(format!("{name} fails"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .at_child_exit(move || exit.borrow_mut().push(format!("{name} exit")))
+    }
+
+    /// The second of three hooks fails in the child: the third never runs, and only the
+    /// first, which succeeded, is finished at exit.
+    #[test]
+    fn a_child_finishes_only_the_hooks_whose_child_half_succeeded() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let _a = register_hook(logging(&log, "a", false));
+        let _b = register_hook(logging(&log, "b", true));
+        let _c = register_hook(logging(&log, "c", false));
+        assert_eq!(run_child_hooks_in_place(0), Err("b fails".to_owned()));
+        assert_eq!(*log.borrow(), ["a in", "b in", "a exit"]);
+    }
 
     /// `run_from_checkpoint(..).await.unwrap()` (the docs' example) prints the error's
     /// `Debug`: it must read as the advice, not as a struct dump.

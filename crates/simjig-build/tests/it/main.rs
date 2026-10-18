@@ -7,6 +7,7 @@
 )]
 
 mod cache;
+mod changed;
 mod emitter;
 mod errors;
 mod fixture_crate;

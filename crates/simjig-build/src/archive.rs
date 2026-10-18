@@ -31,7 +31,7 @@ use std::sync::{Mutex, PoisonError};
 use crate::cache::{self, Cache};
 use crate::compile::Inputs;
 use crate::hash::KeyHasher;
-use crate::manifest::Manifest;
+use crate::manifest::{Digests, Manifest, Recorded, Snapshot};
 use crate::{ABI_VERSION, BuildEnv, Error, depfile};
 
 /// A static library, compiled or found in the cache.
@@ -41,6 +41,9 @@ pub(crate) struct Archive {
     pub(crate) name: String,
     /// Every file the compiler read for it.
     pub(crate) deps: Vec<PathBuf>,
+    /// A dependency that changed while the compiler read it: this archive serves this
+    /// build only and is not in the cache (see `manifest`).
+    pub(crate) changed: Option<PathBuf>,
 }
 
 /// What every archive of one build shares: the inputs, the configured base build and the
@@ -99,6 +102,10 @@ impl Toolchain<'_> {
             return Ok(a);
         }
         let a = self.cached_archive_keyed(spec, &memo.2)?;
+        if a.changed.is_some() {
+            // The next DUT of this script compiles it again, from the edited input.
+            return Ok(a);
+        }
         RUNTIMES
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -109,11 +116,12 @@ impl Toolchain<'_> {
     fn cached_archive_keyed(&self, spec: &Spec<'_>, pre: &str) -> Result<Archive, Error> {
         let cache = self.i.cache;
         let manifest = cache.root().join("manifests").join(pre);
-        if let Some(hit) = lookup(cache, spec, pre, &manifest) {
-            return Ok(hit);
-        }
-        let started = std::time::SystemTime::now();
+        let known = match lookup(cache, spec, pre, &manifest) {
+            Ok(hit) => return Ok(hit),
+            Err(known) => known,
+        };
         let work = cache.work_dir()?;
+        let snapshot = Snapshot::start(&work, known);
         let compiled = self.compile_in(&work, spec);
         let (lib, deps) = match compiled {
             Ok(c) => c,
@@ -122,11 +130,19 @@ impl Toolchain<'_> {
                 return Err(e);
             }
         };
-        let recorded = Manifest::record(&deps, started).ok_or_else(|| Error::Parse {
-            path: work.clone(),
-            line: 0,
-            msg: "a file the compiler read vanished before it could be hashed".to_owned(),
-        })?;
+        let recorded = match Manifest::record(&deps, &snapshot) {
+            Recorded::Stable(m) => m,
+            Recorded::Changed(path) => {
+                let label = format!("{}-{}", spec.kind, spec.what);
+                let dir = cache::keep_unpublished(&work, &self.i.env.out_dir, &label)?;
+                return Ok(Archive {
+                    dir,
+                    name: provisional_name(spec.what),
+                    deps,
+                    changed: Some(path),
+                });
+            }
+        };
         let full = recorded.recorded_key(DEPS_DOMAIN, pre);
         let name = archive_name(spec.what, &full);
         // Publish the archive alone: its objects are inside it.
@@ -144,6 +160,7 @@ impl Toolchain<'_> {
             dir: entry,
             name,
             deps,
+            changed: None,
         })
     }
 
@@ -206,7 +223,7 @@ impl Toolchain<'_> {
         for (k, v) in spec.defines {
             b.define(k, v.as_deref());
         }
-        let provisional = format!("simjig_{what}");
+        let provisional = provisional_name(what);
         if let Err(source) = b.try_compile(&provisional) {
             let what = match what.strip_prefix("model_") {
                 Some(prefix) => format!("the `{prefix}` model"),
@@ -299,17 +316,33 @@ fn version_output(exe: &Path) -> String {
     }
 }
 
-/// The cached archive for `pre`, if the manifest's dependencies still hash to an entry.
-fn lookup(cache: &Cache, spec: &Spec<'_>, pre: &str, manifest: &Path) -> Option<Archive> {
-    let m = Manifest::read(manifest)?;
-    let full = m.current_key(DEPS_DOMAIN, pre)?;
+/// The cached archive for `pre`, if the manifest's dependencies still hash to an entry;
+/// else their current digests, if there is a manifest, for the compile's snapshot.
+fn lookup(
+    cache: &Cache,
+    spec: &Spec<'_>,
+    pre: &str,
+    manifest: &Path,
+) -> Result<Archive, Option<Digests>> {
+    let m = Manifest::read(manifest).ok_or(None)?;
+    let current = m.current().ok_or(None)?;
+    let full = current.key(DEPS_DOMAIN, pre);
     let name = archive_name(spec.what, &full);
     let dir = cache.root().join(spec.kind).join(&full);
-    dir.join(format!("lib{name}.a")).is_file().then(|| Archive {
+    if !dir.join(format!("lib{name}.a")).is_file() {
+        return Err(Some(current));
+    }
+    Ok(Archive {
         dir,
         name,
         deps: m.paths(),
+        changed: None,
     })
+}
+
+/// The name of an archive before its full key is known.
+fn provisional_name(what: &str) -> String {
+    format!("simjig_{what}")
 }
 
 fn archive_name(what: &str, full: &str) -> String {

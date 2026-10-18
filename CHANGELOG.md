@@ -4,6 +4,15 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- An input edited while Verilator, the JSON pass or the C++ compiler read it no longer
+  poisons the cache. Each run snapshots its start (and the digests of the inputs a
+  previous run listed); when a file it read has a modification or change time not
+  before the start, or another digest, its output serves that build only (from
+  `OUT_DIR/simjig-unpublished/`), the build warns (`cargo::warning`), and the next build
+  runs again. Before, the output of the old contents was cached under the new contents'
+  key and hit on every later build. Verilation manifests now record digests and file
+  status like the archive ones: every model is verilated again once
+  (`simjig-verilate-deps-v2`).
 - Each DUT's shim is written to `OUT_DIR/simjig/<name>/<prefix>_shim.cpp` (it was
   `OUT_DIR/simjig/<prefix>_shim.cpp`), and the shim of an earlier configuration is removed.
   A model archive's key no longer lists the files in `OUT_DIR/simjig/` or in the cache, so

@@ -32,7 +32,7 @@ use crate::front::Front;
 use crate::hash::KeyHasher;
 use crate::header::{self, HeaderPort};
 use crate::verilator::{self, Verilator};
-use crate::{BuildEnv, Error, cache, pipeline, script};
+use crate::{BuildEnv, Error, cache, manifest, pipeline, script};
 
 /// A file generated before verilation (a `.vlt` control file or a wrapper module). It is
 /// stored content-addressed in the shared cache, so its path is the same in every crate.
@@ -396,7 +396,9 @@ impl DutConfig {
 pub struct Built {
     /// The Verilator `--prefix`; the model class is `<prefix>` in `<prefix>.h`.
     pub prefix: String,
-    /// The Verilator output directory, inside the shared cache. Read-only.
+    /// The Verilator output directory, inside the shared cache. Read-only. When an input
+    /// changed while Verilator read it, the output is not cached and this is
+    /// `OUT_DIR/simjig-unpublished/verilated-<prefix>/obj` (the build warns).
     pub obj_dir: PathBuf,
     /// The ports declared in `<prefix>.h`.
     pub header_ports: Vec<HeaderPort>,
@@ -650,13 +652,8 @@ impl Dut {
             generated.push(cache.store_input(g)?);
         }
         let args = self.config.verilator_args(&prefix, &ir.top, &generated);
-        let model = cache.verilate(
-            &self.config.name,
-            &verilator,
-            &args,
-            &self.config.include_dirs,
-        )?;
-        front.record(&cache, &ir, placed.layout_check.as_ref(), &model.deps)?;
+        let (model, warnings) =
+            self.verilate(env, &cache, &verilator, &args, front, &ir, &placed)?;
         let header_ports = check_model(env, &self.config, &prefix, &model.obj_dir, &placed)?;
         let mut directives = compile::compile(&compile::Inputs {
             env,
@@ -674,6 +671,7 @@ impl Dut {
             &cache.root().join("inputs"),
             &self.recipe,
         ));
+        directives.extend(warnings);
         if verilator.untested {
             directives.push(format!(
                 "cargo::warning=simjig: {} is not a supported Verilator (supported: {}); \
@@ -692,6 +690,39 @@ impl Dut {
             rust_file: placed.rust,
             directives,
         })
+    }
+}
+
+impl Dut {
+    /// Verilates the model and records the front end's results, with a warning for each
+    /// result left out of the cache because an input changed while it was made.
+    #[expect(clippy::too_many_arguments, reason = "the pipeline's state, used once")]
+    fn verilate(
+        &self,
+        env: &BuildEnv,
+        cache: &cache::Cache,
+        verilator: &Verilator,
+        args: &[String],
+        front: Front,
+        ir: &pipeline::Ir,
+        placed: &emit::Placed,
+    ) -> Result<(cache::Verilated, Vec<String>), Error> {
+        let name = &self.config.name;
+        let model = cache.verilate(
+            name,
+            verilator,
+            args,
+            &self.config.include_dirs,
+            &env.out_dir,
+        )?;
+        let mut warnings = Vec::new();
+        if let Some(path) = &model.changed {
+            warnings.push(manifest::changed_warning(name, "verilating", path));
+        }
+        if let Some(path) = front.record(cache, ir, placed.layout_check.as_ref(), &model.deps)? {
+            warnings.push(manifest::changed_warning(name, "the front end ran", &path));
+        }
+        Ok((model, warnings))
     }
 }
 

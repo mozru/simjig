@@ -387,16 +387,62 @@ A signal whose type is the same in every configuration keeps it (`dut.clk()` is 
 `In<Bit>`). One whose width follows a parameter has an associated type instead:
 `dut.count()` is an `Out<D::Count>`, `D::Count` being `Bits<3>` in `fifo_8x4` and
 `Bits<5>` in `fifo_32x16`. Signals whose types agree in every configuration share one
-(`wr_data` and `rd_data` are both `D::WrData`), so a value moves between them. An
+(`wr_data` and `rd_data` are both `D::WrData`), so a value moves between them, and so do
+signals of interface ports (`up.beat` and `down.beat` below are both `D::Beat`). An
 associated type is bounded by `simjig::Vector` (a bit vector: `set(0x5a)`, `get() == 3`
-and `.to_u128()` work at any width) or by `simjig::Value` (a struct or enum of the
-configuration: `get`, `set`, `==`, `{:?}`, `Default`), so the body needs no `where`
-clause. A method or const of a bound needs its trait in scope (`use simjig::Vector;` for
-`.to_u128()`, `use simjig::bits::Packed;` for `D::WrData::WIDTH`), as an interface port
-whose bundle differs between configurations does (its bundle trait, `<Bundle>Ports` in
-the sweep's module). A signal that not every configuration has alike (a probe of one)
-is left out of `Ports`; the concrete `Dut` still has it. A test of one configuration
-takes its `Dut` as before (`dut: sync_fifo::fifo_8x4::Dut`).
+and `.to_u128()` work at any width), by a struct's fields trait (below) or by
+`simjig::Value` (an enum of the configuration: `get`, `set`, `==`, `{:?}`, `Default`,
+and `from_u128`/`to_u128` for its packed bits), so the body needs no `where` clause.
+A method or const of a bound needs its trait in scope; `use sync_fifo::*;` brings them
+all: `Ports`, the bundle traits (`<Bundle>Ports`) and fields traits of the sweep, and
+the runtime's `Value`, `Vector` and `Packed` (`D::WrData::WIDTH`). A signal that not
+every configuration has alike (a probe of one) is left out of `Ports`; the concrete
+`Dut` still has it. A test of one configuration takes its `Dut` as before
+(`dut: sync_fifo::fifo_8x4::Dut`).
+
+A packed struct whose field widths follow a parameter is a different Rust struct in each
+configuration, so its associated type is bounded by a trait over its fields, named after
+its typedef: `beat_t` gets `BeatFields`, with a getter per field (`beat.tag()`), a
+constructor taking every field in declaration order (`D::Beat::new(tag, data)`) and a
+`with_<field>` per field, each taking anything that converts into the field (a literal
+for a bit vector). In `examples/lib`, `hop_stage` is such a sweep over the interface
+`tagged_if`, whose `beat_t` has a `TAG_W`-bit tag and a `WIDTH`-bit data field:
+
+```rust
+#[simjig::test(init = random, timeout = "1us", duts = [hop_8x2::Dut, hop_32x4::Dut])]
+async fn a_beat_hops_with_its_tag_incremented<D: Ports>(dut: D) {
+    clock(dut.clk(), ns(10)).start();
+    dut.rst().set(1);
+    dut.up().valid().set(0);
+    dut.clk().rising().await;
+    dut.clk().falling().await;
+    dut.rst().set(0);
+    let wrap = 1u128 << D::TAG_W;
+    for (tag, data) in [(0, 0x5a), (wrap - 1, 0x3c)] {
+        let beat = D::Beat::new(tag, data); // fields in declaration order
+        dut.up().beat().set(beat);
+        dut.up().valid().set(1);
+        dut.clk().rising().await;
+        ReadOnly::new().await;
+        let hopped: D::Beat = dut.down().beat().get(); // one type on both ports
+        assert_eq!(hopped, beat.with_tag((beat.tag().to_u128() + 1) % wrap));
+        assert_eq!(hopped.data(), beat.data());
+        assert_eq!(dut.down().valid().get(), 1);
+        dut.clk().falling().await;
+    }
+}
+```
+
+with `use hop_stage::*;` the file's only import from the sweep. Before fields traits, the
+same body imported `Ports` and both bundle traits from the sweep and `RawWords` and
+`Packed` from the runtime, had two beat types it could not compare
+(`<D::Up as TaggedIfSinkPorts>::UpBeat` and `<D::Down as TaggedIfSourcePorts>::UpBeat`;
+`D::Up::UpBeat` does not resolve), and packed the struct by hand:
+
+```text
+let words = [u32::try_from(tag << D::WIDTH | data).unwrap()]; // one storage size only
+let beat = <<D::Up as TaggedIfSinkPorts>::UpBeat as Packed>::from_raw(RawWords::from_words(&words));
+```
 
 ### Waves on failure
 A run is never traced while it first runs. When waves are asked for, the harness replays

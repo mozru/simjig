@@ -17,6 +17,7 @@ fn main() -> Result<(), Error> {
     skid_buffer()?;
     round_robin_arbiter()?;
     async_fifo()?;
+    hop_stage()?;
     Ok(())
 }
 
@@ -101,6 +102,31 @@ fn async_fifo() -> Result<(), Error> {
         .param("DEPTH", 8)
         .trace_fst(true)
         .verilator_args(LINT)
+        .build()?;
+    Ok(())
+}
+
+// ---- hop_stage (rtl/hop_stage.sv, rtl/tagged_if.sv) -------------------------------------
+
+/// `hop_stage` as a sweep of 8-bit beats with 2-bit tags and 32-bit beats with 4-bit tags:
+/// the interface's `beat_t` has different field widths in each, so a test generic over
+/// `hop_stage::Ports` reads and builds it through `hop_stage::BeatFields`. The interfaces'
+/// `WIDTH` and `TAG_W` follow the module's `.param`s.
+fn hop_stage() -> Result<(), Error> {
+    let stage = |name: &str, width: u32, tag_w: u32| {
+        Dut::new(name)
+            .sources(["rtl/tagged_if.sv", "rtl/hop_stage.sv"])
+            .top("hop_stage")
+            .param("WIDTH", width)
+            .param("TAG_W", tag_w)
+            .bind_iface("up", "tagged_if.sink")
+            .bind_iface("down", "tagged_if.source")
+            .trace_fst(true)
+            .verilator_args(LINT)
+    };
+    Sweep::new("hop_stage")
+        .dut(stage("hop_8x2", 8, 2))
+        .dut(stage("hop_32x4", 32, 4))
         .build()?;
     Ok(())
 }

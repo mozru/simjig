@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `examples/lib` gains `hop_stage`, a sweep over the interface `tagged_if` whose `beat_t`
+  has parameter-dependent field widths; its test body (`D::Beat::new`, `beat.tag()`,
+  one `use hop_stage::*;`) is the README's fields-trait example, compile-checked with
+  the other sweep snippets. The README sweep section shows it before and after.
 - Sweep modules (generated code, reviewed snapshots `codegen_it::sweep`): a generic body
   needs one import, `use <sweep>::*;`, which now also brings `Value`, `Vector` and
   `Packed` (re-exported unless a shared type has the name). A bundle trait's associated

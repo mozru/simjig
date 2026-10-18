@@ -70,6 +70,7 @@ usual style, so it differs:
 | `skid_buffer` | `rst`: synchronous, active high | `WIDTH` at least 1, and equal to the interfaces' `WIDTH` |
 | `round_robin_arbiter` | `rst_n`: synchronous, active low | `N` at least 2 |
 | `async_fifo` | `wrst_n`, `rrst_n`: asynchronous, active low, one per clock domain, asserted together | `DEPTH` a power of 2, at least 2; `WIDTH` at least 1 |
+| `hop_stage` | `rst`: synchronous, active high | `WIDTH` and `TAG_W` equal to the interfaces' |
 
 ## sync_fifo
 
@@ -243,3 +244,21 @@ two-flop synchronizers, no other signal crossing) is verified by review and by C
 | `full_after_depth_writes` | directed: exactly `DEPTH` writes before `wfull`, and `rempty` low |
 | `flags_see_the_other_side_three_edges_later` | directed: the synchronizer latency of both flags |
 | `parameters_are_checked_at_elaboration` | `$fatal` on a DEPTH that is not a power of 2 (or below 2), or a WIDTH below 1 |
+
+## hop_stage
+
+`rtl/hop_stage.sv` over `rtl/tagged_if.sv`, tested in `tests/hop_stage.rs`; built as the
+sweep `hop_stage` of `hop_8x2` (`WIDTH = 8`, `TAG_W = 2`) and `hop_32x4` (32 and 4).
+
+- One pipeline stage: each beat on `up` leaves on `down` a cycle later with its `tag`, a
+  hop count, incremented (wrapping at `2**TAG_W`) and its `data` unchanged.
+- The interface's `beat_t` has a `TAG_W`-bit `tag` and a `WIDTH`-bit `data`, so it is a
+  different Rust struct in each configuration. The test is written once over
+  `hop_stage::Ports`: `D::Beat` is the type of both `up.beat` and `down.beat`, built with
+  `D::Beat::new(tag, data)` and read with `beat.tag()` through the generated
+  `hop_stage::BeatFields` (the top README's "A parameter sweep").
+
+| Test | Checks |
+|---|---|
+| `a_beat_hops_with_its_tag_incremented` | per configuration: two beats, the second's tag wrapping, each on `down` one cycle later |
+| `parameters_are_checked_at_elaboration` | `$fatal` on a `WIDTH` or `TAG_W` the interfaces do not have |

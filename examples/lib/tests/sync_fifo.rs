@@ -715,8 +715,9 @@ fn parameters_are_checked_at_elaboration() {
 }
 
 /// The top README's "A parameter sweep" shows this crate's code: each of its Rust blocks
-/// is, line for line (indentation aside), in `build.rs` or this file, so CI compiles and
-/// runs what the README shows.
+/// is, line for line (indentation aside), in `build.rs`, this file or
+/// `tests/hop_stage.rs`, so CI compiles and runs what the README shows (its `text` block
+/// is the code a fields trait replaced, which no longer compiles).
 #[test]
 fn the_readme_sweep_is_this_crate_code() {
     let root = env!("CARGO_MANIFEST_DIR");
@@ -728,13 +729,14 @@ fn the_readme_sweep_is_this_crate_code() {
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
         lines.join("\n")
     };
-    let code = flat(&(read("build.rs") + &read("tests/sync_fifo.rs")));
+    let code =
+        flat(&(read("build.rs") + &read("tests/sync_fifo.rs") + &read("tests/hop_stage.rs")));
     let blocks: Vec<&str> = section
         .split("```rust\n")
         .skip(1)
         .map(|b| b.split("```").next().unwrap())
         .collect();
-    assert_eq!(blocks.len(), 2, "{section}");
+    assert_eq!(blocks.len(), 3, "{section}");
     for block in blocks {
         assert!(code.contains(&flat(block)), "not in the crate:\n{block}");
     }

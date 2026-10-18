@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use simjig_build::XInitial;
 use simjig_build::codegen::{
     Access, ConstValue, DutField, ItemKind, LAYOUT_CHECK_FLAGS, Lowered, Probe, ProbeAccess,
     ProbeType, RustOptions, ShimOptions, SignalTarget, emit_layout_check, emit_rust, emit_shim,
@@ -370,6 +371,7 @@ fn wide_opts(trace_fst: bool, coverage: bool) -> ShimOptions {
         timing: false,
         trace_fst,
         coverage,
+        x_initial: XInitial::Unique,
     }
 }
 

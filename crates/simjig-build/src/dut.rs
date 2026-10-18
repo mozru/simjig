@@ -64,6 +64,41 @@ pub struct Features {
     pub coverage: bool,
 }
 
+/// How Verilator initializes variables that have no initializer (`--x-initial`).
+///
+/// [`Unique`](Self::Unique), Verilator's default, emits a call per variable in the model's
+/// constructor (`VL_SCOPED_RAND_RESET_*`), which returns 0 unless the run asks for random
+/// values: simjig's `#[simjig::test(init = random)]` (`simjig::InitValues::Random`). The other
+/// modes compile the values in, so such a model cannot start from random values and a test
+/// that asks for them fails to load. Explicit `X` in the source (`--x-assign`) is not affected.
+///
+/// `#[non_exhaustive]`, like the other public enums that may grow.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum XInitial {
+    /// `--x-initial unique` (Verilator's default; simjig passes no flag): zeros, or random
+    /// values drawn from the run's seed when the test asks for them.
+    #[default]
+    Unique,
+    /// `--x-initial 0`: always zeros.
+    Zero,
+    /// `--x-initial fast`: whatever Verilator finds fastest (zeros in 5.052), which may let
+    /// it optimize further.
+    Fast,
+}
+
+impl XInitial {
+    /// The `--x-initial` value, or `None` for the default, which simjig leaves to Verilator so
+    /// that a default build's command line, prefix and cache keys are unchanged.
+    fn arg(self) -> Option<&'static str> {
+        match self {
+            Self::Unique => None,
+            Self::Zero => Some("0"),
+            Self::Fast => Some("fast"),
+        }
+    }
+}
+
 /// The coverage kinds of Verilator 5.052 (`V3Options::coverage(bool)` sets all five; the
 /// model has counters while any is on).
 const COVERAGE_KINDS: [&str; 5] = ["line", "toggle", "expr", "fsm", "user"];
@@ -164,6 +199,10 @@ fn refused_arg(arg: &str, next: Option<&str>) -> Option<&'static str> {
             "simjig models are C++ (`--cc`): the shim and the runtime drive a C++ model, not \
              a SystemC one",
         ),
+        "x-initial" => Some(
+            "use `.x_initial(XInitial::..)`: the shim must know whether the model's initial \
+             values can be randomized (`#[simjig::test(init = random)]`)",
+        ),
         "hierarchical" => Some(
             "the pipeline compiles one model per DUT, and a hierarchical block is a separate \
              model whose variables the DUT's scope table does not hold",
@@ -257,6 +296,8 @@ pub struct DutConfig {
     pub trace_fst: bool,
     /// `--coverage`.
     pub coverage: bool,
+    /// `--x-initial` ([`Dut::x_initial`]).
+    pub x_initial: XInitial,
     /// Extra Verilator arguments, passed last.
     pub verilator_args: Vec<String>,
     /// Generated Verilator inputs, passed before the sources.
@@ -346,6 +387,7 @@ impl DutConfig {
             timing,
             trace_fst,
             coverage,
+            x_initial,
             verilator_args,
             generated,
             // Out: it only drops Rust trampolines from the generated Rust. The model's C++
@@ -382,6 +424,10 @@ impl DutConfig {
         }
         h.str("switches")
             .field(&[u8::from(*timing), u8::from(*trace_fst), u8::from(*coverage)]);
+        // Only a mode other than the default is hashed, so default prefixes stay as they were.
+        if let Some(mode) = x_initial.arg() {
+            h.str("x-initial").str(mode);
+        }
         for a in verilator_args {
             h.str("arg").str(a);
         }
@@ -408,6 +454,9 @@ impl DutConfig {
         }
         if self.coverage {
             a.push("--coverage".to_owned());
+        }
+        if let Some(mode) = self.x_initial.arg() {
+            a.extend(["--x-initial".to_owned(), mode.to_owned()]);
         }
         let sources = generated.iter().chain(&self.sources).cloned().collect();
         a.extend(
@@ -831,6 +880,14 @@ impl Dut {
     /// Enables coverage counters (`--coverage`).
     pub fn coverage(mut self, on: bool) -> Self {
         self.config.coverage = on;
+        self
+    }
+
+    /// How variables without an initializer start (`--x-initial`; default
+    /// [`XInitial::Unique`], whose values a test can randomize). A raw `--x-initial` among
+    /// the arguments is refused.
+    pub fn x_initial(mut self, mode: XInitial) -> Self {
+        self.config.x_initial = mode;
         self
     }
 
@@ -1496,6 +1553,36 @@ mod tests {
             assert!(!seen.contains(&p), "{v:?} collides");
             seen.push(p);
         }
+    }
+
+    /// The default `--x-initial` passes no flag and leaves the prefix alone; each other mode
+    /// passes its flag and is a model of its own. A raw `--x-initial` is refused, so the
+    /// shim's `kXInitialUnique` cannot disagree with the command line.
+    #[test]
+    fn x_initial_is_a_flag_and_a_prefix_only_off_the_default() {
+        let with = |mode| DutConfig {
+            x_initial: mode,
+            ..cfg()
+        };
+        let flag = |c: &DutConfig| {
+            let args = c.verilator_args("V", "fifo", &[]);
+            args.iter()
+                .position(|a| a == "--x-initial")
+                .map(|i| args[i + 1].clone())
+        };
+        assert_eq!(flag(&with(XInitial::Unique)), None);
+        assert_eq!(with(XInitial::Unique).model_digest(), cfg().model_digest());
+        assert_eq!(flag(&with(XInitial::Zero)).as_deref(), Some("0"));
+        assert_eq!(flag(&with(XInitial::Fast)).as_deref(), Some("fast"));
+        let prefixes = [XInitial::Unique, XInitial::Zero, XInitial::Fast].map(|m| with(m).prefix());
+        assert!(
+            prefixes[0] != prefixes[1] && prefixes[1] != prefixes[2] && prefixes[0] != prefixes[2]
+        );
+        for args in [&["--x-initial", "fast"][..], &["-x-initial", "0"]] {
+            let err = with_args(args).validate().unwrap_err().to_string();
+            assert!(err.contains(".x_initial(XInitial::..)"), "{err}");
+        }
+        assert!(with_args(&["--x-initial-edge"]).validate().is_ok());
     }
 
     /// `dpi_in_c` only drops Rust trampolines; the model's C++ (so its prefix) is the same.

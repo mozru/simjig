@@ -39,6 +39,11 @@ the public API, the generated code or simulation semantics.
   yielded once or twice afterwards. The cost is one helper entry and two or three extra
   polls of the caller's task per combinator. Trace hashes of runs with combinators
   change. `__private::{hop, boxed}` are gone (macro internals).
+- Performance trade-off (correctness over speed, constitution priority order): each wait on
+  a set `Event` or a free `Lock` now costs one extra scheduler round (one poll), as cocotb
+  requires. On an Event/Lock-heavy benchmark (N tasks, each cycle: edge, set-event wait,
+  lock, queue op) this is about 2.4x slower (N=1000: 14–18 ms → 33 ms; N=4000: 56 → 141 ms);
+  the cost per poll fell from 70 to 55 ns. Other scheduler benchmarks are within ±10%.
 - `Event::wait` on a set event and `Lock::lock` on a free lock resume after the tasks
   already ready (one hop), as cocotb 2.1's `Event.wait()` and `Lock.acquire()` do (goldens
   `event_ready`, `lock_ready`); they used to continue at once. The free lock is taken

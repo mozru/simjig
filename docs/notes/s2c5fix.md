@@ -110,3 +110,9 @@ later build fails with "rename the DUT". The fixture keeps its cache under a sta
 and so does every user crate (`target/simjig-cache`). Suggested fix: version the claim
 with the simjig-build version (or derive the identity from the same fields as the prefix,
 with a schema tag), so an upgrade starts a fresh claim.
+
+## Cost (from review cycle 5)
+Each ready wait (a set Event, a free Lock) is a full extra scheduler round, not just a
+thread-local read: an Event/Lock-heavy benchmark is about 2.4x slower (201,002 → 601,060
+polls), while the cost per poll fell (70 → 55 ns). We accept this to match cocotb (correctness
+before performance). The bench lives in the reviewer's scratchpad (`s2c5r/bench_s2c5r.rs`).

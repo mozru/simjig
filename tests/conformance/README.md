@@ -288,6 +288,11 @@ Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel
 
 ### Known differences from cocotb
 Each with the reason; all are deliberate:
+- **A `Task` passed by value to `with_timeout`/`first!`/`join!` is cancelled** when the
+  combinator drops it (a timeout, or losing a `first!`), because dropping a `Task` cancels
+  it. cocotb keeps a Task operand running ("the callee continues to run"). To keep it
+  running, pass `&mut task`, which matches cocotb byte for byte (review cycle 5, scenario
+  `r5_task_operand`).
 - **`Timer` of zero ticks** is rejected when it is first **awaited** (a `TaskPanic` naming
   the line that built it); cocotb raises `ValueError` when `Timer(0)` is **built**.
   `Timer::new` is a `const fn`, which can neither report a run failure nor put the call

@@ -24,6 +24,15 @@ impl Drop for DriveWhileAlive {
     }
 }
 
+/// Sets its flag when dropped, to observe that a task's future was dropped.
+struct SetOnDrop(Rc<RefCell<bool>>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        *self.0.borrow_mut() = true;
+    }
+}
+
 #[test]
 fn dropping_a_task_handle_cancels_it_and_runs_drop_cleanup() {
     let mut d = clocked();
@@ -101,6 +110,42 @@ fn a_timed_out_scope_cancels_its_whole_subtree() {
     assert_clean(&d.sim);
 }
 
+/// A detached task whose spawner is already gone still belongs to the nearest live
+/// ancestor (here the scope), so the scope's timeout cancels it.
+#[test]
+fn a_task_detached_after_its_spawner_finished_dies_with_the_scope() {
+    let mut d = clocked();
+    let clk = d.clk;
+    let cleaned = Rc::new(RefCell::new(false));
+    let flag = SetOnDrop(Rc::clone(&cleaned));
+    let seen = Rc::clone(&cleaned);
+    d.sim.set_time_limit(simjig::SimTime(1000));
+    let out = d.sim.run(async move {
+        let result = with_timeout(
+            ticks(15),
+            scope("s", async move {
+                // `p` returns `c`'s handle, so `p` is freed before `c` is detached.
+                #[expect(clippy::async_yields_async, reason = "the handle is the result")]
+                let c = spawn("p", async move {
+                    spawn("c", async move {
+                        let _flag = flag;
+                        loop {
+                            rising(clk).await;
+                        }
+                    })
+                })
+                .await;
+                c.detach();
+                Timer::new(ticks(1000)).await;
+            }),
+        )
+        .await;
+        (result.is_err(), *seen.borrow())
+    });
+    assert_eq!(out.unwrap(), (true, true), "`c` was dropped with the scope");
+    assert_clean(&d.sim);
+}
+
 #[test]
 fn awaiting_a_task_returns_its_result_even_if_already_done() {
     let mut d = dut();
@@ -121,12 +166,6 @@ fn awaiting_a_task_returns_its_result_even_if_already_done() {
 
 #[test]
 fn tasks_left_running_are_cancelled_when_main_returns() {
-    struct SetOnDrop(Rc<RefCell<bool>>);
-    impl Drop for SetOnDrop {
-        fn drop(&mut self) {
-            *self.0.borrow_mut() = true;
-        }
-    }
     let mut d = clocked();
     let (clk, a) = (d.clk, d.a);
     let cleaned = Rc::new(RefCell::new(false));

@@ -4,9 +4,10 @@
 //! - [`spawn`] returns a [`Task<T>`] handle that owns the task: dropping the handle cancels
 //!   the task. Cancellation is *only* dropping its future; cleanup is synchronous `Drop`,
 //!   which may still write signals (through the write log) or release locks.
-//! - [`Task::detach`] hands ownership to the parent task instead. A task's detached children
-//!   are cancelled when the parent completes or is cancelled, so no task outlives its
-//!   scope. [`scope`] is a child task awaited in place; dropping the scope future cancels
+//! - [`Task::detach`] hands ownership to the task's nearest ancestor that is still running
+//!   (its parent, unless the parent already completed). A task's detached children are
+//!   cancelled when it completes or is cancelled, so no task outlives its scope, even when
+//!   its handle was passed up and detached after its spawner finished. [`scope`] is a child task awaited in place; dropping the scope future cancels
 //!   everything spawned inside it.
 //! - Each poll and each drop runs under `catch_unwind`; a panic becomes a
 //!   [`FailureKind::TaskPanic`] carrying the hierarchical task name, and stops the run.
@@ -55,7 +56,11 @@ enum TaskState {
 
 struct TaskEntry {
     name: Rc<str>,
-    parent: Option<Key>,
+    /// Every ancestor, the root (`main`) first and the parent last. Keys of finished
+    /// ancestors go stale, which the slab detects.
+    ancestors: Rc<[Key]>,
+    /// The task whose `detached` list holds this one, once detached.
+    owner: Option<Key>,
     state: TaskState,
     future: Option<BoxFuture>,
     result: Option<Box<dyn Any>>,
@@ -158,9 +163,15 @@ pub(crate) fn spawn_in<T: 'static>(
     name: &str,
     future: impl Future<Output = T> + 'static,
 ) -> Task<T> {
-    let full: Rc<str> = match parent.and_then(|p| k.tasks.borrow().name(p)) {
-        Some(p) => format!("{p}.{name}").into(),
-        None => name.into(),
+    let (full, ancestors): (Rc<str>, Rc<[Key]>) = {
+        let tasks = k.tasks.borrow();
+        match parent.and_then(|p| Some((p, tasks.slab.get(p)?))) {
+            Some((p, e)) => (
+                format!("{}.{name}", e.name).into(),
+                e.ancestors.iter().copied().chain([p]).collect(),
+            ),
+            None => (name.into(), Rc::new([])),
+        }
     };
     let join = k
         .waits
@@ -180,7 +191,8 @@ pub(crate) fn spawn_in<T: 'static>(
     });
     let key = k.tasks.borrow_mut().slab.insert(TaskEntry {
         name: Rc::clone(&full),
-        parent,
+        ancestors,
+        owner: None,
         state: TaskState::Pending,
         future: Some(wrapped),
         result: None,
@@ -262,9 +274,10 @@ impl<T: 'static> Task<T> {
         .unwrap_or(true)
     }
 
-    /// Lets the task run on without this handle; it is cancelled when its parent task
-    /// completes or is cancelled (or when the run ends, for a task spawned by `main`'s
-    /// parent, the simulation).
+    /// Lets the task run on without this handle; it is cancelled when its owner completes
+    /// or is cancelled. The owner is the task's parent, or, if the parent already
+    /// completed, the nearest ancestor still running, so a task never outlives the
+    /// [`scope`] it was spawned in.
     pub fn detach(mut self) {
         self.join = None;
         let Some(key) = self.key.take() else { return };
@@ -274,13 +287,27 @@ impl<T: 'static> Task<T> {
                 return;
             };
             entry.has_handle = false;
-            let done = entry.state == TaskState::Done;
-            let parent = entry.parent;
-            if done {
+            if entry.state == TaskState::Done {
                 drop(tasks);
                 free_task(k, key);
-            } else if let Some(p) = parent.and_then(|p| tasks.slab.get_mut(p)) {
-                p.detached.push(key);
+                return;
+            }
+            let ancestors = Rc::clone(&entry.ancestors);
+            let owner = ancestors.iter().rev().copied().find(|&a| {
+                tasks
+                    .slab
+                    .get(a)
+                    .is_some_and(|e| matches!(e.state, TaskState::Pending | TaskState::Polling))
+            });
+            // No running ancestor means `main` completed: the run is ending, and `drop_all`
+            // cancels the task.
+            if let Some(owner) = owner {
+                if let Some(e) = tasks.slab.get_mut(key) {
+                    e.owner = Some(owner);
+                }
+                if let Some(o) = tasks.slab.get_mut(owner) {
+                    o.detached.push(key);
+                }
             }
         });
     }
@@ -373,10 +400,10 @@ impl<T> Drop for Task<T> {
 fn free_task(k: &Kernel, key: Key) {
     let removed = k.tasks.borrow_mut().slab.remove(key);
     let Some(entry) = removed else { return };
-    if let Some(parent) = entry.parent
-        && let Some(p) = k.tasks.borrow_mut().slab.get_mut(parent)
+    if let Some(owner) = entry.owner
+        && let Some(o) = k.tasks.borrow_mut().slab.get_mut(owner)
     {
-        p.detached.retain(|&c| c != key);
+        o.detached.retain(|&c| c != key);
     }
     k.waits.borrow_mut().free_list(entry.join);
     // The result may run user `Drop` code; no borrow is held here.

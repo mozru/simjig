@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A `.param` naming no parameter of the top fails with
+  ``module `rate_limiter` has no parameter `PERIDO`; did you mean `PERIOD`? (it has
+  BURST, PERIOD)``, instead of Verilator's `-G` message or a `PINNOTFOUND` located in
+  the hashed generated wrapper. The parameters come from a second JSON pass without the
+  overrides, run only on that failure.
 - A file list (`Dut::file_list`, `file_list_relative`) or an `-f`/`-F` file among
   `verilator_args` may not carry an option the builder refuses as an argument
   (`--top-module`, `--timing`, trace switches, `--threads N`, `--prefix`, `--Mdir`,

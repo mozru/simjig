@@ -83,6 +83,7 @@ pub(crate) fn design_ir(
             .map_err(|e| {
                 iface_diag::unbound_iface_ports(config, &e)
                     .or_else(|| iface_diag::binding_mistakes(config, &e))
+                    .or_else(|| unknown_params(config, generated, verilator, cache, &e))
                     .unwrap_or_else(|| Error::json_pass(&config.name, e, extra))
             })
     };
@@ -111,6 +112,84 @@ pub(crate) fn design_ir(
         design,
         wrapper: Some(wrapper),
         top: wrapper_top,
+    })
+}
+
+/// Verilator's diagnostics for a parameter override the design does not have (5.052): a
+/// `-G` on the command line, and a `#(.NAME(..))` in a generated top (`PINNOTFOUND`).
+const CMDLINE_PARAM_NOT_FOUND: &str = "Parameters from the command line were not found";
+const PARAM_NOT_FOUND: &str = ": Parameter not found: '";
+
+/// When the JSON pass failed because a [`crate::Dut::param`] names no parameter of the
+/// top module, the error that names it, the closest real one and all of them, instead of
+/// Verilator's message about the command line or about the generated top.
+///
+/// Why a second JSON pass: the failing pass wrote no IR, and the parameters are only in
+/// the IR. It runs only on this failure path, without the overrides (and for a DUT with
+/// interface ports, through the elaboration top, whose IR has the DUT as a submodule).
+/// When that pass fails too, or every `.param` exists (the mistake is in the sources or an
+/// interface binding), Verilator's error stands.
+fn unknown_params(
+    config: &DutConfig,
+    generated: &[PathBuf],
+    verilator: &Verilator,
+    cache: &Cache,
+    e: &svtypes::error::Error,
+) -> Option<Error> {
+    let svtypes::error::Error::Tool { stderr, .. } = e else {
+        return None;
+    };
+    // The user's top: the pass that failed may have been through a generated top.
+    let top = config.top.as_deref()?;
+    if config.params.is_empty()
+        || !(stderr.contains(CMDLINE_PARAM_NOT_FOUND) || stderr.contains(PARAM_NOT_FOUND))
+    {
+        return None;
+    }
+    let bare = DutConfig {
+        params: Vec::new(),
+        ..config.clone()
+    };
+    let design = match bare.iface_top() {
+        None => svtypes::verilator::json_pass(&bare.json_pass_opts(top, generated, &[], verilator)),
+        Some(iface) => {
+            let elab_top = codegen::elab_module(top);
+            let elab = cache
+                .store_input(&GeneratedInput {
+                    file_name: format!("{elab_top}.sv"),
+                    contents: codegen::emit_elab_top(&iface),
+                })
+                .ok()?;
+            let opts = bare.json_pass_opts(&elab_top, generated, &[elab], verilator);
+            svtypes::verilator::json_pass(&opts)
+        }
+    }
+    .ok()?;
+    let module = design.modules.iter().find(|m| m.orig_name == top)?;
+    let known: Vec<&str> = module
+        .params
+        .iter()
+        .map(|p| p.name.as_str())
+        .chain(module.unrepresentable.iter().map(|p| p.name.as_str()))
+        .collect();
+    let it_has = if known.is_empty() {
+        "it has no parameters".to_owned()
+    } else {
+        format!("it has {}", known.join(", "))
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for (name, _) in &config.params {
+        let line = format!(
+            "module `{top}` has no parameter `{name}`{} ({it_has})",
+            codegen::did_you_mean(name, known.iter().copied())
+        );
+        if !known.contains(&name.as_str()) && !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    (!lines.is_empty()).then(|| Error::Config {
+        dut: config.name.clone(),
+        msg: lines.join("\n"),
     })
 }
 

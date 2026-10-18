@@ -211,3 +211,49 @@ fn a_real_error_under_wall_is_not_buried_by_the_generated_top() {
     assert!(!err.contains("PINMISSING"), "{err}");
     assert!(!err.contains("hint: Verilator's lint warnings"), "{err}");
 }
+
+/// A `rate_limiter` with two parameters, and the same module behind an interface port.
+fn rate_limiter(s: &Sandbox, iface: bool) -> Dut {
+    let rtl = s.path().join("rl");
+    std::fs::create_dir_all(&rtl).unwrap();
+    let ports = if iface {
+        "tick_if.sink t, output logic y"
+    } else {
+        "input logic clk, output logic y"
+    };
+    let body = if iface { "t.v" } else { "clk" };
+    std::fs::write(
+        rtl.join("rl.sv"),
+        format!(
+            "interface tick_if; logic v; modport sink(input v); endinterface\n\
+             module rate_limiter #(parameter int BURST = 2, parameter int PERIOD = 4) \
+             ({ports});\n  assign y = {body};\nendmodule\n"
+        ),
+    )
+    .unwrap();
+    let d = Dut::new("rl_small")
+        .sources([rtl.join("rl.sv")])
+        .top("rate_limiter")
+        .param("PERIDO", 3);
+    if iface {
+        d.bind_iface("t", "tick_if.sink")
+    } else {
+        d
+    }
+}
+
+/// A misspelled `.param` names the module's parameters, not Verilator's message about the
+/// command line (`-G`) or the generated wrapper (`PINNOTFOUND`, located in the cache).
+#[test]
+fn a_misspelled_param_names_the_modules_parameters() {
+    for iface in [false, true] {
+        let s = Sandbox::new();
+        let err = rate_limiter(&s, iface).build_in(&s.env()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "invalid DUT `rl_small` configuration: module `rate_limiter` has no parameter \
+             `PERIDO`; did you mean `PERIOD`? (it has BURST, PERIOD)",
+            "interface port: {iface}"
+        );
+    }
+}

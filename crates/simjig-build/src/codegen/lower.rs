@@ -21,7 +21,7 @@ use svtypes::width::packed_storage;
 use self::sv::{LayoutSpeller, nameable};
 use self::types::{Root, Types, Use, bits, lower_types};
 use self::wrapper::dut_module;
-pub use self::wrapper::{elab_module, lower_wrapper, wrapper_module};
+pub use self::wrapper::{DUT_INSTANCE, elab_module, lower_wrapper, wrapper_module};
 use super::names::{Namespace, camel, screaming, snake};
 use super::{
     Access, Bundle, BundleMember, CodegenConfig, Const, ConstGroup, ConstValue, DutField, Error,
@@ -229,7 +229,7 @@ fn lower_signals(
         index += group;
     }
     for probe in &config.probes {
-        let (signal, name) = lower_probe(design, types, probe, slot(signals.len()))?;
+        let (signal, name) = lower_probe(design, types, probe, slot(signals.len()), wrapper)?;
         fields.push(DutField::Signal {
             name: fields_ns.claim(&snake(&name)),
             slot: signal.slot,
@@ -309,19 +309,28 @@ fn slot(index: usize) -> u32 {
 }
 
 /// One probe's signal, and the base of its field name (the path below the top).
+///
+/// The path starts at the DUT the testbench sees. For an interface-ported DUT that is the
+/// DUT module, not the wrapper Verilator elaborates as top: the wrapper is an
+/// implementation detail, so its name is rejected, and the path is rewritten under the
+/// wrapper's [`DUT_INSTANCE`] to find the C++ member.
 fn lower_probe(
     design: &Design,
     types: &Types,
     probe: &Probe,
     slot: u32,
+    wrapper: Option<&Wrapper>,
 ) -> Result<(Signal, String), Error> {
     let item = || format!("probe {}", probe.path);
-    let top = &design.top_module().orig_name;
     let segments: Vec<&str> = probe.path.split('.').collect();
-    if segments.len() < 2 || segments[0] != top {
+    let (what, dut) = match wrapper {
+        Some(w) => ("the DUT", w.dut.as_str()),
+        None => ("the top module", design.top_module().orig_name.as_str()),
+    };
+    if segments.len() < 2 || segments[0] != dut {
         return Err(Error::config(
             item(),
-            format!("the path must start with the top module, e.g. `{top}.u_core.state`"),
+            format!("the path must start with {what} `{dut}`, e.g. `{dut}.u_core.state`"),
         ));
     }
     if let Some(bad) = segments.iter().find(|s| !is_simple_ident(s)) {
@@ -348,7 +357,14 @@ fn lower_probe(
     }
     let storage: Storage = packed_storage(width).map_err(|e| Error::unsupported(item(), e.0))?;
     let var = segments[segments.len() - 1].to_owned();
-    let root_member = segments
+    let model_path: Vec<&str> = match wrapper {
+        Some(w) => [w.module.as_str(), DUT_INSTANCE]
+            .into_iter()
+            .chain(segments[1..].iter().copied())
+            .collect(),
+        None => segments.clone(),
+    };
+    let root_member = model_path
         .iter()
         .map(|s| encode_name(s))
         .collect::<Vec<_>>()

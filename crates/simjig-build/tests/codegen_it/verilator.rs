@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use simjig_build::codegen::{
-    Access, ConstValue, ItemKind, LAYOUT_CHECK_FLAGS, Lowered, ShimOptions, emit_layout_check,
-    emit_rust, emit_shim, emit_vlt, emit_wrapper, lower,
+    Access, ConstValue, DutField, ItemKind, LAYOUT_CHECK_FLAGS, Lowered, Probe, ProbeAccess,
+    ProbeType, ShimOptions, SignalTarget, emit_layout_check, emit_rust, emit_shim, emit_vlt,
+    emit_wrapper, lower,
 };
 
 use crate::cases::{self, Case};
@@ -99,6 +100,63 @@ fn iface_dut_parameters_become_dut_consts() {
     };
     assert_eq!(params, [("K", &three)]);
     assert!(emit_rust(&lowered).contains("pub const K: i32 = 3;"));
+}
+
+/// A probe below an interface-ported DUT is spelled from the DUT (`r_dut.u_core.acc`); the
+/// lowering finds it under the wrapper's `dut` instance, which Verilator then exposes.
+#[test]
+fn iface_dut_probes_are_spelled_from_the_dut() {
+    let mut case = cases::iface_param();
+    let probe = |path: &str| Probe {
+        path: path.into(),
+        module: "r_core".into(),
+        ty: ProbeType::Bits { width: 3 },
+        access: ProbeAccess::Read,
+    };
+    case.config.probes = vec![probe("r_dut.u_core.acc")];
+    let lowered = lower(&case.design, &case.config).unwrap();
+    let signal = lowered.signals.last().unwrap();
+    assert_eq!(signal.name, "r_dut.u_core.acc");
+    let SignalTarget::Probe { root_member, .. } = &signal.target else {
+        panic!("not a probe: {signal:?}")
+    };
+    assert_eq!(
+        root_member,
+        "simjig_wrap_r_dut__DOT__dut__DOT__u_core__DOT__acc"
+    );
+    assert!(matches!(
+        lowered.fields.last(),
+        Some(DutField::Signal { name, .. }) if name == "u_core_acc"
+    ));
+
+    // Verilator declares exactly that root member.
+    let dir = cases::scratch("iface_param_probe");
+    let vlt = dir.join("probes.vlt");
+    fs::write(&vlt, emit_vlt(&lowered)).unwrap();
+    let mdir = dir.join("obj");
+    let mut files = vec![vlt];
+    files.extend(case.sources.iter().cloned());
+    let out = verilator(
+        &[
+            "--cc",
+            "-Wno-fatal",
+            "--top-module",
+            &lowered.top,
+            "--prefix",
+            "Vp",
+            "--Mdir",
+            mdir.to_str().unwrap(),
+        ],
+        &files,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let root = fs::read_to_string(mdir.join("Vp___024root.h")).unwrap();
+    assert!(root.contains(&format!(" {root_member};")), "{root}");
+
+    // The wrapper's own name is an implementation detail and is rejected.
+    case.config.probes = vec![probe("simjig_wrap_r_dut.dut.u_core.acc")];
+    let err = lower(&case.design, &case.config).unwrap_err().to_string();
+    assert!(err.contains("must start with the DUT `r_dut`"), "{err}");
 }
 
 /// Damages a lowering the way a wrong IR would.

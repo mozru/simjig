@@ -18,6 +18,9 @@ use svtypes::ir::{Design, Direction, Module};
 use super::super::{Error, IfaceBinding, IfaceTop, Wrapper, WrapperIface, WrapperPort};
 use super::sv::{Mode, spell};
 
+/// The DUT's instance name inside the wrapper and the elaboration top.
+pub const DUT_INSTANCE: &str = "dut";
+
 /// The wrapper's module name.
 #[must_use]
 pub fn wrapper_module(dut: &str) -> String {

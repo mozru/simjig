@@ -303,3 +303,22 @@ fn a_queue_wake_of_a_cancelled_first_loser_goes_to_the_next_getter() {
     assert_eq!(out.unwrap(), ("ev", 7, 0));
     assert_clean(&d.sim);
 }
+
+/// A capacity of 0 is unbounded, as cocotb's `Queue(maxsize=0)`: `put` never waits.
+#[test]
+fn a_queue_of_capacity_zero_is_unbounded() {
+    let mut d = dut();
+    d.sim
+        .run(async move {
+            let q = Queue::new("unbounded", 0);
+            for i in 0..1000 {
+                q.put(i).await;
+            }
+            assert_eq!(now().ticks(), 0, "no put waited");
+            assert_eq!(q.try_put(1000), Ok(()));
+            assert_eq!((q.len(), q.capacity()), (1001, 0));
+            assert_eq!(q.get().await, 0);
+        })
+        .unwrap();
+    assert_clean(&d.sim);
+}

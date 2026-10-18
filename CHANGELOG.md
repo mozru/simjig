@@ -4,6 +4,8 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `Queue::new(name, 0)` is an unbounded queue (`put` never waits), as cocotb's
+  `Queue(maxsize=0)`; it panicked. `Queue::capacity` is 0 for it.
 - `with_timeout(..).await?` works in a test returning `simjig::Result`: `Failure`
   implements `From<Elapsed>`, as the new `FailureKind::Timeout { after }`, a failure of
   the awaiting task at the time the timeout elapsed. Breaking: `Elapsed` is

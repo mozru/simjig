@@ -24,7 +24,6 @@
 //! More than [`DELTA_MAX`] evals in one timestep is a `DeltaLimit` failure.
 
 use super::backend::EvalStatus;
-use super::clock::ClockState;
 use super::failure::{BlockedTask, FailureKind};
 use super::recorder::TraceKind;
 use super::signal::{self, Writer};
@@ -48,13 +47,13 @@ fn wake_from(k: &Kernel, fire: impl FnOnce(&mut WaitTable, &mut Vec<Wake>)) {
 
 /// Runs timesteps until the main task completes, a failure is recorded, or time cannot
 /// advance.
-pub(crate) fn run_loop(k: &Kernel, clocks: &mut [ClockState], limit: Option<SimTime>) {
+pub(crate) fn run_loop(k: &Kernel, limit: Option<SimTime>) {
     loop {
-        step(k, clocks);
+        step(k);
         if stopped(k) {
             return;
         }
-        let Some(next) = next_time(k, clocks) else {
+        let Some(next) = next_time(k) else {
             if !k.failed() {
                 report_blocked(k);
             }
@@ -74,7 +73,7 @@ pub(crate) fn run_loop(k: &Kernel, clocks: &mut [ClockState], limit: Option<SimT
     }
 }
 
-fn step(k: &Kernel, clocks: &mut [ClockState]) {
+fn step(k: &Kernel) {
     let t = k.now.get();
     k.model.borrow_mut().set_time(t);
     k.record(TraceKind::Step, None, 0, 0);
@@ -83,9 +82,15 @@ fn step(k: &Kernel, clocks: &mut [ClockState]) {
     wake_from(k, WaitTable::fire_next_step);
     run_ready(k);
     wake_from(k, |w, out| w.fire_time(t, out));
-    for clock in clocks.iter_mut().filter(|c| c.next_time == t) {
-        let level = clock.take_edge();
-        signal::write(k, clock.slot, &[level], Writer::Clock, None);
+    let edges: Vec<(u32, u32)> = k
+        .clocks
+        .borrow_mut()
+        .iter_mut()
+        .filter(|c| c.next_time == t)
+        .map(|c| (c.slot, c.take_edge()))
+        .collect();
+    for (slot, level) in edges {
+        signal::write(k, slot, &[level], Writer::Clock, None);
     }
     run_ready(k);
 
@@ -212,10 +217,10 @@ fn apply_and_compare(k: &Kernel) -> bool {
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next
 /// event at or before now is a failure (and also yields `None`).
-fn next_time(k: &Kernel, clocks: &[ClockState]) -> Option<SimTime> {
+fn next_time(k: &Kernel) -> Option<SimTime> {
     let now = k.now.get();
     let mut next = k.waits.borrow().next_timer();
-    for clock in clocks {
+    for clock in k.clocks.borrow().iter() {
         next = Some(next.map_or(clock.next_time, |n| n.min(clock.next_time)));
     }
     let model_next = {

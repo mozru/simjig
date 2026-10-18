@@ -43,7 +43,6 @@ use super::time::{Precision, SimTime};
 /// ```
 pub struct Sim {
     kernel: Rc<Kernel>,
-    clocks: Vec<ClockState>,
     time_limit: Option<SimTime>,
     ran: bool,
 }
@@ -53,7 +52,7 @@ impl fmt::Debug for Sim {
         f.debug_struct("Sim")
             .field("sim", &self.kernel.sim_gen)
             .field("now", &self.kernel.now.get())
-            .field("clocks", &self.clocks.len())
+            .field("clocks", &self.kernel.clocks.borrow().len())
             .finish_non_exhaustive()
     }
 }
@@ -68,7 +67,6 @@ impl Sim {
     pub(crate) fn from_backend(model: Box<dyn ModelBackend>) -> Self {
         Self {
             kernel: Rc::new(Kernel::new(model)),
-            clocks: Vec::new(),
             time_limit: None,
             ran: false,
         }
@@ -107,13 +105,14 @@ impl Sim {
         );
         let slot = sig.slot() as usize;
         let name = &self.kernel.names[slot];
-        if self.clocks.iter().any(|c| c.slot == sig.slot()) {
+        let mut clocks = self.kernel.clocks.borrow_mut();
+        if clocks.iter().any(|c| c.slot == sig.slot()) {
             return Err(ClockError::AlreadyClocked {
                 signal: name.to_string(),
             });
         }
         let state = ClockState::new(&clock, self.kernel.widths[slot], name)?;
-        self.clocks.push(state);
+        clocks.push(state);
         Ok(())
     }
 
@@ -148,7 +147,7 @@ impl Sim {
         let capture = panics::capture();
         let mut main = tasks::spawn_in(&k, None, "main", main);
         k.main.set(main.key());
-        sched::run_loop(&k, &mut self.clocks, self.time_limit);
+        sched::run_loop(&k, self.time_limit);
         let result = main.take_result(&k);
         k.phase.set(Phase::Ended);
         drop(main);

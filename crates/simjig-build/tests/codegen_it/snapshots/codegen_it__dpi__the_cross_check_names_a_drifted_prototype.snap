@@ -1,0 +1,5 @@
+---
+source: crates/simjig-build/tests/codegen_it/dpi.rs
+expression: mismatch.message
+---
+DPI-C import `ty_ints`: Verilator declares `int ty_ints(char b, short s, int i, long long l, unsigned char ub, unsigned short us, unsigned int ui, unsigned long long ul, int* sum)`, but simjig's trampoline implements `int ty_ints(char b, short s, int i, long long l, unsigned char ub, unsigned short us, unsigned int ui, unsigned long long ul, long long* sum)`

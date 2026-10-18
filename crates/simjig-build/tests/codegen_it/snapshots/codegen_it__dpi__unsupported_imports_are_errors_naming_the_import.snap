@@ -1,0 +1,8 @@
+---
+source: crates/simjig-build/tests/codegen_it/dpi.rs
+expression: "errors.join(\"\\n\")"
+---
+codegen: DPI-C import `f_unsupported` (design.sv:29): unsupported: argument `s` has type `string`; simjig implements DPI-C arguments and results of type bit, logic, bit and logic vectors up to 64 bits, byte, shortint, int, longint (each also unsigned) and chandle
+codegen: DPI-C import `f_vectors` (design.sv:21): unsupported: argument `v65` has type `bit [64:0]` (65 bits); simjig implements DPI-C arguments and results of type bit, logic, bit and logic vectors up to 64 bits, byte, shortint, int, longint (each also unsigned) and chandle
+codegen: DPI-C import `f_scalars` (design.sv:19): unsupported: the result has type `logic [7:0]` (8 bits); a DPI-C result is bit, logic, byte, shortint, int, longint (each also unsigned), chandle, or a bit vector of at most 32 bits (IEEE 1800-2023 §35.5.5)
+codegen: DPI-C import `f_void` (design.sv:26): unsupported: the C name `self` cannot be a Rust function name; give the import a C alias (`import "DPI-C" other_name = function ...`)

@@ -82,7 +82,10 @@ pub fn codegen_emitter(design: &Design, config: &DutConfig) -> Result<Emitted, E
         timing: config.timing,
     };
     Ok(Emitted {
-        rust: Some(codegen::emit_rust(&lowered)),
+        rust: Some(
+            codegen::emit_rust(&lowered)
+                + &codegen::emit_dpi(design, &lowered, &opts.prefix).map_err(fail)?,
+        ),
         shim_cpp: Some(codegen::emit_shim(&lowered, &opts).map_err(fail)?),
         vlt: Some(codegen::emit_vlt(&lowered)),
         layout_check: Some(SvModule {

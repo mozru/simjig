@@ -14,6 +14,7 @@
 //! generated Rust disagree).
 #![deny(unsafe_code)]
 
+pub mod fork;
 mod harness;
 mod kernel;
 mod model;

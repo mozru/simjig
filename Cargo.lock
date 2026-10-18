@@ -506,6 +506,7 @@ name = "simjig"
 version = "0.0.0"
 dependencies = [
  "insta",
+ "libc",
  "proptest",
  "serde_json",
  "simjig-bits",

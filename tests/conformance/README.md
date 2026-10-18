@@ -54,6 +54,20 @@ python tests/conformance/show.py golden/timer.jsonl # print a log as a table
 | `written_join` | comb_chain | the same for two inputs written in one delta |
 | `edge_kinds` | counter | `ValueChange(clk)`, `RisingEdge(clk)` and `ClockCycles` on one signal are separate callbacks |
 | `combinator_hop` | counter | `First`, `Combine` and `with_timeout` resume their caller after the tasks the same callback woke |
+| `loser_scheduled` | counter | a `First` operand woken by a task the edge woke loses to one the edge woke, even when it is the left operand |
+| `nested_combinators` | counter | `First` of a `Combine`, `Combine` of a `First`, `First` of a `First` |
+| `timeout_combinators` | counter | `with_timeout` around a `First` and around a `Combine` |
+| `cycles_join` | counter | `ClockCycles` awaited from a `ValueChange(clk)` wake joins the `RisingEdge(clk)` callback |
+| `rise_changed` | counter | one task alternating `RisingEdge`, `ValueChange` and `FallingEdge` of `clk` among others looping on one kind |
+| `many_kinds` | counter | 24 tasks cycling through the three edge kinds of `clk`, with an `Event` set in between |
+| `primed_walk` | counter | callbacks registered during a walk (`ValueChange(count)` from a `clk` wake) and joined later |
+| `spawned_combinators` | counter | `First`, `Combine`, `with_timeout` and a plain wait in spawned tasks, decided by an `Event` set in the edge callback |
+| `sync_losers` | counter | `First` losers waiting on an `Event`, a `Lock` and a `Queue`: cancelled while waiting, they take nothing from later waiters |
+| `cancelled_nest` | counter | a `First` whose losing operand is a waiting `Combine`: the caller resumes three hops after the edge |
+| `event_ready` | counter | `Event.wait()` on a set Event resumes one hop later, after the tasks already queued, even if the Event is cleared meanwhile; on a cleared one, after the tasks woken before `set`; inside a `First` |
+| `lock_ready` | counter | `Lock.acquire()` on a free Lock takes it at once and resumes one hop later; a released Lock goes to the oldest waiter, which resumes after the tasks already queued |
+| `queue_get_ready` | counter | `Queue.get()` on a non-empty queue takes no hop; a task that runs before a woken getter takes its item, and the getter waits again behind the others |
+| `queue_put_ready` | counter | the same for `Queue.put()` on a non-full queue and a woken putter |
 
 ## Log format
 JSON Lines: one compact JSON object per line (`json.dumps(..., separators=(",", ":"))`),
@@ -211,30 +225,57 @@ application that follows it):
 - `ClockCycles(s, n)` awaits the one `RisingEdge(s)` trigger `n` times, inline in the
   awaiting task, so it joins like a plain `RisingEdge` (`edge_kinds` 45 ns).
 
-- **`First`, `Combine` and `with_timeout` resume their caller late.** They await each
-  operand in a helper task (`_wait` in `_concurrent_waiters.py`, started with
-  `_start_next`, so the helpers register before tasks started earlier but not yet run)
-  and wake the caller through an internal event. When the deciding helper finishes, the
-  caller is scheduled behind every task already queued: for `Combine` (and a `First`
-  whose losers have all finished) that is one hop; `First` and `with_timeout` (`select`)
-  first cancel a loser still waiting by scheduling it once more, and the caller is
-  scheduled when that loser finishes, a second hop. So the caller resumes after the tasks
-  the same callback woke directly (`combinator_hop` at 25 and 35 ns), and after the tasks
-  those wake when a loser was cancelled: an `Event` set by such a task wakes its waiter
-  before the caller of `First` (45 ns) and `with_timeout` (65 ns), after the caller of
-  `Combine` (55 ns). simjig polls the operands inline and yields once, or twice when
-  dropping the losers cancelled a pending wait (`kernel::combinator::hop`).
+- **`First`, `Combine` and `with_timeout` run each operand in a helper task**
+  (`_wait` in `_concurrent_waiters.py`; `with_timeout(x, t)` is `select(Timer(t), x)`).
+  The helpers are started with `_start_next`, at the front of the queue in operand order,
+  so they register before tasks started earlier but not yet run. The caller awaits an
+  internal event set when the **last** helper finishes, which schedules it at the back.
+  `First` and `select` are decided by the helper that **finishes first in run order**,
+  not by the leftmost operand: an operand woken by a task that the same callback woke
+  earlier (an `Event` it sets) loses to an operand the callback woke directly
+  (`loser_scheduled`, both rounds). The decider cancels the other helpers (`Task.cancel()`):
+  one waiting on a trigger is deregistered at once and scheduled at the back; one already
+  scheduled finishes cancelled at its place. So the caller resumes after the tasks the
+  callback woke directly (`combinator_hop` 25 and 35 ns) and, when a loser was still
+  waiting, after the tasks those wake before the loser's cancellation runs (45 and 65 ns;
+  `Combine` has no loser, 55 ns). A cancelled helper whose operand is itself a waiting
+  combinator cancels that combinator's helpers when it runs and reschedules itself
+  (`NullTrigger`) until they have finished: one more hop each (`cancelled_nest`).
+  Combinators in spawned tasks follow the same rules (`spawned_combinators`).
 
+simjig runs combinator operands the same way: each operand of `first!`, `join!` and
+`with_timeout` is an internal helper task (`kernel::combinator`), queued, decided and
+cancelled as above. Helpers have no name and no handle, and never appear in reports.
 simjig mirrors this with one wait group per (signal, edge kind), ordered by the
 registration that primed it (`kernel::waits`, "Value-change groups"), and a walk that runs
 tasks to quiescence after each group that fires (`kernel::sched::fire_value_changes`).
+
+### Event, Lock and Queue
+- **`Event.wait()` on a set Event and `Lock.acquire()` on a free Lock take one hop.**
+  `_Event._prime` and `Lock._prime_lock` fire the trigger while it is primed, which
+  schedules the task at the back: it resumes after the tasks already queued (`event_ready`
+  15 ns, `lock_ready` 15 ns), and still resumes if the Event is cleared meanwhile. The
+  Lock is taken at that moment, so a task that runs in between sees `locked()` true.
+- A set or a release schedules the waiter at the back too, after the tasks queued before
+  it (`event_ready` 25 ns, `lock_ready` 17 and 25 ns). Inside a `First`, the hop is the
+  helper's (`event_ready` 35 ns).
+- **`Queue.get()` on a non-empty queue and `Queue.put()` on a non-full one take no hop**:
+  they await nothing (`queue_get_ready` and `queue_put_ready` 15 ns).
+- **A woken getter (putter) can lose its item (slot)** to a task that runs before it:
+  `put_nowait` wakes the oldest getter, which loops on `while self.empty()`, while a task
+  scheduled earlier calls `get()` and takes the item without waiting; the woken getter
+  waits again, last in line (`queue_get_ready` 25 and 27 ns; `queue_put_ready` 25 to 31 ns).
+
+simjig matches all of these (`kernel::sync`).
 
 ### Further rules, confirmed but not in a golden
 Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel_tests`).
 - `NextTimeStep` waiters resume before that time step's `Timer` waiters (step 1 above;
   `phases::next_time_step_resumes_at_the_next_scheduled_time_before_timers`).
-- `First` of edges that fire in the same comparison goes to the **leftmost** operand
-  (`phases::first_of_coincident_edges_goes_to_the_leftmost_operand`).
+- `First` of edges that fire in the same comparison goes to the operand whose edge
+  trigger was primed first: with fresh triggers that is the leftmost, since the helpers
+  register in operand order
+  (`phases::first_of_coincident_edges_goes_to_the_trigger_primed_first`).
 - A bus that changes and changes back within one time step, in two deltas, fires
   `ValueChange` **twice** (`phases::a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice`).
 - A task woken from a `ReadOnly` waiter (an `Event` set, a `Queue` put) runs in that
@@ -246,19 +287,34 @@ Each is pinned by a simjig test against `FakeModel` (`crates/simjig/tests/kernel
   (`timing::a_timer_resumes_before_the_designs_event_at_the_same_time`).
 
 ### Known differences from cocotb
-Deliberate, each with the reason:
+Each with the reason; all are deliberate:
+- **A `Task` passed by value to `with_timeout`/`first!`/`join!` is cancelled** when the
+  combinator drops it (a timeout, or losing a `first!`), because dropping a `Task` cancels
+  it. cocotb keeps a Task operand running ("the callee continues to run"). To keep it
+  running, pass `&mut task`, which matches cocotb byte for byte (review cycle 5, scenario
+  `r5_task_operand`).
 - **`Timer` of zero ticks** is rejected when it is first **awaited** (a `TaskPanic` naming
   the line that built it); cocotb raises `ValueError` when `Timer(0)` is **built**.
   `Timer::new` is a `const fn`, which can neither report a run failure nor put the call
   site in the message, and a `Timer` may be built before the run starts
   (`phases::trigger_misuse_points_at_the_line_that_made_the_trigger`).
-- **Combinator operand bodies run in the caller.** cocotb runs each operand of `First`,
-  `Combine` and `with_timeout` in its own helper task, so a multi-step operand (a
-  coroutine that awaits several triggers) resumes at its helper's place in the event loop;
-  simjig polls every operand when the caller is woken. The caller's own resumption point
-  matches cocotb ("Callback order"); code *inside* an operand that runs between two of its
-  awaits may run earlier or later relative to other tasks woken by the same trigger. No
-  golden exercises it.
+- **Cancellation cleanup runs when the operand is cancelled.** simjig cancels by dropping
+  the operand's future, at the moment cocotb deregisters a waiting helper; its `Drop`
+  code runs then. cocotb throws `CancelledError` into the helper when it next runs, so its
+  `finally` blocks run one hop later, after the tasks queued before it (seen in an
+  experiment). The order of the helpers and the caller is the same (`kernel::combinator`;
+  `cancel::a_cancelled_losers_drop_cleanup_runs_when_it_is_cancelled`).
+- **A `Lock` or `Queue` wake granted to a cancelled loser is passed on.** A `First` loser
+  can be granted what it waits for and cancelled before it resumes: a `Lock` it acquired
+  (free when awaited, so during its hop, or released to it in the callback that decides
+  the `First`), or a `Queue.get()` (`put()`) woken by a `put` (`get`). cocotb throws
+  `CancelledError` into it: the Lock stays held by the cancelled helper and nobody can
+  acquire it again, and the Queue wake is lost, so the next getter never gets the item
+  (both seen in experiments). simjig releases the lock to the next waiter and passes the
+  wake on (`sync::a_lock_taken_by_a_cancelled_first_loser_is_released`,
+  `sync::a_queue_wake_of_a_cancelled_first_loser_goes_to_the_next_getter`,
+  `sync::lock_is_granted_in_arrival_order_and_passed_on_by_a_cancelled_waiter`). A loser
+  cancelled while still waiting takes nothing in either (`sync_losers`).
 
 ### Simulation end
 The simulation ends when no timed callback and no `--timing` event is left. A test that

@@ -7,7 +7,8 @@
 //! - `waits` and `trigger`: trigger registrations and the trigger futures;
 //! - `signal`: `RawSig` handles and the write log;
 //! - `clock`: kernel-owned clocks; `time`: ticks and checked durations;
-//! - `sync`: `Event`, `Lock`, `Queue`; `combinator`: `join!`, `first!`;
+//! - `sync`: `Event`, `Lock`, `Queue`; `combinator`: `join!`, `first!`, `with_timeout`,
+//!   whose operands run as helper tasks;
 //! - `failure`, `recorder`: failures as data and the flight recorder; `panics`: where a
 //!   task (or, through `panics::take`, a DPI-C import) panicked;
 //! - `state`: the kernel struct and the thread-local current kernel;

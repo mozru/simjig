@@ -1,0 +1,17 @@
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"rst","value":1}
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"en","value":1}
+{"time":10000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"rst","value":0}
+{"time":15000,"phase":"active","trigger":"RisingEdge(clk)","task":"b","op":"note","signal":"locked","value":"True"}
+{"time":15000,"phase":"active","trigger":"RisingEdge(clk)","task":"b","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"RisingEdge(clk)","task":"b","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"Lock.acquire()","task":"a","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"Lock.acquire()","task":"a","op":"read","signal":"count","value":0}
+{"time":17000,"phase":"active","trigger":"Timer(2ns)","task":"a","op":"note","signal":"locked","value":"True"}
+{"time":17000,"phase":"active","trigger":"Lock.acquire()","task":"c","op":"read","signal":"clk","value":1}
+{"time":17000,"phase":"active","trigger":"Lock.acquire()","task":"c","op":"read","signal":"count","value":1}
+{"time":25000,"phase":"active","trigger":"RisingEdge(clk)","task":"main","op":"read","signal":"clk","value":1}
+{"time":25000,"phase":"active","trigger":"RisingEdge(clk)","task":"main","op":"read","signal":"count","value":1}
+{"time":25000,"phase":"active","trigger":"RisingEdge(clk)","task":"r","op":"read","signal":"clk","value":1}
+{"time":25000,"phase":"active","trigger":"RisingEdge(clk)","task":"r","op":"read","signal":"count","value":1}
+{"time":25000,"phase":"active","trigger":"Lock.acquire()","task":"w","op":"read","signal":"clk","value":1}
+{"time":25000,"phase":"active","trigger":"Lock.acquire()","task":"w","op":"read","signal":"count","value":1}

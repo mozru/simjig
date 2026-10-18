@@ -28,15 +28,16 @@
 use std::fmt;
 use std::future::Future;
 use std::panic::Location;
-use std::pin::{Pin, pin};
+use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::combinator::hops;
+use super::combinator::{Fork, MaybeDone};
 use super::panics;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
+use super::tasks;
 use super::time::{SimDuration, SimTime};
-use super::waits::{EdgeKind, Registration, WaitOn, cancelled_waits};
+use super::waits::{EdgeKind, Registration, WaitOn};
 
 /// Shared poll logic: register on first poll, then complete once fired.
 ///
@@ -308,8 +309,15 @@ pub const fn yield_now() -> YieldNow {
 impl Future for YieldNow {
     type Output = ();
 
+    // One hop (cocotb's `NullTrigger`, or any trigger that fires as it is primed): the
+    // first poll queues the task at the back; the hop ends in the next run of the task (or
+    // helper) that awaits it. A hand-written combinator in the task's future may poll it
+    // again in a run routed to one of the task's combinator helpers (`combinator`); that
+    // is not the task's own run and must not end the hop early. Waking again there is a
+    // no-op while the task is queued, and requeues it if it already ran.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.yielded {
+        let own_run = state::try_current("yield_now()", tasks::runs_owner).unwrap_or(true);
+        if self.yielded && own_run {
             return Poll::Ready(());
         }
         self.yielded = true;
@@ -346,22 +354,21 @@ impl fmt::Display for Elapsed {
 
 impl std::error::Error for Elapsed {}
 
-/// Runs `future` for at most `duration`; on timeout it is dropped (cancelled).
+/// Runs `future` for at most `duration`; on timeout it is cancelled (dropped).
 ///
-/// Ties break as in cocotb 2.1, whose `with_timeout` is `select(Timer(timeout), trigger)`
-/// with the timeout's Timer armed first (golden `timeout_ties`):
+/// This is cocotb 2.1's `with_timeout`, `select(Timer(timeout), trigger)`: a
+/// [`first!`](crate::first) of the timeout's Timer and `future`, each in a helper task, the
+/// Timer's first. Ties break as in cocotb (golden `timeout_ties`):
 /// - the timeout's Timer registers before anything `future` waits on, and Timers due at
 ///   the same time fire one at a time in registration order, so a `Timer` (inline, or in a
 ///   task spawned just before) due when the timeout is loses to it;
 /// - Timers resume before that timestep's edges, so an edge or `cycles` due when the
 ///   timeout is loses too;
 /// - a spawned task whose own Timer was registered *before* the timeout's finishes first
-///   (it runs, with what it wakes, before the timeout's Timer fires), so its result wins;
-/// - if both are ready in the same poll, the timeout wins.
+///   (it runs, with what it wakes, before the timeout's Timer fires), so its result wins.
 ///
-/// The caller resumes where cocotb's `select` resumes it: after the other tasks ready when
-/// the deciding side completed, and after one more hop for cancelling the side still
-/// waiting (`combinator::hop`, golden `combinator_hop`).
+/// The caller resumes where cocotb's `select` resumes it: once the cancelled side has
+/// finished too (see `kernel::combinator`, golden `combinator_hop`).
 ///
 /// # Errors
 /// [`Elapsed`] if the timeout expired first.
@@ -372,23 +379,14 @@ pub async fn with_timeout<T>(
     duration: SimDuration,
     future: impl Future<Output = T>,
 ) -> Result<T, Elapsed> {
-    // In `Option`s so both can be dropped, cancelling the loser, before the hops.
-    let mut future = pin!(Some(future));
-    let mut timer = Some(Timer::new(duration));
-    let out = std::future::poll_fn(|cx| {
-        let (Some(t), Some(f)) = (timer.as_mut(), future.as_mut().as_pin_mut()) else {
-            unreachable!("invariant: with_timeout drops its operands only once decided")
-        };
-        // The timer first, so it registers before anything `future` waits on: see above.
-        if Pin::new(t).poll(cx).is_ready() {
-            return Poll::Ready(Err(Elapsed { after: duration }));
-        }
-        f.poll(cx).map(Ok)
-    })
-    .await;
-    let before = cancelled_waits();
-    future.set(None);
-    drop(timer.take());
-    hops(cancelled_waits() != before).await;
-    out
+    let mut timer = MaybeDone::new(Timer::new(duration));
+    let mut inner = MaybeDone::new(future);
+    let mut fork = Fork::first();
+    let decided = std::future::poll_fn(|cx| fork.poll([&mut timer, &mut inner], cx)).await;
+    drop(fork);
+    if decided == 0 {
+        Err(Elapsed { after: duration })
+    } else {
+        Ok(inner.take())
+    }
 }

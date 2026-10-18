@@ -42,6 +42,8 @@
    was started first. If simjig uses declaration order, `two_clocks` will not match line
    for line. Either the Rust diff compares per-task streams for that scenario, or the
    kernel mimics priming order. The director needs to decide.
+   **Resolved:** the kernel mimics priming order, one trigger group at a time; see the
+   conformance README, "Callback order" (`tests/conformance/README.md`).
 6. cocotb's Verilator runner and Makefile **default `COCOTB_TRUST_INERTIAL_WRITES=1`**,
    so a plain `os.environ.pop` does not give mode 0. `regen.py` pins it explicitly. With
    mode 0, only `ReadWrite` visibility changes (see the README).
@@ -75,5 +77,6 @@
 ## Not verified
 - linux-64 and linux-aarch64 runs (only osx-arm64 was run). The lock resolves for all
   three platforms.
-- The cause of the coincident-edge wake order (surprise 5) is a hypothesis.
+- The cause of the coincident-edge wake order (surprise 5) was a hypothesis; it is now
+  confirmed (conformance README, "Callback order").
 - `fatal` with `AT_START` (time 0) under cocotb: only linted, not run.

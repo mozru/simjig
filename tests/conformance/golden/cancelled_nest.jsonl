@@ -1,0 +1,17 @@
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"rst","value":1}
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"en","value":1}
+{"time":10000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"rst","value":0}
+{"time":15000,"phase":"active","trigger":"RisingEdge(clk)","task":"f_task","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"RisingEdge(clk)","task":"f_task","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z1","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z1","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z2","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z2","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z3","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z3","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"First","task":"main","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"First","task":"main","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z4","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z4","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z5","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z5","op":"read","signal":"count","value":0}

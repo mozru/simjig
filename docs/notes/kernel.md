@@ -7,9 +7,9 @@ Code: `crates/simjig/src/kernel.rs` and `crates/simjig/src/kernel/`. Tests:
 Per timestamp, as in cocotb 2.1's `verilator.cpp` with trusted inertial writes:
 1. timed region: `set_time`; wake `NextTimeStep`, run; wake `Timer`s due now and log the
    kernel clocks' edges (writer = clock, declaration order), run;
-2. delta loop: `eval`; apply the write log; compare watched slots against the previous
-   comparison and wake in registration order; run tasks; stop after an iteration that
-   applied nothing;
+2. delta loop: `eval`; apply the write log; fire the value-change groups whose edge
+   happened, one at a time, running tasks after each (wake order: the conformance README,
+   "Callback order", which is normative); stop after an iteration that applied nothing;
 3. `ReadWrite` region: wake, run, apply + compare + run; if anything was applied, go back to 2;
 4. `ReadOnly` region: wake, run; any write is a failure;
 5. advance to min(timer wheel, clocks, `next_time_slot()` if `events_pending()`).
@@ -56,8 +56,9 @@ show the model's initial values.
   model agent's `model/raw.rs` will need the same opt-out.
 - The workspace denies `expect`; the kernel uses an internal `OrInvariant::or_invariant`
   (panics with the violated invariant) instead of one `#[expect]` per call.
-- `join!` boxes each operand and `first!` requires one output type (returns it); both
-  poll left to right.
+- `join!` and `first!` box each operand; `first!` requires one output type (returns it).
+  Each operand runs in an internal helper task, as in cocotb (`kernel::combinator`; the
+  conformance README, "Callback order").
 
 ## Why not simpler (constitution rule 5)
 - **Raw waker (`unsafe`)**: the data word packs `sim_gen:32 | task index:16 | gen:16`; no
@@ -159,8 +160,8 @@ workaround still works and now agrees with the kernel's.
   log, waits and clocks are unchanged; `RawSig` is `(sim, model, local slot)` and resolves
   to the flat slot in `RawSig::with`.
 - Every delta evals all models in declaration order (stopping at the first failing one),
-  then applies the log; watched-signal diffs cover all models and wake in arm order across
-  models (tested). Models must share one precision (`ModelSetError::PrecisionMismatch`).
+  then applies the log; value-change groups cover all models and fire in priming order
+  across models (tested; order rules: the conformance README, "Callback order"). Models must share one precision (`ModelSetError::PrecisionMismatch`).
 - Failure messages name the model ("model 1: ...") only when there are several.
 - The trait documents that each backend switches `Verilated::threadContextp` (and its
   `$urandom` state) itself in `eval` and any call that runs model code.

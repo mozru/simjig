@@ -77,6 +77,11 @@ pub(crate) struct Kernel {
     pub(crate) ready: RefCell<ReadyQueue>,
     /// The task being polled or dropped, which owns writes, spawns and registrations.
     pub(crate) current: Cell<Option<Key>>,
+    /// Whose code is running inside `current`'s poll: `current` itself, or the
+    /// combinator helper whose operand is being polled (`combinator`).
+    pub(crate) context: Cell<Option<Key>>,
+    /// The helper this poll of `current` runs, if it was woken through a helper.
+    pub(crate) route: Cell<Option<Key>>,
     pub(crate) main: Cell<Option<Key>>,
     pub(crate) main_done: Cell<bool>,
     pub(crate) waits: RefCell<WaitTable>,
@@ -178,6 +183,8 @@ impl Kernel {
             tasks: RefCell::new(TaskTable::default()),
             ready: RefCell::new(ReadyQueue::default()),
             current: Cell::new(None),
+            context: Cell::new(None),
+            route: Cell::new(None),
             main: Cell::new(None),
             main_done: Cell::new(false),
             failure: RefCell::new(None),
@@ -308,11 +315,13 @@ pub(crate) fn retired_name(sim_gen: u32, model: usize, slot: u32) -> Option<Box<
 
 /// Installs `kernel` as current until the guard drops.
 pub(crate) fn install(kernel: Rc<Kernel>) -> InstallGuard {
-    CURRENT.with_borrow_mut(|c| {
-        assert!(
-            c.is_none(),
-            "Sim::run cannot be nested inside another Sim::run"
-        );
+    // `try_borrow_mut`: a combinator polls its operands while it borrows the kernel, so a
+    // nested run inside one finds the cell borrowed rather than set.
+    CURRENT.with(|cell| {
+        let installed = cell.try_borrow_mut().ok().filter(|c| c.is_none());
+        let Some(mut c) = installed else {
+            panic!("Sim::run cannot be nested inside another Sim::run")
+        };
         *c = Some(kernel);
     });
     InstallGuard(())

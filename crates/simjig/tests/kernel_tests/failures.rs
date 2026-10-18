@@ -444,3 +444,27 @@ fn a_panicking_fake_model_closure_is_a_model_fatal() {
     );
     assert_clean(&sim);
 }
+
+#[test]
+fn a_run_nested_inside_a_combinator_operand_is_refused_by_name() {
+    // A combinator polls its operands while it holds the current kernel; a nested run
+    // still fails with the "cannot be nested" message, not a borrow error.
+    let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
+    let f = sim
+        .run(async {
+            simjig::first!(
+                async {
+                    let mut inner = Sim::from_fake(FakeModel::new(Precision::NS));
+                    drop(inner.run(async {}));
+                },
+                Timer::new(ticks(5))
+            );
+        })
+        .unwrap_err();
+    assert!(matches!(f.kind, FailureKind::TaskPanic { .. }), "{f}");
+    assert!(
+        f.message
+            .contains("Sim::run cannot be nested inside another Sim::run"),
+        "{f}"
+    );
+}

@@ -36,7 +36,7 @@ fn writes_are_deposits_visible_only_after_application() {
 }
 
 #[test]
-fn edge_waiters_wake_in_registration_order_across_signals() {
+fn edge_waiters_wake_in_priming_order_across_signals() {
     // Two clocks with coincident edges at 0, 20, 40...: the group primed first fires first,
     // whatever the clock declaration order (golden two_clocks).
     let mut m = FakeModel::new(Precision::NS);
@@ -300,10 +300,10 @@ fn a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice() {
 
 #[test]
 fn combinators_resume_their_caller_after_the_tasks_the_same_edge_woke() {
-    // Golden combinator_hop. Per round, the caller's combinator registers on rising(x)
-    // before f does; f sets an Event z waits on. `first!` and `with_timeout` cancel a
-    // waiting loser (the Timer), one hop more than `join!`: z runs before their caller,
-    // after the caller of `join!`.
+    // Golden combinator_hop. Per round, the caller's helper registers on rising(x) before f
+    // does; f sets an Event z waits on. `join!`'s caller is woken by its last helper, right
+    // after f; `first!` and `with_timeout` first cancel their waiting loser (the Timer),
+    // whose helper is queued behind z, and the caller is woken only when it finishes.
     let (mut sim, x, _) = two_bits();
     let trace: Trace = Rc::default();
     let shared = Rc::clone(&trace);
@@ -362,7 +362,112 @@ fn combinators_resume_their_caller_after_the_tasks_the_same_edge_woke() {
 }
 
 #[test]
-fn first_of_coincident_edges_goes_to_the_leftmost_operand() {
+fn first_goes_to_the_helper_that_finishes_first_not_the_leftmost_operand() {
+    // Golden loser_scheduled: t waits on rising(x) before the caller's `first!` does, and
+    // sets ev. The edge wakes t, then the `rising` helper; ev's helper is woken by t, so
+    // it is queued behind the `rising` helper and loses although it is the left operand.
+    let (mut sim, x, _) = two_bits();
+    let won = sim.run(async move {
+        let ev = Event::new("ev");
+        let set = ev.clone();
+        let t = spawn("t", async move {
+            rising(x).await;
+            set.set();
+        });
+        let writer = spawn("w", async move {
+            Timer::new(ticks(1)).await;
+            x.write_u64(1);
+        });
+        yield_now().await; // t registers first
+        let won = first!(
+            async {
+                ev.wait().await;
+                "ev"
+            },
+            async {
+                rising(x).await;
+                "rise"
+            }
+        );
+        t.await;
+        writer.await;
+        won
+    });
+    assert_eq!(won.unwrap(), "rise");
+}
+
+#[test]
+fn a_cancelled_nested_combinator_finishes_its_helpers_before_the_caller_resumes() {
+    // Golden cancelled_nest. The `join!` loses while waiting; its helper, when it runs,
+    // cancels the join's two helpers and requeues itself until they finished, so the
+    // caller resumes three hops after the edge: between z3 and z4 of an Event chain that f
+    // starts at that edge.
+    let (mut sim, x, y) = two_bits();
+    let trace: Trace = Rc::default();
+    let shared = Rc::clone(&trace);
+    sim.run(async move {
+        let events: Vec<Event> = (0..6).map(|_| Event::new("ev")).collect();
+        let (first_event, tf) = (events[0].clone(), Rc::clone(&shared));
+        let mut tasks = vec![spawn("f", async move {
+            rising(x).await;
+            push(&tf, "f");
+            first_event.set();
+        })];
+        for i in 0..5 {
+            let (wait, next, tz) = (events[i].clone(), events[i + 1].clone(), Rc::clone(&shared));
+            tasks.push(spawn("z", async move {
+                wait.wait().await;
+                push(&tz, format!("z{}", i + 1));
+                next.set();
+            }));
+        }
+        tasks.push(spawn("w", async move {
+            Timer::new(ticks(2)).await;
+            x.write_u64(1);
+        }));
+        Timer::new(ticks(1)).await;
+        first!(
+            async {
+                join!(changed(y), Timer::new(ticks(100)));
+            },
+            rising(x)
+        );
+        push(&shared, "caller");
+        for task in tasks {
+            task.await;
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        *trace.borrow(),
+        ["f", "z1", "z2", "z3", "caller", "z4", "z5"]
+    );
+}
+
+#[test]
+fn edges_of_a_multi_bit_signal_are_rejected_as_in_cocotb() {
+    // cocotb 2.1 raises TypeError for `RisingEdge` on a multi-bit signal
+    // (`LogicArrayObject.rising_edge`); edge detection compares bit 0, the whole value of
+    // a 1-bit signal.
+    for make in [rising as fn(RawSig) -> simjig::Edge, falling] {
+        let mut m = FakeModel::new(Precision::NS);
+        m.signal("bus", 8);
+        let mut sim = Sim::from_fake(m);
+        let bus = sim.signal("bus").unwrap();
+        let f = sim.run(async move { make(bus).await }).unwrap_err();
+        assert!(matches!(f.kind, FailureKind::TaskPanic { .. }), "{f}");
+        assert!(
+            f.message
+                .contains("edges are defined on 1-bit signals and this one is 8 bits"),
+            "{f}"
+        );
+    }
+}
+
+#[test]
+fn first_of_coincident_edges_goes_to_the_trigger_primed_first() {
+    // Each operand's helper primes its edge in operand order, so the leftmost operand's
+    // trigger is the older one and fires first; it wins because its helper finishes first.
     let mut m = FakeModel::new(Precision::NS);
     m.signal("c1", 1);
     m.signal("c2", 1);
@@ -590,4 +695,36 @@ fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
         );
         assert_clean(&d.sim);
     }
+}
+
+/// A hop ends in the awaiting task's own run. A hand-written join in the task's future
+/// polls it again when the task's combinator helpers run (they poll the task's future,
+/// routed to them); those polls come before `other` and must not end it.
+#[test]
+fn a_hop_ends_in_its_own_run_not_in_a_combinator_helper_run_of_its_task() {
+    let mut d = dut();
+    let trace: Trace = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let t2 = Rc::clone(&t);
+            let other = spawn("other", async move { push(&t2, "other") });
+            let mut hop = std::pin::pin!(yield_now());
+            let mut fork = std::pin::pin!(async {
+                first!(Timer::new(ticks(5)), Timer::new(ticks(5)));
+            });
+            let mut hopped = false;
+            std::future::poll_fn(|cx| {
+                if !hopped && hop.as_mut().poll(cx).is_ready() {
+                    hopped = true;
+                    push(&t, "hop");
+                }
+                fork.as_mut().poll(cx)
+            })
+            .await;
+            other.await;
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["other", "hop"]);
+    assert_clean(&d.sim);
 }

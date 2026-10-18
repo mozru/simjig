@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simjig::{Timer, TraceKind, rising, scope, spawn, with_timeout};
+use simjig::{NextTimeStep, Timer, TraceKind, now, rising, scope, spawn, with_timeout};
 
 use super::{assert_clean, clocked, dut, ticks};
 
@@ -104,7 +104,7 @@ fn a_timed_out_scope_cancels_its_whole_subtree() {
         )
         .await;
         Timer::new(ticks(1)).await;
-        (result.is_err(), a.read_u64(), simjig::now().ticks())
+        (result.is_err(), a.read_u64(), now().ticks())
     });
     assert_eq!(out.unwrap(), (true, 0, 16));
     assert_clean(&d.sim);
@@ -265,4 +265,127 @@ fn a_handle_dropped_before_its_task_ever_ran_is_recorded() {
         .collect();
     assert_eq!(dropped.len(), 1, "{dropped:?}");
     assert_clean(&d.sim);
+}
+
+#[test]
+fn cancelling_most_waiters_of_one_edge_or_deadline_leaves_the_rest_in_order() {
+    // The wait table drops cancelled registrations of an edge group or a timer deadline
+    // lazily; the survivors still wake in registration order, and a deadline whose timers
+    // were all cancelled schedules no timestep. 200 waiters, 140 cancelled: enough for the
+    // stale keys to be compacted away.
+    const WAITERS: u64 = 200;
+    let kept = |i: &u64| i.is_multiple_of(7) || i % 7 == 1;
+    let mut d = clocked();
+    let clk = d.clk;
+    let order: Rc<RefCell<Vec<String>>> = Rc::default();
+    let shared = Rc::clone(&order);
+    d.sim
+        .run(async move {
+            let mut survivors = Vec::new();
+            let mut cancelled = Vec::new();
+            for i in 0..WAITERS {
+                let log = Rc::clone(&shared);
+                let task = spawn("w", async move {
+                    if i % 2 == 0 {
+                        Timer::new(ticks(5)).await;
+                    } else {
+                        Timer::new(ticks(2)).await; // past the edge at 0
+                        rising(clk).await;
+                    }
+                    log.borrow_mut().push(format!("{i}@{}", now().ticks()));
+                });
+                if kept(&i) {
+                    survivors.push(task);
+                } else {
+                    cancelled.push(task);
+                }
+            }
+            let doomed: Vec<_> = (0..20)
+                .map(|_| spawn("x", async { Timer::new(ticks(7)).await }))
+                .collect();
+            Timer::new(ticks(3)).await;
+            drop(cancelled);
+            drop(doomed);
+            Timer::new(ticks(3)).await; // t = 6
+            NextTimeStep::new().await;
+            shared.borrow_mut().push(format!("next@{}", now().ticks()));
+            for task in survivors {
+                task.await;
+            }
+        })
+        .unwrap();
+    let at = |parity: u64, t: u64| {
+        (0..WAITERS)
+            .filter(move |i| i % 2 == parity && kept(i))
+            .map(move |i| format!("{i}@{t}"))
+    };
+    let want: Vec<String> = at(0, 5)
+        .chain(["next@10".to_owned()])
+        .chain(at(1, 10))
+        .collect();
+    assert_eq!(*order.borrow(), want);
+    assert_clean(&d.sim);
+}
+
+/// Conformance README, "Known differences": a `first!` loser's `Drop` cleanup runs when
+/// the decider cancels it, before the tasks the decider's trigger woke after it (`z`).
+/// cocotb 2.1 throws `CancelledError` into the loser when it next runs, so its `finally`
+/// runs after `z` (seen in an experiment). The caller resumes last in both.
+#[test]
+fn a_cancelled_losers_drop_cleanup_runs_when_it_is_cancelled() {
+    let mut d = clocked();
+    let clk = d.clk;
+    let trace: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let t = Rc::clone(&trace);
+    d.sim
+        .run(async move {
+            let ev = simjig::Event::new("ev");
+            let log = |name| {
+                let trace = Rc::clone(&t);
+                move || trace.borrow_mut().push(name)
+            };
+            let (set, wait) = (ev.clone(), ev.clone());
+            let (log_x, log_y, log_z) = (log("x"), log("y"), log("z"));
+            let tasks = [
+                spawn("x", async move {
+                    Timer::new(ticks(5)).await;
+                    rising(clk).await; // 10
+                    set.set();
+                    log_x();
+                }),
+                spawn("y", async move {
+                    Timer::new(ticks(5)).await;
+                    rising(clk).await;
+                    log_y();
+                }),
+                spawn("z", async move {
+                    Timer::new(ticks(1)).await; // waits on `ev` after the operand
+                    wait.wait().await;
+                    log_z();
+                }),
+            ];
+            let cleanup = log("cleanup");
+            simjig::first!(ev.wait(), async move {
+                let _guard = OnDrop(Some(cleanup));
+                Timer::new(ticks(100)).await;
+            });
+            log("main")();
+            for task in tasks {
+                task.await;
+            }
+        })
+        .unwrap();
+    assert_eq!(*trace.borrow(), ["x", "y", "cleanup", "z", "main"]);
+    assert_clean(&d.sim);
+}
+
+/// Runs its closure when dropped.
+struct OnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(f) = self.0.take() {
+            f();
+        }
+    }
 }

@@ -27,12 +27,41 @@ the public API, the generated code or simulation semantics.
   and `changed` on one signal are separate groups. Wake order at one delta changes from
   global registration order to priming order; trace hashes of runs where that differs
   change.
-- `first!`, `join!` and `with_timeout` resume their caller where cocotb 2.1's `First`,
-  `Combine` and `with_timeout` do (golden `combinator_hop`): after yielding once, and
-  once more when dropping the losers cancelled a wait that had not fired, so the tasks
-  woken by the same edge (and, for `first!` and `with_timeout`, the tasks those wake) run
-  first. Before, the caller resumed at once, in its registration order. A combinator
-  whose operands are ready at once now also yields before returning.
+- `first!`, `join!` and `with_timeout` run each operand in an internal helper task, as
+  cocotb 2.1's `First`, `Combine` and `with_timeout` do (`_wait`): the helpers start at the
+  front of the ready queue in operand order, the first helper to *finish* decides a
+  `first!` (not the leftmost operand that is ready: an operand woken by a task the same
+  edge woke loses to one the edge woke itself), losers are cancelled as cocotb cancels
+  them (dropped when deregistered, finishing at their queue place), and the caller
+  resumes when the last helper finishes (goldens `combinator_hop`, `loser_scheduled`,
+  `spawned_combinators`, `cancelled_nest` and seven more in `test_callback_order`).
+  Before, operands were polled inline in the caller, leftmost first, and the caller
+  yielded once or twice afterwards. The cost is one helper entry and two or three extra
+  polls of the caller's task per combinator. Trace hashes of runs with combinators
+  change. `__private::{hop, boxed}` are gone (macro internals).
+- Performance trade-off (correctness over speed, constitution priority order): each wait on
+  a set `Event` or a free `Lock` now costs one extra scheduler round (one poll), as cocotb
+  requires. On an Event/Lock-heavy benchmark (N tasks, each cycle: edge, set-event wait,
+  lock, queue op) this is about 2.4x slower (N=1000: 14–18 ms → 33 ms; N=4000: 56 → 141 ms);
+  the cost per poll fell from 70 to 55 ns. Other scheduler benchmarks are within ±10%.
+- `Event::wait` on a set event and `Lock::lock` on a free lock resume after the tasks
+  already ready (one hop), as cocotb 2.1's `Event.wait()` and `Lock.acquire()` do (goldens
+  `event_ready`, `lock_ready`); they used to continue at once. The free lock is taken
+  before the hop, so a task that runs in between sees it locked. Trace hashes of runs
+  that await a set event or a free lock change.
+- `Queue::get` and `Queue::put` that can complete do so at once even when other getters
+  (putters) wait or were woken and have not run yet, as cocotb 2.1's `Queue` does (goldens
+  `queue_get_ready`, `queue_put_ready`); the woken one finds the item (slot) gone and
+  waits again, last in line. They used to queue behind every waiter. `Queue::try_put`
+  likewise fails only when the queue is full (cocotb's `put_nowait`), no longer when
+  puts are waiting.
+- `yield_now()` ends only in a run of the task (or combinator helper) that awaits it. A
+  hand-written join in a task's future that also awaits `first!`/`join!` used to see it
+  end early, when the combinator's helpers ran.
+- Performance: value-change groups are kept in a map keyed by priming order, so a walk
+  over G groups costs O(G log G) instead of O(G^2); cancelling one of many waiters of an
+  edge or a timer deadline, and firing one of many timers due together, is O(1) instead
+  of O(waiters).
 - `with_timeout` breaks ties as cocotb 2.1 does (golden `timeout_ties`): the timeout's
   Timer registers before the future's triggers and is checked first, so a `Timer`,
   edge or `cycles` due exactly at the timeout now times out (a future's own `Timer` used

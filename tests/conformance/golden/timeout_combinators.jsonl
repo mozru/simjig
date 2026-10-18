@@ -1,0 +1,15 @@
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"rst","value":1}
+{"time":0,"phase":"start","trigger":"start","task":"main","op":"write","signal":"en","value":1}
+{"time":10000,"phase":"active","trigger":"FallingEdge(clk)","task":"main","op":"write","signal":"rst","value":0}
+{"time":15000,"phase":"active","trigger":"RisingEdge(clk)","task":"f_task","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"RisingEdge(clk)","task":"f_task","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z_task","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"Event.wait()","task":"z_task","op":"read","signal":"count","value":0}
+{"time":15000,"phase":"active","trigger":"with_timeout0","task":"main","op":"read","signal":"clk","value":1}
+{"time":15000,"phase":"active","trigger":"with_timeout0","task":"main","op":"read","signal":"count","value":0}
+{"time":25000,"phase":"active","trigger":"RisingEdge(clk)","task":"f_task","op":"read","signal":"clk","value":1}
+{"time":25000,"phase":"active","trigger":"RisingEdge(clk)","task":"f_task","op":"read","signal":"count","value":1}
+{"time":25000,"phase":"active","trigger":"Event.wait()","task":"z_task","op":"read","signal":"clk","value":1}
+{"time":25000,"phase":"active","trigger":"Event.wait()","task":"z_task","op":"read","signal":"count","value":1}
+{"time":25000,"phase":"active","trigger":"with_timeout1","task":"main","op":"read","signal":"clk","value":1}
+{"time":25000,"phase":"active","trigger":"with_timeout1","task":"main","op":"read","signal":"count","value":1}

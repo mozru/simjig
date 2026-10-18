@@ -1,13 +1,17 @@
 //! Kernel integration tests, all against `FakeModel` (no Verilator needed).
 #![expect(clippy::unwrap_used, reason = "test helpers outside #[test] functions")]
 
+mod bench;
 mod cancel;
+mod clocks;
 mod conflog;
 mod conformance;
 mod failures;
+mod multi;
 mod phases;
 mod swarm;
 mod sync;
+mod timing;
 
 use simjig::{Clock, FakeModel, Precision, RawSig, Sim, SimDuration};
 

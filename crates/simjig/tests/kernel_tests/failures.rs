@@ -175,6 +175,11 @@ fn awaiting_an_event_never_set_is_a_deadlock() {
     assert!(f.to_string().contains("awaits Event `done`"), "{f}");
 }
 
+const BAD_BEAT_LINE: u32 = line!() + 2;
+fn bad_beat() {
+    panic!("bad beat");
+}
+
 #[test]
 fn task_panic_carries_the_hierarchical_name_and_stops_the_run() {
     let mut d = clocked();
@@ -186,7 +191,7 @@ fn task_panic_carries_the_hierarchical_name_and_stops_the_run() {
                 spawn("driver", async move {
                     rising(clk).await;
                     rising(clk).await;
-                    panic!("bad beat");
+                    bad_beat();
                 })
                 .await;
             });
@@ -201,11 +206,43 @@ fn task_panic_carries_the_hierarchical_name_and_stops_the_run() {
     );
     assert_eq!(f.task.as_deref(), Some("main.env.driver"));
     assert_eq!(f.time, SimTime(10));
+    let at = f.location.unwrap();
+    assert!(at.file().ends_with("failures.rs"), "{at}");
+    assert_eq!((at.line(), at.column()), (BAD_BEAT_LINE, 5));
     assert!(
         f.to_string()
             .starts_with("simjig TaskPanic at t=10 ns in task `main.env.driver`")
     );
     assert_clean(&d.sim);
+}
+
+#[test]
+fn a_panic_in_cleanup_is_located_too() {
+    struct Loud;
+    impl Drop for Loud {
+        fn drop(&mut self) {
+            panic!("cleanup failed");
+        }
+    }
+    let line = line!() - 3;
+    let mut d = dut();
+    let f = d
+        .sim
+        .run(async move {
+            let task = spawn("loud", async move {
+                let _guard = Loud;
+                Timer::new(ticks(5)).await;
+            });
+            Timer::new(ticks(1)).await;
+            task.cancel();
+        })
+        .unwrap_err();
+    assert!(
+        matches!(&f.kind, FailureKind::TaskPanic { message } if message.contains("cleanup failed")),
+        "{f}"
+    );
+    assert_eq!(f.task.as_deref(), Some("main.loud"));
+    assert_eq!(f.location.unwrap().line(), line);
 }
 
 #[test]

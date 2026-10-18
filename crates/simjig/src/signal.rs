@@ -150,7 +150,7 @@ fn get<T: Packed<Raw: RawWords>>(raw: RawSig) -> T {
             k.names[slot as usize],
             T::WIDTH
         );
-        k.model.borrow().read(slot, buf.as_mut());
+        k.models.borrow().read(slot, buf.as_mut());
     });
     T::from_raw(RawWords::from_words(buf.as_ref()))
 }

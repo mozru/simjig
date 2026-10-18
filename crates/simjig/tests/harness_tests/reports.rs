@@ -74,7 +74,7 @@ fn write_conflict() {
 fn the_kernel_location_is_used_without_an_override() {
     let location = std::panic::Location::caller();
     let f = Failure {
-        location: Some(location),
+        location: Some(location.into()),
         ..failure(
             FailureKind::WriteInReadOnly {
                 signal: "top.data".into(),

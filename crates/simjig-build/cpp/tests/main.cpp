@@ -491,9 +491,15 @@ void devnull_redirect_finds_descriptors_above_the_limit() {
     const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     CHECK(fd >= 0);
     constexpr int kHigh = 3000;
-    CHECK_EQ(::dup2(fd, kHigh), kHigh);
     struct rlimit old{};
     CHECK_EQ(::getrlimit(RLIMIT_NOFILE, &old), 0);
+    // Room for kHigh first: Linux's default soft limit is 1024 (macOS's is higher).
+    struct rlimit room = old;
+    if (room.rlim_cur != RLIM_INFINITY && room.rlim_cur <= rlim_t{kHigh}) {
+        room.rlim_cur = rlim_t{kHigh} + 1;
+    }
+    CHECK_EQ(::setrlimit(RLIMIT_NOFILE, &room), 0);
+    CHECK_EQ(::dup2(fd, kHigh), kHigh);
     struct rlimit low = old;
     low.rlim_cur = 256;
     CHECK_EQ(::setrlimit(RLIMIT_NOFILE, &low), 0);

@@ -5,7 +5,6 @@
 //! (`hop_stage::BeatFields`); a field and a port of one type in every configuration
 //! (`beat.data()`, `down_data`) are one type, `D::DownData`. The glob import is the body's only one for the sweep: it
 //! brings the sweep's traits and the runtime's `Value`, `Vector` and `Packed`.
-#![forbid(unsafe_code)]
 
 use simjig::{ReadOnly, clock, ns};
 

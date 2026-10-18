@@ -64,7 +64,6 @@
 //! let data = Bits::<8>::new(0x5a);
 //! assert_eq!(data.bit(1), Bit::new(true));
 //! ```
-#![deny(unsafe_code)]
 
 mod dpi;
 pub mod fork;

@@ -4,7 +4,6 @@
 //! module that holds all the logic, so the logic can be unit-tested and snapshot-tested
 //! outside the compiler. Users reach the macros through `simjig` (`#[simjig::test]`); the
 //! expansions refer only to `::simjig::...` paths, or to the path given by `crate = ...`.
-#![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
 

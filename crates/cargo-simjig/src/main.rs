@@ -5,8 +5,6 @@
 //! `help [<command>]`, `<command> --help`) goes to stdout and exits 0; a usage error
 //! goes to stderr and exits 2.
 
-#![forbid(unsafe_code)]
-
 use std::env;
 use std::io::{self, Write as _};
 use std::process::ExitCode;

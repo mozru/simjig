@@ -17,6 +17,10 @@ simjig = { path = "../../crates/simjig" }
 [build-dependencies]
 simjig-build = { path = "../../crates/simjig-build" }
 
+# Outside the root workspace, so it states the one workspace lint it relies on.
+[lints.rust]
+unsafe_code = "deny"
+
 # The measured profile: `cargo test --profile bench` is release with line tables, so a
 # profiler can attribute samples to source lines without changing the code generated.
 [profile.bench]

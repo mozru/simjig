@@ -72,6 +72,7 @@ impl Sandbox {
     /// Puts a fake `verilator` first on the process `PATH` (and returns that `PATH`). It
     /// answers `--version` like the pinned release and fails on anything else, so a run
     /// of the wrong Verilator fails the build.
+    #[expect(unsafe_code, reason = "std::env::set_var is unsafe in edition 2024")]
     pub(crate) fn fake_verilator_first_on_path(&self) -> std::ffi::OsString {
         let dir = self.path().join("fake-bin");
         std::fs::create_dir_all(&dir).unwrap();

@@ -53,6 +53,7 @@ fn verilator_is_located_once_per_build_script() {
 
 /// The C++ compiler is set up (found, its kind detected, its version asked) once per
 /// build script: building a DUT again, with every archive in the cache, runs it no more.
+#[expect(unsafe_code, reason = "std::env::set_var is unsafe in edition 2024")]
 #[test]
 fn the_compiler_is_set_up_once_per_build_script() {
     let s = Sandbox::new();

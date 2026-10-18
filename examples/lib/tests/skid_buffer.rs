@@ -8,7 +8,6 @@
 //! keeps the beats in flight: each beat taken on `up` must leave on `down` exactly once, in
 //! order, and never more than two at a time (the buffer's two registers). A reset edge
 //! empties the board, so a test may reset mid-run.
-#![forbid(unsafe_code)]
 #![expect(
     clippy::unwrap_used,
     reason = "test helpers outside #[test] functions: a panic is the test failure"

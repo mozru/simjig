@@ -277,6 +277,7 @@ fn editing_a_header_next_to_a_recipe_source_recompiles_the_model() {
 
 /// The compiler's identity is part of every archive key: a compiler whose `--version`
 /// changes (an upgrade in place, same path) compiles the model and the runtime again.
+#[expect(unsafe_code, reason = "std::env::set_var is unsafe in edition 2024")]
 #[test]
 fn a_new_compiler_version_recompiles_every_archive() {
     let s = Sandbox::new();

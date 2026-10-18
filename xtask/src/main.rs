@@ -6,7 +6,6 @@
 //!   run means a green CI run.
 //! - `cargo xtask miri` runs the kernel and ABI tests under Miri (nightly). It is not part
 //!   of `ci`: it takes minutes.
-#![forbid(unsafe_code)]
 
 mod setup;
 
@@ -196,36 +195,35 @@ mod tests {
         );
     }
 
-    /// ARCHITECTURE.md: `unsafe` exists only in named modules of `simjig`; every other
-    /// crate root (library or binary) forbids it.
+    /// ARCHITECTURE.md: the workspace denies `unsafe_code`; every member inherits the
+    /// workspace lints or, like the examples, lists `unsafe_code = "deny"` itself.
     #[test]
-    fn every_crate_root_but_simjig_forbids_unsafe() {
+    fn every_workspace_member_denies_unsafe() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let mut roots = vec![root.join("xtask/src/main.rs")];
-        for krate in std::fs::read_dir(root.join("crates")).unwrap() {
-            let dir = krate.unwrap().path();
-            if dir.file_name().is_some_and(|n| n == "simjig") {
-                continue;
+        let read = |p: &Path| std::fs::read_to_string(p).unwrap();
+        let workspace = read(&root.join("Cargo.toml"));
+        let (_, rust_lints) = workspace.split_once("[workspace.lints.rust]\n").unwrap();
+        let rust_lints = rust_lints.split("\n[").next().unwrap();
+        assert!(
+            rust_lints.contains("\nunsafe_code = \"deny\""),
+            "{rust_lints}"
+        );
+        let mut manifests = vec![root.join("xtask/Cargo.toml")];
+        for dir in ["crates", "examples"] {
+            for member in std::fs::read_dir(root.join(dir)).unwrap() {
+                manifests.push(member.unwrap().path().join("Cargo.toml"));
             }
-            roots.extend(
-                ["src/lib.rs", "src/main.rs"]
-                    .map(|f| dir.join(f))
-                    .into_iter()
-                    .filter(|p| p.is_file()),
-            );
         }
-        assert!(roots.len() >= 7, "{roots:?}");
-        let missing: Vec<_> = roots
+        assert!(manifests.len() >= 9, "{manifests:?}");
+        let lax: Vec<_> = manifests
             .iter()
-            .filter(|p| {
-                !std::fs::read_to_string(p)
-                    .unwrap()
-                    .contains("#![forbid(unsafe_code)]")
+            .filter(|m| {
+                let text = read(m);
+                let (_, lints) = text.split_once("\n[lints").unwrap_or_default();
+                !(lints.starts_with("]\nworkspace = true")
+                    || lints.contains("\nunsafe_code = \"deny\""))
             })
             .collect();
-        assert!(
-            missing.is_empty(),
-            "no #![forbid(unsafe_code)] in {missing:?}"
-        );
+        assert!(lax.is_empty(), "unsafe_code not denied in {lax:?}");
     }
 }

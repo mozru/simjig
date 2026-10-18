@@ -11,7 +11,6 @@
 //! `rising()` of a testbench clock sees the pre-edge values, so a sample holds the `req`
 //! and `gnt` that the edge acts on; the driver's writes half a cycle later are what the
 //! next edge sees.
-#![forbid(unsafe_code)]
 
 use std::cell::RefCell;
 use std::rc::Rc;

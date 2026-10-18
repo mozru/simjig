@@ -1,6 +1,5 @@
 //! Two DUTs in one test: they share one simulation (one time axis, one delta loop), and the
 //! testbench connects them. Here the inverter's output feeds the flop's `d`.
-#![forbid(unsafe_code)]
 
 use simjig::{ReadOnly, Timer, clock, ns};
 use simjig_bits::Bit;

@@ -52,7 +52,6 @@
 //! # use simjig_bits::Bits;
 //! let _: Bits<8> = (-1).into(); // u128 has no negation
 //! ```
-#![forbid(unsafe_code)]
 
 mod bit;
 mod bits;

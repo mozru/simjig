@@ -15,7 +15,6 @@
 //! - **Stimulus.** A producer and a consumer task draw from their own seeded streams
 //!   (`ctx.rng("producer")`), so the consumer's backpressure and the producer's bursts are
 //!   independent and replay exactly from the report's seed.
-#![forbid(unsafe_code)]
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,

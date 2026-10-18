@@ -3,9 +3,8 @@
 //! `__Dpi.h` cross-check, verilation, compilation), driven through `Sim` and
 //! `#[simjig::test]`.
 //!
-//! The crate forbids `unsafe_code`: the generated trampolines (`#[no_mangle]`, pointer
-//! reads) must compile in a user crate that does.
-#![forbid(unsafe_code)]
+//! The crate denies `unsafe_code` (the workspace lint): the generated trampolines
+//! (`#[no_mangle]`, pointer reads) must compile in a user crate that does.
 #![expect(clippy::unwrap_used, reason = "test helpers outside #[test] functions")]
 
 #[cfg(not(simjig_test_models))]

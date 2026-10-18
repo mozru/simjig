@@ -1,7 +1,6 @@
 //! `simjig::prelude` next to a sweep module: both glob-imported, every name either brings
 //! resolves without an ambiguity error (E0659). `Value`, `Vector` and `Packed` come in
 //! through both globs as the same items; this file fails to compile if they ever differ.
-#![forbid(unsafe_code)]
 
 use simjig::prelude::*;
 

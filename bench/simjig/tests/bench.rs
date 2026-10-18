@@ -17,7 +17,6 @@
 //!
 //! Each test measures its own body (model creation and the harness's report excluded) and
 //! appends one JSON line to the file `BENCH_OUT` (stderr when unset).
-#![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
 use std::io::Write as _;

@@ -28,7 +28,6 @@
 //!
 //! Monitors sample at `rising()`, which for a testbench clock shows the pre-edge values:
 //! the `winc`, `wfull` and `rdata` the edge acts on.
-#![forbid(unsafe_code)]
 
 use std::cell::Cell;
 use std::rc::Rc;

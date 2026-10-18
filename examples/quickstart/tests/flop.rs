@@ -1,6 +1,5 @@
 //! A clocked design: a kernel-driven clock, rising edges, and `ReadOnly` to see the values
 //! a clock edge produced.
-#![forbid(unsafe_code)]
 
 use simjig::{ReadOnly, clock, ns};
 use simjig_bits::Bit;

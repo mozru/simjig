@@ -9,7 +9,6 @@
 //! - [`version`]: the supported Verilator versions and their parser.
 //! - [`toolchain`]: which Verilator to run and whether to accept it (build and doctor).
 //! - [`literal`] and [`width`]: the literal parser and width calculator the front ends use.
-#![forbid(unsafe_code)]
 
 pub mod error;
 pub mod frontend;

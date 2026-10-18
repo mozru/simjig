@@ -7,6 +7,10 @@
 //! and `$display` come back as statuses and messages instead of ending the process, both in a
 //! plain model (the fatal unwinds) and in a `--timing` model (the fatal is recorded inside a
 //! coroutine and reported after eval).
+#![expect(
+    unsafe_code,
+    reason = "it calls the C ABI's vtables through raw pointers, as model::abi does"
+)]
 
 #[path = "../src/model/abi.rs"]
 #[expect(dead_code, reason = "the test uses only part of the ABI mirror")]

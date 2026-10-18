@@ -14,7 +14,6 @@
 //! for the type IR, run the [`Emitter`] on it, verilate through the shared content-hash
 //! cache, cross-check the header ports against the IR, compile libverilated (once per
 //! configuration, cached) and the model with `cc`, and emit `cargo::` directives.
-#![forbid(unsafe_code)]
 
 mod archive;
 mod cache;

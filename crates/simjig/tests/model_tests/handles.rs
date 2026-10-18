@@ -165,6 +165,10 @@ mod models {
     include!(concat!(env!("OUT_DIR"), "/test_models.rs"));
 }
 
+#[expect(
+    unsafe_code,
+    reason = "the model's vtable symbol is an `unsafe extern` static"
+)]
 mod inv_ffi {
     use simjig::__private::Vtable;
     include!(concat!(env!("OUT_DIR"), "/test_vtables/inv.rs"));

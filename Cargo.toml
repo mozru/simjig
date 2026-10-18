@@ -33,6 +33,9 @@ libc = "0.2.191"
 miniz_oxide = "0.8.9"
 
 [workspace.lints.rust]
+# Unsafe code is allowed only where a module opts in with `#[expect(unsafe_code, reason)]`
+# (ARCHITECTURE.md, "Invariants").
+unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"
 missing_debug_implementations = "warn"

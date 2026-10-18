@@ -1,5 +1,4 @@
 //! A combinational design: drive an input, let time pass, check the output.
-#![forbid(unsafe_code)]
 
 use simjig::{Timer, ns};
 use simjig_bits::Bit;

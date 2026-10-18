@@ -13,8 +13,6 @@
 //! The supported Verilator versions are `svtypes::version::SUPPORTED`, the table every
 //! build-time crate shares.
 
-#![forbid(unsafe_code)]
-
 pub mod doctor;
 mod json;
 pub mod show;

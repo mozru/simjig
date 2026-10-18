@@ -279,3 +279,57 @@ fn read_only_rejects_reentry_and_timer_zero_is_rejected() {
         assert_clean(&d.sim);
     }
 }
+
+/// The 1-based line of this file that contains `marker` (once, besides this lookup).
+fn line_of(marker: &str) -> u32 {
+    let source = include_str!("phases.rs");
+    let index = source
+        .lines()
+        .position(|l| l.contains(marker) && !l.contains("line_of"))
+        .unwrap();
+    u32::try_from(index + 1).unwrap()
+}
+
+#[test]
+fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
+    type Main = fn() -> std::pin::Pin<Box<dyn Future<Output = ()>>>;
+    let cases: [(Main, &str); 3] = [
+        (
+            || {
+                Box::pin(async {
+                    ReadOnly::new().await;
+                    ReadOnly::new().await; // misuse: read-only twice
+                })
+            },
+            "misuse: read-only twice",
+        ),
+        (
+            || Box::pin(Timer::new(ticks(0))), // misuse: zero timer
+            "misuse: zero timer",
+        ),
+        (
+            || {
+                Box::pin(async {
+                    ReadOnly::new().await;
+                    ReadWrite::default().await; // misuse: read-write after read-only
+                })
+            },
+            "misuse: read-write after read-only",
+        ),
+    ];
+    for (main, marker) in cases {
+        let mut d = dut();
+        let failure = d.sim.run(main()).unwrap_err();
+        let location = failure.location.unwrap();
+        assert!(location.file().ends_with("phases.rs"), "{failure}");
+        assert_eq!(location.line(), line_of(marker), "{failure}");
+        let FailureKind::TaskPanic { message } = &failure.kind else {
+            panic!("{failure}")
+        };
+        assert!(
+            message.contains("phases.rs"),
+            "the message names the line: {message}"
+        );
+        assert_clean(&d.sim);
+    }
+}

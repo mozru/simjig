@@ -23,28 +23,39 @@
 
 use std::fmt;
 use std::future::Future;
+use std::panic::Location;
 use std::pin::{Pin, pin};
 use std::task::{Context, Poll};
 
-use super::OrInvariant;
+use super::panics;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
 use super::time::{SimDuration, SimTime};
 use super::waits::{EdgeKind, Registration, WaitOn};
 
 /// Shared poll logic: register on first poll, then complete once fired.
+///
+/// `at` is where the trigger was made: misuse that `register` detects (it returns the
+/// message) panics there, at the user's line, rather than in this module.
 fn poll_registered(
     reg: &mut Option<Registration>,
     cx: &Context<'_>,
     what: &str,
-    register: impl FnOnce(&Kernel) -> WaitOn,
+    at: &'static Location<'static>,
+    register: impl FnOnce(&Kernel) -> Result<WaitOn, String>,
 ) -> Poll<()> {
     match reg {
         None => {
-            *reg = Some(state::with_current(what, |k| {
-                let on = register(k);
-                Registration::new(k, on, cx)
-            }));
+            let registered =
+                state::try_current(|k| register(k).map(|on| Registration::new(k, on, cx)));
+            match registered {
+                Some(Ok(r)) => *reg = Some(r),
+                Some(Err(message)) => panics::panic_at(at, format_args!("{message}")),
+                None => panics::panic_at(
+                    at,
+                    format_args!("{what} needs a running simulation; await it inside Sim::run"),
+                ),
+            }
             Poll::Pending
         }
         Some(r) => {
@@ -64,6 +75,7 @@ fn poll_registered(
 pub struct Edge {
     slot: u32,
     kind: EdgeKind,
+    at: &'static Location<'static>,
     reg: Option<Registration>,
 }
 
@@ -82,6 +94,7 @@ fn edge(sig: RawSig, edge: EdgeKind, what: &str) -> Edge {
     Edge {
         slot,
         kind: edge,
+        at: Location::caller(),
         reg: None,
     }
 }
@@ -117,10 +130,9 @@ impl Future for Edge {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let (slot, edge) = (self.slot, self.kind);
-        poll_registered(&mut self.reg, cx, "an edge trigger", |_| WaitOn::Edge {
-            slot,
-            edge,
+        let (slot, edge, at) = (self.slot, self.kind, self.at);
+        poll_registered(&mut self.reg, cx, "an edge trigger", at, |_| {
+            Ok(WaitOn::Edge { slot, edge })
         })
     }
 }
@@ -142,14 +154,21 @@ pub async fn cycles(sig: RawSig, n: u64) {
 #[must_use = "triggers do nothing unless awaited"]
 pub struct Timer {
     duration: SimDuration,
+    at: &'static Location<'static>,
     reg: Option<Registration>,
 }
 
 impl Timer {
     /// A timer for `duration`, counted from its first poll.
+    ///
+    /// # Panics
+    /// When awaited, if `duration` is zero ticks or the deadline overflows the tick
+    /// counter; the panic points at this call.
+    #[track_caller]
     pub const fn new(duration: SimDuration) -> Self {
         Self {
             duration,
+            at: Location::caller(),
             reg: None,
         }
     }
@@ -159,18 +178,21 @@ impl Future for Timer {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let duration = self.duration;
-        poll_registered(&mut self.reg, cx, "Timer", |k| {
-            assert!(
-                duration.ticks() > 0,
-                "Timer of zero ticks; use yield_now() or ReadWrite to stay in this timestep"
-            );
+        let (duration, at) = (self.duration, self.at);
+        poll_registered(&mut self.reg, cx, "Timer", at, |k| {
+            if duration.ticks() == 0 {
+                return Err(
+                    "Timer of zero ticks; use yield_now() or ReadWrite to stay in this \
+                            timestep"
+                        .to_owned(),
+                );
+            }
             let deadline = k
                 .now
                 .get()
                 .checked_add(duration)
-                .or_invariant("Timer deadline overflows the 64-bit tick counter");
-            WaitOn::Time(deadline)
+                .ok_or_else(|| "Timer deadline overflows the 64-bit tick counter".to_owned())?;
+            Ok(WaitOn::Time(deadline))
         })
     }
 }
@@ -178,16 +200,28 @@ impl Future for Timer {
 macro_rules! phase_trigger {
     ($(#[$doc:meta])* $name:ident, $on:expr, $check:expr) => {
         $(#[$doc])*
-        #[derive(Debug, Default)]
+        #[derive(Debug)]
         #[must_use = "triggers do nothing unless awaited"]
         pub struct $name {
+            at: &'static Location<'static>,
             reg: Option<Registration>,
         }
 
         impl $name {
-            /// The trigger, registered when first awaited.
+            /// The trigger, registered when first awaited; misuse panics point at this call.
+            #[track_caller]
             pub const fn new() -> Self {
-                Self { reg: None }
+                Self {
+                    at: Location::caller(),
+                    reg: None,
+                }
+            }
+        }
+
+        impl Default for $name {
+            #[track_caller]
+            fn default() -> Self {
+                Self::new()
             }
         }
 
@@ -195,22 +229,25 @@ macro_rules! phase_trigger {
             type Output = ();
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-                poll_registered(&mut self.reg, cx, stringify!($name), |k| {
-                    let check: fn(&Kernel) = $check;
-                    check(k);
-                    $on
+                let at = self.at;
+                poll_registered(&mut self.reg, cx, stringify!($name), at, |k| {
+                    let check: fn(&Kernel) -> Result<(), String> = $check;
+                    check(k)?;
+                    Ok($on)
                 })
             }
         }
     };
 }
 
-fn not_in_read_only(k: &Kernel, what: &str) {
-    assert!(
-        k.phase.get() != Phase::ReadOnly,
-        "{what} awaited in the ReadOnly phase, which is already past it; await \
-         NextTimeStep, a Timer or an edge first"
-    );
+fn not_in_read_only(k: &Kernel, what: &str) -> Result<(), String> {
+    if k.phase.get() == Phase::ReadOnly {
+        return Err(format!(
+            "{what} awaited in the ReadOnly phase, which is already past it; await \
+             NextTimeStep, a Timer or an edge first"
+        ));
+    }
+    Ok(())
 }
 
 phase_trigger!(
@@ -240,7 +277,7 @@ phase_trigger!(
     /// Resumes at the start of the next timestep, whenever something else schedules one.
     NextTimeStep,
     WaitOn::NextTimeStep,
-    |_| {}
+    |_| Ok(())
 );
 
 /// Returned by [`yield_now`].

@@ -41,6 +41,9 @@ the public API, the generated code or simulation semantics.
   output (run once per build script). Every archive is compiled again once.
 - `Dut::verilator_args` also refuses `--sc`, `--main`, `--binary`, `--lib-create`, `-o`,
   `--hierarchical`, and the `--prefix=`, `--Mdir=`, `--top=` and `--top-module=` forms.
+- The cache drops a model's object files once they are archived, rebuilds an entry
+  directory that lost its archive, and removes work directories under `tmp/` that are
+  more than an hour old.
 - `codegen::lower` checks each probe path against the IR's instance tree: a mistyped
   instance or variable (with the closest name), a declaring module that is not the
   instance's, and a `ProbeAccess::ReadWrite` probe of a parameter or localparam are

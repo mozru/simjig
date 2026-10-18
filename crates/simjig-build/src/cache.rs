@@ -9,7 +9,8 @@
 //! - `prefixes/<prefix>`: the identity of the configuration that owns a model prefix.
 //! - `libverilated/<key>/`: compiled Verilator runtimes (see `compile`).
 //! - `archives/<key>/`: compiled models (see `compile`).
-//! - `tmp/`: work directories, renamed into place when complete.
+//! - `tmp/`: work directories, renamed into place when complete; one left by a killed
+//!   build is removed an hour later.
 //!
 //! Keys. Verilator only reveals which files it read (`` `include ``s) after running, so
 //! the lookup has two steps, like ccache's direct mode:
@@ -63,6 +64,7 @@ impl Cache {
             let dir = root.join(sub);
             std::fs::create_dir_all(&dir).map_err(Error::io("creating", &dir))?;
         }
+        remove_stale_work_dirs(&root.join("tmp"));
         Ok(Self { root })
     }
 
@@ -281,6 +283,26 @@ fn deps_listing(deps: &[PathBuf]) -> String {
         out.push('\n');
     }
     out
+}
+
+/// How old a work directory must be before it counts as left behind by a killed build.
+/// No compile or verilation of one model takes an hour; a younger directory may belong to
+/// a build that is still running (in another process sharing the cache).
+const STALE_WORK_DIR: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Removes the work directories under `tmp` last modified more than [`STALE_WORK_DIR`] ago.
+fn remove_stale_work_dirs(tmp: &Path) {
+    let Ok(entries) = std::fs::read_dir(tmp) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for e in entries.flatten() {
+        let modified = e.metadata().and_then(|m| m.modified());
+        let age = modified.ok().and_then(|m| now.duration_since(m).ok());
+        if age.is_some_and(|a| a > STALE_WORK_DIR) {
+            remove_best_effort(&e.path());
+        }
+    }
 }
 
 fn nanos() -> u128 {

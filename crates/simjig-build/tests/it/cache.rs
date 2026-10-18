@@ -177,3 +177,24 @@ fn an_entry_without_its_archive_is_rebuilt() {
     let archives = std::fs::read_dir(&entry).unwrap().count();
     assert_eq!(archives, 1, "the archive is back");
 }
+
+/// Work directories left by a build that was killed are removed when they are an hour
+/// old; younger ones may belong to a build still running.
+#[test]
+fn stale_work_dirs_are_removed() {
+    let s = Sandbox::new();
+    let tmp = s.path().join("cache/tmp");
+    let (old, young) = (tmp.join("old"), tmp.join("young"));
+    for d in [&old, &young] {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::write(d.join("x.o"), "").unwrap();
+    }
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+    counter(&s.rtl(), 8).build_in(&s.env()).unwrap();
+    assert!(!old.exists(), "the stale work dir is gone");
+    assert!(young.exists(), "a recent work dir is kept");
+}

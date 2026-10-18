@@ -7,4 +7,8 @@
     dead_code,
     reason = "the ABI mirror lands before the runtime that uses it"
 )]
+#[expect(
+    unsafe_code,
+    reason = "FFI mirror of simjig_abi.h: raw member pointers and extern vtables"
+)]
 pub(crate) mod abi;

@@ -29,6 +29,8 @@ use simjig::{
     us, with_timeout,
 };
 
+mod common;
+
 simjig::include_dut!(async_fifo);
 
 use async_fifo::Dut;
@@ -375,4 +377,28 @@ async fn edges_until_low(clk: In<Bit>, flag: Out<Bit>) -> u32 {
         }
     }
     panic!("`{}` still high eight edges later", flag.name());
+}
+
+/// The elaboration checks: power-of-2 depths from 2 up elaborate, other depths and a WIDTH
+/// below 1 stop elaboration.
+#[test]
+fn parameters_are_checked_at_elaboration() {
+    let src = &["rtl/async_fifo.sv"];
+    let good: &[&[&str]] = &[&["DEPTH=2"], &["DEPTH=64", "WIDTH=1"]];
+    let bad_depth: &[&[&str]] = &[&["DEPTH=1"], &["DEPTH=12"]];
+    common::assert_param_checks(
+        "async_fifo",
+        src,
+        good,
+        bad_depth,
+        "DEPTH must be a power of 2",
+    );
+    let bad_width: &[&[&str]] = &[&["WIDTH=0"]];
+    common::assert_param_checks(
+        "async_fifo",
+        src,
+        &[],
+        bad_width,
+        "WIDTH must be at least 1",
+    );
 }

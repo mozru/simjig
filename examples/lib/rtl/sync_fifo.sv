@@ -32,6 +32,8 @@ module sync_fifo #(
     output logic                   empty,
     output logic [$clog2(DEPTH):0] count
 );
+  timeunit 1ns; timeprecision 1ps;
+
   localparam int AW = $clog2(DEPTH);
 
   if (DEPTH < 2 || (DEPTH & (DEPTH - 1)) != 0) begin : g_bad_depth

@@ -1,6 +1,8 @@
 // Types carried by `item_fifo`: a packed-struct payload, which simjig generates as the
 // Rust struct `fifo_pkg::Item` (here `item_fifo::Item`) with typed fields.
 package fifo_pkg;
+  timeunit 1ns; timeprecision 1ps;
+
   localparam int TAG_W  = 6;
   localparam int DATA_W = 16;
 

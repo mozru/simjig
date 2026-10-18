@@ -18,6 +18,8 @@ use std::rc::Rc;
 
 use simjig::{ReadOnly, Rng, TestCtx, clock, cycles, ns, spawn};
 
+mod common;
+
 simjig::include_dut!(round_robin_arbiter);
 
 use round_robin_arbiter::Dut;
@@ -237,4 +239,20 @@ async fn hold_keeps_the_grant_with_its_owner(dut: Dut) {
     drive(dut, ALL, true).await; // 3 keeps the grant over 2
     let grants: Vec<u128> = settled(&log).await.iter().map(|s| s.gnt).collect();
     assert_eq!(grants, [1, 2, 2, 2, 2, 2, 2, 8, 8]);
+}
+
+/// The elaboration check: any N from 2 up elaborates (a power of 2 or not), and N below 2
+/// stops elaboration.
+#[test]
+fn parameters_are_checked_at_elaboration() {
+    let src = &["rtl/round_robin_arbiter.sv"];
+    let good: &[&[&str]] = &[&["N=2"], &["N=7"], &["N=32"]];
+    let bad: &[&[&str]] = &[&["N=0"], &["N=1"]];
+    common::assert_param_checks(
+        "round_robin_arbiter",
+        src,
+        good,
+        bad,
+        "N must be at least 2",
+    );
 }

@@ -24,7 +24,7 @@ module round_robin_arbiter #(
   typedef logic [IW-1:0] idx_t;
 
   if (N < 2) begin : g_check_n
-    $error("round_robin_arbiter: N must be at least 2, got %0d", N);
+    $fatal(1, "round_robin_arbiter: N must be at least 2, got %0d", N);
   end
 
   idx_t ptr;     // the requester with the highest priority this cycle

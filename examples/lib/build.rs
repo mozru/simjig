@@ -64,6 +64,9 @@ fn skid_buffer() -> Result<(), Error> {
         .bind_iface_with(stream("up", "sink"))
         .bind_iface_with(stream("down", "source"))
         .verilator_args(LINT)
+        // The generated top (`simjig_wrap_skid_buffer`) declares no `timeunit`, while every
+        // RTL unit here does: without a default, Verilator stops on the mix (TIMESCALEMOD).
+        .verilator_args(["--timescale", "1ns/1ps"])
         .build()?;
     Ok(())
 }

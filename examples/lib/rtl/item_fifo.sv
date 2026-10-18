@@ -17,6 +17,8 @@ module item_fifo
     output logic                   empty,
     output logic [$clog2(DEPTH):0] count
 );
+  timeunit 1ns; timeprecision 1ps;
+
   sync_fifo #(
       .WIDTH($bits(item_t)),
       .DEPTH(DEPTH),

@@ -41,6 +41,20 @@ Every testbench here has the same parts:
   `.param(..)`; the generated `Dut` carries them as constants (`Dut::N`, `Dut::DEPTH`), so
   the testbench never repeats them.
 
+## Conventions
+
+Every RTL unit (module, interface, package) declares `timeunit 1ns; timeprecision 1ps;`,
+and every parameterized module checks its parameters at elaboration with `$fatal`, which
+a `parameters_are_checked_at_elaboration` test pins. Reset polarity follows each design's
+usual style, so it differs:
+
+| Module | Reset | Elaboration checks |
+|---|---|---|
+| `sync_fifo` / `item_fifo` | `rst`: synchronous, active high | `DEPTH` a power of 2, at least 2; `WIDTH` at least 1 |
+| `skid_buffer` | `rst`: synchronous, active high | `WIDTH` at least 1, and equal to the interfaces' `WIDTH` |
+| `round_robin_arbiter` | `rst_n`: synchronous, active low | `N` at least 2 |
+| `async_fifo` | `wrst_n`, `rrst_n`: asynchronous, active low, one per clock domain, asserted together | `DEPTH` a power of 2, at least 2; `WIDTH` at least 1 |
+
 ## sync_fifo
 
 `rtl/sync_fifo.sv`: a synchronous FIFO with `push`/`pop`, `full`, `empty` and `count`.
@@ -67,7 +81,7 @@ one `Fifo<T>` struct, so one driver, monitor and model serve both.
 | `push_and_pop_in_one_cycle` | when empty, in between, and when full |
 | `registered_read_waits_for_a_pop`, `first_word_falls_through` | the two read modes |
 | `random_continuations_from_full` | fills once, then `fork::run_from_checkpoint` runs four random branches from that full state, each with its own seed (needs nextest) |
-| `depth_must_be_a_power_of_two` | runs `verilator --lint-only -Wall` on other parameter sets, and on DEPTHs it must refuse |
+| `parameters_are_checked_at_elaboration` | runs `verilator --lint-only -Wall` on other parameter sets, and on a DEPTH or WIDTH it must refuse (`$fatal`) |
 
 ## skid_buffer
 
@@ -96,6 +110,10 @@ Dut::new("skid_buffer")
     .build()?;
 ```
 
+Every RTL unit here declares `timeunit 1ns; timeprecision 1ps;`, but the wrapper simjig
+generates for the interface ports does not, so `build.rs` also passes
+`--timescale 1ns/1ps` to give it one (Verilator stops on a mix with `TIMESCALEMOD`).
+
 For an interface without parameters, `.bind_iface("up", "stream_if.sink")` is enough. In
 the test, `dut.up` and `dut.down` are bundles typed from the modports: `dut.up.valid` is
 an `In<Bit>` the testbench writes, `dut.up.ready` an `Out<Bit>` it reads.
@@ -105,6 +123,7 @@ an `In<Bit>` the testbench writes, `dut.up.ready` an `Out<Bit>` it reads.
 | `random_valid_and_ready_lose_nothing` | 1000 beats with random `valid` (held until taken) and bursty random `ready`: no loss, no duplicate, order kept, `down` stable while stalled, at most two beats inside, and both sides saw backpressure |
 | `full_throughput_while_ready_is_high` | with `ready` high and a beat every cycle, `up.ready` never drops and the beats leave on consecutive edges |
 | `a_stall_fills_the_skid_then_drains_in_order` | `up.ready` drops only once both registers hold a beat, and returns two edges after the release |
+| `parameters_are_checked_at_elaboration` | `$fatal` on a WIDTH below 1, or one that differs from the `stream_if` instances' own `WIDTH` |
 
 ## round_robin_arbiter
 
@@ -127,6 +146,7 @@ of the pointer (`PointerModel`). The tests add:
 | `all_requesting_grants_each_once_per_n_cycles` | fairness: every window of `N` cycles grants each requester once |
 | `a_held_request_is_granted_within_n_cycles` | starvation bound under random arrivals, and the bound is reached |
 | `hold_keeps_the_grant_with_its_owner` | directed lock and release |
+| `parameters_are_checked_at_elaboration` | `$fatal` on N below 2 |
 
 ## async_fifo
 
@@ -157,3 +177,4 @@ data, and the test waits (under `with_timeout`) until all 1000 items are read.
 | `traffic_with_a_slow_writer_and_a_fast_reader` | 29 ns / 3.1 ns; runs dry |
 | `full_after_depth_writes` | directed: exactly `DEPTH` writes before `wfull` |
 | `flags_see_the_other_side_three_edges_later` | directed: the synchronizer latency of both flags |
+| `parameters_are_checked_at_elaboration` | `$fatal` on a DEPTH that is not a power of 2 (or below 2), or a WIDTH below 1 |

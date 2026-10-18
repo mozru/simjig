@@ -22,12 +22,13 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::process::Command;
 use std::rc::Rc;
 
 use simjig::bits::{Bit, Bits, Packed};
 use simjig::with_timeout;
 use simjig::{In, Out, RawWords, ReadOnly, Rng, TestCtx, clock, cycles, fork, ns, spawn, us};
+
+mod common;
 
 simjig::include_dut!(sync_fifo);
 simjig::include_dut!(item_fifo);
@@ -480,34 +481,19 @@ async fn random_continuations_from_full(ctx: &TestCtx, dut: item_fifo::Dut) {
 }
 
 /// The elaboration checks: Verilator lints every supported shape cleanly with `-Wall`,
-/// and stops on a DEPTH that is not a power of two.
+/// and stops on a DEPTH that is not a power of two or a WIDTH below 1.
 #[test]
-fn depth_must_be_a_power_of_two() {
-    let lint = |params: &[&str]| {
-        let rtl = concat!(env!("CARGO_MANIFEST_DIR"), "/rtl/sync_fifo.sv");
-        let out = Command::new("verilator")
-            .args(["--lint-only", "-Wall", "--top-module", "sync_fifo", rtl])
-            .args(params)
-            .output()
-            .expect("verilator on PATH (run under `pixi run`)");
-        (
-            out.status.success(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    };
-    for ok in [
-        &["-GDEPTH=2"][..],
-        &["-GDEPTH=16", "-GWIDTH=33", "-GFWFT=1"],
-    ] {
-        let (passed, stderr) = lint(ok);
-        assert!(passed, "{ok:?}: {stderr}");
-    }
-    for bad in ["-GDEPTH=1", "-GDEPTH=6"] {
-        let (passed, stderr) = lint(&[bad]);
-        assert!(!passed, "{bad} elaborated");
-        assert!(
-            stderr.contains("DEPTH must be a power of two"),
-            "{bad}: {stderr}"
-        );
-    }
+fn parameters_are_checked_at_elaboration() {
+    let src = &["rtl/sync_fifo.sv"];
+    let good: &[&[&str]] = &[&["DEPTH=2"], &["DEPTH=16", "WIDTH=33", "FWFT=1"]];
+    let bad_depth: &[&[&str]] = &[&["DEPTH=1"], &["DEPTH=6"]];
+    common::assert_param_checks(
+        "sync_fifo",
+        src,
+        good,
+        bad_depth,
+        "DEPTH must be a power of two",
+    );
+    let bad_width: &[&[&str]] = &[&["WIDTH=0"]];
+    common::assert_param_checks("sync_fifo", src, &[], bad_width, "WIDTH must be at least 1");
 }

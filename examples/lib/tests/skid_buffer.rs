@@ -20,6 +20,8 @@ use std::rc::Rc;
 use simjig::bits::{Bit, Bits};
 use simjig::{ReadOnly, Rng, TestCtx, clock, cycles, ns, spawn, us, with_timeout};
 
+mod common;
+
 simjig::include_dut!(skid_buffer);
 
 use skid_buffer::Dut;
@@ -243,4 +245,22 @@ async fn a_stall_fills_the_skid_then_drains_in_order(dut: Dut) {
         .await
         .expect("the three beats leave");
     assert_eq!(board.borrow().received, beats);
+}
+
+/// The elaboration checks: the module lints cleanly over default-width interfaces, and
+/// stops on a WIDTH below 1 or one that differs from the interfaces' own `WIDTH`.
+#[test]
+fn parameters_are_checked_at_elaboration() {
+    let src = &["rtl/stream_if.sv", "rtl/skid_buffer.sv"];
+    // As a top, the module's interface ports get `stream_if` instances with WIDTH = 8.
+    let good: &[&[&str]] = &[&[], &["WIDTH=8"]];
+    common::assert_param_checks(
+        "skid_buffer",
+        src,
+        good,
+        &[&["WIDTH=0"]],
+        "WIDTH must be at least 1",
+    );
+    let bad: &[&[&str]] = &[&["WIDTH=16"]];
+    common::assert_param_checks("skid_buffer", src, &[], bad, "but up.data has 8 bits");
 }

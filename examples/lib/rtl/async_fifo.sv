@@ -12,8 +12,16 @@
 // Write side (`wclk`): a write happens at a rising edge with `winc && !wfull`.
 // Read side (`rclk`): `rdata` shows the oldest entry while `!rempty` (first-word
 // fall-through); `rinc && !rempty` at a rising edge pops it.
-// Each side has its own asynchronous, active-low reset; release each synchronously to its
-// own clock.
+//
+// Reset: each side has its own asynchronous, active-low reset (`wrst_n`, `rrst_n`). The
+// two must be asserted together (their low periods overlap), as in Cummings' design, and
+// each released synchronously to its own clock. Each reset clears its own pointer and the
+// synchronizer that carries the other side's pointer in, so one reset alone leaves the
+// pointers inconsistent: `wrst_n` alone zeroes the write pointer while the read pointer
+// keeps its value, so once the zero crosses over `rempty` drops (unless the read pointer
+// happened to be zero) and the read side pops entries nobody wrote. With both low together,
+// both pointers and both synchronizers are zero, and both sides are empty from the moment
+// the second reset falls until the first write.
 module async_fifo #(
     parameter int unsigned WIDTH = 8,
     parameter int unsigned DEPTH = 16  // a power of 2, at least 2
@@ -38,7 +46,10 @@ module async_fifo #(
   localparam ptr_t FULL_FLIP = ptr_t'(3) << (AW - 1);
 
   if (DEPTH < 2 || (1 << AW) != DEPTH) begin : g_check_depth
-    $error("async_fifo: DEPTH must be a power of 2 and at least 2, got %0d", DEPTH);
+    $fatal(1, "async_fifo: DEPTH must be a power of 2 and at least 2, got %0d", DEPTH);
+  end
+  if (WIDTH < 1) begin : g_check_width
+    $fatal(1, "async_fifo: WIDTH must be at least 1, got %0d", WIDTH);
   end
 
   function automatic ptr_t bin2gray(ptr_t b);

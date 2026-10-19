@@ -323,6 +323,12 @@ impl Sim {
         }
     }
 
+    /// The cycle a synchronous run's [`SyncClock`](crate::SyncClock) reached (its rising
+    /// edges, [`SyncClock::cycle`](crate::SyncClock::cycle)); `None` without one.
+    pub(crate) fn sync_cycle(&self) -> Option<u64> {
+        self.kernel.sync_cycles.get()
+    }
+
     /// The current simulation time (the end time, after [`run`](Self::run)).
     #[must_use]
     pub fn now(&self) -> SimTime {

@@ -37,6 +37,8 @@ the public API, the generated code or simulation semantics.
   is low (both were silently accepted: a second clock advanced the same time axis, two
   rises made no edge); each panic names the caller's line, through `tick()` and
   `ticks(n)` too. New: `SyncClock::cycle()`, the rising edges so far.
+- The failure report of a synchronous test gives the cycle its `SyncClock` reached after
+  the time (`t=3 us (cycle 300)`); `FailureReport` gains `cycle: Option<u64>`.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

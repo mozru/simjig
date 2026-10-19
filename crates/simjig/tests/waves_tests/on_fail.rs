@@ -264,6 +264,8 @@ fn a_failing_sync_test_gets_waves_from_a_replay() {
     assert_eq!(fail_time, 3_000_000, "{err}");
     assert!(err.contains("replay:   reproduced"), "{err}");
     assert!(err.contains("repro:"), "{err}");
+    // The header gives the cycle the SyncClock reached: 1 + 299 rising edges.
+    assert!(err.contains("t=3 us (cycle 300)"), "{err}");
     let waves = fst::read(&dir.join("waves.fst"));
     assert_eq!(waves.end, fail_time, "the waves end at the failure");
     // One sample per edge (each half period is a timestep with one eval, dumped right

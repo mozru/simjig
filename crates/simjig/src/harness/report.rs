@@ -231,6 +231,10 @@ pub struct FailureReport {
     /// Whether a model of the run can write waves; without one, the report offers no
     /// waves command.
     pub can_trace: bool,
+    /// The cycle a synchronous test's `SyncClock` reached when it failed
+    /// ([`SyncClock::cycle`](crate::SyncClock::cycle)), printed after the time; `None` for
+    /// an async test.
+    pub cycle: Option<u64>,
     /// The fork branch whose failure failed the test (`Branches::into_values`), if one did:
     /// the header then gives the branch's failure time, the checkpoint's being the
     /// failure's own.
@@ -266,6 +270,7 @@ impl FailureReport {
             signals: failing_signals(&failure.kind),
             waves: None,
             can_trace: true,
+            cycle: None,
             failed_branch: None,
         }
     }
@@ -361,7 +366,10 @@ impl fmt::Display for FailureReport {
             }) => {
                 format!("t={time} (checkpoint; fork branch {index} died)")
             }
-            None => format!("t={time}"),
+            None => match self.cycle {
+                Some(cycle) => format!("t={time} (cycle {cycle})"),
+                None => format!("t={time}"),
+            },
         };
         let init = match self.run.init {
             InitValues::Random => "init=random  ",

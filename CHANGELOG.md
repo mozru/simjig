@@ -549,7 +549,7 @@ the public API, the generated code or simulation semantics.
   without its driver. Cancel such a task with `Task::cancel`. A combinator dropping a
   losing operand, a cancelled task's locals and the end of the run are unaffected; so is
   dropping a handle whose task has run. The `must_use` message of `Task` says the same.
-- IR schema 5: no new fields; it marks the DPI fields stage 3 added under schema 4
+- IR schema 5: no new fields; it marks the DPI fields added under schema 4
   (`Design::dpi_imports`, `Design::dpi_exports`), so schema 4 no longer has two JSON forms
   and a front-cache entry from a build without them is not served. Every `IR_HASH` (and
   so every generated binding and shim) changes, and every DUT's JSON pass runs once more.
@@ -797,7 +797,7 @@ the public API, the generated code or simulation semantics.
   assuming the simjig repository; the doctor's Verilator line says that builds keep the
   Verilator their build script found, so switching `PATH` alone does not rebuild.
 - `svtypes --help` (`-h`, `help`) prints the usage and succeeds.
-### Stage 3: DPI-C, waves, fork checkpoints, several DUTs per test
+### DPI-C, waves, fork checkpoints, several DUTs per test
 
 #### DPI-C imports implemented in Rust (`simjig`, `simjig-build`, `svtypes`)
 - Generated code: for a design with `import "DPI-C"` functions or tasks, the generated
@@ -869,7 +869,7 @@ the public API, the generated code or simulation semantics.
   (`now().display(ctx.precision())`); `SimTime` documents why it has no `Display`.
 
 #### Documentation
-- `README.md`, `examples/quickstart` and the crate docs show the Stage 3 features. The
+- `README.md`, `examples/quickstart` and the crate docs show these features. The
   quickstart's flop is built with `.trace_fst(true)` and gains a two-DUT test
   (`tests/inv_flop.rs`).
 
@@ -912,7 +912,7 @@ the public API, the generated code or simulation semantics.
   the simjig-build version and the shape of `DutConfig`; a cache written by another
   simjig-build no longer reports every prefix as a collision.
 
-#### Stage 3 review cycle 2 fixes
+#### Fixes: fork hooks, traces, load errors, waves on failure
 - Fork: a branch child runs `ForkHook::at_child_exit` only for hooks whose `in_child`
   succeeded. Before, a failing hook (a user's hook registered before a traced model, or
   a trace whose branch file could not be created) left the other hooks to finish, and a
@@ -935,7 +935,7 @@ the public API, the generated code or simulation semantics.
 - `simjig-build`: a failed Verilator run whose stderr has STMTDLY or NOTIMING ends with a
   hint to add `.timing(true)`.
 
-#### Stage 3 review cycle 3 fixes
+#### Fixes: waves of dead fork branches, nested checkpoints
 - Waves of a fork branch whose child died without a report (a signal): its file is
   labelled `died (killed by signal <n>); file incomplete`, listed after the readable
   files, has no marker (it used to be put at the checkpoint and labelled "failed at"),

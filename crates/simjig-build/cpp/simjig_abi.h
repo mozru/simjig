@@ -137,7 +137,7 @@ typedef struct simjig_create_opts {
     /* ---- Appended after size 32 (SIMJIG_ABI_VERSION 1). A caller compiled before them
      * passes a smaller `size`, and create reads them as SIMJIG_INIT_ZERO. ---- */
 
-    /* SIMJIG_INIT_*: the initial values of the model's variables (docs/notes/n-xinit.md). */
+    /* SIMJIG_INIT_*: the initial values of the model's variables (docs/notes/model.md). */
     uint32_t init;
     /* With SIMJIG_INIT_RANDOM: the seed the initial values are drawn from, in 1..=INT32_MAX
      * (VerilatedContext::randSeed while the model is constructed). Ignored otherwise. */
@@ -222,7 +222,8 @@ typedef struct simjig_model_vtable {
      * did not inline, each interface instance) plus one in the symbol table; a run is a
      * maximal contiguous range of them, and the runs come in symbol-table order (the order of
      * the objects in V<prefix>__Syms). The run layout and an index's coverage point are fixed
-     * for one build (docs/notes/s1c2fix.md has the mapping), and the runs are fixed at create.
+     * for one build (docs/notes/tracecov.md, "Coverage", has the mapping), and the runs are
+     * fixed at create.
      * Covergroup bins are NOT in any run: Verilator allocates them on the heap when the
      * covergroup's `new` runs (during an eval), outside the symbol table. cov_write and
      * cov_zero do include them. (Before the first release this slot was `cov_counters`,

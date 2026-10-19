@@ -1,6 +1,6 @@
-# glue notes (agent "glue", branch `w3/glue`)
+# Glue notes
 
-Stage 2 exit: the whole stack used end to end as a user would. Checked against Verilator
+An end-to-end check: the whole stack used as a user would. Checked against Verilator
 5.052 (pixi), osx-arm64.
 
 ## What changed
@@ -40,16 +40,16 @@ models (`abi_counter`, `abi_ticker`).
    `Dut::build` prints `rustc-link-lib`, which Cargo gives to the library; an integration
    test that never names the library does not link it, so the vtable symbol is undefined
    (`ld: symbol(s) not found`). Without a library target the directives reach every target,
-   which is why `examples/quickstart` has none. Proposed fix (simjig-build `compile.rs`, not
-   mine): also emit the archives and `-lc++` as `cargo::rustc-link-arg` (bins, tests,
+   which is why `examples/quickstart` has none. Proposed fix (simjig-build `compile.rs`):
+   also emit the archives and `-lc++` as `cargo::rustc-link-arg` (bins, tests,
    examples, benches). Archives only load members on demand, so linking one twice is safe.
-2. Users must depend on `simjig-bits` directly for `Bit`, `Bits`, `WideBits`: `simjig`
+2. (Fixed since: `simjig::bits` re-exports the crate.) Users must depend on `simjig-bits` directly for `Bit`, `Bits`, `WideBits`: `simjig`
    re-exports them only under `__private::bits`. A public `simjig::bits` (or top-level
    re-exports) would remove one dependency from every testbench.
-3. `simjig::clock` takes `impl Into<RawSig>`, but `cycles`, `rising`, `falling`, `changed`
+3. (Fixed since: the free triggers take `impl Into<RawSig>` too.) `simjig::clock` takes `impl Into<RawSig>`, but `cycles`, `rising`, `falling`, `changed`
    (free functions) take `RawSig`: `cycles(dut.clk.raw(), 2)` next to `clock(dut.clk, ..)`.
    `cycles` should take `impl Into<RawSig>` too (and outputs need `.raw()` anyway).
-4. Failure times print in ticks of the precision (`t=10000 ps`), not the largest exact unit
+4. (Fixed since: `TimeDisplay` prints the largest exact unit.) Failure times print in ticks of the precision (`t=10000 ps`), not the largest exact unit
    (`10 ns`); the timeout attribute takes `"1us"`.
 5. Signal names of an interface-ported DUT are the wrapper's
    (`simjig_wrap_iface_top.out_bus_valid`), which is what reports and `name()` show; the
@@ -64,8 +64,7 @@ models (`abi_counter`, `abi_ticker`).
   crates never depend on each other; this is a build-dependency of the runtime crate's own
   test models only (no runtime link: directives are `-tests` only, and the models build
   only under `SIMJIG_TEST_MODELS=1`). The alternative, a separate test-only crate, would
-  move the runtime's tests away from the runtime. The invariant's wording needs updating
-  (director).
+  move the runtime's tests away from the runtime.
 - The `iface_top` "writing an `Out` field does not compile" check is compositional: a test
   binds every bundle field with an explicit `In<..>`/`Out<..>` type (fails to compile if
   codegen types one differently), and `simjig::Out` carries a `compile_fail` doctest for

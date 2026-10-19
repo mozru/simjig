@@ -1,6 +1,6 @@
 # abi: the C ABI, the C++ runtime and the fatal-unwinding spike
 
-Agent `abi`, branch `w1/abi`. Checked against the installed Verilator 5.052 (conda-forge,
+Checked against the installed Verilator 5.052 (conda-forge,
 `.pixi/envs/default/share/verilator/include`) and the 5.053-devel source.
 
 ## Files
@@ -126,8 +126,28 @@ Sanitizers and leaks:
   `eval_held`, `release`, a hold of a poisoned model: `Vfat held`) included.
 - **`leaks --atExit`** (macOS): 0 leaks after the fatal-unwind and destroy cases, plain and
   `--timing`.
-- **ASan could not run on this host.** The conda clang 21 ASan runtime deadlocks in
-  `__asan::InitializeShadowMemory` on macOS 27 before `main`. Not verified; rerun on Linux CI.
+- **ASan could not run on macOS.** The conda clang 21 ASan runtime deadlocks in
+  `__asan::InitializeShadowMemory` on macOS 27 before `main`.
+- On linux-aarch64 (gcc 15.3 runtimes), `run.sh asan` and `run.sh ubsan` both run to the
+  end with no sanitizer report; `delay_internal` aborts as expected (exit 134). The ASan
+  hang does not occur there.
+
+## Later changes
+- Offset 128 is now `cov_runs` (`simjig_cov_run` runs of counters) instead of
+  `cov_counters`; the slot had no consumer, so `SIMJIG_ABI_VERSION` stayed 1. See
+  tracecov.md, "Coverage".
+- `ModelVtable::check(*const Self, ir_hash)` reads `abi_version` and `size` through field
+  pointers before it creates a reference. Miri rejects the older `&self` form over a table
+  shorter than the mirror ("constructing invalid value ... dangling reference").
+- `Signal::decode` decodes storage and direction once and checks
+  `storage == for_width(width)` and `words == ceil(width/32)`; the accessors take typed
+  narrow pointers or a wide cell, and every match is exhaustive. Miri showed the older
+  catch-all arm doing an 8-byte read of a 1-byte member for an unknown storage class.
+  Run with `cargo +nightly miri test -p simjig --lib model::abi`.
+- Narrow writes must mask: Verilator widens a `CData`/`SData`/`QData` input without
+  masking it, so an unmasked write of 5-, 12- and 40-bit inputs reads back as `0xff`,
+  `0xffff` and `u64::MAX` in the DUT (tested on `counter.sv`'s `tiny_in`, `mid_in`,
+  `quad_in`).
 
 ## Measured costs (`cargo test --release -p simjig --test abi_counter -- --ignored --nocapture`)
 Apple M6, release, three runs, 50 M iterations:

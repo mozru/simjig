@@ -1,7 +1,7 @@
-# Notes: Stage 3 de-risking spikes (agent "spikes")
+# Notes: de-risking spikes
 
 Small, real experiments on Verilator 5.052 (pixi) and the designs in `tests/duts`, run
-before Stage 3 starts. The code in `tests/spikes` is reference material, not production
+before fork checkpoints, DPI-C and waves were built. The code in `tests/spikes` is reference material, not production
 code. Each claim below names the test that checks it.
 
 ## How to run
@@ -84,10 +84,9 @@ the child's report over a socket. The child ends with `_exit`.
      type valid, chain ends exactly at EOF, header `end_time`). It does not decompress
      anything.
 4. The pixi environment had no `lz4.h`/`zlib.h`, so Verilator's FST writer did not
-   compile. Commit `c43da94` adds `lz4-c` and `zlib` to `pixi.toml` (a shared file). Stage 2
-   waves need them too.
+   compile. `pixi.toml` now pins `lz4-c` and `zlib`; waves need them too.
 
-**Rules for Stage 3 (`simjig::fork`)**
+**Rules for `simjig::fork`**
 1. Unix only. Build every model with `--threads 1`, **and** construct every
    `VerilatedContext` with `threads(1)` before adding a model.
 2. Fork only when no other thread can hold a lock: run under nextest (one test per
@@ -138,7 +137,7 @@ different designs). Each has its own `VerilatedContext`, and all run on one thre
 - `Verilated::threadContextp(ctx)` is one `thread_local` store. Constructing a model sets
   it to that model's context. Nothing else switches it, and `eval()` does not.
 
-**Rules for Stage 3**
+**Rules for simjig**
 1. Before every `eval()` (and every `final()` and trace call) of a model, call
    `Verilated::threadContextp(model's context)`. Put this in the shim's eval wrapper, not
    in Rust, so it cannot be forgotten.
@@ -159,9 +158,8 @@ different designs). Each has its own `VerilatedContext`, and all run on one thre
    edge. The first eval only initialises the trigger state.
 7. **DPI note:** a DPI *import* is one global C symbol, so every model in a binary that
    imports `dpi_add` gets the same implementation. Two designs that need different
-   functions under one name cannot share a binary. DPI *exports* were not tested. This
-   refines the agentic-rust skill §9a ("own test binary" per parameter variant): distinct
-   prefixes share a binary fine; only DPI name clashes force separate binaries.
+   functions under one name cannot share a binary. DPI *exports* were not tested. So a
+   parameter variant does not need its own test binary: distinct prefixes share a binary fine; only DPI name clashes force separate binaries.
 
 ## 3. DPI into Rust (`tests/dpi.rs`)
 `dpi_add` and `dpi_tick` are `#[unsafe(no_mangle)] pub extern "C"` functions in the test
@@ -180,7 +178,7 @@ C++): C++→C++ 0.53 ns, C++→Rust plain 0.42–0.50 ns, C++→Rust with `catch
 guard costs about 1 ns per call; `catch_unwind` itself is free on the happy path, and the
 cost is the thread-local accesses.
 
-**Rules for Stage 3**
+**Rules for simjig**
 1. Every Rust DPI function body runs under `catch_unwind`. On a panic it stores the
    payload and returns a neutral value.
 2. After every `eval()`, the kernel checks the parked payload. If one is there, it
@@ -204,7 +202,7 @@ with the design's 5 ns slots and coincides with them at 35 and 70 ns.
 | `nextTimeSlot()` with `eventsPending()` false: **the process exits with code 1**, both for a model without `--timing` ("No delays in the design") and for a `--timing` model before its first eval ("There is no next time slot scheduled") | `next_time_slot_exits_the_process_when_no_event_is_pending` | pass |
 | Setting time past a pending slot (5 ns + 1 ps) and evaluating: **exit 1** ("Encountered process that should've been resumed at an earlier simulation time. Missed a time slot?"). Going back in time (5 ns → 2 ns) is not checked at all | `skipping_past_a_design_slot_is_fatal_but_going_backwards_is_not_checked` | pass |
 
-**Rules for Stage 3**
+**Rules for simjig**
 1. Call `nextTimeSlot()` only when `eventsPending()` is true. Otherwise Verilator calls
    `vl_fatal` → `std::exit(1)`, which kills the test process with no Rust failure.
    `eventsPending()` is also false after `$finish`.
@@ -243,7 +241,7 @@ iterations of one eval.
 - A pulse that starts and ends inside one eval is missed 100% of the time, with or
   without `public_flat_rd`.
 
-**Rules for Stage 3**
+**Rules for simjig**
 1. The kernel compares watched signals after **every** eval (each delta), never once per
    time step. Otherwise a design-driven clock that changes twice in one time step (two
    clk pulses written in deltas) aliases as above.
@@ -260,10 +258,10 @@ iterations of one eval.
 - DECISION.md §4 Q3 asked whether `fork()` works "single thread, `--threads 1`, no open
   trace files". It works, but `--threads 1` is not enough: the context also needs
   `threads(1)` (§1 surprise 1). Open traces are survivable only with the detach procedure.
-- The agentic-rust skill §9a says "Each HDL-parameter variant gets its own `--prefix` and
-  its own test binary". The prefix is required; a separate binary is not. Only DPI name
+- A common rule is "each HDL-parameter variant gets its own `--prefix` and its own test
+  binary". The prefix is required; a separate binary is not. Only DPI name
   clashes force separate binaries (§2 rule 7).
-- The skill says to "compile the shim so fatals do not exit". `nextTimeSlot()` misuse and
+- A common rule is to "compile the shim so fatals do not exit". `nextTimeSlot()` misuse and
   a skipped time slot reach `vl_fatal` → `exit(1)` from libverilated, not from the shim. A
   `VL_USER_FATAL` hook must be compiled into libverilated itself.
 - `pixi.toml` lacked FST's `lz4`/`zlib` (fixed in `c43da94`).

@@ -1,4 +1,4 @@
-# Notes: shared DUTs and cocotb conformance goldens (agent "duts")
+# Notes: shared DUTs and cocotb conformance goldens
 
 ## What exists
 - `tests/duts/<name>/`: 13 designs, each with a README. `pixi run duts-lint` lints all of

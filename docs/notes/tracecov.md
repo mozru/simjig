@@ -1,6 +1,6 @@
 # tracecov: FST tracing, coverage and per-model isolation at the C level
 
-Agent `tracecov`, branch `w3/tracecov`. Checked against the installed Verilator 5.052
+Checked against the installed Verilator 5.052
 (`.pixi/envs/default/share/verilator/include`) and the 5.053-devel source.
 
 ## How to run
@@ -12,7 +12,7 @@ pixi run cpp-tests      # crates/simjig-build/cpp/tests/run.sh: 18 C++ tests, ab
 covergroup and `--coverage-line`) into one
 executable, the same way `cpp/spike/run.sh` does. `traits.cpp` writes their traits the way
 the shim emitter does. The tests use only the vtable. `cargo xtask ci`
-runs it (since s1c2fix).
+runs it.
 
 ## The ABI after this change (`SIMJIG_ABI_VERSION` stays 1)
 `simjig_model_vtable` grows from 136 to **192 bytes**, append-only. The first 136 bytes keep
@@ -23,7 +23,7 @@ their layout. The old trace/coverage slots are now filled.
 | 104 | `trace_open` | `simjig_status (*)(h, const char* path)` | `trace_open_ex(h, path, 0, 0)` |
 | 112 | `trace_dump` | `simjig_status (*)(h, uint64_t time)` | one sample; OK no-op if no trace or `time < start_time` |
 | 120 | `trace_close` | `simjig_status (*)(h)` | close; OK no-op if none open |
-| 128 | `cov_counters` | `uint32_t* (*)(h, size_t* count)` | live pointer, or NULL/0 (below) |
+| 128 | `cov_runs` (was `cov_counters`) | `const simjig_cov_run* (*)(h, size_t* count)` | counter runs, or NULL/0 (below) |
 | 136 | `features` | `uint64_t` | `SIMJIG_FEATURE_TIMING 1`, `_TRACE_FST 2`, `_COVERAGE 4` |
 | 144 | `trace_open_ex` | `simjig_status (*)(h, const char* path, uint32_t depth, uint64_t start_time)` | open (closing an open one first) |
 | 152 | `trace_flush` | `simjig_status (*)(h)` | flush buffered samples |
@@ -45,11 +45,8 @@ Trace and coverage entries return `SIMJIG_UNSUPPORTED` unless the model was buil
 them. They map the sticky FINISH and STOP to OK: those describe the simulation, not the
 call. FATAL, EXCEPTION and POISONED pass through.
 
-The Rust mirror (`crates/simjig/src/model/abi.rs`) must append the seven fields above and
-`Status::IoError = 7`, and change the size assert to 192. Until it does,
-`abi_counter::rust_mirror_matches_cpp_layout` fails (C reports 192, Rust 136). I applied that
-patch temporarily and all 69 `simjig` tests passed, then reverted it, because `crates/simjig`
-belongs to another agent.
+The Rust mirror (`crates/simjig/src/model/abi.rs`) carries the same fields and
+`Status::IoError = 7`; `abi_counter::rust_mirror_matches_cpp_layout` compares the sizes.
 
 ### ABI field table (`simjig_rt_abi_fields`)
 `const simjig_abi_field* simjig_rt_abi_fields(size_t* count)` (in `simjig_rt.h`, defined in
@@ -119,13 +116,30 @@ Verilator 5.052 keeps coverage counters in **several** arrays, not one:
 
 Both use the same keys, and `coverage.dat` sums items with equal keys.
 
-`cov_counters` returns `rootp->__Vcoverage` **only when its length equals the symbol table's**.
-That means every point of the model is declared in the top object. Otherwise it returns
-NULL/0 and does not hand out a partial array: an index would then name different points in
-different builds. `cov_zero` (`VerilatedCovContext::zero`) and `cov_write` always cover every
-point.
+The first ABI had `cov_counters`, which returned `rootp->__Vcoverage` only when every point
+was declared in the top object, and NULL otherwise (an interface-ported DUT always has an
+interface object, so it got NULL). `cov_runs` replaced it in the same slot (offset 128;
+nothing consumed the old one, so `SIMJIG_ABI_VERSION` stayed 1):
+- C++ has no way to enumerate a model's objects, so `simjig_vl_config.h` includes
+  `verilated_cov.h` and redefines `VL_COVER_INSERT` to report each `countp` to the runtime
+  whose create is constructing the model (`simjig::note_cov_counter`);
+- after construction, create keeps the pointers that lie inside the `V<prefix>__Syms` object
+  (it holds the root, every module object and its own array as members, so the
+  `fake_zero_count` of later instances drops out), sorts them by address, deduplicates them
+  and merges contiguous ones into runs (`simjig_cov_run { uint32_t* counters; size_t len; }`,
+  16 bytes);
+- runs come in symbol-table member order: the root's array, then each non-inlined module or
+  interface instance in `V<prefix>__Syms` declaration order, then the symbol table's array.
+  Two arrays that happen to be adjacent in memory form one run;
+- points of several instances of one module with equal keys are summed in `coverage.dat`,
+  so `tc_hier` has 9 counters in 3 runs but 3 points. The live sum of the runs equals the
+  `coverage.dat` total exactly there;
+- cost: every translation unit includes `verilated.h` through the config header (the model
+  sources already did through their pch).
 
-Mapping, for a flat model (`tc`, `-O` defaults inline everything; `--flatten` forces it):
+`cov_zero` (`VerilatedCovContext::zero`) and `cov_write` always cover every point.
+
+Mapping within one object's array, as for a flat model (`tc`, `-O` defaults inline everything; `--flatten` forces it):
 - index `i` is Verilator's local bin number `i` in the top object. It is assigned at
   verilation, so it is stable for one build, not across Verilator versions or design edits;
 - a line/branch/user point is one counter;
@@ -142,8 +156,8 @@ Mapping, for a flat model (`tc`, `-O` defaults inline everything; `--flatten` fo
 Each handle has its own context and so its own `VerilatedCovContext`: `coverage.dat` is per
 model.
 
-## Covergroup bins and `cov_runs` (s1c3fix)
-`cov_runs` (`docs/notes/s1c2fix.md`) hands out the counter arrays that lie inside the
+## Covergroup bins and `cov_runs`
+`cov_runs` (above) hands out the counter arrays that lie inside the
 `V<prefix>__Syms` object. A covergroup's bins are not there: 5.052 registers them through
 `VL_COVER_INSERT` when the covergroup is constructed, which for `cg inst = new;` is the model's
 first eval (static initialisers run in `_eval_static`), into counters it allocates on the
@@ -212,27 +226,24 @@ runs, `cov_zero` clears them).
     seed 0.
   - x-initialisation randomness (`VL_SCOPED_RAND_RESET_*`) uses the context's `randSeed` and
     scope hashes, never `t_rng`, so it is per-context already and `rng_seed` does not affect
-    it.
+    it. Because the hash takes the scope and variable names, one seed makes like-named
+    registers of two models start alike. So models of one design (`DutModel::design`, the
+    top module's name) share the first one's initial-value seed: the lockstep case, old
+    and new RTL of one top built under two prefixes, then starts alike. Models of different
+    designs keep their own seeds, or `inv.q` and `flop.q` would start equal only because
+    their names are.
 - **`$display`** goes into the active runtime's ring (`VL_PRINTF` hook), with `$time` and
   `%m` from that model's context and name. Test: A (`A.tc ... t=45`) and B (`B.tc ...
   t=1045`) each see only their own line.
 
-## Probe width check (Stage 1 review)
-Before this change, `SIMJIG_SIGNAL` checked only the storage class, so a 3-bit probe
-declared as 5 bits built cleanly (both are `CData`). The exact width exists only at runtime:
-it is in the `VlVarTableEntry` tables of `V<prefix>__Syms__Slow.cpp`, which `public_flat_rd`/
-`_rw` creates even without `--vpi`. No `constexpr` metadata exists. So `create` runs
-`simjig::check_probe` on every `SIMJIG_DIR_INTERNAL` signal after `bind`:
-- look up scope `<model name>.<path minus its last component>` and var `<last component>`;
-- check that the var exists, that `datap()` equals the bound pointer, that it has no
-  unpacked dimensions, and that `entBits()` equals the declared width.
-
-A mismatch throws `std::runtime_error`. `create` then returns EXCEPTION with an EXCEPTION
-message such as `simjig: probe 'tc.u.r': the model's variable is 1 bits wide, but it is bound
-as 5 bits`, and the handle is poisoned. Tests:
-- `probe_width_is_checked_at_create` (C++);
-- `probe_with_a_wrong_width_fails_create` (emitter output with a widened probe, Verilator
-  build, driver).
+## Probe width check
+`SIMJIG_SIGNAL` checks only the storage class, so a 3-bit probe declared as 5 bits would
+build cleanly (both are `CData`). The exact width exists only at runtime: it is in the
+`VlVarTableEntry` tables of `V<prefix>__Syms__Slow.cpp`, which `public_flat_rd`/`_rw`
+creates even without `--vpi`. No `constexpr` metadata exists. So probes are bound at create
+through the scope table by `simjig::find_probe`, which checks the width, type and access (see
+codegen.md, "Probes"). A mismatch throws; `create` then returns EXCEPTION with a message
+naming the probe, and the handle is poisoned.
 
 Ports are not checked this way; `check_ports` against the header macros covers them.
 
@@ -257,7 +268,7 @@ signal stored as `VlWide` (more than 64 bits), loops `j` up to `width - i * 32` 
 word `i`, not up to 32, and evaluates `newData[i] >> j` and `chgData >> j` on a 32-bit
 `EData`. For every word but the last, `j` reaches 32 and more: a shift by at least the
 operand's width, undefined behaviour that UBSan reports as a shift-exponent error (found
-by the stage 1 review; not rerun in this branch). In practice the shifted-out word's bits are read again as the next
+by a UBSan run; not rerun since). In practice the shifted-out word's bits are read again as the next
 word's, so the toggle counts of bits above 32 in a word-crossing signal are counted from
 two words. It affects any `--coverage` (or `--coverage-toggle`) model with a toggled
 signal wider than 64 bits, simjig or not; the `_I` and `_Q` variants loop `i < width` over a
@@ -266,16 +277,10 @@ signal wider than 64 bits, simjig or not; the `_I` and `_Q` variants loop `i < w
 upstream.
 
 ## Not verified / open
-- Linux: everything ran on osx-arm64 only. The fd scan uses `RLIMIT_NOFILE` capped at 65536.
-- ASan (it cannot run on this host; see abi.md).
+- Linux: the C++ tests and the fork checkpoints pass on linux-aarch64 (see buildinfra.md,
+  "Linux"); linux-64 was not run. The fd scan lists `/proc/self/fd` (Linux) or `/dev/fd`,
+  falling back to a scan up to `RLIMIT_NOFILE` capped at 65536, and raises the soft limit
+  for the call when a descriptor lies above it (`dup2` onto it fails otherwise).
+- ASan ran clean on Linux only (see abi.md).
 - A nested scope (DPI → Rust → another model) end to end; only `thread_rng`'s contract is
   tested directly.
-- (Superseded) `cov_counters` became `cov_runs` in s1c2fix, which covers non-inlined
-  modules; probes are found through the scope table, not `rootp->a__DOT__b`.
-- (Superseded by s1c4fix: generate-block probe paths are supported via IR schema 4.) Probe paths through generate blocks (`top.g[0].u.x`, `top.gen_blk.x`) were not supported: the lowering accepts only plain identifiers, and the IR's instance tree
-  (`Module::instances`) lists only instances directly in a module body. Verilator's scope
-  table names such a scope plainly, `g.gb[0].u` (checked on 5.052; only the C++ member
-  name is mangled), so `find_probe` could find it; supporting
-  them needs the IR to record generate scopes and the lowering to accept `name[index]`
-  segments.
-- The `CHANGELOG.md` now exists and records the ABI and build changes.

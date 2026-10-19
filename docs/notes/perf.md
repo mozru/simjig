@@ -1,4 +1,4 @@
-# Notes: simulation throughput (agent "perf")
+# Notes: simulation throughput
 
 Goal: simjig's throughput on the benchmark's `sync_fifo` testbench (`bench/README.md`),
 with semantics bit-identical: the conformance goldens, the wake order, every kernel test,
@@ -93,7 +93,7 @@ guarantee, in order of size:
    byte is a dependent multiply). The removal build saves 54 ns of C (28 of A): an upper
    bound on what any faster hash could gain. A word-at-a-time or SIMD hash would get most
    of that but changes every recorded hash (seeds, failure signatures and replays compare
-   them), so it is a decision for the director, not done here. Making the hash opt-out
+   them), so it is a separate decision, not taken here. Making the hash opt-out
    (a fast mode) saves the same 54 ns and drops the determinism check of DECISION §2 row 4
    for such runs.
 4. **Signal access through the current kernel.** A typed `get` is about 100 instructions:
@@ -164,7 +164,7 @@ Main at bd73904 against the end of phase 2, one session: A 621.8 -> 188.2 (3.3x)
 173.1 (3.7x), C 308.7 (3.3x). The ceiling (a hand-written Verilator loop, Marlin) is 35
 to 40 ns for C: simjig is 9x off by default, 8x without the hash.
 
-## What phase 2 did with the director's list
+## What phase 2 did with the open list
 1. **Pointer-based signal access: done for the last hop.** A Verilator backend hands the
    kernel each readable narrow slot's storage pointer (`kernel::cell::Direct`, made from a
    validated signal-table row; width and writability checked when the table is decoded).
@@ -187,11 +187,11 @@ to 40 ns for C: simjig is 9x off by default, 8x without the hash.
    and runs the design code the write triggers at the wrong `$time` (displays, DPI-C calls,
    assertions). The skipped evals of phase 1 (nothing written since the last eval) are
    no-ops for a model without a variable C++ may write; they stay recorded and counted.
-   (Corrected after review: "provably no-ops" was wrong for a model with a
+   (Corrected later: "provably no-ops" was wrong for a model with a
    `public_flat_rw` variable, whose logic runs on every eval; see "Corrections" below.)
 3. **A fast path for quiet timesteps: done** as far as it is provable (phase 1: empty
    ReadWrite round, empty regions, skipped walks; phase 2: a walk after evals alone when
-   only inputs are watched). (Corrected after review: the phase 2 skip assumed Verilator
+   only inputs are watched). (Corrected later: the phase 2 skip assumed Verilator
    rejects an assignment to an input, but `ASSIGNIN` is a lint a design may waive, and
    then an eval changes an input; the skip was removed. See "Corrections" below.)
 4. **Wakers and polling: done where it did not change behaviour.** Wakers were already
@@ -234,7 +234,7 @@ it needs a different executor for the common case (for example, tasks that only 
 edges of kernel clocks compiled into a per-edge schedule with the waits resolved once,
 signals read through pointers held by the schedule, and evals merged where the design is
 known to have no logic on the edge), which changes the executor's semantics and needs its
-own design decision (rule 5) and review cycles.
+own design decision (rule 5).
 
 ## Also measured, not done
 - **A faster hash of the time word** (the largest part of each record's chain): FNV-1a
@@ -311,7 +311,7 @@ none is removable without giving up a check.
   serial chain further; the whole hash now costs 30 ns of async C (304.8 against 274.6
   without it), so this would recover perhaps 15 ns, with architecture-specific code.
 
-# Corrections (review of phases 1 to 3)
+# Corrections (phases 1 to 3)
 
 Two of the "provable" skips were not, and are now gone where they cannot be proven.
 

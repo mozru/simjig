@@ -236,7 +236,7 @@ struct Vtable final {
     // epoch; thread_rng() catches the thread up without losing the model's stream. The two
     // thread_rng() calls are defensive: they matter only to a constructor that draws from
     // the thread's stream (none of the test designs does, and removing them passes every
-    // test; docs/notes/n-xinit.md), and keep such a draw on the model's stream.
+    // test; docs/notes/model.md), and keep such a draw on the model's stream.
     static void construct_randomized(VerilatedContext& ctx, Handle* h, const char* name,
                                      uint32_t seed) {
         const int reset = ctx.randReset();

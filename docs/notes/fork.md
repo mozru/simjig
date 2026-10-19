@@ -1,4 +1,4 @@
-# Notes: multiple DUTs and `fork()` checkpoints (agent "fork", branch `w3/fork`)
+# Notes: multiple DUTs and `fork()` checkpoints
 
 Code: `crates/simjig/src/harness/multi.rs` (tuple DUTs, `Lockstep`, `Mirror`),
 `crates/simjig/src/harness/dut.rs` (`DutModel::{load, bind}`, `LoadedModel`),
@@ -129,8 +129,19 @@ printed.
 - Multi-model: one shared precision; at most 4 DUTs per test; one seed for all models.
 - Branches cannot spawn tasks that outlive the body (the child exits when the body
   returns); a branch's `Drop` cleanup does not run.
+- **No nested checkpoints**: inside a branch the call returns `ForkError::Nested`, checked
+  before every other rule ("in a branch" is "this process holds the socket to its
+  parent", so it needs no new state). Nesting is refused rather than supported because
+  the sentinel, the channel, the armed hooks, the failed-branch record and the waves file
+  names would each need a level. Because of it, a branch trace file always has exactly
+  one `.branch-<j>` level.
+- **No fork inside a combinator** (`ForkError::InCombinator`): an operand of `join!`,
+  `first!` or `with_timeout` is a helper polled inside `main`, not a task, so the
+  quiet-point check alone would let it fork. A sibling operand would then keep running in
+  every branch, and a `first!` sibling that won in a child would cancel the body and let
+  the child run the rest of the test as the parent.
 
-## For the director (outside my ownership, changed minimally)
+## Changes outside the fork module
 - `model/bind.rs`: `load`, `create_in`, `ModelBinder::model`, `dut_model!` emits `load`
   and `bind`; `create` = `create_in(.., 0, ..)`. Additive; needed because only the model
   layer can build a backend without a `Sim`.
@@ -140,10 +151,8 @@ printed.
   dependency); `simjig` depends on it for Unix only. Why not std: `fork`, `_exit`, `wait4`
   and `proc_pidinfo` have no std wrapper, and hand-written `rusage`/`proc_taskinfo`
   layouts would be a second copy of libc's.
-- **Trace integration is not done**: on this branch the Rust side never opens a trace, so
-  nothing registers a `ForkHook`. When `VerilatorModel` opens an FST it should register
-  `ForkHook::new(|| trace_flush, |b| trace_reopen(<file>.branch-<i>.fst))` and keep the
-  `HookGuard` with the model.
+- Traces: an open FST registers a `ForkHook` (`model::trace`), which continues the
+  branch's waves in `<stem>.branch-<i>.fst`; see `docs/notes/waves.md`.
 - `fork.rs` reads kernel fields (`phase`, `main`, `current`, `tasks.unfinished()`,
   `failure`) through `state::try_current`; no kernel code changed.
 - Contradiction with spikes.md: none found. DECISION.md says "`fork()` checkpoints (Unix,
@@ -153,6 +162,5 @@ printed.
 ## Not verified
 - Linux (all runs on osx-arm64): the `/proc/self/status` path, `ru_maxrss` in KiB, fork
   latency growing with RSS.
-- A real FST through `trace_reopen` from a fork child (no Rust trace API here).
 - Non-Unix builds (`cfg(not(unix))` code was not compiled).
 - Miri: `fork/sys.rs` is FFI only.

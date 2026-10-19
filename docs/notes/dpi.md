@@ -1,4 +1,4 @@
-# DPI notes (agent "dpi", branch `w3/dpi`)
+# DPI notes
 
 DPI-C imports implemented in Rust: the one sanctioned case of the simulator calling the
 testbench. Checked against Verilator 5.052 (pixi), osx-arm64.
@@ -77,7 +77,10 @@ How the two meet without touching the kernel: a thread-local registry keyed by
   failure naming both. `set_dpi` also claims its C names process-wide and panics if another
   prefix claimed one. Two instances with the *same* prefix in one simulation (multi-model
   sims) cannot be addressed separately by `set_dpi`; the second one fails on its first
-  DPI call, not before (models without DPI are unaffected).
+  DPI call, not before (models without DPI are unaffected). This rules out a lockstep run
+  of two instances of one DPI build; the failure is `FailureKind::Setup`, and its help
+  gives the workaround: build the design a second time under another `Dut::new` name
+  (another prefix) and run one instance of each.
 
 ## Facts about Verilator 5.052 (beyond spikes §3)
 - `--json-only` dumps `dpiImport`, `dpiExport`, `cname`, `prototype`, but not `dpiTask`,
@@ -116,8 +119,9 @@ scope (two thread-local accesses, an `Rc` clone); `ModelMeta` carrying the impor
 would let models without DPI skip it (below).
 
 ## Why not simpler (constitution rule 5)
-- **A registry instead of a field on `Dut` or `ModelMeta`:** both are other agents' code
-  (Rust item emitter, `dut_model!`); the registry needs neither, and the kernel is untouched.
+- **A registry instead of a field on `Dut` or `ModelMeta`:** both belong to other layers
+  (the Rust item emitter, `dut_model!`); the registry needs neither, and the kernel is
+  untouched.
 - **`unsafe` in `dpi::abi`:** the trampolines must read and write the pointers Verilator
   passes. Each `unsafe fn` has one contract (the pointer is Verilator's argument of exactly
   that type); the macro is the only caller. Unit tests drive every shape with buffers.
@@ -125,7 +129,11 @@ would let models without DPI skip it (below).
   generated code stays free of `unsafe`, and one table (`abi.rs`) defines the ABI.
 - **`Box<Box<dyn Trait>>` behind `dyn Any`:** the runtime does not know the generated trait.
 
-## Open issues and hooks for other agents
+## Open issues at first implementation
+Since resolved: 1 (`FailureKind::DpiPanic`), 2 (the kernel refuses every entry point
+inside a DPI-C call), 3 (`dpi::dispatch` takes the panic location), 4 (`build_dpi.rs` is
+gone), 5 (an accepted exception in `ARCHITECTURE.md`), 6 (`Dut::dpi_in_c`), 8
+(`ModelMeta::dpi_imports`), 9 (`CHANGELOG.md`), 10 (IR schema 5).
 1. **`FailureKind::DpiPanic`** (kernel): today the failure is `ModelFatal` with the DPI
    message. A dedicated kind needs `ModelError` to carry a kind; `dpi::ModelDpi::scope`
    already returns the message separately, so `VerilatorModel::eval` is the only caller to
@@ -135,19 +143,19 @@ would let models without DPI skip it (below).
    during eval), which still becomes a DPI failure but with that message; `spawn`, `Timer`
    or `now()` inside a call are not caught. One call to `crate::dpi::forbid_in_call(what)`
    in `state::with_current`/`try_current` covers everything.
-3. **Panic location** (kernel2 `panics.rs`): `dpi::dispatch` could call `panics::take()`
+3. **Panic location** (kernel `panics.rs`): `dpi::dispatch` could call `panics::take()`
    after `catch_unwind` to add `at file:line` to the message, as task panics do.
-4. **build.rs** (glue): `build_dpi.rs` is self-contained; when glue's simjig-build-based
+4. **build.rs**: `build_dpi.rs` is self-contained; when the simjig-build-based
    `build.rs` lands, fold its two `Dut`s into that list and delete `build_dpi.rs`
-   (`tests_only` duplicates glue's; the `dut_model!` append skips itself when codegen
-   emits the glue). `tests/dpi_tests/main.rs` expects `missing_debug_implementations`
+   (`tests_only` duplicates the shared one; the `dut_model!` append skips itself when
+   codegen emits the model glue). `tests/dpi_tests/main.rs` expects `missing_debug_implementations`
    until `Dut` derives `Debug`; remove that `expect` then.
 5. **simjig build-depends on simjig-build** for its own tests, contradicting the
    ARCHITECTURE invariant "build-time and run-time crates never depend on each other" (as
-   glue's change does). Needs a decision.
+   the shared test-model build does). Needs a decision.
 6. **C implementations:** codegen always emits trampolines, so a user who links C DPI code
    (like `tests/duts/dpi/dpi_impl.c`) gets duplicate symbols. Needs a `Dut` builder switch
-   (e.g. `.dpi(DpiImpl::C)`), not added (not my file).
+   (e.g. `.dpi(DpiImpl::C)`), not added at first.
 7. **Exports** are in the IR (`dpi_exports`) for the build-script duplicate check; the
    runtime registry covers imports only (exports are Verilator's C++ symbols).
 8. **`ModelMeta::dpi_imports`** would let the backend skip the per-eval scope for models

@@ -24,6 +24,13 @@
 - Why not serde_json for `--json`: the output is one fixed shape of strings and bools;
   escaping strings per RFC 8259 §7 is 15 tested lines. No dependency was added.
 - Why not more crates: the checks live in the `cargo-simjig` library target.
+- The doctor finds Verilator by the build's rule (`svtypes::toolchain::{locate, judge}`:
+  `SIMJIG_VERILATOR`, then `$VERILATOR_ROOT/bin/verilator`, then `PATH`; a wrong explicit
+  choice is an error). A `VERILATOR_ROOT` without `bin/verilator` is a `FAIL` of the
+  `verilator` check (fix: unset it), because the build would not look further.
+- The supported-Verilator table is `svtypes::version::SUPPORTED`, shared with
+  `simjig-build`; the front end still decodes the whole 5.050-5.059 dialect range, but its
+  error lists only `SUPPORTED`.
 
 ## Verilator 5.052 facts (checked against the installed launcher, `bin/verilator`)
 - The launcher computes its root as `realpath($RealBin/../share/verilator)`. If
@@ -42,17 +49,11 @@
 ## Not verified
 - The install branch of `cargo xtask setup` (a tool at the wrong version) was not run:
   every tool was already at its pin, so only the skip path ran. The decision is unit-tested.
-- Linux: the doctor was run only on macOS arm64. The probes use only `PATH` lookup and
-  `--version`, but the `c++` fallback and the FST file list were not checked on Linux.
+- Linux: the doctor's tests pass on linux-aarch64 under pixi. conda-forge's `gxx` has no
+  activation script, so `CXX` was unset there and the doctor warned; `pixi.toml` sets it
+  (`[target.linux-*.activation.env]`). The `c++` fallback outside pixi was not checked.
 - Windows: `is_executable` has a non-unix branch that was never compiled.
 
 ## Open issues
-- `ARCHITECTURE.md`'s code map has no `cargo-simjig` row, and its `xtask` row mentions
-  only `ci`. Suggested row: "`cargo-simjig` | `cargo simjig doctor`: environment checks
-  and the supported-Verilator table; `xtask` uses it as a library."
-- The supported-Verilator table lives in `cargo_simjig::verilator::SUPPORTED`.
-  `simjig-build` will need the same table at build time but must not depend on
-  `cargo-simjig`; the table should move to `svtypes` (which owns the per-version JSON
-  front ends) when that exists, and doctor should read it from there.
 - The design (`proposal-C.md`) also lists "cache stale" and "fork available" checks; they
   need `simjig-build` and the runtime, and are not implemented.

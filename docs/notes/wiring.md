@@ -1,6 +1,6 @@
 # wiring notes (`simjig_build::Dut::build` end to end)
 
-Agent `wiring`, branch `w2/wiring`. Checked against Verilator 5.052 (pixi, osx-arm64).
+Checked against Verilator 5.052 (pixi, osx-arm64).
 
 ## Pipeline (`Dut::build_in`, `src/dut.rs`, `src/pipeline.rs`)
 1. Validate (name is a C identifier, sources, **top is now required**), locate Verilator.
@@ -56,10 +56,17 @@ As docs/notes/abi.md, with these decisions:
 
 ## Prefix uniqueness (`pipeline::claim`)
 The spikes showed a duplicate `--prefix` links silently with one copy of 88 symbols.
-- Per build script (process): a DUT name may be rebuilt only with an identical config
-  (identity = SHA-256 of the config's `Debug`); the name also names `<name>.rs`.
-- Across crates: `cache/prefixes/<prefix>` stores the owning identity; another identity
-  with the same prefix (a 32-bit hash collision) is an error.
+- Per build script (process): a DUT name may be rebuilt only with an identical config;
+  the name also names `<name>.rs`, so this compares whole configurations.
+- Across crates: the cache records, per prefix, the `DutConfig::model_digest` that first
+  used it; another digest with the same prefix (a 32-bit collision) is an error
+  (`pipeline::claim_prefix`). The claim is made after the front end's checks, so a failed
+  build leaves none.
+- The digest hashes the settings field by field, never through `Debug`: an identity built
+  from `Debug` made every cached prefix a "collision" whenever `DutConfig` gained a field.
+  `dpi_in_c` changes only the generated Rust, so it is in neither the prefix nor the
+  claim; with it in the claim but not the prefix, moving an import to C failed the next
+  build until `cargo clean`.
 - User-supplied `verilator_input`s now count towards the prefix.
 
 ## Verification results
@@ -92,8 +99,8 @@ The spikes showed a duplicate `--prefix` links silently with one copy of 88 symb
 - `svtypes::json_pass` runs `verilator` from the process `PATH`, not `SIMJIG_VERILATOR`;
   mismatched versions are an error, but a different binary of the same version is not
   caught. svtypes should take the executable.
-- Neither the JSON passes nor the layout check are cached: each build-script run costs
-  1-3 extra Verilator runs (a `--json-only` of the counter takes ~0.07 s).
+- The JSON passes and the layout check are now cached (`front.rs`); a cache miss still
+  costs 1-3 extra Verilator runs (a `--json-only` of the counter takes ~0.07 s).
 - The cross-crate prefix claim is check-then-write, not atomic: two colliding identities
   racing can both pass once.
 - The fixture's `stub.rs` is copied from `tests/codegen_it/stub.rs` at test time, so the

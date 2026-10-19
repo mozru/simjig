@@ -16,7 +16,7 @@
 //   model output into the per-model message ring (simjig_rt.cpp).
 // - VL_COVER_INSERT (redefined at the end): every coverage point a model registers also reports
 //   its counter's address to the runtime creating the model, so cov_runs can hand out every
-//   counter array, wherever Verilator put it (docs/notes/s1c2fix.md). verilated_cov.h defines
+//   counter array, wherever Verilator put it (docs/notes/tracecov.md). verilated_cov.h defines
 //   the macro unconditionally, so it is included here first (it brings verilated.h) and the
 //   macro replaced; its include guard keeps any later include from restoring the original.
 #ifndef SIMJIG_VL_CONFIG_H_

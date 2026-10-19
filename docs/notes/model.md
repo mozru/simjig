@@ -1,4 +1,4 @@
-# Model notes (agent "model", branch `w2/model`)
+# Model notes
 
 Code: `crates/simjig/src/model/{raw,verilator,meta,bind,values}.rs` (plus an accessor added
 to `abi.rs`), `crates/simjig/src/signal.rs`. Tests: `crates/simjig/tests/model_tests/`
@@ -62,8 +62,8 @@ Checked against Verilator 5.052 (pixi), osx-arm64.
   DECISION §6's `Into`; before converting, it tests (by `TypeId`, folded away per
   monomorphisation) whether the argument is a `u128`, i.e. an integer literal, and checks
   it against `T::WIDTH`: `signal `wide.i8` is 8 bits wide: value 0x15a does not fit
-  (maximum 0xff)`, at the caller's line. The conversion runs inside `set`, so the bits
-  agent's concern (the conversion panics before `set` can name the signal) does not apply.
+  (maximum 0xff)`, at the caller's line. The conversion runs inside `set`, so it cannot
+  panic before `set` has named the signal.
   Cost: a `'static` bound on the argument, which every value type meets.
 - Handles are generic over any `T: 'static` (codegen names `In<[T; N]>` for unpacked
   arrays); those have no `get`/`set` until the ABI describes unpacked storage.
@@ -72,7 +72,8 @@ Checked against Verilator 5.052 (pixi), osx-arm64.
 `model_tests::codegen` compiles all 14 files in
 `crates/simjig-build/tests/codegen_it/generated/` against the real `__private` (not the
 stub): they build unchanged, and struct packing, enum `variant()` and `__bind` work.
-Two gaps, for the director (I did not edit codegen):
+Two gaps found at the time (both since closed: the generated module calls `dut_model!`
+and derives `Clone, Copy, Debug`):
 1. **Nobody emits the model glue.** Codegen emits `Dut { fields, IR_HASH, SIGNALS, __bind }`
    but nothing names the vtable symbol, the prefix or the time precision, and no one
    implements `DutModel`. Proposed: the generated file also contains one line
@@ -99,23 +100,25 @@ directly, no copies): `edge_read`, `readonly_read`, `write_after_edge`, `timeout
 faithful. Not replayed: `two_clocks`, `cdc_stream`, `fifo_stream`, `derived_edge`
 (DUTs not in this brief).
 
-## Spike findings (docs/notes/spikes.md)
+## Spike findings (docs/notes/spikes.md), as first found
+Since done: `threads(1)` is set at create (`simjig_rt.cpp`), and `$urandom` and DPI
+panics are handled per model (`tracecov.md`, `dpi.md`).
 1. `threadContextp` before every entry point: already done by `simjig_rt`'s `Scope`
    (`simjig_rt.cpp:55`), for create, eval, final and the rest. Not tested with interleaved
    models, because one `Sim` drives one model and runs cannot interleave.
 2. **`threads(1)` is NOT set: measured 13 threads in a test process after loading one model**
    (`ps -M`), i.e. an 11-worker `VlThreadPool` per context. The fix is one line in
-   `simjig::Runtime::Runtime` (`crates/simjig-build/cpp/simjig_rt.cpp`, not mine):
-   `m_context->threads(1);` before the model is constructed. Needed before fork (Stage 3)
+   `simjig::Runtime::Runtime` (`crates/simjig-build/cpp/simjig_rt.cpp`):
+   `m_context->threads(1);` before the model is constructed. Needed before fork
    and to stop wasting CPU under nextest.
-3. `$urandom` per-model `VlRNG` swap: Stage 3 (needs runtime C++). Today each context
+3. `$urandom` per-model `VlRNG` swap: later work (needs runtime C++). Today each context
    creation reseeds the thread stream, so `$urandom` depends on how many models a process
    created before. The verilator seed plusarg is passed.
 4. Initial eval before the first edge: holds by construction. The kernel's first eval at
    t=0 runs before any write (clock edges included) is applied.
    `handles::a_clock_edge_at_time_zero_is_captured` checks a clock rising at t=0 clocks the
    counter.
-5. Poisoning after FATAL: done (above). DPI panics: Stage 3 (no DPI support yet).
+5. Poisoning after FATAL: done (above). DPI panics: later work (no DPI support yet).
 
 ## Measured (release, Apple M6, `cargo test --release -p simjig --test model_tests -- --ignored --nocapture measure`, 3 runs)
 | Access (inside `Sim::run`) | ns |
@@ -130,6 +133,58 @@ Reads meet the 5 ns budget (DECISION §4 Q2). Writes do not, and the typed layer
 nothing measurable: the cost is the kernel's write log (`Writer::current`, the conflict
 check, `Vec` pushes). That is the kernel owner's to optimise if it matters; a write is
 logged once per delta, not per eval.
+
+## Random initial state
+A test can start a model from random initial values (`#[simjig::test(init = random)]`),
+so a flop that reset never clears fails, while every default build and zero run stays as
+it was.
+
+What Verilator 5.052 does (checked in the installed 5.052 and the 5.053 source):
+- `--x-initial unique` is the default (`V3Options.cpp`). Each variable without an
+  initializer, inputs included, is set in the root constructor (`..._ctor_var_reset`) by
+  `VL_SCOPED_RAND_RESET_{I,Q,W}(width, __VscopeHash, salt)`: the scope hash comes from the
+  instance name, the salt from the variable's name.
+- That macro returns 0 when the context's `randReset()` is 0 (the default), all ones for
+  1, and for 2 a value from `VlRNG{randSeed() ^ scopeHash ^ salt}`: deterministic per
+  (seed, scope, variable), with no draw from the `$urandom` stream.
+- `--x-initial 0` and `fast` compile the values into the constructor, so nothing at run
+  time can randomize them.
+- `--x-assign unique` is separate: explicit `X` constants become variables reset with
+  `VL_SCOPED_RAND_RESET_ASSIGN_*`, which ignore `randReset` and are always random.
+
+Why not just pass `+verilator+rand+reset+2`: `randSeed` is also the `$urandom` seed, and
+every model of one simulation gets the same Verilator seed on purpose (lockstep needs equal
+`$urandom` draws). Separate initial values would then need separate `$urandom` seeds,
+changing default multi-DUT behaviour. Restoring `$urandom` after create is not exact
+either: a constructor that draws (class objects) would already have drawn from the other
+stream.
+
+So the choice travels in two fields appended to `simjig_create_opts` (`init`, `init_seed`)
+rather than a new vtable slot: the values are set in the constructor, so a call after
+create is too late. Appending keeps `SIMJIG_ABI_VERSION` 1 and the vtable size; a caller
+compiled before the fields passes the old `size` and gets zeros.
+
+On the build side the default needs no flag. What is needed is a way to say "not
+unique", so the runtime refuses `init = random` (`LoadError::NoRandomInit`) instead of
+silently running on zeros: `simjig_build::XInitial` sets the mode, and a raw `--x-initial`
+in `verilator_args` or an option file is refused, so the shim's `kXInitialUnique` cannot
+disagree with the command line (unlike trace and coverage, there is no `VM_*` switch to
+check it against). Trade-off: refusing the raw flag costs ergonomics, for never running a
+"random" test on zeros (correctness).
+
+Run side:
+- `#[simjig::test(init = ..)]` wins over `SIMJIG_INIT`, so a `SIMJIG_INIT=random` sweep
+  cannot break a test pinned to zeros.
+- The report header, repro line and `summary.json` mention it only for random runs, so a
+  zero run's report is byte-identical to one from before the feature.
+- `Seed::init_seed(model)` is its own stream, so adding it changed no other stream. It is
+  kept in `1..=i32::MAX` because `randSeed` is an `int`.
+- Initial values are drawn once, at create: fork branches inherit the parent's state.
+- `FakeModel`s ignore `init`, as they ignore `trace`.
+
+Limits: `--x-assign` is not exposed (reachable through `verilator_args`). Mutation
+evidence covers one mutant only (`sync_fifo` without `rd_ptr <= '0;`, see
+`examples/lib/README.md`).
 
 ## Why not simpler (constitution rule 5)
 - `RawWords` with a sealed `Buffer` supertrait: generic code cannot size a stack buffer
@@ -153,3 +208,10 @@ logged once per delta, not per eval.
   1ns/1ps` for the DUTs); they should move to `simjig-build` now that it exists.
 - `create` in `model::bind` resolves every signal by name through `Sim::signal` (O(n^2) in
   the signal count, once per test) because `Sim` keeps its simulation id private.
+- When building the test models fails (for example, Verilator not on `PATH`),
+  `crates/simjig/build.rs` records the failure and reruns only when `build.rs` or
+  `SIMJIG_TEST_MODELS` changes, so the failure stays cached after the environment is
+  fixed. Touch `crates/simjig/build.rs` to rebuild.
+- Coverage: Verilator writes one `coverage.dat` line per point name, so the file can list
+  fewer points than `cov_runs` has counters (26 against 30 for `counter_cov`; the extra
+  counters are zero).

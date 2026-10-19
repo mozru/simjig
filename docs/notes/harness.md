@@ -1,4 +1,4 @@
-# Harness notes (agent "harness", branch `w2/harness`)
+# Harness notes
 
 Code: `crates/simjig-macros/` (the attribute), `crates/simjig/src/harness.rs` and
 `crates/simjig/src/harness/` (runtime). Tests: `crates/simjig/tests/harness_tests/` (one
@@ -17,7 +17,7 @@ impl ModelOptions { pub fn verilator_args(&self) -> Vec<String> } // ["+verilato
 `()` implements it (an empty `FakeModel` at 1 ps) for tests without a DUT. The brief's
 `create(sim: &mut Sim)` is kept as is; `instantiate` was added because a `Sim` is built
 *from* a backend, so something must build the backend first, and only the DUT type knows
-which model it needs. The generated `Dut` (simjig-build + the model agent) implements both.
+which model it needs. The generated `Dut` implements both (through `dut_model!`).
 
 ## Attribute grammar
 ```text
@@ -52,6 +52,7 @@ See `crates/simjig/src/harness/rundir.rs`.
 ```text
 schema "simjig.run/1" | test (libtest name) | package | launcher (e.g. "pixi run")|null
 status "pass"|"fail" | seed "0x%016x" | seed_source "env"|"test-name" | verilator_seed u32
+init "zero"|"random" | init_seed u32|null (model 0's)
 precision "1ns"|null | end_time {ticks, display}|null
 timeout {ticks, display, source "default"|"attribute"}|null
 trace_hash "0x%016x"|null | events {file:"events.jsonl", written, recorded}|null
@@ -70,21 +71,22 @@ SplitMix64 from `mix64(root ^ mix64(fnv1a(path)))`. Verilator: stream `"verilato
 `verilated.cpp`). Known-answer tests pin xoshiro and SplitMix64 to the reference C.
 
 ## Failure report
-One block per failure (`FailureReport`'s `Display`): header `FAIL <test> seed= t= [Kind
-sig=]`, then `task`, `at`, `message`, kind-specific lines (`blocked:` uses
-`BlockedTask`'s `Display`, as `Failure`'s does), `help`, `repro`, `waves` (placeholder),
+One block per failure (`FailureReport`'s `Display`): header `FAIL <test> seed= [init=random]
+t= [Kind sig=]`, then `task`, `at`, `message`, kind-specific lines (`blocked:` uses
+`BlockedTask`'s `Display`, as `Failure`'s does), `help`, `repro`, `waves` (docs/notes/waves.md),
 `run dir`. Times print in the largest unit that shows them exactly (`TimeDisplay`:
 `1250 ns`, `1 us`). The repro line is
 `SIMJIG_SEED=<seed> [<launcher> ]cargo nextest run -p <package> [--run-ignored all] -E
 'binary(=<binary>) & test(=<test>)'`, the launcher (`pixi run`, `conda run -p ..`) when
 the test ran inside one. Signature = FNV-1a (`kernel::recorder::Fnv`) of kind, location
-and the message with numbers masked (words starting with a digit, or all-hex words
-containing a digit). Not included: time, seed, task path (they vary per seed).
+and the message with numbers masked (words starting with a digit, sized SystemVerilog
+literals such as `8'h08`, which is how `Bits` values print, or all-hex words containing a
+digit). Not included: time, seed, task path (they vary per seed).
 `run_test` prints the block once to stderr and fails with `resume_unwind` (no extra
 "panicked at harness" line); the payload is the block, so
 `#[should_panic(expected = ...)]` works.
 
-## Deviations and contradictions (report to the director)
+## Deviations from the original design
 - **`sim: &Sim` is impossible with the current kernel.** `Sim::run(&mut self, main: impl
   Future + 'static)` borrows the `Sim` mutably for the whole run and needs a `'static`
   main future, so the body cannot hold `&Sim`. The context parameter is
@@ -100,8 +102,6 @@ containing a digit). Not included: time, seed, task path (they vary per seed).
 - **Default timeout**: without `timeout`, a test stops at 10 ms of simulation time
   (`DEFAULT_TIMEOUT_MS`), `ceil(10 ms / tick)` ticks at precisions coarser than 1 ms;
   `timeout = "none"` disables it.
-- `ARCHITECTURE.md` is not mine: its code map should gain "`simjig::harness`: seeds, test
-  runner, failure reports, run directories" and `simjig-macros`' now real `#[simjig::test]`.
 - `clippy::result_large_err` fires on every `-> simjig::Result` (Failure is 144 bytes).
   The macro silences it on the test fn; generated `DutModel` impls in trait position do not
   trigger it.
@@ -126,9 +126,19 @@ containing a digit). Not included: time, seed, task path (they vary per seed).
   fn is not type-checked outside `--test` builds).
 
 ## Not verified
-- No real Verilator `Dut`: the seam is exercised only with FakeModel DUTs.
-- `include_dut!(name)` (the `OUT_DIR` form) is untested; only `@from <dir>` is, since no
-  build script of mine writes `OUT_DIR/simjig/`.
-- Waves: the `waves:` line is a placeholder; `SIMJIG_WAVES` is read by nothing.
 - Concurrent runs of one test and seed: covered by
   `concurrency::concurrent_runs_of_one_test_all_write_their_run_dir` on one machine only.
+
+## Known limitations
+- A task dropped before it ever ran is warned about and recorded
+  (`TraceKind::DroppedUnpolled`), but `summary.json` has no count of them: the recorder
+  is a 4096-event ring, so the harness could count only the ones still in the window. An
+  exact count needs a kernel counter.
+- `Rng` has no `Bits<N>` draw (`Bits::new(u128::from(rng.below(1 << 16)))` per field),
+  and `Bits<N>` has no exact narrowing getter (`to_u128` only; a `u32` needs
+  `u32::try_from`). Generated packed structs have `to_bits()` but no `LowerHex`.
+- Design parameters are generated as `i32` constants (SV `int`), so a size needs
+  `usize::try_from(Dut::DEPTH)`.
+- `ns()`/`ps()` convert to ticks of the running simulation's precision, so they are not
+  `const fn` and panic outside a run: a table of clock settings must be a function.
+- `cargo simjig help help` and `cargo simjig help a b` report "no command `help`".

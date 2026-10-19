@@ -1,4 +1,4 @@
-# Notes: a faster async executor with the same observable behaviour (agent "sched")
+# Notes: a faster async executor with the same observable behaviour
 
 Goal: async testbenches as fast as possible, with bit-identical observable behaviour: the
 33 goldens, the wake order, the trace hash, replay and fork, failure reports. Starting
@@ -201,3 +201,20 @@ survived). A new operation, `Op::Repolled` (a rising edge polled once under
 added lines only). Seeds 4096-8191 were blessed on int-q. With m5 applied, 1129 of the 8192
 seeds differ, all of them new ones, and `cancel::an_edge_repolled_with_another_waker_wakes_the_newest`
 fails.
+
+## What the cocotb ordering rules cost
+Matching cocotb's order costs scheduler rounds, accepted because correctness comes before
+performance:
+- Each due Timer and each fired value-change group is followed by its own `run_ready`
+  (kernel notes, "Design decisions"). Each wakes a task anyway, so the cost is the extra
+  empty-queue check, answered inline (3. above).
+- A combinator adds one helper entry per operand (no allocation) and two or three polls of
+  its root task. On a cancel-heavy benchmark this was about 1.2x the inline-yield
+  approximation it replaced at N = 1000, and faster at N = 4000, where the lazily
+  compacted wait lists pay for it.
+- A ready wait (a set `Event`, a free `Lock`) is a full extra scheduler round: an
+  Event- and Lock-heavy benchmark took about 3x the polls and 2.4x the time, at a lower
+  cost per poll.
+- The value-change walk must not cost more than linear time in the primed groups. Keeping
+  groups in a `Vec` with a `remove` per fired group was O(G²): 2.7 s against 155 ms for
+  4000 groups. `order` is now compacted lazily (`kernel::waits`).

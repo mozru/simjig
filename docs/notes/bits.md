@@ -24,8 +24,16 @@ width. Through `impl Into<T>`, the conversion runs before `set` can add the sign
 so the message names the width (`Bits<8>: value 0x15a does not fit in 8 bits (maximum
 0xff)`) and the location points at the call. To also name the signal, `set` would need its
 own conversion trait (`fn try_into_value(self) -> Result<T, OutOfRange>`, implemented for
-`u128`, `bool` and `T` itself). Literal inference would be unchanged. That is a decision
-for the signals owner and the director, so it is not built here.
+`u128`, `bool` and `T` itself). Literal inference would be unchanged. Not built.
+
+## Comparing from the left
+
+`4 == x` works because `PartialEq<Bits<N>>`, `PartialEq<WideBits<N, W>>` and
+`PartialEq<Bit>` are implemented for `u128` only (the reason is on the impl;
+`tests/it/inference.rs` pins it). `i32` cannot be added either: it is the literal
+fallback, and `f_i32 == From::from(2i8)` stops compiling. The trade-off is that code
+comparing a `u128` with an inferred right side (`total_u128 == xs.iter().sum()`) breaks
+in every crate that links simjig-bits; that is the price of `assert_eq!(4, x.get())`.
 
 ## Compile-time width checks
 
@@ -52,7 +60,7 @@ chose the direct one.
 
 `Packed::from_raw` is total (it never fails). A generated enum with unused encodings
 therefore has to represent unknown encodings, for example with an `Unknown(raw)` variant.
-Otherwise the trait needs a fallible decode. This is flagged for the codegen owner.
+Otherwise the trait needs a fallible decode.
 
 ## Deferred
 
@@ -60,7 +68,7 @@ Otherwise the trait needs a fallible decode. This is flagged for the codegen own
   operator and adds signed comparison and display. That is not small.
 - `Logic<N>`: not started. Nothing here assumes 2-state beyond the names. The `Packed`
   contract describes raw 2-state storage. 4-state values will go through
-  `get_planes`/`set_planes` (agentic-rust §9b), not through `Packed::Raw`.
+  `get_planes`/`set_planes`, not through `Packed::Raw`.
 - Shifts, `widening_add`, `cat!`/`sv!`, and slices of more than 128 bits out of a
   `WideBits` (`slice` returns `Bits<M>`, so `M <= 128`).
 - `WideBits` slice and deposit run bit by bit (at most 128 iterations). Simple and

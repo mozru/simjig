@@ -31,7 +31,10 @@ Every testbench here has the same parts:
 - **A monitor and a reference model.** The monitor is a detached task that checks the
   design against a plain-Rust model on every edge, then applies the edge to the model. It
   runs in every test, directed or random, so each is checked the same way; the test reads
-  the model (an `Rc<RefCell<..>>`) at the end for its coverage counts.
+  the model (an `Rc<RefCell<..>>`) at the end for its coverage counts. The test body and
+  the monitor wake on the same edge in either order, so a body that reads the monitor's
+  log right after its own last `drive(..).await` awaits `ReadOnly::new()` first, or it
+  misses that edge's sample.
 - **Seeded random stimulus.** Each driver draws from its own stream
   (`ctx.rng("producer")`), so a failure replays from the report's seed, and changing one
   driver does not change another's stimulus. Rates change in bursts, so queues fill and
@@ -48,7 +51,7 @@ Every testbench here has the same parts:
   that reset does not clear fails the test right after the first reset. With
   `sync_fifo`'s `rd_ptr <= '0;` deleted, 11 of the 12 `sync_fifo` tests failed (with zeros, 4: only the
   mid-run reset tests), measured before `sync_fifo` became a two-configuration sweep;
-  see `docs/notes/n-xinit.md`. The sweep runs each `duts = [..]` test on both
+  see `docs/notes/model.md`, "Random initial state". The sweep runs each `duts = [..]` test on both
   configurations, each with random initial values.
 - **Directed corner cases** for what random traffic reaches rarely or must be pinned
   exactly (latency, a cycle count).
@@ -57,6 +60,23 @@ Every testbench here has the same parts:
 - **Parameters set once.** Each module's function in `build.rs` sets its parameters with
   `.param(..)`; the generated `Dut` carries them as constants (`Dut::N`, `Dut::DEPTH`), so
   the testbench never repeats them.
+
+## Checking a testbench with mutants
+
+Each testbench here was checked by applying RTL mutants by hand (a reset that misses a
+register, a flag from one synchronizer flop instead of two, binary pointers instead of
+Gray), running the module's test binary at the default seed (the reset mutants also at
+`SIMJIG_SEED` 1 to 5), and restoring the file. Two lessons:
+- Restore with a fresh mtime (`git checkout`, or `touch` after copying back). Cargo reruns
+  `build.rs` only when a source is newer than its last run, so a restored file with an
+  older mtime leaves the mutant's model in place.
+- A property that random traffic reaches only at some seeds (a reset edge meeting an
+  active `push`) needs a directed test: CI runs the default seed. The directed reset
+  tests below (`a_reset_beats_push_and_pop`, `resets_clear_both_flags_without_a_clock_edge`
+  and the rest) exist for this.
+
+A one-flop synchronizer is functionally correct in a 2-state simulation, so only an
+exact-latency test (`flags_see_the_other_side_three_edges_later`) can see it.
 
 ## Conventions
 

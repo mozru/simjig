@@ -1,4 +1,4 @@
-# Kernel notes (agent "kernel", branch `w1/kernel`)
+# Kernel notes
 
 Code: `crates/simjig/src/kernel.rs` and `crates/simjig/src/kernel/`. Tests:
 `crates/simjig/tests/kernel_tests/` (one binary) plus unit tests per module.
@@ -28,11 +28,16 @@ of `two_clocks` has its own test in `phases.rs`):
 `main` runs first at t=0 before any eval (cocotb's start-of-simulation), so reads there
 show the model's initial values.
 
-## Decisions and deviations (report to the director)
+## Decisions and deviations
 - **WriteConflict**: two *different* writers writing *different* values in one delta (cocotb
   has no such check; last write wins). Agreeing writers are accepted. Same-writer rewrites:
   last wins.
-- **DELTA_MAX = 64** counts evals per timestep (including the ReadWrite loop-backs).
+- **DELTA_MAX = 64** counts evals between two `ReadWrite` rounds of a timestep (or before
+  the first), so an oscillation inside one settle fails early. A model `#0` loop (no
+  `ReadWrite` waiter) counts against it too, and its message says so.
+  **`READ_WRITE_MAX` = 10 000** bounds the `ReadWrite` rounds that wake a task
+  (`ReadWriteLimit`, naming those tasks). cocotb has no such limit; the reason is on the
+  constant. Evals per timestep are therefore bounded by `(READ_WRITE_MAX + 1) * DELTA_MAX`.
 - **ReadOnly or ReadWrite awaited in ReadOnly** panics (→ `TaskPanic`); `ReadWrite` awaited
   in a `ReadWrite` region resumes in the next region (the next timestep if nothing was
   written; with nothing scheduled, the run fails `Starved`, where cocotb ends the sim).
@@ -52,8 +57,10 @@ show the model's initial values.
   constructor until the model backend lands (`Sim::from_backend` is `pub(crate)` for it).
 - `RawSig` is `!Send` (single-threaded kernel), and the module root is `src/kernel.rs`
   (no `mod.rs`, per the Rust rules), next to my owned `src/kernel/`.
-- `lib.rs` got `#![deny(unsafe_code)]`; `kernel/waker.rs` opts out with `#![expect]`. The
-  model agent's `model/raw.rs` will need the same opt-out.
+- The workspace denies `unsafe_code` (`[workspace.lints.rust]`); the modules ARCHITECTURE.md
+  lists opt in with `#[expect(unsafe_code, reason = ..)]`, not `#[allow]`: the workspace
+  warns on `clippy::allow_attributes`, and `expect` fails once the unsafe code goes away.
+  `bench/simjig` is its own workspace, so its `Cargo.toml` states the lint itself.
 - The workspace denies `expect`; the kernel uses an internal `OrInvariant::or_invariant`
   (panics with the violated invariant) instead of one `#[expect]` per call.
 - `join!` and `first!` box each operand; `first!` requires one output type (returns it).
@@ -90,7 +97,7 @@ show the model's initial values.
   4096 records and hashes all of them.
 - No CHANGELOG entry or API snapshot (constitution rule 4); there is no CHANGELOG file yet.
 
-# kernel2 (agent "kernel2", branch `w3/kernel2`)
+# Clocks, `--timing`, panic locations, several models
 
 ## Clock control from inside a run
 `simjig::clock(sig, period) -> ClockHandle` declares a stopped clock (or reconfigures the
@@ -108,9 +115,8 @@ clock can be stopped and restarted. Clocks moved from `Sim` into the kernel
 - Misuse panics at the caller (`#[track_caller]`, panics raised outside closures so the
   location is the user's line): start twice, configure a running clock, a non-1-bit signal,
   invalid period/high time, redeclaring a running clock, `start()` in ReadOnly.
-- `clock` takes `impl Into<RawSig>`. The typed handles (`In<Bit>`, signal.rs, not mine)
-  need `impl From<In<Bit>> for RawSig` for `simjig::clock(dut.clk, ns(10))` to compile
-  as written; today it is `clock(dut.clk.raw(), ns(10))`.
+- `clock` takes `impl Into<RawSig>`; the writable typed handles convert, so
+  `simjig::clock(dut.clk, ns(10))` compiles as written.
 
 ## `--timing` safety
 - `next_time_slot` is asked only of models whose `events_pending()` is true
@@ -145,8 +151,7 @@ cannot be stored as a `&'static Location`, and std has no constructor for one; w
 distinct position, bounded by the source). `SourceLocation` has `file()/line()/column()`,
 the same `Display` as std, and `From<&'static Location<'static>> for &'static
 SourceLocation`. Harness `src/` compiles unchanged; one line in
-`tests/harness_tests/reports.rs` needed `Some(location.into())` (outside my ownership;
-changed so CI passes, flagged for the director). The harness's own panic-location
+`tests/harness_tests/reports.rs` needed `Some(location.into())`. The harness's own panic-location
 workaround still works and now agrees with the kernel's.
 
 `Failure::help() -> Option<&str>` exposes the advice; the harness can stop parsing
@@ -169,8 +174,7 @@ workaround still works and now agrees with the kernel's.
   alike in messages (the `RawSig` Debug shows the model). A per-model name prefix would
   need a backend method; not added.
 
-**Integration with `w2/model`** (checked by a trial merge in a scratch worktree): three
-one-line fixes. `model/bind.rs`: `RawSig::new(sim_gen, slot)` -> `RawSig::in_model(sim_gen,
+**Integration with the model layer**: three one-line fixes. `model/bind.rs`: `RawSig::new(sim_gen, slot)` -> `RawSig::in_model(sim_gen,
 0, slot)`, `raw.slot()` -> `raw.local_slot()`; `signal.rs`: `k.model` -> `k.models`.
 
 ## Write-path cost
@@ -195,7 +199,7 @@ builds on the same (heavily loaded, load average about 20 on 12 cores) machine:
 | `write_u64` | 22.3 | 5.62 |
 | whole run per write (eval, apply, recorder, FakeModel) | 61.9-71.4 | 38.9-39.4 |
 
-The model agent's `measure_typed_access` on a trial merge went from 6.7-7.6 to 6.1-7.4 ns
+The model layer's `measure_typed_access` went from 6.7-7.6 to 6.1-7.4 ns
 for the same-slot rewrite case, but its numbers swung 2x between runs on the loaded machine
 (efficiency cores); not conclusive. Writes now cost about what reads cost (+0.3 ns here);
 whether both are under 5 ns on an idle machine is **not verified**. The remaining floor is
@@ -206,3 +210,108 @@ the shared handle resolution (thread-local + `RefCell` borrow, about 1.9 ns), wh
 `pixi run cargo xtask ci` (see the final report). Mutation: removing the `#0` re-eval fails
 both zero-delay tests; without the panic hook `Failure.location` is `None` and the location
 tests fail.
+
+# Design decisions
+
+## Timers due together fire one at a time
+Timers due at t fire in registration order, and the tasks each one wakes run before the
+next fires (the conformance README, "Timers wake before the time step's edges"). cocotb
+does the same: each GPI callback runs the whole event loop before the next callback.
+`with_timeout` arms its Timer before polling the future, so the timeout wins a tie with
+a Timer armed later and loses to one armed earlier.
+- Why not simpler (rule 5): firing all due Timers together gets every tie right except a
+  task whose own Timer was armed before the `with_timeout` call; deciding that inside
+  `with_timeout` would need the fire order of unrelated Timers. Cost: one `run_ready` per
+  due Timer, which wakes a task anyway. Clock edges are still logged before any Timer task
+  runs. Pinned by `phases::each_timer_runs_what_it_wakes_before_the_next_timer_due_then`.
+
+## Value-change groups
+- Each group keeps its own snapshot, taken when it is primed (Verilator copies the value
+  per callback). A shared per-signal snapshot is wrong: a `rising(x)` group primed from a
+  `changed(x)` wake at x's rising edge must see x = 1 and wait for the next edge, and a
+  snapshot not yet updated for x would fire it at once
+  (`phases::changed_and_rising_on_one_signal_are_separate_groups`).
+- Why not fire every changed group together and order the waiters differently: no order
+  of one wake batch puts an `Event.wait()` task between two groups' waiters, which every
+  callback-order golden shows. The kernel has to run tasks between groups. Cost: one
+  `run_ready` per fired group.
+
+## Combinator helpers are task-table entries
+`kernel::combinator` explains the mechanism. Why not simpler (rule 5):
+- Polling the operands inline in the caller and then yielding once or twice cannot model
+  "the first helper to finish in run order decides" (golden `loser_scheduled`) or the
+  queue place of a helper woken by another task (`spawned_combinators`).
+- Spawning a real task per operand needs `'static` operands, an API break (every
+  `first!(ev.wait(), ..)` borrows), or an `unsafe` pointer to the pinned operand, a new
+  unsafe module. Routing the root task's poll to the helper needs neither.
+- Cost: one helper entry per operand (no allocation) and two or three more polls of the
+  root task per combinator.
+
+## A ready Event or Lock takes one hop
+A set `Event` and a free `Lock` resume after the tasks already queued (the conformance
+README, "Event, Lock and Queue"). The hop is `yield_now`; a free lock is taken before the
+hop and held by the future, so dropping the future during the hop passes the lock on.
+- Why not a `wake_by_ref` and a flag in each future: that is `yield_now` again (rule 6),
+  and without `yield_now`'s check that it ends only in a run of the context that awaits
+  it, a routed combinator poll of the same task would end the hop early
+  (`phases::a_hop_ends_in_its_own_run_not_in_a_combinator_helper_run_of_its_task`).
+
+## Dropped Task handles that never ran
+The rule and its exemptions are on `tasks::settle_unrun_drops` and `tasks::cascading`.
+Alternatives rejected:
+- Failing every handle dropped without `.await`, `.detach()` or `.cancel()`: it would fail
+  `let _mon = spawn(..)` held to the end of a scope and handles kept in structs for RAII
+  cancellation, removing drop as the cancellation mechanism (DECISION §1).
+- Deferring the check to the end of the run and failing only if `main` returned `Ok`:
+  `Sim::run<T>` cannot tell `Ok` from `Err` for a generic `T` without a new bound, which
+  would break `sim.run(async { 42 })`, and it would report a missing driver's later
+  symptom (a timeout) instead of its cause.
+- Exempting the last poll of any task, not only `main`'s: `let _ = spawn(..)` in a child
+  would then pass silently, since the kernel cannot see a child's `Err`.
+- An opt-in `cancel_on_drop()`: a new public API and a second spelling of cancel (rule 5).
+  It can be added later without a break.
+
+The failure is `FailureKind::Setup` (the test is set up so that it cannot run), not a new
+kind, which keeps the harness's exhaustive matches on `FailureKind` unchanged. clippy's
+`let_underscore_future` also catches `let _ = spawn(..)`.
+
+## Detached tasks follow the ancestor chain
+Each task keeps its ancestors (`Rc<[Key]>`, root first); `detach` hands it to the nearest
+one still running, so a handle passed up and detached after its spawner finished still
+dies with the scope (`cancel::a_task_detached_after_its_spawner_finished_dies_with_the_scope`).
+Not reparenting on free: finding a freed task's children would need a scan or a children
+list per task. Stale keys of finished ancestors are caught by the slab's generations.
+
+## Trigger misuse names the user's line
+Trigger constructors are `#[track_caller]` and keep the location; `panics::panic_at`
+blames it, so the failure names the line that built the trigger. The default panic hook
+still prints `trigger.rs`, so the message also names the user's line.
+`Timer::new` stays `const`: a `Timer` built inside a DPI-C call is inert data, and
+awaiting it is refused there like every other kernel entry point.
+
+## `TriggerExt` and `ThenRegion`
+Why not simpler (rule 5): two free functions (`read_write_after(trigger)`) would do, but
+the suffix form `dut.clk.rising().read_write()` needs a trait or inherent methods on three
+types. One sealed trait with default methods is one place instead of six methods.
+`ThenRegion` is a hand-written two-state future, not an `async` block, so that the trait
+method can name its return type and both halves deregister in `Drop`. It reuses
+`ReadWrite` and `ReadOnly` unchanged: no scheduler change. `Cycles` is a named future for
+the same reason; it still creates an edge per remaining count on poll, so the width check
+runs inside the simulation.
+
+# Known limitations
+- `DeltaLimit` names the signals written in the last delta, not the task writing them.
+- A by-value `TestCtx` parameter is taken for a DUT, so the macro's error does not say
+  "take `&simjig::TestCtx`".
+- `Bit` has no `to_u128` (`Bits::to_u128` exists).
+- The typed handles have no `cycles` method; for an output use `cycles(dut.q.raw(), n)`
+  or a loop of `rising()`.
+- Cancelling deeply nested combinators costs polls quadratic in the depth (about 5,500
+  polls for 100 levels).
+- A cancelled helper with live nested combinators polls its operand once so they cancel
+  their helpers. If that operand also polls foreign futures, one of them can progress
+  where cocotb would throw `CancelledError`. No golden or test covers it.
+- `scope("s", async { let m = spawn(..); check()?; .. }).await?` in `main` fails as
+  `Setup` when `check` fails: the drop happens in the scope task's poll, not `main`'s,
+  so the `main` exemption does not apply. The message names the fix.
+- The swarm test's seed count is fixed (400); `SWARM_SEED` reruns one seed.

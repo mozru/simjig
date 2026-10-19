@@ -1,4 +1,4 @@
-# Notes: simjig vs cocotb benchmark (agent "bench")
+# Notes: simjig vs cocotb benchmark
 
 The method, the commands and the full table are in `bench/README.md`. This note covers
 where the time goes and what is worth fixing in simjig.
@@ -67,12 +67,11 @@ of them was changed in this branch.
   1.5 s of CPU in two hours (blocked on I/O) and was killed before profiling; it is not
   in any number to a measurable degree, but it was there.
 
-# Marlin and raw C++ flows (agent "bench2")
+# Marlin and raw C++ flows
 
 Two more flows, so simjig can be placed between cocotb and the ceiling: Marlin 0.21.1
-(`bench/marlin/`) and a raw C++ Verilator `main` (`bench/cpp/main.cpp`). Method and
-caveats are in `bench/README.md`. **No measurement was taken**: simjig is being optimised
-on branch `perf`, and the final four-flow run happens after it lands.
+(`bench/marlin/`) and a raw C++ Verilator `main` (`bench/cpp/main.cpp`). Method,
+caveats and the final measurements are in `bench/README.md`.
 
 ## Marlin
 - "Merlin" in the request is Marlin (crates.io `marlin`, github.com/ethanuppal/marlin,
@@ -116,15 +115,15 @@ on branch `perf`, and the final four-flow run happens after it lands.
 - Orders of magnitude only (loaded machine): Marlin and C++ both run C at about 35 to
   40 ns/cycle, about 25x less than simjig's 1 us.
 
-## The final run
+## A full run
 `BENCH_RUN_ARGS="--sizes 1000000,10000000 --runs 5 --flows simjig,cocotb,marlin,cpp" bench/run.sh`
 runs env, build, bug, the 120 measured runs and the table, and rewrites
 `bench/results/`. Estimated from the committed process times: simjig 130 s, cocotb
 720 s, Marlin and C++ about 10 s each; with build and bug check about 17 minutes, plus
-any wait for the load gate (< 2.5). Then the Results section of `bench/README.md` needs
-rewriting from `results/table.md`.
+any wait for the load gate (< 2.5). The committed final runs (`results/final-*.jsonl`)
+add the simjig-elide and simjig-sync flows.
 
-## The mid-size design (agent "bench3")
+## The mid-size design
 Why: on the FIFO, Verilator's eval is 7% of simjig's time, so every ratio is a framework
 ratio. `bench/rtl/mid_pipe.sv` (`--design mid`; `bench/README.md`, "Designs") puts a real
 model cost under the same push/pop testbench.
@@ -149,8 +148,7 @@ model cost under the same push/pop testbench.
   Every flow reported the same pushes, pops and hash at every variant.
 - **Bug check.** All four flows fail `c_full` on the injected bug (`out_valid`); the FIFO
   design's bug check still fails all four too (`count`, cycle 496).
-- **Not done.** No measurement (the director runs it after merging `perf`); no profile
-  of where simjig's extra time per cycle goes on `mid`.
+- **Not done.** No profile of where simjig's extra time per cycle goes on `mid`.
 
 Refactor on the way: each flow's helpers that both designs use (xorshift32, drivers, run
 length, result line, the C++ `Bench` stepper) moved to one shared file per flow

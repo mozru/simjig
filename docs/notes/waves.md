@@ -1,4 +1,4 @@
-# waves: FST tracing and waves on failure (agent "waves", branch `w3/waves`)
+# waves: FST tracing and waves on failure
 
 Code: `crates/simjig/src/model/{trace,verilator}.rs` (plus four `RawModel` trace calls in
 `model/raw.rs`, `FEATURE_TRACE_FST` in `model/abi.rs` and two `LoadError` variants in
@@ -87,13 +87,13 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
   same ending) a different kernel trace hash. It prints `replay: NON-DETERMINISTIC` with one
   line per difference and a help line; it never retries. If the child wrote no summary
   (crash), the verdict is `NOT VERIFIED` with the child's last stderr lines.
-- Files in the run dir (multi-file since s3c1fix, `docs/notes/s3c1fix.md` §1): every FST
-  the replay wrote, moved from the replay's root by `replay::move_waves`:
+- Files in the run dir (one FST per traced model and fork branch): every FST the replay
+  wrote, moved from the replay's root by `replay::move_waves`:
   - `waves.fst` for the first model, `waves.model-<i>.fst` for model `i > 0` of a
     multi-DUT test (`harness::dut`, `ModelOptions::for_model`);
   - `waves[.model-<i>].branch-<j>.fst` for each `fork` branch, one `.branch-<j>`
-    (`model::trace::branch_path`; checkpoints cannot nest, see s3c3fix: `ForkError::Nested`). `replay::trace_identity` parses the names; any other
-    file is left where it is;
+    (`model::trace::branch_path`; checkpoints cannot nest, `ForkError::Nested`).
+    `replay::trace_identity` parses the names; any other file is left where it is;
   - one `<stem>.gtkw` per FST (`[dumpfile]`, `[timestart] <from>`, the primary marker at
     the failure time in ticks, a zoom fitting the window into ~1000 px, the failing
     signals as `TOP.<kernel name>` for WriteConflict/WriteInReadOnly/DeltaLimit);
@@ -111,6 +111,13 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
   checkpoint's time, but the branch ran on past it, so its `.gtkw` marker is at the
   branch's own failure. The traced span is not cut at the checkpoint: a default window
   has no end, so each branch child traces to its own end.
+- A fork branch killed by a signal has no failure time and an unfinished file (its trace
+  was never closed, so it is often 0 bytes). Its file is listed last, labelled
+  `died (killed by signal 6); file incomplete`, with no marker, and gets a `.gtkw` (and so
+  a `gtkwave` command) only when it starts with a whole FST header block.
+- When no model of the test can trace, the report offers no waves command, and
+  `SIMJIG_WAVES_ON_FAIL` skips the replay. Trade-off: such runs lose the replay's
+  determinism check under `ON_FAIL`; `SIMJIG_WAVES=1` still replays and checks.
 - A passing run under `SIMJIG_WAVES=1` prints the waves block to stderr and fails the test
   if the replay did not reproduce it.
 - Report: `FailureReport` gains `signals: Vec<String>` and `waves: Option<WavesReplay>`
@@ -140,9 +147,9 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
   `cargo simjig waves on_fail::counter_counts --seed 0x2a --window 100ns..` from the
   workspace root (no `-p`, so it reuses what `nextest run --workspace` built).
 
-## Outside my files (shared, minimal)
+## Changes outside the waves modules
 - `crates/simjig/build.rs`: `counter_fst`, `fifo_fst` (shared designs with `.trace_fst(true)`)
-  and a dedupe of repeated `-rpath` link args. **For simjig-build:** an FST model emits
+  and a dedupe of repeated `-rpath` link args. Open in simjig-build: an FST model emits
   `-Wl,-rpath,<dir>` once for lz4 and once for zlib, usually the same directory, and ld64
   warns `duplicate -rpath` on every test binary (`linker_messages`). Users with one FST
   model see that warning; the fix belongs in `compile.rs` (dedupe the dirs).
@@ -151,8 +158,6 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
 - `model/meta.rs`: `LoadError::{NoTrace, TraceOpen}`. `lib.rs`: exports.
 - `tests/harness_tests/runner.rs`: `..RunEnv::default()` for the two new fields.
 - Root `Cargo.toml`/`Cargo.lock`: `miniz_oxide` workspace dev-dependency.
-- `ARCHITECTURE.md` (not mine): the `cargo-simjig` row should say `doctor` and `waves`, and
-  the `simjig` row "harness (..., waves from replay)".
 
 ## Not verified
 - Opening `waves.gtkw` in GTKWave (not installed here): the marker/zoom line follows
@@ -164,4 +169,3 @@ Test: `every_timestep_is_one_sample_at_its_sim_time` (FST time table == the reco
 - The trace window when a test sets `SIMJIG_TRACE` and also runs several Sims in one test
   (several DUTs in one Sim get one file each, above).
 - Waves for a `$fatal` cover the timesteps before the fatal only (above).
-- No CHANGELOG exists for the API additions (constitution rule 4).

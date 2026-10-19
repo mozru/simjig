@@ -112,7 +112,11 @@ pub(crate) struct Kernel {
     /// rather than a `RefCell` borrow.
     has_failed: Cell<bool>,
     pub(crate) recorder: Recorder,
-    pub(crate) counters: Cell<KernelStats>,
+    /// The counters of [`KernelStats`] that the kernel keeps (the others are counted when
+    /// asked): one `Cell` each, so a count is one add, not a copy of the whole struct.
+    steps: Cell<u64>,
+    evals: Cell<u64>,
+    polls: Cell<u64>,
     /// The run's time limit, for a synchronous run (`kernel::sync_clock`); an async run checks
     /// `Sim`'s own.
     pub(crate) time_limit: Cell<Option<SimTime>>,
@@ -255,7 +259,9 @@ impl Kernel {
             failure: RefCell::new(None),
             has_failed: Cell::new(false),
             recorder: Recorder::default(),
-            counters: Cell::new(KernelStats::default()),
+            steps: Cell::new(0),
+            evals: Cell::new(0),
+            polls: Cell::new(0),
             walked: Cell::new(None),
             time_limit: Cell::new(None),
         }
@@ -311,10 +317,32 @@ impl Kernel {
         });
     }
 
-    pub(crate) fn bump(&self, f: impl FnOnce(&mut KernelStats)) {
-        let mut c = self.counters.get();
-        f(&mut c);
-        self.counters.set(c);
+    /// Counts a timestep.
+    #[inline]
+    pub(crate) fn count_step(&self) {
+        self.steps.set(self.steps.get() + 1);
+    }
+
+    /// Counts a model eval.
+    #[inline]
+    pub(crate) fn count_eval(&self) {
+        self.evals.set(self.evals.get() + 1);
+    }
+
+    /// Counts a task poll.
+    #[inline]
+    pub(crate) fn count_poll(&self) {
+        self.polls.set(self.polls.get() + 1);
+    }
+
+    /// The counters kept so far ([`KernelStats`] without the table sizes and records).
+    pub(crate) fn counted(&self) -> KernelStats {
+        KernelStats {
+            steps: self.steps.get(),
+            evals: self.evals.get(),
+            polls: self.polls.get(),
+            ..KernelStats::default()
+        }
     }
 
     pub(crate) fn failed(&self) -> bool {

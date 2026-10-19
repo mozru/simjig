@@ -309,7 +309,7 @@ fn copy_small(dst: &mut [u32], src: &[u32]) {
 pub(crate) struct WriteLog {
     entries: Vec<Entry>,
     words: Vec<u32>,
-    /// Current delta number, never 0; bumped by every `take`.
+    /// Current delta number, never 0; bumped by every `clear`.
     epoch: u32,
     /// Per slot: (epoch of its last write, index into `entries`). Eight bytes, so the
     /// lookup is one load; `take` clears it when the epoch wraps.

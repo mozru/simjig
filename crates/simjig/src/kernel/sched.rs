@@ -131,7 +131,7 @@ fn step(k: &Kernel) {
     let t = k.now.get();
     k.models.borrow_mut().set_time(t);
     k.record_step();
-    k.bump(|c| c.steps += 1);
+    k.count_step();
 
     if k.waits.borrow().region_waited(WaitOn::NextTimeStep) {
         fire_and_wake(k, WaitTable::fire_next_step);
@@ -262,7 +262,7 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
     }
     let status = k.models.borrow_mut().eval(k.now.get());
     k.record_eval(*evals);
-    k.bump(|c| c.evals += 1);
+    k.count_eval();
     *evals += 1;
     let Err((model, status)) = status else {
         return true;

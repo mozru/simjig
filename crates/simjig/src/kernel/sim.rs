@@ -357,7 +357,7 @@ impl Sim {
     /// Kernel counters and table sizes; after a run, the tables must be empty.
     #[must_use]
     pub fn stats(&self) -> KernelStats {
-        let mut stats = self.kernel.counters.get();
+        let mut stats = self.kernel.counted();
         stats.live_tasks = self.kernel.tasks.borrow().len();
         let waits = self.kernel.waits.borrow();
         stats.live_waiters = waits.live_waiters();

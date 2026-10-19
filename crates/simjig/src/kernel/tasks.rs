@@ -805,17 +805,18 @@ pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> String {
 ///
 /// A woken helper polls its root task routed to it (`combinator`); a helper that already
 /// finished, or whose root is not waiting, is skipped.
-fn poll_task(k: &Kernel, woken: Key) {
-    let (key, route) = {
-        let tasks = k.tasks.borrow();
-        match tasks.helper(woken) {
+fn poll_task(k: &Kernel, index: u32, gen16_: u16) {
+    let (key, route, future) = {
+        let mut tasks = k.tasks.borrow_mut();
+        // A wake for a slot reused since (another generation) is dropped.
+        let Some(woken) = tasks.by_wake(index, gen16_) else {
+            return;
+        };
+        let (key, route) = match tasks.helper(woken) {
             Some(h) if h.state == HelperState::Done => return,
             Some(h) => (h.root, Some(woken)),
             None => (woken, None),
-        }
-    };
-    let future = {
-        let mut tasks = k.tasks.borrow_mut();
+        };
         let Some(entry) = tasks.get_mut(key) else {
             return;
         };
@@ -824,11 +825,11 @@ fn poll_task(k: &Kernel, woken: Key) {
         }
         entry.state = TaskState::Polling;
         entry.polled = true;
-        entry.future.take()
+        (key, route, entry.future.take())
     };
     let Some(mut future) = future else { return };
     k.record(TraceKind::Poll, Some(key), u64::from(route.is_some()), 0);
-    k.bump(|c| c.polls += 1);
+    k.count_poll();
     let waker = waker::task_waker(k.sim_gen, key.index, gen16(key.gen_));
     let mut cx = Context::from_waker(&waker);
     let previous = k.current.replace(Some(key));
@@ -900,10 +901,7 @@ fn run_queued(k: &Kernel) {
         let Some((index, g)) = k.ready.borrow_mut().pop() else {
             return;
         };
-        let key = k.tasks.borrow().by_wake(index, g);
-        if let Some(key) = key {
-            poll_task(k, key);
-        }
+        poll_task(k, index, g);
     }
 }
 

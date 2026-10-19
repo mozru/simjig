@@ -1,13 +1,19 @@
-# simjig vs cocotb: a sync_fifo testbench
+# simjig vs cocotb, Marlin and raw C++: a sync_fifo testbench
 
-How fast simjig runs a testbench-heavy simulation, compared with cocotb running the same
-testbench on the same RTL, with the same Verilator. Not part of `cargo xtask ci`: nothing
-here runs unless you run it.
+How fast simjig runs a testbench-heavy simulation, compared with the same testbench on
+the same RTL, with the same Verilator, in three other flows:
+- **cocotb** 2.1.0: the event-driven Python reference;
+- **Marlin** 0.21.1 ([crates.io](https://crates.io/crates/marlin), Rust): the model as a
+  struct, driven by a hand-written loop of `eval()` calls;
+- **raw C++**: a hand-written Verilator `main`, the ceiling (only Verilator and a loop).
+
+Not part of `cargo xtask ci`: nothing here runs unless you run it.
 
 ```sh
 bench/run.sh                 # everything below: env, build, bug check, measurements, table
-bench/run.sh build           # build both testbenches only
+bench/run.sh build           # build every testbench only
 bench/run.sh run --sizes 10000 --runs 1 --max-load 100 --out target/smoke.jsonl  # a smoke run
+bench/run.sh run --flows simjig,marlin,cpp ...  # some flows (simjig, simjig_pub, cocotb, marlin, cpp)
 bench/run.sh table bench/results/raw.jsonl
 ```
 
@@ -16,8 +22,13 @@ bench/run.sh table bench/results/raw.jsonl
 | `simjig/` | the simjig testbench: a standalone Cargo workspace (`build.rs`, `tests/bench.rs`) |
 | `cocotb/test_bench.py` | the cocotb testbench, statement for statement the same |
 | `cocotb/run.py` | builds and runs it with cocotb's Verilator runner |
+| `marlin/` | the Marlin testbench: a standalone Cargo workspace (`tests/bench.rs`; `rtl/sync_fifo_bench.sv`, the parameter wrapper Marlin needs) |
+| `cpp/main.cpp` | the raw C++ testbench |
 | `bench.py` | the driver: build, bug check, measured runs, table |
 | `results/` | the committed results: `env.txt`, `bug.txt`, `raw.jsonl` (one line per run), `table.md` |
+
+**The results below predate the Marlin and C++ flows**: they are simjig and cocotb only
+(measured 2026-10-18). The four-flow measurement replaces them.
 
 ## Results
 
@@ -93,8 +104,9 @@ build process ran during any batch.
 ## Method
 
 **DUT.** `examples/lib/rtl/sync_fifo.sv` with `WIDTH=8`, `DEPTH=16`, `FWFT=0` (registered
-read), verilated by both flows with the same Verilator 5.052 (pixi). No tracing, no
-coverage, no `--timing`, no `-O` (Verilator's default optimisation in both), one thread.
+read), verilated by every flow with the same Verilator 5.052 (pixi; Marlin 0.21.1
+supports 5.025 and later). No tracing, no coverage, no `--timing`, no `-O` (Verilator's
+default optimisation in all), one thread.
 The exact Verilator command lines (from each build's `__verFiles.dat`):
 
 - simjig (`bench/simjig/build.rs`, model `fifo`):
@@ -108,25 +120,44 @@ The exact Verilator command lines (from each build's `__verFiles.dat`):
   --timescale 1ns/1ps -GWIDTH=8 -GDEPTH=16 -GFWFT=0 <cocotb>/share/lib/verilator/verilator.cpp
   examples/lib/rtl/sync_fifo.sv`, then `make -j -C target/bench-cocotb -f Vtop.mk VM_TRACE=0`.
 
+- Marlin (`VerilatorRuntime`, at the model's first use; `bench.py build` triggers it):
+  `verilator --cc -sv -j 0 --build -CFLAGS "-shared -fpic -std=c++14 -DVL_TIME_CONTEXT"
+  -MAKEFLAGS CXX=c++ --Mdir <artifacts>/obj_dir --top-module sync_fifo_bench
+  bench/marlin/rtl/sync_fifo_bench.sv examples/lib/rtl/sync_fifo.sv ../ffi/ffi.cpp`, then
+  `c++ -shared` of the two archives into a `.so` that the test `dlopen`s. Marlin has no
+  way to pass parameters (its `#[verilog]` macro reads port widths from the top module's
+  source), so `sync_fifo_bench.sv` instantiates `sync_fifo #(8, 16, 0)` with literal port
+  widths; Verilator inlines the wrapper.
+- C++ (`bench.py`, `build_cpp`): `verilator --cc --exe --build -j 0 --no-timing
+  --top-module sync_fifo -GWIDTH=8 -GDEPTH=16 -GFWFT=0 -Mdir target/bench-cpp -o bench_cpp
+  examples/lib/rtl/sync_fifo.sv bench/cpp/main.cpp`.
+
 The differences are the ones each flow needs: cocotb's `--vpi --public-flat-rw` (VPI
 access) and its `main` (`verilator.cpp`); simjig's `--no-timing` and its `.vlt` (the
 design has no delays, so `--no-timing` changes nothing, and the timescale is the RTL's own
-`timeunit 1ns; timeprecision 1ps`). The `fifo_pub` rows measure what `--public-flat-rw`
-costs a simjig model, so the model cost can be compared like for like.
+`timeunit 1ns; timeprecision 1ps`); Marlin's wrapper, `-sv` (the files are `.sv` anyway),
+C++14, `-fpic` and its `ffi.cpp` (one `extern "C"` function per port and for `eval`).
+None passes `-O` or `--trace`. The `fifo_pub` rows measure what `--public-flat-rw` costs a
+simjig model, so the model cost can be compared like for like.
 
-**C++.** Both compile with the pinned clang 21 at `-O2`: simjig-build's default
-(`SIMJIG_CXX_OPT`), and for cocotb `OPT_FAST=-O2 OPT_SLOW=-O2 OPT_GLOBAL=-O2` (through
-`MAKEFLAGS`) instead of `verilated.mk`'s `-Os`. Both also get conda's `CXXFLAGS`
+**C++.** All four compile with the pinned clang 21 at `-O2`: simjig-build's default
+(`SIMJIG_CXX_OPT`), and for cocotb, Marlin and the C++ flow `OPT_FAST=-O2 OPT_SLOW=-O2
+OPT_GLOBAL=-O2` (through `MAKEFLAGS`, which the `make` that Verilator's `--build` runs
+reads too) instead of `verilated.mk`'s `-Os`. All also get conda's `CXXFLAGS`
 (`-O2 -ftree-vectorize -fstack-protector-strong -D_FORTIFY_SOURCE=2 ...`). The Rust is
-built with `cargo test --profile bench` (release, plus line tables).
+built with `cargo test --profile bench` (release, plus line tables). Marlin labels its
+build "`verilator-O0` profile [unoptimized]": that is Marlin's name for "no `-O` passed
+to Verilator", Verilator's default optimisation, as in every flow here.
 
-**Testbench** (identical in both; `tests/bench.rs` and `cocotb/test_bench.py`):
+**Testbench** (the same in all four: `simjig/tests/bench.rs`, `cocotb/test_bench.py`,
+`marlin/tests/bench.rs`, `cpp/main.cpp`; the hand-written loops of Marlin and C++ are
+described after this list):
 - a 10 ns clock from the simulator's own clock: simjig's kernel clock
   (`clock(clk, ns(10)).start()`), and cocotb's `Clock`, which with
   `COCOTB_TRUST_INERTIAL_WRITES=1` is the C++ GPI clock (`impl="gpi"`, recorded in every
   cocotb result line);
-- drivers write at the falling edge, the monitor samples at the rising edge (both flows
-  show pre-edge values there: `tests/conformance/README.md`);
+- drivers write at the falling edge, the monitor samples at the rising edge (every flow
+  shows pre-edge values there: `tests/conformance/README.md`);
 - **(A) `clock_only`**: start the clock, await N rising edges;
 - **(B) `monitor_only`**: A plus a monitor task that reads `push`, `pop`, `full`, `empty`,
   `count`, `rd_data` at each rising edge, converts them to integers and folds them into a
@@ -137,19 +168,41 @@ built with `cargo test --profile bench` (release, plus line tables).
   which the model needs) and checks `count`, `full`, `empty` and `rd_data` against a
   reference model, then applies the edge's push and pop to it. Rates are redrawn every 24
   cycles from {10, 50, 90} %, so the FIFO fills and drains.
-- Both draw from the same xorshift32 (seeds `0x12345678`, `0x9E3779B9`), so both simulate
+- All draw from the same xorshift32 (seeds `0x12345678`, `0x9E3779B9`), so all simulate
   the very same stimulus: every result line carries the pushes, pops and a hash of the
-  popped bytes (B: of the sampled values), and `table` reports any mismatch. There was
-  none.
+  popped bytes (B: of the sampled values), and `table` reports any point where the flows
+  disagree.
 - In cocotb, signal handles and trigger objects are looked up once, outside the loops.
+
+**Marlin and C++: a loop, not a scheduler.** Neither has tasks, triggers, delta cycles or
+an event queue; the testbench owns the loop and calls `eval()` itself, so they measure
+close to the raw cost of the model plus the testbench's arithmetic: a ceiling, not an
+event-driven framework like simjig and cocotb. Their loops reproduce the event-driven
+order exactly (the hashes prove it): at time 0 one eval with the initial inputs (simjig's
+kernel evaluates before applying the clock's first edge, so the first sample sees `empty`
+high), then per cycle: the monitor samples the pre-edge values, `clk = 1; eval()`, the
+producer and consumer write their inputs, `clk = 0; eval()`. The three "tasks" of C are
+three steps of one loop body, called in the order the schedulers run them. Within that:
+- Marlin's `eval()` copies every input field into the model (one FFI call per input, five
+  here), calls Verilator's `eval` (one), and copies every output back (four): ten
+  indirect calls into a `dlopen`ed `.so` per eval, two evals per cycle. A read is a field
+  read, so the monitor's reads of the inputs (`push`, `pop`, `wr_data`) read back what the
+  testbench wrote. Marlin keeps no simulated time.
+- The C++ loop reads and writes the model's port members directly and advances
+  `VerilatedContext` time by 5 ns per half period (nothing reads it: no delays).
+- The reference model is a `VecDeque` (Marlin) or a `std::deque` (C++), and failed
+  checks are `assert_eq!` (Marlin) or a compare that prints and exits 1 (C++).
 
 **Timing.** Each testbench times its own body (from the first statement to the end of
 the last task), so model construction, Python start-up, cocotb's regression setup and
 the harness's report are excluded; `process s` is the wall time of the whole process
-(simjig: the test binary running one test; cocotb: the runner's simulator process), for
-reference. Builds are never timed. Each point is 5 runs, each in a fresh process, run one
+(simjig and Marlin: the test binary running one test, which for Marlin includes its
+`verilator --version` check and the `dlopen`; cocotb: the runner's simulator process;
+C++: the executable), for reference. Builds are never timed. Each point is 5 runs, each in a fresh process, run one
 at a time; the table gives the median, min and max of the in-testbench time and
-cycles/s = N / median. Speedup = cocotb median / simjig median.
+cycles/s = N / median, ns/cycle = median / N. Speedup vs cocotb = cocotb median / the
+flow's median; time vs cpp = the flow's median / the C++ median (how far from the
+ceiling).
 
 **Idle machine.** Before every batch (one flow, variant and size: 5 runs), the driver
 waits until the 1-minute load average is below `--max-load` (2.5: the idle floor here was
@@ -158,15 +211,23 @@ process is running; the load it saw is in each result line and the table's `load
 column. Nothing is built while measuring: `bench/run.sh build` comes first.
 
 **Correctness check.** `bench/run.sh bug` deletes `|| do_pop` from the push condition
-(a full FIFO then drops a push that comes with a pop) and runs C for 10 000 cycles on
-both. Both fail at the same check (`results/bug.txt`): `count` is 15 where the model
-holds 16.
+(a full FIFO then drops a push that comes with a pop) and runs C for 10 000 cycles in
+every flow. All four fail at the same check (`results/bug.txt`): `count` is 15 where the
+model holds 16 (cycle 496).
 
 ## Caveats
 
+- Marlin and C++ are hand-written loops (see Method): they show what the model and the
+  arithmetic cost, with nothing scheduled. simjig's and cocotb's numbers include a
+  scheduler that the loops do not have: edges found by watching signals, tasks woken in
+  order, writes applied at defined points, delta cycles. A loop gets the same results
+  here only because its author wrote the cycle's order out by hand; with several clocks,
+  combinational feedback through the testbench or many independent tasks that order is
+  the testbench author's job, and the loops' advantage is partly that work not done.
+
 - One design, one size: a tiny FIFO, so the model's eval is cheap and the numbers are
   dominated by the testbench and the scheduler. A large design narrows the gap, since
-  both flows spend the same time in Verilator's eval.
+  every flow spends the same time in Verilator's eval.
 - The stimulus RNG is a hand-written xorshift32, not `ctx.rng` or Python's `random`: the
   price of identical stimulus. In C it costs cocotb three Python method calls per cycle (two draws by the
   producer, one by the consumer).

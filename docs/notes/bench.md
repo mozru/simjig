@@ -66,3 +66,60 @@ of them was changed in this branch.
 - A stray `find /` of mine (from setup) was left running during the measurement. It used
   1.5 s of CPU in two hours (blocked on I/O) and was killed before profiling; it is not
   in any number to a measurable degree, but it was there.
+
+# Marlin and raw C++ flows (agent "bench2")
+
+Two more flows, so simjig can be placed between cocotb and the ceiling: Marlin 0.21.1
+(`bench/marlin/`) and a raw C++ Verilator `main` (`bench/cpp/main.cpp`). Method and
+caveats are in `bench/README.md`. **No measurement was taken**: simjig is being optimised
+on branch `perf`, and the final four-flow run happens after it lands.
+
+## Marlin
+- "Merlin" in the request is Marlin (crates.io `marlin`, github.com/ethanuppal/marlin,
+  "No-nonsense hardware testing in Rust"). 0.21.1, released 2026-10-02, is the latest
+  release at least two weeks old (0.21.1 is also the newest). MPL-2.0.
+- The API: `#[verilog(src, name)] struct Fifo;` generates a struct with one public field
+  per port; `VerilatorRuntime::new2(artifacts, sources, includes, dpi, options)` and
+  `runtime.create_model_simple::<Fifo>()` verilate the sources (at run time, on first use;
+  cached by source mtime in the artifacts directory), link a `.so` and `dlopen` it.
+  `eval()` (trait `AsDynamicVerilatedModel`) pins every input, evals and reads every
+  output back, each through an `extern "C"` function pointer. `marlin-test` (a separate
+  crate, not used) adds a `Seq` wrapper with `tick()`; the core API is the loop.
+- No parameter overrides: the macro reads port widths from the top module's source
+  (`$clog2(DEPTH)` included, evaluated with the defaults), and `VerilatedModelConfig` has
+  no `-G`. Hence `bench/marlin/rtl/sync_fifo_bench.sv`, a wrapper with literal widths.
+- No extra Verilator or compiler flags either (`VerilatedModelConfig` has the `-O` level,
+  warnings to ignore, the C++ standard, include and library paths, and the compiler).
+  The C++ gets `-O2` through `MAKEFLAGS` in the environment, which the `make` that
+  Verilator's `--build` runs reads (checked with `make -n -B`: `OPT_FAST` is `-O2`).
+  Marlin cannot pass `--no-timing`; with no delays in the design that changes nothing.
+- It works with the pixi Verilator 5.052 (Marlin requires 5.025 or later).
+
+## Surprises
+- A `//` comment whose first word is "Verilator" is a Verilator pragma
+  (`BADVLTPRAGMA`); the wrapper's comment had to be reworded.
+- The first B hash from both loops was wrong: before any `eval()`, Verilator's outputs
+  are zero (`empty` low), but simjig's kernel evaluates once at time 0 before applying the
+  clock's first edge, so its first sample sees `empty` high. Both loops now start with
+  one eval; then every hash matched at 10k and 1M.
+- Marlin's build banner says "`verilator-O0` profile [unoptimized]" when no `-O` is
+  passed: that is Verilator's default optimisation, not `-O0`.
+
+## Smoke checks (10k cycles, load 4.4; not measurements)
+- `bench/run.sh build`: all four built (58 s).
+- `bench/run.sh run --sizes 10000 --runs 1 --max-load 100 --out target/smoke.jsonl`,
+  then `table`: no mismatch. Every flow reported A hash 0, B hash 3228338176, C pushes
+  4160, pops 4155, hash 1744841553 (the committed simjig/cocotb values). At 1M (Marlin and
+  C++ only, by hand): C 402910/402901/3888034673, as committed.
+- `bench/run.sh bug`: all four fail at `count`, 15 against the model's 16 (C++: cycle
+  496).
+- Orders of magnitude only (loaded machine): Marlin and C++ both run C at about 35 to
+  40 ns/cycle, about 25x less than simjig's 1 us.
+
+## The final run
+`BENCH_RUN_ARGS="--sizes 1000000,10000000 --runs 5 --flows simjig,cocotb,marlin,cpp" bench/run.sh`
+runs env, build, bug, the 120 measured runs and the table, and rewrites
+`bench/results/`. Estimated from the committed process times: simjig 130 s, cocotb
+720 s, Marlin and C++ about 10 s each; with build and bug check about 17 minutes, plus
+any wait for the load gate (< 2.5). Then the Results section of `bench/README.md` needs
+rewriting from `results/table.md`.

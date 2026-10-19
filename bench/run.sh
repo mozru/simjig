@@ -4,6 +4,10 @@
 #   bench/run.sh            # env, build, bug check, then every measurement (building
 #                           # nothing); writes bench/results/{env,bug}.txt, raw.jsonl, table.md
 #   bench/run.sh run --sizes 10000 --runs 1   # any subcommand of bench/bench.py
+#   BENCH_RUN_ARGS="--sizes 1000000 --flows simjig,cocotb,marlin,cpp" bench/run.sh
+#                           # the whole sequence, with these `run` options
+#
+# Flows: simjig (models fifo and fifo_pub), cocotb, Marlin and raw C++ (bench/README.md).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$HOME/.pixi/bin:$HOME/.cargo/bin:$PATH" PIXI_NO_TELEMETRY=1

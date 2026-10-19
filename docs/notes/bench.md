@@ -66,3 +66,93 @@ of them was changed in this branch.
 - A stray `find /` of mine (from setup) was left running during the measurement. It used
   1.5 s of CPU in two hours (blocked on I/O) and was killed before profiling; it is not
   in any number to a measurable degree, but it was there.
+
+# Marlin and raw C++ flows (agent "bench2")
+
+Two more flows, so simjig can be placed between cocotb and the ceiling: Marlin 0.21.1
+(`bench/marlin/`) and a raw C++ Verilator `main` (`bench/cpp/main.cpp`). Method and
+caveats are in `bench/README.md`. **No measurement was taken**: simjig is being optimised
+on branch `perf`, and the final four-flow run happens after it lands.
+
+## Marlin
+- "Merlin" in the request is Marlin (crates.io `marlin`, github.com/ethanuppal/marlin,
+  "No-nonsense hardware testing in Rust"). 0.21.1, released 2026-10-02, is the latest
+  release at least two weeks old (0.21.1 is also the newest). MPL-2.0.
+- The API: `#[verilog(src, name)] struct Fifo;` generates a struct with one public field
+  per port; `VerilatorRuntime::new2(artifacts, sources, includes, dpi, options)` and
+  `runtime.create_model_simple::<Fifo>()` verilate the sources (at run time, on first use;
+  cached by source mtime in the artifacts directory), link a `.so` and `dlopen` it.
+  `eval()` (trait `AsDynamicVerilatedModel`) pins every input, evals and reads every
+  output back, each through an `extern "C"` function pointer. `marlin-test` (a separate
+  crate, not used) adds a `Seq` wrapper with `tick()`; the core API is the loop.
+- No parameter overrides: the macro reads port widths from the top module's source
+  (`$clog2(DEPTH)` included, evaluated with the defaults), and `VerilatedModelConfig` has
+  no `-G`. Hence `bench/marlin/rtl/sync_fifo_bench.sv`, a wrapper with literal widths.
+- No extra Verilator or compiler flags either (`VerilatedModelConfig` has the `-O` level,
+  warnings to ignore, the C++ standard, include and library paths, and the compiler).
+  The C++ gets `-O2` through `MAKEFLAGS` in the environment, which the `make` that
+  Verilator's `--build` runs reads (checked with `make -n -B`: `OPT_FAST` is `-O2`).
+  Marlin cannot pass `--no-timing`; with no delays in the design that changes nothing.
+- It works with the pixi Verilator 5.052 (Marlin requires 5.025 or later).
+
+## Surprises
+- A `//` comment whose first word is "Verilator" is a Verilator pragma
+  (`BADVLTPRAGMA`); the wrapper's comment had to be reworded.
+- The first B hash from both loops was wrong: before any `eval()`, Verilator's outputs
+  are zero (`empty` low), but simjig's kernel evaluates once at time 0 before applying the
+  clock's first edge, so its first sample sees `empty` high. Both loops now start with
+  one eval; then every hash matched at 10k and 1M.
+- Marlin's build banner says "`verilator-O0` profile [unoptimized]" when no `-O` is
+  passed: that is Verilator's default optimisation, not `-O0`.
+
+## Smoke checks (10k cycles, load 4.4; not measurements)
+- `bench/run.sh build`: all four built (58 s).
+- `bench/run.sh run --sizes 10000 --runs 1 --max-load 100 --out target/smoke.jsonl`,
+  then `table`: no mismatch. Every flow reported A hash 0, B hash 3228338176, C pushes
+  4160, pops 4155, hash 1744841553 (the committed simjig/cocotb values). At 1M (Marlin and
+  C++ only, by hand): C 402910/402901/3888034673, as committed.
+- `bench/run.sh bug`: all four fail at `count`, 15 against the model's 16 (C++: cycle
+  496).
+- Orders of magnitude only (loaded machine): Marlin and C++ both run C at about 35 to
+  40 ns/cycle, about 25x less than simjig's 1 us.
+
+## The final run
+`BENCH_RUN_ARGS="--sizes 1000000,10000000 --runs 5 --flows simjig,cocotb,marlin,cpp" bench/run.sh`
+runs env, build, bug, the 120 measured runs and the table, and rewrites
+`bench/results/`. Estimated from the committed process times: simjig 130 s, cocotb
+720 s, Marlin and C++ about 10 s each; with build and bug check about 17 minutes, plus
+any wait for the load gate (< 2.5). Then the Results section of `bench/README.md` needs
+rewriting from `results/table.md`.
+
+## The mid-size design (agent "bench3")
+Why: on the FIFO, Verilator's eval is 7% of simjig's time, so every ratio is a framework
+ratio. `bench/rtl/mid_pipe.sv` (`--design mid`; `bench/README.md`, "Designs") puts a real
+model cost under the same push/pop testbench.
+
+- **Why synthetic, not PicoRV32 or SERV.** No download, no third-party license, and the
+  testbench interface stays the FIFO's: a CPU needs a memory model served by the
+  testbench, which in cocotb is a Python callback per access and would turn the
+  comparison back into a testbench-cost one. The price: it is not a real core (one
+  clock, one long pipeline, no control-heavy logic).
+- **Why stages in inverse pairs.** The checker must be cheap in Python, or cocotb's
+  number measures a reference model. With each odd stage undoing the even one (odd
+  multiplier and its inverse mod 2^64, computed in the RTL by a Newton-iteration constant
+  function), `out_data` is the popped entry: the scoreboard is a queue. Verilator does
+  no algebra across registers, so the work is not optimized away; the CRC lane, which
+  hashes every intermediate value, makes sure each stage's arithmetic is observed (it
+  is in every flow's result hash).
+- **Sizing.** Smoke runs of the C++ flow (load 6 to 8, so rough): 32 stages about
+  0.5 us per cycle, 64 about 0.7 us, 128 about 1.3 us. 128 it is: in the middle of the
+  0.5 to 5 us aimed at, about 12 400 flops. Verilating and compiling it takes seconds.
+- **Smoke run** (10 000 cycles, 1 run, load about 6: not a measurement), ns per cycle,
+  C (full): simjig 2 367, simjig `mid_pub` 2 758, Marlin 1 320, C++ 1 318, cocotb 11 639.
+  Every flow reported the same pushes, pops and hash at every variant.
+- **Bug check.** All four flows fail `c_full` on the injected bug (`out_valid`); the FIFO
+  design's bug check still fails all four too (`count`, cycle 496).
+- **Not done.** No measurement (the director runs it after merging `perf`); no profile
+  of where simjig's extra time per cycle goes on `mid`.
+
+Refactor on the way: each flow's helpers that both designs use (xorshift32, drivers, run
+length, result line, the C++ `Bench` stepper) moved to one shared file per flow
+(`simjig/tests/common/`, `marlin/tests/common/`, `cocotb/bench_common.py`,
+`cpp/common.h`); `cargo fmt` reformatted the two Rust `bench.rs` files it touched.

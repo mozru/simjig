@@ -14,62 +14,24 @@ are looked up once, outside the loops: the fastest idiomatic form.
 Each test times its own body and appends one JSON line to the file BENCH_OUT.
 """
 
-import json
-import os
 import time
 from collections import deque
 
 import cocotb
-from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge
+from bench_common import (
+    CONSUMER_SEED,
+    MASK,
+    PHASE,
+    PRODUCER_SEED,
+    XorShift32,
+    cycles,
+    report,
+    start_clock,
+)
 
-DEPTH = 16
-PHASE = 24
-RATES = (10, 50, 90)
-PRODUCER_SEED = 0x12345678
-CONSUMER_SEED = 0x9E3779B9
-MASK = 0xFFFFFFFF
-
-
-class XorShift32:
-    """Marsaglia's xorshift32 (13, 17, 5), the same stream as the Rust testbench's."""
-
-    __slots__ = ("x",)
-
-    def __init__(self, seed):
-        self.x = seed
-
-    def next(self):
-        x = self.x
-        x ^= (x << 13) & MASK
-        x ^= x >> 17
-        x ^= (x << 5) & MASK
-        self.x = x
-        return x
-
-    def rate(self):
-        return RATES[self.next() % 3]
-
-
-def cycles():
-    return int(os.environ.get("BENCH_CYCLES", "10000"))
-
-
-def report(variant, n, start, clock, **result):
-    secs = round(time.perf_counter() - start, 6)
-    line = {"flow": "cocotb", "dut": "fifo", "variant": variant, "cycles": n,
-            "seconds": secs, "clock_impl": clock.impl, **result}  # fmt: skip
-    with open(os.environ["BENCH_OUT"], "a") as f:
-        f.write(json.dumps(line) + "\n")
-
-
-def start_clock(dut):
-    # With COCOTB_TRUST_INERTIAL_WRITES=1 (run.py sets it), cocotb 2.1's Clock picks
-    # impl="gpi" (cocotb/clock.py): the clock toggles in C++ (GPI), not in a Python
-    # coroutine; each result records `clock.impl`. It starts high, like simjig's.
-    clock = Clock(dut.clk, 10, unit="ns")
-    clock.start()
-    return clock
+DESIGN = "fifo"
+DEPTH = 16  # the -GDEPTH run.py passes
 
 
 @cocotb.test()
@@ -80,7 +42,7 @@ async def clock_only(dut):
     rising = RisingEdge(dut.clk)
     for _ in range(n):
         await rising
-    report("clock_only", n, start, clock, hash=0)
+    report("clock_only", n, start, clock, DESIGN, hash=0)
 
 
 @cocotb.test()
@@ -103,7 +65,7 @@ async def monitor_only(dut):
         return h
 
     h = await cocotb.start_soon(monitor())
-    report("monitor_only", n, start, clock, hash=h)
+    report("monitor_only", n, start, clock, DESIGN, hash=h)
 
 
 @cocotb.test()
@@ -170,4 +132,4 @@ async def full(dut):
     await prod
     await cons
     pushes, pops, h = await mon
-    report("full", n, start, clock, pushes=pushes, pops=pops, hash=h)
+    report("full", n, start, clock, DESIGN, pushes=pushes, pops=pops, hash=h)

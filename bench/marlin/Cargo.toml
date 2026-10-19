@@ -1,0 +1,20 @@
+# Marlin side of the sync_fifo benchmark (bench/README.md). A standalone workspace on
+# purpose, like bench/simjig: it stays out of the root workspace and out of
+# `cargo xtask ci`. Run it through `bench/run.sh`.
+[package]
+name = "marlin-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "The sync_fifo benchmark's testbench, written with Marlin."
+
+[workspace]
+
+# Marlin 0.21.1 (2026-10-02): the latest release at least two weeks old on 2026-10-18.
+[dev-dependencies]
+marlin = { version = "=0.21.1", features = ["verilog"] }
+
+# The measured profile, as bench/simjig's: release with line tables.
+[profile.bench]
+debug = "line-tables-only"

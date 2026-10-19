@@ -105,6 +105,9 @@ fn the_time_limit_ends_the_body() {
         "{failure}"
     );
     assert_eq!(failure.time, SimTime(100));
+    // No tasks to blame in a synchronous test.
+    let help = failure.help().unwrap();
+    assert!(!help.contains("task"), "{help}");
 }
 
 /// A panic in the body is a `TaskPanic` of `main`, at the panicking line.
@@ -131,6 +134,13 @@ fn message(failure: &simjig::Failure) -> String {
     }
 }
 
+/// A panic in the body: its message and line (a `TaskPanic` of `main`).
+fn panicked(body: impl FnOnce(counter::Dut)) -> (String, Option<u32>) {
+    let (mut sim, dut) = sim::<counter::Dut>();
+    let failure = sim.run_sync(|| body(dut)).unwrap_err();
+    (message(&failure), failure.location.map(simjig::SourceLocation::line))
+}
+
 /// `spawn`, a kernel clock and an awaited trigger name the mode instead of running.
 #[test]
 fn async_features_are_refused_by_name() {
@@ -147,6 +157,12 @@ fn async_features_are_refused_by_name() {
     refused("clock", &|dut| {
         simjig::clock(dut.clk.raw(), SimDuration::from_ticks(10)).start();
     });
+    // At the line that starts it.
+    let line = line!() + 2;
+    let (_, at) = panicked(|dut| {
+        simjig::clock(dut.clk.raw(), SimDuration::from_ticks(10)).start();
+    });
+    assert_eq!(at, Some(line));
     refused("trigger", &|dut| {
         let mut edge = pin!(dut.clk.rising());
         let mut cx = Context::from_waker(Waker::noop());

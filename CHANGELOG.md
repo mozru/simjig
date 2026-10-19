@@ -29,6 +29,9 @@ the public API, the generated code or simulation semantics.
   code: the user's function gains `#[deny(unused_must_use)]` (snapshot `expands_sync`,
   reviewed). A body that discards another `#[must_use]` value on purpose writes
   `let _ = ..;`.
+- Synchronous tests: `clock(..).start()` panics at the caller's line (it named a line
+  inside simjig), and a `TimeLimit` failure with no blocked task (always so in a
+  synchronous test) no longer blames a listed task in its `help:` line.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

@@ -209,6 +209,10 @@ fn duts() -> Vec<Dut> {
 }
 
 fn main() {
+    // The target simjig is built for, the test binary's too: the `<triple>/` level of its
+    // path under `--target` (`harness::rundir::target_dir_of`).
+    let triple = std::env::var("TARGET").unwrap_or_default();
+    println!("cargo::rustc-env=SIMJIG_TARGET_TRIPLE={triple}");
     println!("cargo::rustc-check-cfg=cfg(simjig_test_models)");
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=SIMJIG_TEST_MODELS");

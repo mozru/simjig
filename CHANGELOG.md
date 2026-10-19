@@ -23,6 +23,12 @@ the public API, the generated code or simulation semantics.
   half a period late, at the next write, when the design itself changed that input in an
   eval (possible once its `ASSIGNIN` lint is waived): the value-change walk after an eval
   was skipped when only inputs were watched. That walk now always runs.
+- `#[simjig::test(sync)]` denies `unused_must_use` in the test's body: an async helper
+  called there (`reset(dut);`) only made a future and dropped it, so it silently did
+  nothing, with only rustc's warning to show it. It is now a compile error. Generated
+  code: the user's function gains `#[deny(unused_must_use)]` (snapshot `expands_sync`,
+  reviewed). A body that discards another `#[must_use]` value on purpose writes
+  `let _ = ..;`.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

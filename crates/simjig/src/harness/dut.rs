@@ -174,6 +174,21 @@ impl ModelOptions {
     /// user's. It never applies where simjig can tell an eval is not a no-op: a model with
     /// a writable public variable (`public_flat_rw`, `--public-flat-rw`, a read-write
     /// probe), one built with `--timing`, and one recording waves evaluate every time.
+    ///
+    /// The checklist. Opting in is safe when the design
+    /// - never writes its own top-level inputs (no `ASSIGNIN` waiver);
+    /// - does not read `$time` or `$realtime`, print (`$display`, `$write`), draw
+    ///   `$random` or `$urandom`, or call a DPI-C import in combinational logic fed by such
+    ///   an input; and
+    /// - does not use `$sampled`.
+    ///
+    /// It is not safe when the design writes an input it also reads (a waived `ASSIGNIN`)
+    /// and logic fed by that input does any of the above, or when such logic is fed by a
+    /// `$sampled` value: a skipped eval then misses a print, a random draw, a DPI-C call or
+    /// a `$time` read that a C++ loop's eval makes. When unsure, leave it off.
+    ///
+    /// It has no effect in a synchronous test (`#[simjig::test(sync)]`): each eval there
+    /// follows the clock edge `SyncClock` writes, so none has nothing written.
     #[must_use]
     pub fn with_elide_evals(mut self, on: bool) -> Self {
         self.elide_evals = on;

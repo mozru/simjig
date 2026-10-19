@@ -596,6 +596,11 @@ that the replay ended the same way, and writes `waves.fst` and a GTKWave `waves.
 (marker at the failure) into the run directory. Each model of the test and each `fork`
 branch gets its own file (`waves.model-1.fst`, `waves.branch-0.fst`), listed in the report.
 
+In a synchronous test's waves, each timestep is dumped right after its eval, so an input
+written between ticks (`dut.en.set(1)` after `cyc.tick()`) shows at the timestamp of the
+next rising edge, which is the eval that takes it, as in a hand-written Verilator loop
+(`top->en = 1; top->clk = 1; top->eval(); tfp->dump(t);`).
+
 ```sh
 SIMJIG_WAVES_ON_FAIL=1 pixi run cargo nextest run          # every failure gets waves (CI)
 SIMJIG_WAVES=1 SIMJIG_SEED=0x... pixi run cargo nextest run -E 'test(=m::t)'   # one run
@@ -812,4 +817,11 @@ the comparison with cocotb). For the fastest runs:
   `$sampled` value: Verilator runs such logic on every eval, and simjig cannot see it
   (`ModelOptions::with_elide_evals` has the details). Even opted in, a `--timing` model
   and a model with a variable C++ may write (`public_flat_rw` in the source or a `.vlt`,
-  `--public-flat-rw`, a read-write probe) are evaluated every time.
+  `--public-flat-rw`, a read-write probe) are evaluated every time. It has no effect in a
+  synchronous test, where every eval follows a clock edge. The checklist:
+  - **safe** when your design never writes its own inputs, doesn't read `$time`, print
+    (`$display`), call DPI-C or draw `$urandom` in combinational logic fed by them, and
+    doesn't use `$sampled`;
+  - **not safe** when it writes an input it reads (`ASSIGNIN` waived) or uses `$sampled`,
+    and logic fed by either does one of those things: a skipped eval then misses a print,
+    a draw or a DPI-C call that a C++ loop's eval makes. When unsure, leave it off.

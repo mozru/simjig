@@ -104,7 +104,9 @@ pub use kernel::trigger::{
 pub use model::meta::LoadError;
 pub use model::trace::TraceOptions;
 pub use model::values::{FieldDiff, InvalidEnum};
-pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords, Value, Vector};
+pub use signal::{
+    Bind, Bound, BoundMut, In, InOut, Out, PublicRd, PublicRw, RawWords, Value, Vector,
+};
 
 /// Bit-vector values with SystemVerilog semantics (`Bit`, `Bits<N>`, `WideBits`, the
 /// `Packed` trait): the `simjig-bits` crate.

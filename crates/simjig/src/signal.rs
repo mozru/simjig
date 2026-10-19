@@ -46,14 +46,36 @@
 use std::any::Any;
 use std::fmt;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use simjig_bits::Packed;
 
 use crate::kernel::backend::words;
 use crate::kernel::signal::RawSig;
+use crate::kernel::state::Kernel;
 use crate::kernel::trigger::{self, Edge};
 
 pub(crate) mod sealed {
+    use std::rc::Rc;
+
+    use crate::kernel::state::Kernel;
+
+    /// What [`Bind::bind_to`](super::Bind::bind_to) takes: only this crate can make one, so
+    /// only `SyncClock::bind` can bind a handle.
+    pub struct BindTo {
+        pub(crate) kernel: Rc<Kernel>,
+        /// Whether the run may read and write the model's storage directly (held).
+        pub(crate) direct: bool,
+    }
+
+    impl std::fmt::Debug for BindTo {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("BindTo")
+                .field("direct", &self.direct)
+                .finish_non_exhaustive()
+        }
+    }
+
     /// A word buffer sized for one storage type, so accesses need no allocation.
     pub trait Buffer: Copy {
         /// A buffer of exactly the storage's word count.
@@ -466,6 +488,139 @@ handle! {
     PublicRw
 }
 settable!(PublicRw);
+
+/// A handle bound to a synchronous run ([`SyncClock::bind`](crate::SyncClock::bind)):
+/// [`get`](Self::get) reads the model's storage directly, with none of a handle's lookups.
+/// Made from a read-only handle ([`Out`], [`PublicRd`]); [`BoundMut`] also writes.
+///
+/// It reads what the handle would, and checks nothing at each access: the width was checked
+/// when it was bound, and the run it belongs to is the one that made it. It is for that run;
+/// after it ends it reads the model's final state.
+pub struct Bound<T> {
+    slot: BoundSlot,
+    value: PhantomData<fn() -> T>,
+}
+
+/// A handle bound to a synchronous run that also writes: [`set`](Self::set) puts the value
+/// into the model's storage at once, as a synchronous test's `set` does, and the next eval
+/// takes it. Made from [`In`], [`InOut`] or [`PublicRw`].
+pub struct BoundMut<T> {
+    slot: BoundSlot,
+    value: PhantomData<fn() -> T>,
+}
+
+/// What a bound handle reads and writes through: the kernel's direct table (kept alive by
+/// the `Rc`), or, for a slot without a direct way, the handle's own path.
+struct BoundSlot {
+    kernel: Rc<Kernel>,
+    flat: u32,
+    raw: RawSig,
+    direct: bool,
+}
+
+impl BoundSlot {
+    #[inline]
+    fn read<T: Packed<Raw: RawWords>>(&self) -> T {
+        let mut buf = <T::Raw as sealed::Buffer>::zeroed();
+        if !(self.direct && self.kernel.direct.read(self.flat, buf.as_mut())) {
+            return get(self.raw);
+        }
+        T::from_raw(RawWords::from_words(buf.as_ref()))
+    }
+
+    #[inline]
+    #[track_caller]
+    fn write<T: Packed<Raw: RawWords>, V: Into<T> + 'static>(&self, value: V) {
+        if let Some(&literal) = (&value as &dyn Any).downcast_ref::<u128>() {
+            check_literal::<T>(self.raw, literal);
+        }
+        let value: T = value.into();
+        let mut buf = <T::Raw as sealed::Buffer>::zeroed();
+        value.to_raw().to_words(buf.as_mut());
+        if !(self.direct && self.kernel.direct.write(self.flat, buf.as_ref())) {
+            self.raw.write_words(buf.as_ref());
+        }
+    }
+}
+
+impl<T: Packed<Raw: RawWords>> Bound<T> {
+    /// The signal's current value.
+    #[inline]
+    #[must_use]
+    pub fn get(&self) -> T {
+        self.slot.read()
+    }
+}
+
+impl<T: Packed<Raw: RawWords>> BoundMut<T> {
+    /// The signal's current value.
+    #[inline]
+    #[must_use]
+    pub fn get(&self) -> T {
+        self.slot.read()
+    }
+
+    /// Puts `value` into the model (the next eval takes it).
+    ///
+    /// # Panics
+    /// If `value` is a `u128` that does not fit the signal's width.
+    #[inline]
+    #[track_caller]
+    pub fn set(&self, value: impl Into<T> + 'static) {
+        self.slot.write::<T, _>(value);
+    }
+}
+
+impl<T> fmt::Debug for Bound<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Bound").field(&self.slot.raw).finish()
+    }
+}
+
+impl<T> fmt::Debug for BoundMut<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("BoundMut").field(&self.slot.raw).finish()
+    }
+}
+
+/// A typed handle a synchronous run can bind ([`SyncClock::bind`](crate::SyncClock::bind)):
+/// [`In`], [`Out`], [`InOut`], [`PublicRd`] and [`PublicRw`].
+pub trait Bind {
+    /// The bound handle: [`BoundMut`] for a writable handle, [`Bound`] for a read-only one.
+    type Bound;
+    /// Binds the handle; only `SyncClock::bind` can call it.
+    #[doc(hidden)]
+    fn bind_to(self, to: sealed::BindTo) -> Self::Bound;
+}
+
+macro_rules! bind {
+    ($bound:ident: $($name:ident),*) => {$(
+        impl<T: Packed> Bind for $name<T> {
+            type Bound = $bound<T>;
+
+            fn bind_to(self, to: sealed::BindTo) -> Self::Bound {
+                let sealed::BindTo { kernel, direct } = to;
+                let flat = self.raw.with(|k, flat| {
+                    let width = k.widths[flat as usize];
+                    assert!(
+                        width == T::WIDTH,
+                        "signal `{}` is {width} bits wide, but its handle's type is {} bits",
+                        k.names[flat as usize],
+                        T::WIDTH
+                    );
+                    flat
+                });
+                $bound {
+                    slot: BoundSlot { kernel, flat, raw: self.raw, direct },
+                    value: PhantomData,
+                }
+            }
+        }
+    )*};
+}
+
+bind!(BoundMut: In, InOut, PublicRw);
+bind!(Bound: Out, PublicRd);
 
 #[cfg(test)]
 mod tests {

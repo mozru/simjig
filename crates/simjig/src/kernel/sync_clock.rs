@@ -91,6 +91,26 @@ impl SyncClock {
         }
     }
 
+    /// `handle` bound to this run: a [`Bound`](crate::Bound) (or, for a writable handle, a
+    /// [`BoundMut`](crate::BoundMut)) that reads and writes the model's storage directly,
+    /// for a testbench's hot loop. The handle's own `get` and `set` do the same with a
+    /// lookup of the current kernel and the handle's checks at each call.
+    ///
+    /// The direct way is taken only for a model held for the run (a lone model, without
+    /// waves or DPI-C imports implemented in Rust, `ModelBackend::sync_begin`) and a slot
+    /// of at most 64 bits; otherwise the bound handle uses the handle's path.
+    ///
+    /// # Panics
+    /// If `handle` belongs to another simulation or its type's width is not the signal's.
+    #[track_caller]
+    pub fn bind<H: crate::signal::Bind>(&self, handle: H) -> H::Bound {
+        let direct = self.kernel.models.borrow().held();
+        handle.bind_to(crate::signal::sealed::BindTo {
+            kernel: Rc::clone(&self.kernel),
+            direct,
+        })
+    }
+
     /// One cycle: [`rise`](Self::rise), then [`fall`](Self::fall). Two evals.
     #[inline]
     pub fn tick(&mut self) {

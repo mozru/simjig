@@ -153,3 +153,52 @@ fn async_features_are_refused_by_name() {
         assert!(matches!(edge.as_mut().poll(&mut cx), Poll::Pending));
     });
 }
+
+/// A bound handle reads and writes what the handle does, without its lookups.
+#[test]
+fn bound_handles_read_and_write_what_handles_do() {
+    let (mut sim, dut) = sim::<counter::Dut>();
+    let seen = sim
+        .run_sync(|| {
+            let mut cyc = clock(dut.clk.raw());
+            let (rst, en, count) = (cyc.bind(dut.rst), cyc.bind(dut.en), cyc.bind(dut.count));
+            rst.set(1);
+            cyc.tick();
+            rst.set(0);
+            en.set(1);
+            cyc.ticks(5);
+            (
+                count.get().to_u128(),
+                dut.count.get().to_u128(),
+                en.get(),
+                rst.get(),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        seen,
+        (5, 5, simjig::bits::Bit::ONE, simjig::bits::Bit::ZERO)
+    );
+}
+
+/// With two models nothing is held, so bound handles take the handles' own path; the
+/// results are the same, and both models step with the clock of the first.
+#[test]
+fn bound_handles_of_two_models_take_the_handle_path() {
+    let (mut sim, (a, b)) = sim::<(counter::Dut, counter::Dut)>();
+    let seen = sim
+        .run_sync(|| {
+            let mut cyc = clock(a.clk.raw());
+            let (rst, en, count) = (cyc.bind(a.rst), cyc.bind(a.en), cyc.bind(a.count));
+            rst.set(1);
+            b.rst.set(1);
+            cyc.tick();
+            rst.set(0);
+            en.set(1);
+            cyc.ticks(3);
+            (count.get().to_u128(), b.count.get().to_u128())
+        })
+        .unwrap();
+    // `b`'s clock is never driven: it stays in reset at 0.
+    assert_eq!(seen, (3, 0));
+}

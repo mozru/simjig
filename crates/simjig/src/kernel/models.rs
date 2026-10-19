@@ -89,6 +89,8 @@ pub(crate) struct Models {
     version: u64,
     /// Bumped by every write.
     written: u64,
+    /// Held for a synchronous run ([`sync_begin`](Self::sync_begin)).
+    held: bool,
 }
 
 impl Models {
@@ -129,6 +131,7 @@ impl Models {
             settled,
             version: 0,
             written: 0,
+            held: false,
         })
     }
 
@@ -269,15 +272,22 @@ impl Models {
     /// since a held model must be the only one evaluated.
     pub(crate) fn sync_begin(&mut self) {
         if let [backend] = self.backends.as_mut_slice() {
-            backend.sync_begin();
+            self.held = backend.sync_begin();
         }
     }
 
     /// Ends [`sync_begin`](Self::sync_begin).
     pub(crate) fn sync_end(&mut self) {
+        self.held = false;
         for backend in &mut self.backends {
             backend.sync_end();
         }
+    }
+
+    /// Whether the models are held for a synchronous run: no backend call can run while
+    /// the testbench does (no waves to sample, no DPI-C import implemented in Rust).
+    pub(crate) fn held(&self) -> bool {
+        self.held
     }
 
     /// Evaluates every model at `time`, in declaration order, as [`eval`](Self::eval) does

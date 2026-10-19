@@ -277,12 +277,12 @@ fn monitor_only_sync<D: bench_fifo::Ports>(dut: &D) {
     let start = Instant::now();
     let mut cyc = SyncClock::new(dut.clk(), ns(10));
     let (push, pop, full, empty, count, rd) = (
-        dut.push(),
-        dut.pop(),
-        dut.full(),
-        dut.empty(),
-        dut.count(),
-        dut.rd_data(),
+        cyc.bind(dut.push()),
+        cyc.bind(dut.pop()),
+        cyc.bind(dut.full()),
+        cyc.bind(dut.empty()),
+        cyc.bind(dut.count()),
+        cyc.bind(dut.rd_data()),
     );
     let mut hash = 0u32;
     for _ in 0..n {
@@ -303,9 +303,20 @@ fn monitor_only_sync<D: bench_fifo::Ports>(dut: &D) {
 fn full_sync<D: bench_fifo::Ports>(dut: &D) {
     let n = cycles();
     let start = Instant::now();
-    let (rst, push, wr, pop) = (dut.rst(), dut.push(), dut.wr_data(), dut.pop());
-    let (full, empty, count, rd) = (dut.full(), dut.empty(), dut.count(), dut.rd_data());
     let mut cyc = SyncClock::new(dut.clk(), ns(10));
+    // Bound handles: the same reads and writes as the handles', without their lookups.
+    let (rst, push, wr, pop) = (
+        cyc.bind(dut.rst()),
+        cyc.bind(dut.push()),
+        cyc.bind(dut.wr_data()),
+        cyc.bind(dut.pop()),
+    );
+    let (full, empty, count, rd) = (
+        cyc.bind(dut.full()),
+        cyc.bind(dut.empty()),
+        cyc.bind(dut.count()),
+        cyc.bind(dut.rd_data()),
+    );
     // Reset: two rising edges with every input idle, released after a falling edge.
     rst.set(1);
     push.set(0);

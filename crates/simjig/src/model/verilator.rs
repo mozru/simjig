@@ -273,10 +273,11 @@ impl ModelBackend for VerilatorModel {
 
     // Held only with nothing to do around an eval: no waves to sample, no DPI-C context to
     // install, a healthy model. Otherwise every eval keeps the full path.
-    fn sync_begin(&mut self) {
+    fn sync_begin(&mut self) -> bool {
         if self.tracer.is_none() && self.dpi.is_none() && self.poisoned.is_none() {
             self.held = self.raw.hold() == Status::Ok as i32;
         }
+        self.held
     }
 
     fn sync_end(&mut self) {

@@ -150,8 +150,12 @@ pub(crate) trait ModelBackend {
     }
     /// Starts a synchronous run (`Sim::run_sync`): until [`sync_end`](Self::sync_end), every
     /// eval comes through [`eval_at`](Self::eval_at) and no other model of the simulation is
-    /// evaluated, so the backend may keep its model installed between evals.
-    fn sync_begin(&mut self) {}
+    /// evaluated, so the backend may keep its model installed between evals. Returns
+    /// whether it did ("held"): then nothing runs around an eval, no waves are sampled and
+    /// no DPI-C import implemented in Rust exists, so no Rust code runs during an eval.
+    fn sync_begin(&mut self) -> bool {
+        false
+    }
     /// Ends [`sync_begin`](Self::sync_begin).
     fn sync_end(&mut self) {}
     /// [`set_time`](Self::set_time) then [`eval`](Self::eval), which a backend may do in

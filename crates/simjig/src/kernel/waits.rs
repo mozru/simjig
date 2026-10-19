@@ -104,8 +104,13 @@ struct Group {
     edge: EdgeKind,
     /// The `seq` of the registration that primed it; `None` while unprimed.
     primed: Option<u64>,
-    /// The slot's value when this group last looked at it (or when it was primed).
-    snapshot: Vec<u32>,
+    /// The slot's word count.
+    words: usize,
+    /// The slot's value when this group last looked at it (or when it was primed): here
+    /// for a slot of at most two words (compared as one array, the common case), else in
+    /// `wide`.
+    narrow: [u32; 2],
+    wide: Vec<u32>,
     /// In registration order; empty while unprimed.
     waiters: Pending,
 }
@@ -278,7 +283,9 @@ impl WaitTable {
                 slot,
                 edge,
                 primed: None,
-                snapshot: Vec::new(),
+                words: words(model.slot_width(slot)),
+                narrow: [0; 2],
+                wide: Vec::new(),
                 waiters: Pending::default(),
             });
         }
@@ -289,8 +296,13 @@ impl WaitTable {
             return;
         }
         g.primed = Some(self.seq);
-        g.snapshot.resize(words(model.slot_width(slot)), 0);
-        model.read(slot, &mut g.snapshot);
+        if g.words <= 2 {
+            g.narrow = [0; 2];
+            model.read(slot, &mut g.narrow[..g.words]);
+        } else {
+            g.wide.resize(g.words, 0);
+            model.read(slot, &mut g.wide);
+        }
         self.order.push_back((self.seq, index));
     }
 
@@ -469,13 +481,25 @@ impl WaitTable {
             if g.primed != Some(primed) {
                 continue; // stale: unprimed since
             }
-            self.scratch.resize(g.snapshot.len(), 0);
-            model.read(g.slot, &mut self.scratch);
-            if self.scratch == g.snapshot {
-                continue;
-            }
-            let (old, new) = (g.snapshot[0] & 1, self.scratch[0] & 1);
-            g.snapshot.copy_from_slice(&self.scratch);
+            let (old, new) = if g.words <= 2 {
+                let mut now = [0; 2];
+                model.read(g.slot, &mut now[..g.words]);
+                if now == g.narrow {
+                    continue;
+                }
+                let old = g.narrow[0] & 1;
+                g.narrow = now;
+                (old, now[0] & 1)
+            } else {
+                self.scratch.resize(g.words, 0);
+                model.read(g.slot, &mut self.scratch);
+                if self.scratch == g.wide {
+                    continue;
+                }
+                let old = g.wide[0] & 1;
+                g.wide.copy_from_slice(&self.scratch);
+                (old, self.scratch[0] & 1)
+            };
             let fires = match g.edge {
                 EdgeKind::Changed => true,
                 EdgeKind::Rising => old == 0 && new == 1,

@@ -70,7 +70,7 @@ fn poll_registered(
             Poll::Pending
         }
         Some(r) => {
-            if r.poll_fired(cx) {
+            if r.take_fired(cx) {
                 *reg = None;
                 Poll::Ready(())
             } else {

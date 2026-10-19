@@ -720,6 +720,9 @@ pub(crate) fn wake_one(k: &Kernel, list: Key) -> bool {
 pub(crate) struct Registration {
     sim_gen: u32,
     key: Key,
+    /// Already removed from the table ([`take_fired`](Self::take_fired)): `Drop` has
+    /// nothing left to do.
+    released: bool,
 }
 
 impl Registration {
@@ -742,7 +745,32 @@ impl Registration {
         Self {
             sim_gen: k.sim_gen,
             key,
+            released: false,
         }
+    }
+
+    /// As [`poll_fired`](Self::poll_fired), and once fired also removes the registration
+    /// from the table, in the same visit to the kernel, so that dropping it next costs no
+    /// lookup of the current kernel. For a trigger whose future is done once it fires.
+    pub(crate) fn take_fired(&mut self, cx: &Context<'_>) -> bool {
+        let key = self.key;
+        let fired = state::with_sim(self.sim_gen, |k| {
+            let mut waits = k.waits.borrow_mut();
+            let Some(w) = waits.waiters.get_mut(key) else {
+                return false;
+            };
+            if !w.fired {
+                if !w.waker.will_wake(cx.waker()) {
+                    w.waker.clone_from(cx.waker());
+                }
+                return false;
+            }
+            waits.remove(key);
+            true
+        })
+        .unwrap_or(false);
+        self.released |= fired;
+        fired
     }
 
     /// Whether the registration has fired; if not, makes sure `cx`'s waker is the one woken.
@@ -774,6 +802,9 @@ impl Registration {
 
 impl Drop for Registration {
     fn drop(&mut self) {
+        if self.released {
+            return;
+        }
         state::with_sim(self.sim_gen, |k| k.waits.borrow_mut().remove(self.key));
     }
 }

@@ -68,11 +68,13 @@ struct Written {
 
 /// Replays `original` with waves as `request` asks, with the test binary `exe`.
 pub(crate) fn replay(exe: &Path, original: &Original<'_>, request: &WavesRequest) -> WavesReplay {
+    let mut events_compared = false;
     let (from, to, verdict, written) = match request.span(original.target, original.precision) {
         Err(why) => (SimTime::ZERO, None, Verdict::NotRun(why), Vec::new()),
         Ok((from, to)) => match run_child(exe, original, from, to) {
             Ok((end, written)) => {
                 let lines = original.end.differences(&end, original.precision);
+                events_compared = original.end.trace_hash.is_some() && end.trace_hash.is_some();
                 let verdict = if lines.is_empty() {
                     Verdict::Reproduced
                 } else {
@@ -96,6 +98,7 @@ pub(crate) fn replay(exe: &Path, original: &Original<'_>, request: &WavesRequest
         to,
         precision: original.precision,
         verdict,
+        events_compared,
     }
 }
 

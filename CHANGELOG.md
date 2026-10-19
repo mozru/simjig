@@ -44,6 +44,10 @@ the public API, the generated code or simulation semantics.
   `target/` another tool created first). The test binary's target directory is now found
   as the build cache's is: the tag, else an absolute `CARGO_TARGET_DIR` holding the
   binary, else Cargo's `<target>/[<triple>/]<profile>/deps/` layout.
+- The waves replay of a run without a trace hash (a synchronous test, `trace_hash = false`)
+  reports `reproduced (same seed, same outcome at the same time; ..events were not
+  compared)` instead of claiming the same events. `WavesReplay` gains the public field
+  `events_compared`.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

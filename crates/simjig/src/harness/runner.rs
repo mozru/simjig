@@ -626,6 +626,7 @@ fn replay_with_waves(
         to: None,
         precision: outcome.precision.unwrap_or(Precision::PS),
         verdict: super::waves::Verdict::NotRun(why.to_owned()),
+        events_compared: false,
     };
     let (Some(run_dir), Some(precision), Some(end)) =
         (&outcome.run_dir, outcome.precision, outcome.end_time)

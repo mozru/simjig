@@ -324,6 +324,7 @@ fn a_replay_lists_every_waves_file_with_the_failing_branch_first() {
         to: None,
         precision: Precision::NS,
         verdict: Verdict::Reproduced,
+        events_compared: true,
     });
     insta::assert_snapshot!(report.to_string());
 }
@@ -368,6 +369,7 @@ fn the_file_of_a_dead_fork_branch_is_labelled_incomplete() {
         to: None,
         precision: Precision::NS,
         verdict: Verdict::Reproduced,
+        events_compared: true,
     });
     let text = report.to_string();
     assert!(!text.contains("failed at"), "{text}");

@@ -232,7 +232,10 @@ fn a_failure_with_waves_on_fail_gets_waves_from_a_replay() {
         err.contains(&format!("waves:    {}", fst_path.display())),
         "the report names the waves:\n{err}"
     );
-    assert!(err.contains("replay:   reproduced"), "{err}");
+    assert!(
+        err.contains("replay:   reproduced (same seed, same ending at the same time, same events)"),
+        "{err}"
+    );
     let waves = fst::read(&fst_path);
     assert_eq!(waves.end, fail_time, "the waves end at the failure");
     // The default window: max(10% of 3000 ns, 1 us) before the failure.
@@ -264,6 +267,11 @@ fn a_failing_sync_test_gets_waves_from_a_replay() {
     assert_eq!(fail_time, 3_000_000, "{err}");
     assert!(err.contains("replay:   reproduced"), "{err}");
     assert!(err.contains("repro:"), "{err}");
+    // No trace hash, so only the outcome was compared.
+    assert!(
+        err.contains("reproduced (same seed, same outcome at the same time; the run keeps no"),
+        "{err}"
+    );
     // The header gives the cycle the SyncClock reached: 1 + 299 rising edges.
     assert!(err.contains("t=3 us (cycle 300)"), "{err}");
     let waves = fst::read(&dir.join("waves.fst"));

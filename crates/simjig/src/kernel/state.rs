@@ -101,7 +101,7 @@ pub(crate) struct Kernel {
     /// Whether `failure` is set: asked after every task poll and eval, so a plain flag
     /// rather than a `RefCell` borrow.
     has_failed: Cell<bool>,
-    pub(crate) recorder: RefCell<Recorder>,
+    pub(crate) recorder: Recorder,
     pub(crate) counters: Cell<KernelStats>,
     /// [`Models::version`] and [`Models::written`] when the last value-change walk began
     /// (`sched`).
@@ -236,7 +236,7 @@ impl Kernel {
             unrun_drops: RefCell::new(Vec::new()),
             failure: RefCell::new(None),
             has_failed: Cell::new(false),
-            recorder: RefCell::new(Recorder::default()),
+            recorder: Recorder::default(),
             counters: Cell::new(KernelStats::default()),
             walked: Cell::new(None),
         }
@@ -246,7 +246,7 @@ impl Kernel {
         let task = task.map_or(u64::MAX, |k| {
             u64::from(k.index) << 16 | u64::from(gen16(k.gen_))
         });
-        self.recorder.borrow_mut().record(TraceRecord {
+        self.recorder.record(TraceRecord {
             time: self.now.get(),
             kind,
             task,

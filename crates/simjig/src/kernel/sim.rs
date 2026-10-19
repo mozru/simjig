@@ -272,13 +272,13 @@ impl Sim {
     /// test.
     #[must_use]
     pub fn trace_hash(&self) -> u64 {
-        self.kernel.recorder.borrow().hash()
+        self.kernel.recorder.hash()
     }
 
     /// The most recent kernel events, oldest first (a bounded window).
     #[must_use]
     pub fn recent_trace(&self) -> Vec<TraceRecord> {
-        self.kernel.recorder.borrow().recent()
+        self.kernel.recorder.recent()
     }
 
     /// Kernel counters and table sizes; after a run, the tables must be empty.
@@ -289,7 +289,7 @@ impl Sim {
         let waits = self.kernel.waits.borrow();
         stats.live_waiters = waits.live_waiters();
         stats.live_wait_lists = waits.live_lists();
-        stats.records = self.kernel.recorder.borrow().count();
+        stats.records = self.kernel.recorder.count();
         stats
     }
 }

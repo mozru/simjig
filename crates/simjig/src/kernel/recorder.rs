@@ -6,6 +6,7 @@
 //! same hash. Records therefore hold only deterministic data (times, slot numbers, task
 //! keys from the deterministic slab), never addresses or the global simulation id.
 
+use std::cell::Cell;
 use std::fmt;
 
 use super::time::SimTime;
@@ -174,15 +175,20 @@ impl Fnv {
 
 /// A fixed ring of [`RECORDER_CAPACITY`] records: record `i` (counting from 0) is at
 /// `ring[i % RECORDER_CAPACITY]`, so a record is one store, with no length bookkeeping.
+///
+/// Every field is a `Cell`, so recording takes `&self`: the kernel records several times
+/// per timestep, and a `RefCell` around the recorder cost a borrow check each time.
+/// Nothing borrows into it, and recording calls no other code, so no record can interleave
+/// with another.
 #[derive(Debug)]
 pub(crate) struct Recorder {
-    ring: Box<[TraceRecord]>,
+    ring: Box<[Cell<TraceRecord>]>,
     /// Where the next record goes: `count % RECORDER_CAPACITY`.
-    next: usize,
+    next: Cell<usize>,
     /// Whether the ring has wrapped (holds `RECORDER_CAPACITY` records).
-    full: bool,
-    hash: Fnv,
-    count: u64,
+    full: Cell<bool>,
+    hash: Cell<Fnv>,
+    count: Cell<u64>,
 }
 
 const _: () = assert!(
@@ -200,17 +206,18 @@ impl Default for Recorder {
             value: 0,
         };
         Self {
-            ring: vec![blank; RECORDER_CAPACITY].into_boxed_slice(),
-            next: 0,
-            full: false,
-            hash: Fnv::default(),
-            count: 0,
+            ring: (0..RECORDER_CAPACITY).map(|_| Cell::new(blank)).collect(),
+            next: Cell::new(0),
+            full: Cell::new(false),
+            hash: Cell::new(Fnv::default()),
+            count: Cell::new(0),
         }
     }
 }
 
 impl Recorder {
-    pub(crate) fn record(&mut self, record: TraceRecord) {
+    pub(crate) fn record(&self, record: TraceRecord) {
+        let mut hash = self.hash.get();
         // The bytes hashed are the five words' little-endian bytes, in this order.
         for word in [
             record.time.0,
@@ -219,28 +226,36 @@ impl Recorder {
             record.arg,
             record.value,
         ] {
-            self.hash.write_u64(word);
+            hash.write_u64(word);
         }
-        self.ring[self.next] = record;
-        self.next = (self.next + 1) & (RECORDER_CAPACITY - 1);
-        self.full |= self.next == 0;
-        self.count += 1;
+        self.hash.set(hash);
+        let next = self.next.get();
+        self.ring[next].set(record);
+        let next = (next + 1) & (RECORDER_CAPACITY - 1);
+        self.next.set(next);
+        if next == 0 {
+            self.full.set(true);
+        }
+        self.count.set(self.count.get() + 1);
     }
 
     pub(crate) fn hash(&self) -> u64 {
-        self.hash.finish()
+        self.hash.get().finish()
     }
 
     pub(crate) fn count(&self) -> u64 {
-        self.count
+        self.count.get()
     }
 
     /// The kept records, oldest first.
     pub(crate) fn recent(&self) -> Vec<TraceRecord> {
-        if !self.full {
-            return self.ring[..self.next].to_vec();
-        }
-        [&self.ring[self.next..], &self.ring[..self.next]].concat()
+        let next = self.next.get();
+        let (older, newer) = if self.full.get() {
+            (&self.ring[next..], &self.ring[..next])
+        } else {
+            (&self.ring[..next], &self.ring[..0])
+        };
+        older.iter().chain(newer).map(Cell::get).collect()
     }
 }
 
@@ -308,7 +323,7 @@ mod tests {
     /// fixed ring: replays and failure signatures compare such values across versions.
     #[test]
     fn the_trace_hash_is_stable() {
-        let mut r = Recorder::default();
+        let r = Recorder::default();
         for t in 0..100u64 {
             r.record(TraceRecord {
                 time: SimTime(t * 5000),
@@ -327,7 +342,7 @@ mod tests {
 
     #[test]
     fn the_ring_keeps_the_newest_records_in_order() {
-        let mut r = Recorder::default();
+        let r = Recorder::default();
         for t in 0..3 {
             r.record(rec(t));
         }
@@ -344,8 +359,8 @@ mod tests {
 
     #[test]
     fn ring_is_bounded_but_hash_covers_everything() {
-        let mut a = Recorder::default();
-        let mut b = Recorder::default();
+        let a = Recorder::default();
+        let b = Recorder::default();
         for t in 0..(RECORDER_CAPACITY as u64 + 10) {
             a.record(rec(t));
             b.record(rec(if t == 0 { 1 } else { t }));

@@ -1,8 +1,9 @@
-# Notes: de-risking spikes
+# Notes: spikes
 
-Small, real experiments on Verilator 5.052 (pixi) and the designs in `tests/duts`, run
-before fork checkpoints, DPI-C and waves were built. The code in `tests/spikes` is reference material, not production
-code. Each claim below names the test that checks it.
+A spike here is an experiment kept as a regression test. These are small, real
+experiments on Verilator 5.052 (pixi) and the designs in `tests/duts`, run before fork
+checkpoints, DPI-C and waves were built. The code in `tests/spikes` is reference material,
+not production code. Each claim below names the test that checks it.
 
 ## How to run
 ```sh

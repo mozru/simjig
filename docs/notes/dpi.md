@@ -1,7 +1,7 @@
 # DPI notes (agent "dpi", branch `w3/dpi`)
 
 DPI-C imports implemented in Rust: the one sanctioned case of the simulator calling the
-testbench (PLAN §2.1). Checked against Verilator 5.052 (pixi), osx-arm64.
+testbench. Checked against Verilator 5.052 (pixi), osx-arm64.
 
 ## Files
 | Where | What |

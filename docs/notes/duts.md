@@ -16,14 +16,12 @@
 
 ## Surprises (the scheduler spec depends on these)
 1. **Flops do NOT show their new value right after `RisingEdge(clk)` in cocotb on
-   Verilator.** This contradicts `docs/PLAN.md` §5 step 2 ("flops already show their new
-   values, as in cocotb on Verilator"). cocotb applies the clock toggle as a write. The
+   Verilator.** This contradicts the original plan, which said flops already show their new
+   values after the edge, as in cocotb on Verilator. cocotb applies the clock toggle as a write. The
    edge callback fires after the write is applied but before the eval that clocks the
    flops. Post-edge values appear from `ReadOnly` on, or at the next trigger in a later
-   eval. This holds in both `COCOTB_TRUST_INERTIAL_WRITES` modes. The director should
-   decide whether simjig copies cocotb (sampled pre-edge values, which are race-free for
-   monitors) or keeps the PLAN wording. In either case the PLAN sentence is factually
-   wrong about cocotb.
+   eval. This holds in both `COCOTB_TRUST_INERTIAL_WRITES` modes. simjig copies cocotb
+   (sampled pre-edge values, which are race-free for monitors); see DECISION.md §0.
 2. **A design-driven edge behaves the opposite way.** `RisingEdge(div_clk)` on a derived
    clock and `ValueChange(count)` see post-eval values, because they fire after the eval
    that produced them. A simjig "trigger on derived clock is sampled" rule must state which
@@ -35,13 +33,13 @@
 4. **A write right after `RisingEdge` is not captured by that edge**, and a task cannot
    read back its own write before awaiting. Writes are applied after the next
    `eval_step`. This matches the write-log design (DECISION.md table 2, row 2).
-5. **Wake order at coincident edges is not clock-declaration order.** PLAN §5 says
+5. **Wake order at coincident edges is not clock-declaration order.** The original plan said
    coincident edges are applied in clock-declaration order. cocotb applies them together
    (every woken task sees both clocks high), but wakes waiters in what looks like
    trigger-priming order. The `rclk` waiter ran before the `wclk` waiter although `wclk`
    was started first. If simjig uses declaration order, `two_clocks` will not match line
    for line. Either the Rust diff compares per-task streams for that scenario, or the
-   kernel mimics priming order. The director needs to decide.
+   kernel mimics priming order.
    **Resolved:** the kernel mimics priming order, one trigger group at a time; see the
    conformance README, "Callback order" (`tests/conformance/README.md`).
 6. cocotb's Verilator runner and Makefile **default `COCOTB_TRUST_INERTIAL_WRITES=1`**,

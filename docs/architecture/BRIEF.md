@@ -1,5 +1,8 @@
 # Architecture brief: simjig
 
+The brief the three design proposals (`proposal-A.md`, `-B.md`, `-C.md`) answered;
+`DECISION.md` consolidates them. Kept as history.
+
 ## What we are building
 simjig is a general-purpose framework for verifying any RTL design with Verilator, in Rust:
 custom interfaces, standard buses (AXI), block-level to SoC-level tests.
@@ -13,13 +16,9 @@ custom interfaces, standard buses (AXI), block-level to SoC-level tests.
   fork/join, events, queues.
 - **Cargo-native** (`cargo test`/nextest), deterministic, seeded.
 
-## Inputs to read
-1. `../PLAN.md`: the plan, revised after adversarial reviews.
-2. `../simjig/CLAUDE.md`: the constitution.
-3. `../simjig/ARCHITECTURE.md`: the current skeleton.
-4. `~/.claude/skills/agentic-rust/SKILL.md`: Rust rules.
-
-The workspace currently has 5 empty crates (`svtypes`, `simjig-bits`, `simjig-build`, `simjig`,
+## Starting point
+The proposal authors also had the constitution (now in `CONTRIBUTING.md`) and the
+skeleton `ARCHITECTURE.md`. The workspace currently has 5 empty crates (`svtypes`, `simjig-bits`, `simjig-build`, `simjig`,
 `simjig-macros`) plus `xtask`. You may propose a different structure.
 
 ## Verified facts the architecture must respect

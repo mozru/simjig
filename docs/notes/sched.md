@@ -19,9 +19,9 @@ the kernel tests before it was committed (the full gates ran on the last).
    locks, queues, spawns, detaches, cancellations, `first!`, `join!`, `with_timeout`, a
    combinator of the test's own with foreign wakers, loops re-arming one trigger, triggers
    dropped before and after their first poll, and panics. A seed's digest covers its
-   outcome (the failure report, with source lines blanked), the trace hash, the kernel's
-   counters and a log of every resumption with the time, the task, the step and every
-   signal's value. Mutations of the scheduler (reversing a group's wake order, firing the
+   outcome (the failure's kind, time, task and data, not its text), the trace hash, the
+   kernel's counters and a log of every resumption with the time, the task, the step and
+   every signal's value. Mutations of the scheduler (reversing a group's wake order, firing the
    Timers of a timestep together, firing groups together, reordering a group on join,
    ignoring the log in a quiet ReadWrite round, skipping walks after evals) change 22 to
    996 of the 4096 digests.

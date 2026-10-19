@@ -11,13 +11,15 @@
 //! after their first poll, edges re-polled under another waker, and panics. Every resumption records the time, the task, the
 //! step and every signal's value.
 //!
-//! A seed's digest covers its outcome (the failure report, with source lines blanked so
-//! that editing this file does not move them, in the wording it was blessed with:
-//! [`BLESSED_WORDING`]), the trace hash (every eval, write, poll,
-//! spawn and completion, in order), the kernel's counters and the resumption log. The
+//! A seed's digest covers its outcome (the failure's structure, never its rendered text:
+//! [`fold_failure`]), the trace hash (every eval, write, poll, spawn and completion, in
+//! order), the kernel's counters and the resumption log. Messages and help lines are
+//! wording, not scheduling, so rewording one leaves the corpus as it is. The
 //! digests in `corpus.txt` were produced by the scheduler before the fast paths
-//! (`SIMJIG_CORPUS_BLESS=1`); every later scheduler must reproduce them. Bless again only
-//! for a deliberate change of semantics, which then needs its own review.
+//! (`SIMJIG_CORPUS_BLESS=1`); every later scheduler must reproduce them. They were blessed
+//! once more when the digest stopped hashing the failure's text, after checking that the
+//! scheduler mutants of `docs/notes/sched.md` change exactly the same seeds as before.
+//! Bless again only for a deliberate change of semantics, which then needs its own review.
 //!
 //! Operations added later are appended: only seeds from [`FIRST_SEEDS`] on draw them, so
 //! the first seeds' programs, and their digests from before the fast paths, are unchanged.
@@ -34,7 +36,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use super::backend::{EvalStatus, ModelBackend, ModelError};
 use super::clock::{Clock, ClockHandle};
-use super::failure::FailureKind;
+use super::failure::{BlockedTask, Failure, FailureKind};
 use super::fake::{FakeModel, FakeSig};
 use super::signal::RawSig;
 use super::sim::Sim;
@@ -101,6 +103,12 @@ impl Fnv {
 
     fn u64(&mut self, v: u64) {
         self.bytes(&v.to_le_bytes());
+    }
+
+    /// A string with its length first, so that `("ab", "c")` and `("a", "bc")` differ.
+    fn str(&mut self, s: &str) {
+        self.u64(s.len() as u64);
+        self.bytes(s.as_bytes());
     }
 }
 
@@ -612,54 +620,36 @@ fn clock_of(sig: RawSig, plan: ClockPlan) -> ClockHandle {
     }
 }
 
-/// Blanks the digits after `.rs:` (source lines and columns), so that editing this file
-/// does not change a failure's text.
-fn without_lines(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(".rs:") {
-        out.push_str(&rest[..at + 4]);
-        rest = rest[at + 4..].trim_start_matches(|c: char| c.is_ascii_digit() || c == ':');
-    }
-    out.push_str(rest);
-    out
+/// Why a task panicked, for the panics a program can cause.
+#[derive(Clone, Copy, Debug)]
+enum PanicCause {
+    /// [`Op::Panic`].
+    Corpus,
+    /// A trigger awaited during the `ReadOnly` phase.
+    AwaitedInReadOnly,
+    /// A task spawned during the `ReadOnly` phase.
+    StartedInReadOnly,
 }
 
-/// Today's wording in the failures a program can cause, and the wording the corpus was
-/// blessed with, when the triggers were types built with `::new` rather than functions.
-/// Renaming a trigger in a message or help line is not a change of semantics, so the
-/// digest maps it back instead of blessing again. Applied in order.
-const BLESSED_WORDING: [(&str, &str); 7] = [
-    (
-        "`read_only()` and `.read_only()`",
-        "ReadOnly and `.read_only()`",
-    ),
-    ("(`timer(ns(1)).await`)", "(`Timer::new(ns(1)).await`)"),
-    ("a timer()", "a Timer"),
-    ("next_time_step()", "NextTimeStep"),
-    ("awaits read_write()", "awaits ReadWrite"),
-    ("read_write() awaited in", "ReadWrite awaited in"),
-    ("read_only() awaited in", "ReadOnly awaited in"),
-];
-
-/// A failure's text as the corpus was blessed: source lines blanked, and today's trigger
-/// names mapped back ([`BLESSED_WORDING`]).
-fn as_blessed(text: &str) -> String {
-    BLESSED_WORDING
-        .iter()
-        .fold(without_lines(text), |text, (now, then)| {
-            text.replace(now, then)
-        })
+/// The cause of a panic a program can cause, or `None` for any other panic. This is the one
+/// place that reads a panic's message: a rewording that breaks it fails the corpus as an
+/// unexpected failure instead of changing digests silently.
+fn panic_cause(message: &str) -> Option<PanicCause> {
+    if message == "corpus panic" {
+        Some(PanicCause::Corpus)
+    } else if message.contains("awaited in the ReadOnly phase") {
+        Some(PanicCause::AwaitedInReadOnly)
+    } else if message.contains("started in the ReadOnly phase") {
+        Some(PanicCause::StartedInReadOnly)
+    } else {
+        None
+    }
 }
 
 /// Whether a failure is one a program can legitimately cause.
 fn legitimate(kind: &FailureKind) -> bool {
     match kind {
-        FailureKind::TaskPanic { message } => {
-            message == "corpus panic"
-                || message.contains("awaited in the ReadOnly phase")
-                || message.contains("started in the ReadOnly phase")
-        }
+        FailureKind::TaskPanic { message } => panic_cause(message).is_some(),
         FailureKind::WriteConflict { .. }
         | FailureKind::WriteInReadOnly { .. }
         | FailureKind::DeltaLimit { .. }
@@ -668,6 +658,61 @@ fn legitimate(kind: &FailureKind) -> bool {
         | FailureKind::Deadlock { .. }
         | FailureKind::TimeLimit { .. } => true,
         _ => false,
+    }
+}
+
+/// Folds a legitimate failure's structure into `digest`: its kind, time, task, source
+/// file, and the kind's own data (limits, signal and writer names, and each blocked task
+/// with how many triggers it awaits). Rendered text is left out: the message, the help
+/// line and the trigger descriptions are wording. So are a location's line and column,
+/// which editing this file moves.
+fn fold_failure(digest: &mut Fnv, f: &Failure) {
+    digest.str(f.kind.name());
+    digest.u64(f.time.ticks());
+    digest.str(f.task.as_deref().unwrap_or(""));
+    digest.str(f.location.map_or("", |l| l.file()));
+    let blocked = |digest: &mut Fnv, tasks: &[BlockedTask]| {
+        digest.u64(tasks.len() as u64);
+        for b in tasks {
+            digest.str(&b.task);
+            digest.u64(b.awaiting.len() as u64);
+        }
+    };
+    match &f.kind {
+        FailureKind::TaskPanic { message } => {
+            digest.u64(panic_cause(message).map_or(u64::MAX, |c| c as u64));
+        }
+        FailureKind::DeltaLimit { limit, signals } => {
+            digest.u64(u64::from(*limit));
+            for s in signals {
+                digest.str(s);
+            }
+        }
+        FailureKind::ReadWriteLimit { limit, waiters } => {
+            digest.u64(u64::from(*limit));
+            blocked(digest, waiters);
+        }
+        FailureKind::WriteConflict {
+            signal,
+            first,
+            second,
+        } => {
+            for s in [signal, first, second] {
+                digest.str(s);
+            }
+        }
+        FailureKind::WriteInReadOnly { signal } => digest.str(signal),
+        FailureKind::Starved { blocked: tasks } | FailureKind::Deadlock { blocked: tasks } => {
+            blocked(digest, tasks);
+        }
+        FailureKind::TimeLimit {
+            limit,
+            blocked: tasks,
+        } => {
+            digest.u64(limit.ticks());
+            blocked(digest, tasks);
+        }
+        _ => {}
     }
 }
 
@@ -710,7 +755,7 @@ fn run_programs(
     plans: [ClockPlan; CLOCKS],
     s: Signals,
     programs: Vec<Rc<[Op]>>,
-) -> (Result<(), super::failure::Failure>, u64, u64) {
+) -> (Result<(), Failure>, u64, u64) {
     let log = Rc::new(Cell::new((0u64, 0u64)));
     let log_out = Rc::clone(&log);
     let outcome = sim.run(async move {
@@ -759,21 +804,24 @@ fn run_seed(seed: u64) -> (u64, String) {
         .collect();
     let s = signals(&sim, second);
     let (outcome, folded, resumptions) = run_programs(&mut sim, plans, s, programs);
-    let summary = match &outcome {
-        Ok(()) => "ok".to_owned(),
+    let mut digest = Fnv::new();
+    let word = match &outcome {
+        Ok(()) => {
+            digest.str("ok");
+            "ok"
+        }
         Err(f) => {
             assert!(legitimate(&f.kind), "seed {seed}: unexpected failure: {f}");
-            as_blessed(&f.to_string())
+            fold_failure(&mut digest, f);
+            f.kind.name()
         }
     };
     let stats = sim.stats();
     assert_eq!(
         (stats.live_tasks, stats.live_waiters, stats.live_wait_lists),
         (0, 0, 0),
-        "seed {seed}: tables not empty after the run ({summary})"
+        "seed {seed}: tables not empty after the run ({word})"
     );
-    let mut digest = Fnv::new();
-    digest.bytes(summary.as_bytes());
     for v in [
         sim.trace_hash(),
         stats.steps,
@@ -785,11 +833,35 @@ fn run_seed(seed: u64) -> (u64, String) {
     ] {
         digest.u64(v);
     }
-    let word = summary.split(' ').nth(1).unwrap_or("ok").to_owned();
-    (digest.0, word)
+    (digest.0, word.to_owned())
 }
 
 const CORPUS: &str = include_str!("differential/corpus.txt");
+
+#[test]
+fn a_failure_digest_ignores_wording_but_not_structure() {
+    let digest = |message: &str, awaiting: &str, ticks: u64| {
+        let f = Failure {
+            kind: FailureKind::Starved {
+                blocked: vec![BlockedTask {
+                    task: "t0".into(),
+                    awaiting: vec![awaiting.into()],
+                }],
+            },
+            time: SimTime(ticks),
+            precision: Precision::NS,
+            task: None,
+            location: None,
+            message: message.into(),
+        };
+        let mut d = Fnv::new();
+        fold_failure(&mut d, &f);
+        d.0
+    };
+    let blessed = digest("1 task blocked", "a Timer", 5);
+    assert_eq!(digest("one task is blocked", "a timer()", 5), blessed);
+    assert_ne!(digest("1 task blocked", "a Timer", 6), blessed);
+}
 
 #[test]
 fn the_scheduler_reproduces_the_corpus() {

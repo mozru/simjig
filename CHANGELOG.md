@@ -15,10 +15,8 @@ the public API, the generated code or simulation semantics.
   edges, `cycles` and timers are unchanged. Messages that named the old forms now name the
   functions: the zero-tick timer panic, the `ReadOnly`-phase misuse panic, the sync-mode
   refusal, and the `DeltaLimit`, `ReadWriteLimit`, `WriteInReadOnly` and `Starved` help
-  lines (report snapshots reviewed). Scheduling is unchanged: the goldens and the
-  differential corpus are identical (the corpus digest maps the new wording back to the
-  blessed one, `kernel::differential::BLESSED_WORDING`). Migrate with
-  `Timer::new(` to `timer(` and `X::new()` to the snake_case function.
+  lines (report snapshots reviewed). Scheduling is unchanged: the goldens are identical.
+  Migrate with `Timer::new(` to `timer(` and `X::new()` to the snake_case function.
 - A synchronous test (`#[simjig::test(sync)]`) also denies clippy's `let_underscore_future`,
   so `let _ = reset(dut);` of an async helper is an error under `cargo clippy` (rustc
   ignores the lint). Generated code: the `#[deny(..)]` on the test function gains it,

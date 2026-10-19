@@ -24,6 +24,7 @@ use std::fmt;
 use std::panic;
 use std::rc::Rc;
 
+use super::cell::HeldEval;
 use super::sched::eval_failed;
 use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
@@ -39,6 +40,8 @@ pub struct SyncClock {
     kernel: Rc<Kernel>,
     clk: u32,
     half: SimDuration,
+    /// The held model's eval, called directly on every edge (`None`: not held).
+    held: Option<HeldEval>,
 }
 
 impl fmt::Debug for SyncClock {
@@ -84,10 +87,12 @@ impl SyncClock {
             flat
         });
         kernel.models.borrow_mut().write(flat, &[0]);
+        let held = kernel.models.borrow().held_eval();
         Self {
             kernel,
             clk: flat,
             half: SimDuration::from_ticks(ticks / 2),
+            held,
         }
     }
 
@@ -161,7 +166,21 @@ impl SyncClock {
         if !k.direct.write(self.clk, &[level]) {
             k.models.borrow_mut().write(self.clk, &[level]);
         }
-        let status = k.models.borrow_mut().eval_at(t);
+        let status = match self.held {
+            Some(held) => {
+                // SAFETY: the kernel (held by `self`) keeps the backend alive, and the run is
+                // still held: holds end with the run (`Sim::run_sync`), whose phase was
+                // checked above.
+                #[expect(unsafe_code, reason = "the held eval's contract, kept as stated")]
+                let raw = unsafe { held.call(t.ticks()) };
+                if raw == 0 {
+                    Ok(())
+                } else {
+                    k.models.borrow_mut().held_outcome(raw)
+                }
+            }
+            None => k.models.borrow_mut().eval_at(t),
+        };
         k.bump(|c| {
             c.steps += 1;
             c.evals += 1;

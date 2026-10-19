@@ -37,7 +37,7 @@ use super::raw::{CreateError, RawModel, check_vtable};
 use super::trace::{TraceOptions, Tracer};
 use crate::dpi::{DpiFailure, ModelDpi};
 use crate::kernel::backend::{CoverageFault, EvalStatus, ModelBackend, ModelError};
-use crate::kernel::cell::Direct;
+use crate::kernel::cell::{Direct, HeldEval};
 use crate::kernel::time::{Precision, SimTime};
 
 /// A generated Verilator model behind the kernel's backend interface.
@@ -278,6 +278,14 @@ impl ModelBackend for VerilatorModel {
             self.held = self.raw.hold() == Status::Ok as i32;
         }
         self.held
+    }
+
+    fn held_eval(&self) -> Option<HeldEval> {
+        self.held.then(|| self.raw.held_eval())
+    }
+
+    fn held_outcome(&mut self, raw: i32) -> Result<EvalStatus, ModelError> {
+        self.outcome(raw & !MSGS_PENDING)
     }
 
     fn sync_end(&mut self) {

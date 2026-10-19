@@ -26,7 +26,7 @@
 use std::fmt;
 use std::path::Path;
 
-use super::cell::Direct;
+use super::cell::{Direct, HeldEval};
 use super::failure::SourceLocation;
 use super::time::{Precision, SimTime};
 
@@ -158,6 +158,19 @@ pub(crate) trait ModelBackend {
     }
     /// Ends [`sync_begin`](Self::sync_begin).
     fn sync_end(&mut self) {}
+    /// While held ([`sync_begin`](Self::sync_begin) returned `true`): the held eval to call
+    /// directly, if the backend has one; a status other than OK goes to
+    /// [`held_outcome`](Self::held_outcome).
+    fn held_eval(&self) -> Option<HeldEval> {
+        None
+    }
+    /// What a [`HeldEval`]'s non-OK raw status means (messages printed, failures
+    /// reported), as [`eval_at`](Self::eval_at) would have returned it.
+    fn held_outcome(&mut self, raw: i32) -> Result<EvalStatus, ModelError> {
+        Err(ModelError::fatal(format!(
+            "a held eval returned status {raw} to a backend that has none"
+        )))
+    }
     /// [`set_time`](Self::set_time) then [`eval`](Self::eval), which a backend may do in
     /// one call.
     fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {

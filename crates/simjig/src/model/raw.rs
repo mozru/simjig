@@ -41,7 +41,7 @@ use super::abi::{
     Msg, Narrow, OwnedMsg, Signal,
 };
 use super::meta::{Vtable, row_problem};
-use crate::kernel::cell::Direct;
+use crate::kernel::cell::{Direct, HeldEval};
 
 /// Checks the vtable a model's symbol returned ([`ModelVtable::check`]: ABI version, size,
 /// IR hash) and only then returns it as a reference.
@@ -277,6 +277,25 @@ impl RawModel {
     pub(crate) fn hold(&mut self) -> i32 {
         // SAFETY: as in `eval`.
         unsafe { (self.vt.hold)(self.handle.as_ptr()) }
+    }
+
+    /// The held eval as a kernel [`HeldEval`], for a synchronous run's clock; calling it is
+    /// sound while this model lives and is held ([`HeldEval::call`]'s contract).
+    pub(crate) fn held_eval(&self) -> HeldEval {
+        /// `eval_held` through the vtable `table` points to, on `handle`.
+        ///
+        /// # Safety
+        /// `table` and `handle` are a live model's vtable and handle.
+        unsafe fn call(table: *const (), handle: *mut (), ticks: u64) -> i32 {
+            // SAFETY: the caller's promise: `table` is a `&'static ModelVtable`.
+            let vt = unsafe { &*table.cast::<ModelVtable>() };
+            // SAFETY: the caller's promise: `handle` is that model's live handle.
+            unsafe { (vt.eval_held)(handle.cast(), ticks) }
+        }
+        let table = ptr::from_ref::<ModelVtable>(self.vt).cast::<()>();
+        // SAFETY: `call` is sound on this model's vtable and handle while the model lives
+        // (and is held), which is what `HeldEval::call` demands of its callers.
+        unsafe { HeldEval::new(call, table, self.handle.as_ptr().cast()) }
     }
 
     /// Ends [`hold`](Self::hold).

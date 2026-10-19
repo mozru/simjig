@@ -265,6 +265,43 @@ impl KeptDirect {
     }
 }
 
+/// A held model's eval (`eval_held`), callable without its backend: what a synchronous
+/// run's clock calls on every edge, so an edge is one call into the model and a status
+/// check. Made by the backend that holds the model (`ModelBackend::held_eval`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HeldEval {
+    call: unsafe fn(*const (), *mut (), u64) -> i32,
+    table: *const (),
+    handle: *mut (),
+}
+
+impl HeldEval {
+    /// # Safety
+    /// `call(table, handle, ticks)` sets the model's time and evaluates it once, and is
+    /// sound whenever the backend that made this is alive and holds its model.
+    pub(crate) const unsafe fn new(
+        call: unsafe fn(*const (), *mut (), u64) -> i32,
+        table: *const (),
+        handle: *mut (),
+    ) -> Self {
+        Self {
+            call,
+            table,
+            handle,
+        }
+    }
+
+    /// Sets the model's time to `ticks` and evaluates it; the raw status of `eval_held`.
+    ///
+    /// # Safety
+    /// The backend that made this is alive and still holds its model.
+    #[inline]
+    pub(crate) unsafe fn call(self, ticks: u64) -> i32 {
+        // SAFETY: the caller's promise is `new`'s condition.
+        unsafe { (self.call)(self.table, self.handle, ticks) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

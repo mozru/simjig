@@ -19,7 +19,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use super::OrInvariant;
 use super::backend::{EvalStatus, ModelBackend, ModelError};
-use super::cell::DirectTable;
+use super::cell::{DirectTable, HeldEval};
 use super::panics;
 use super::tasks::panic_message;
 use super::time::{Precision, SimTime};
@@ -281,6 +281,26 @@ impl Models {
         self.held = false;
         for backend in &mut self.backends {
             backend.sync_end();
+        }
+    }
+
+    /// The held model's eval, while held ([`ModelBackend::held_eval`]).
+    pub(crate) fn held_eval(&self) -> Option<HeldEval> {
+        if self.held {
+            self.backends[0].held_eval()
+        } else {
+            None
+        }
+    }
+
+    /// What the held model's non-OK raw status means ([`ModelBackend::held_outcome`]).
+    pub(crate) fn held_outcome(
+        &mut self,
+        raw: i32,
+    ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+        match self.backends[0].held_outcome(raw) {
+            Ok(EvalStatus::Running) => Ok(()),
+            other => Err((0, other)),
         }
     }
 

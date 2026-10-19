@@ -50,7 +50,7 @@ use super::slab::Key;
 use super::state::{Kernel, Phase};
 use super::tasks::run_ready;
 use super::time::SimTime;
-use super::waits::{WaitTable, fire_and_wake};
+use super::waits::{WaitOn, WaitTable, fire_and_wake};
 
 /// Evals allowed between two `ReadWrite` rounds of one timestep (or before the first)
 /// before the run fails with `DeltaLimit`.
@@ -129,7 +129,10 @@ fn step(k: &Kernel) {
     k.record(TraceKind::Step, None, 0, 0);
     k.bump(|c| c.steps += 1);
 
-    fire_and_wake(k, WaitTable::fire_next_step);
+    if k.waits.borrow().region_waited(WaitOn::NextTimeStep) {
+        fire_and_wake(k, WaitTable::fire_next_step);
+    }
+    // Not only for NextTimeStep waiters: the main task's first poll is this one.
     run_ready(k);
     // The clock edges due at `t` are logged before any Timer task runs, so a Timer task
     // that stops a clock or writes its signal at `t` comes after that edge in the log.
@@ -190,8 +193,12 @@ fn step(k: &Kernel) {
     }
     k.phase.set(Phase::ReadOnly);
     k.record(TraceKind::ReadOnly, None, 0, 0);
-    fire_and_wake(k, WaitTable::fire_read_only);
-    run_ready(k);
+    // With no ReadOnly waiter there is nothing to run: the deltas ended with every ready
+    // task run.
+    if k.waits.borrow().region_waited(WaitOn::ReadOnly) {
+        fire_and_wake(k, WaitTable::fire_read_only);
+        run_ready(k);
+    }
     if k.phase.get() == Phase::ReadOnly {
         k.phase.set(Phase::Active);
     }

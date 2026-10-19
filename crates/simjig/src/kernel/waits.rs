@@ -432,6 +432,19 @@ impl WaitTable {
             .collect()
     }
 
+    /// Whether anything waits on the region `on` (`NextTimeStep`, `ReadWrite` or
+    /// `ReadOnly`); the scheduler skips firing an empty region.
+    pub(crate) fn region_waited(&self, on: WaitOn) -> bool {
+        match on {
+            WaitOn::NextTimeStep => !self.next_step.is_empty(),
+            WaitOn::ReadWrite => !self.read_write.is_empty(),
+            WaitOn::ReadOnly => !self.read_only.is_empty(),
+            WaitOn::Edge { .. } | WaitOn::Time(_) | WaitOn::List(_) => {
+                unreachable!("invariant: only regions are asked")
+            }
+        }
+    }
+
     pub(crate) fn fire_read_only(&mut self, out: &mut Vec<Wake>) {
         self.fire_drain(|w| &mut w.read_only, out);
     }

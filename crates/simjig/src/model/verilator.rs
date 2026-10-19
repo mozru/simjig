@@ -29,8 +29,8 @@ use std::ffi::CString;
 use std::path::Path;
 
 use super::abi::{
-    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_RANDOM_INIT, FEATURE_TIMING, FEATURE_TRACE_FST,
-    MSGS_PENDING, MsgKind, OwnedMsg, Status,
+    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_PUBLIC_RW, FEATURE_RANDOM_INIT, FEATURE_TIMING,
+    FEATURE_TRACE_FST, MSGS_PENDING, MsgKind, OwnedMsg, Status,
 };
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
@@ -58,6 +58,24 @@ pub(crate) struct VerilatorModel {
     now: SimTime,
     /// Held for a synchronous run (`sync_begin`): evals go through `eval_held`.
     held: bool,
+    /// Whether an eval with nothing written since the last one does nothing: see
+    /// `settles_by_build`.
+    settles: bool,
+}
+
+/// Whether a model built with `features` and the signal table `rows` runs nothing in an
+/// eval with nothing written since the previous one, as Verilator 5.052 schedules it: no
+/// `--timing` (timed events of its own), and no variable C++ may write. Such a variable
+/// (`public_flat_rw`; a read-write probe is one, and so a writable row that is not an
+/// input) feeds its logic under the 'ico' region's 'first iteration' trigger, which every
+/// `eval()` sets, so that logic runs again on each eval: it re-reads `$time` and repeats its
+/// `$display`s and DPI-C calls. `SIMJIG_FEATURE_PUBLIC_RW` says the build found one in the
+/// model's scope table; the row check also covers a shim built without simjig-build.
+fn settles_by_build(features: u64, rows: &[super::abi::Decoded]) -> bool {
+    features & (FEATURE_TIMING | FEATURE_PUBLIC_RW) == 0
+        && !rows
+            .iter()
+            .any(|r| r.access & ACCESS_WRITE != 0 && r.dir != Dir::In)
 }
 
 impl VerilatorModel {
@@ -118,6 +136,7 @@ impl VerilatorModel {
             tracer: None,
             now: SimTime::ZERO,
             held: false,
+            settles: false,
         };
         if let Err(e) = model.outcome(status) {
             // A model that failed to construct runs no final blocks when dropped.
@@ -128,6 +147,7 @@ impl VerilatorModel {
             });
         }
         model.check_table(meta)?;
+        model.settles = settles_by_build(model.raw.features(), model.raw.signals());
         model.raw.take_coverage_runs();
         if let Some(options) = trace {
             model.tracer = Tracer::open(&mut model.raw, meta.prefix, options)?;
@@ -297,8 +317,17 @@ impl ModelBackend for VerilatorModel {
     #[inline]
     fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {
         if !self.held {
+            // A synchronous run (`ModelBackend::eval_at`): this is the timestep's only
+            // eval, and `SyncClock` and a sync `set` write the next timestep's inputs into
+            // the model before the next `set_time`, so the sample is taken now.
             self.set_time(time);
-            return self.eval();
+            let result = self.eval();
+            if self.poisoned.is_none()
+                && let Some(tracer) = &self.tracer
+            {
+                tracer.end_timestep();
+            }
+            return result;
         }
         self.now = time;
         let status = self.raw.eval_held(time.ticks());
@@ -307,10 +336,6 @@ impl ModelBackend for VerilatorModel {
         }
         // Messages to print, or a failure: the same handling as `eval`'s.
         self.outcome(status & !MSGS_PENDING)
-    }
-
-    fn eval_changes(&self, slot: u32) -> bool {
-        !self.raw.is_input(slot as usize)
     }
 
     fn direct(&self, slot: u32) -> Option<Direct> {
@@ -362,12 +387,10 @@ impl ModelBackend for VerilatorModel {
         }
     }
 
-    // Without `--timing`, an eval runs only what a deposit since the last one triggers,
-    // and Verilator's eval loop returns settled; with waves on, every eval is sampled.
+    // Built so that an eval runs only what a deposit since the last one triggers
+    // (`settles_by_build`); with waves on, every eval is sampled.
     fn settles(&self) -> bool {
-        self.raw.features() & FEATURE_TIMING == 0
-            && self.tracer.is_none()
-            && self.poisoned.is_none()
+        self.settles && self.tracer.is_none() && self.poisoned.is_none()
     }
 
     fn events_pending(&self) -> bool {
@@ -645,6 +668,66 @@ mod tests {
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
     }
 
+    /// Eval elision (`ModelBackend::settles`) only for a model whose eval with nothing
+    /// written runs nothing: not with `--timing`, not when the build found a writable
+    /// variable (`SIMJIG_FEATURE_PUBLIC_RW`), not with a writable row that is not an input
+    /// (a read-write probe), and not with waves.
+    #[test]
+    fn only_a_model_without_writable_variables_settles() {
+        fn with_features(features: u64) -> Vtable {
+            Vtable::leak(ModelVtable {
+                features,
+                ..fake::vtable()
+            })
+        }
+        fn public_rw() -> Vtable {
+            thread_local! {
+                static VT: Vtable = with_features(FEATURE_PUBLIC_RW);
+            }
+            VT.with(|vt| *vt)
+        }
+        fn timing() -> Vtable {
+            thread_local! {
+                static VT: Vtable = with_features(FEATURE_TIMING);
+            }
+            VT.with(|vt| *vt)
+        }
+        static PUBLIC_RW: ModelMeta = ModelMeta {
+            vtable: public_rw,
+            ..FAKE
+        };
+        static TIMING: ModelMeta = ModelMeta {
+            vtable: timing,
+            ..FAKE
+        };
+        static TRACED: ModelMeta = ModelMeta {
+            vtable: traced_vtable,
+            ..FAKE
+        };
+        let settles = |meta: &ModelMeta, y_access: u8| {
+            fake::reset();
+            STATE.with_borrow_mut(|s| s.y_access = Some(y_access));
+            VerilatorModel::load(meta, &[], None, None)
+                .unwrap()
+                .settles()
+        };
+        let read = super::super::abi::ACCESS_READ;
+        assert!(settles(&FAKE, read));
+        assert!(
+            !settles(&FAKE, read | ACCESS_WRITE),
+            "a writable output row"
+        );
+        assert!(
+            !settles(&PUBLIC_RW, read),
+            "the build found a writable variable"
+        );
+        assert!(!settles(&TIMING, read));
+        fake::reset();
+        let options = TraceOptions::new("w.fst");
+        let model = VerilatorModel::load(&TRACED, &[], None, Some(&options)).unwrap();
+        assert!(!model.settles(), "with waves");
+    }
+
     /// A table from an older header is rejected on its size before any other field (here
     /// the prefix, which names another model) is read.
     #[test]
@@ -790,6 +873,51 @@ mod tests {
         model.set_time(SimTime(6));
         drop(model);
         assert_eq!(calls(), ["eval", "eval", "dump 0", "eval", "destroy"]);
+    }
+
+    /// A synchronous run with waves (not held, so every eval goes through `set_time`):
+    /// each timestep's sample must hold that timestep's values. `SyncClock` and a sync
+    /// `set` write straight into the model *before* `eval_at` calls `set_time`, which is
+    /// when the previous timestep is dumped (`model::trace`), so each sample shows the
+    /// next edge's clock level.
+    #[test]
+    fn a_sync_run_samples_each_timestep_before_the_next_edge_is_written() {
+        static CLOCKED: ModelMeta = ModelMeta {
+            vtable: traced_vtable,
+            signals: &[
+                SignalMeta {
+                    name: "fake.a",
+                    slot: 0,
+                    width: 1,
+                    storage: Storage::CData,
+                    access: Access::In,
+                },
+                SignalMeta {
+                    name: "fake.y",
+                    slot: 1,
+                    width: 8,
+                    storage: Storage::CData,
+                    access: Access::Out,
+                },
+            ],
+            ..FAKE
+        };
+        fake::reset();
+        STATE.with_borrow_mut(|s| s.a_width = Some(1));
+        let options = TraceOptions::new("w.fst");
+        let model = VerilatorModel::load(&CLOCKED, &[], None, Some(&options)).unwrap();
+        let mut sim = crate::Sim::from_backend(Box::new(model));
+        let clk = sim.signal("fake.a").unwrap();
+        sim.run_sync(|| {
+            let mut cyc = crate::SyncClock::new(clk, crate::SimDuration::from_ticks(10));
+            cyc.tick();
+            cyc.tick();
+        })
+        .unwrap();
+        drop(sim);
+        let dumps = STATE.with_borrow(|s| s.dumps.clone());
+        // clk is 0 at t=0 (SyncClock::new), 1 at 5, 0 at 10, 1 at 15, 0 at 20.
+        assert_eq!(dumps, [(0, 0), (5, 1), (10, 0), (15, 1), (20, 0)]);
     }
 
     /// In a fork child, a healthy trace moves to the branch's file and is closed there at

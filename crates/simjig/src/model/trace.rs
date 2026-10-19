@@ -11,6 +11,11 @@
 //! The last timestep is dumped when the trace closes. A timestep without an eval (none
 //! exists today) dumps nothing.
 //!
+//! A synchronous run (`Sim::run_sync`) is the exception: `SyncClock` and a sync `set`
+//! write the next timestep's clock and inputs straight into the model, before the next
+//! `set_time`, so a sample taken then would show them at the previous time. Its one eval
+//! per timestep comes through `eval_at`, which dumps the timestep right after that eval.
+//!
 //! # Failures
 //! - An eval that fails dumps the state it reached and flushes, so the waves up to the
 //!   failure are on disk even if the process dies before the model is dropped.

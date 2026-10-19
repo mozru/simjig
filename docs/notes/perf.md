@@ -185,11 +185,15 @@ to 40 ns for C: simjig is 9x off by default, 8x without the hash.
    instead of the old one, which is what cocotb shows and the goldens pin. Deferring the
    write's eval to the next timestep instead does not save an eval (it still runs, later)
    and runs the design code the write triggers at the wrong `$time` (displays, DPI-C calls,
-   assertions). The skipped evals of phase 1 (nothing written since the last eval) are the
-   ones that are provably no-ops; they stay recorded and counted.
+   assertions). The skipped evals of phase 1 (nothing written since the last eval) are
+   no-ops for a model without a variable C++ may write; they stay recorded and counted.
+   (Corrected after review: "provably no-ops" was wrong for a model with a
+   `public_flat_rw` variable, whose logic runs on every eval; see "Corrections" below.)
 3. **A fast path for quiet timesteps: done** as far as it is provable (phase 1: empty
    ReadWrite round, empty regions, skipped walks; phase 2: a walk after evals alone when
-   only inputs are watched, since Verilator rejects an assignment to an input).
+   only inputs are watched). (Corrected after review: the phase 2 skip assumed Verilator
+   rejects an assignment to an input, but `ASSIGNIN` is a lint a design may waive, and
+   then an eval changes an input; the skip was removed. See "Corrections" below.)
 4. **Wakers and polling: done where it did not change behaviour.** Wakers were already
    static (no allocation). The current kernel is now found through one plain thread-local
    holding its address (`kernel::state::with_entry`, one unsafe block) instead of a
@@ -306,3 +310,50 @@ none is removable without giving up a check.
   low-byte chain for all 256 states in about 100 cycles): would shorten each record's
   serial chain further; the whole hash now costs 30 ns of async C (304.8 against 274.6
   without it), so this would recover perhaps 15 ns, with architecture-specific code.
+
+# Corrections (review of phases 1 to 3)
+
+Two of the "provable" skips were not, and are now gone where they cannot be proven.
+
+- **Eval elision** (phase 1: an eval with nothing written since the last one is skipped).
+  Verilator 5.052 schedules logic fed by a variable C++ may write (`VLVF_PUB_RW`:
+  `public_flat_rw`, `public` or `public_flat` on a variable, `--public-flat-rw`,
+  `--public-depth`, `--public-params`, a read-write probe) under the 'ico' region's
+  'first iteration' trigger (`V3Sched.cpp`), which every `eval()` sets. That logic runs on
+  every eval, written or not, so skipping one changed what it saw (`$time`) and did
+  (`$display`, DPI-C calls); tests `model_tests::elision` (a probe, and a metacomment with
+  nothing written). simjig-build now reads the scope table after verilating
+  (`syms::writable_public`) and compiles such a model with `SIMJIG_PUBLIC_RW=1`, which
+  the shim reports as `SIMJIG_FEATURE_PUBLIC_RW`; the backend then never settles. Checked
+  on 5.052's output: `--public` alone and `--vpi` alone make no variable writable and put
+  nothing under that trigger, so they keep elision.
+- **The walk after evals alone when only inputs are watched** (phase 2). It assumed
+  Verilator rejects an assignment to an input; `ASSIGNIN` is a lint a design may waive,
+  and then an eval changes an input and a waiter on it woke half a period late
+  (`model_tests::walks`). Nothing outside the design shows such a write (`--json-only`
+  marks the written submodule port, not the top's input), so the skip is removed: the
+  Verilator backend keeps `eval_changes` true for every slot. The kernel mechanism
+  (`WaitTable::eval_groups`, the clause in `sched::fire_value_changes`) is left in place,
+  now unused by any shipped backend, to keep this change out of `kernel/sched.rs` while
+  the scheduler is rebuilt on `sched`.
+- **Not fixed, a known gap.** The same 'first iteration' trigger also runs logic fed by an
+  input the design writes (`ASSIGNIN` waived) and by a `$sampled` variable. For pure
+  combinational logic that is a no-op, so elision is still right; for such logic that
+  reads `$time`, displays or calls DPI-C, a skipped eval differs from a C++ loop. It is not
+  detectable from the build's inputs (see above).
+
+## Cost (bench C, 1M cycles, 5 interleaved rounds, idle-gated by `bench.py`'s gate)
+Median ns per cycle; int-p @ 667e341 against this branch; every run reported the same
+pushes, pops and hash (402910, 402901, 3888034673).
+
+| Model | before | after | |
+|---|---:|---:|---:|
+| `fifo` | 302.4 | 314.0 | +3.8% |
+| `fifo_pub` (`--public-flat-rw`) | 305.2 | 346.8 | +13.6% |
+| `fifo` sync (`c_full_sync`) | 42.0 | 42.4 | noise |
+
+A second session with a third build (this branch with the walk skip put back) attributes
+all of `fifo`'s cost to the walk: 303.2 before, 314.3 after, 302.5 with the skip. So
+`fifo_pub` pays about 11 ns for the walk and 30 ns for evaluating every eval, as a C++
+loop does. Correctness over performance (constitution); a provable form of the walk skip
+would need Verilator to say which inputs a design writes.

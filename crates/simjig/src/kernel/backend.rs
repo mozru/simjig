@@ -173,19 +173,27 @@ pub(crate) trait ModelBackend {
         )))
     }
     /// [`set_time`](Self::set_time) then [`eval`](Self::eval), which a backend may do in
-    /// one call.
+    /// one call. Unless held ([`sync_begin`](Self::sync_begin)), the kernel calls it only in
+    /// a synchronous run, once per timestep, where the testbench writes the next timestep's
+    /// inputs straight into the model right after it: so a backend that samples per
+    /// timestep (waves) must sample here, not at the next `set_time`.
     fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {
         self.set_time(time);
         self.eval()
     }
     /// Whether an `eval` may change `slot`'s value; `false` only for a slot that nothing
-    /// but [`write`](Self::write) changes. `true` (the default) is always safe.
+    /// but [`write`](Self::write) changes. `true` (the default) is always safe, and the
+    /// Verilator backend keeps it for every slot, inputs included: a design may write its
+    /// own input once its `ASSIGNIN` lint is waived, which nothing outside the design
+    /// shows.
     fn eval_changes(&self, _slot: u32) -> bool {
         true
     }
     /// Whether an `eval` with no `write` since the previous `eval` is sure to change
-    /// nothing and call nothing (no timed events of its own, no per-eval waves sampling):
-    /// the eval loop has already settled every value. [`Models`](super::models::Models)
+    /// nothing and call nothing (no timed events of its own, no per-eval waves sampling, no
+    /// logic that runs on every eval whatever was written, such as a Verilator model's
+    /// logic fed by a `public_flat_rw` variable): the eval loop has already settled every
+    /// value. [`Models`](super::models::Models)
     /// then skips such an eval; `false` (the default) evaluates every time.
     fn settles(&self) -> bool {
         false

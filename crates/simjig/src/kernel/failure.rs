@@ -269,6 +269,12 @@ impl FailureKind {
             Self::DesignFinished => {
                 "the design called $finish; end the test before it, or remove the $finish"
             }
+            // No listed task: a synchronous test, which has none, stepped its clock past
+            // the limit (or an async run ended with nothing blocked).
+            Self::TimeLimit { blocked, .. } if blocked.is_empty() => {
+                "the test ran too long; it kept stepping the clock past the limit: end its loop \
+                 sooner, or give it a longer timeout"
+            }
             Self::TimeLimit { .. } => {
                 "the test ran too long; a listed task is probably waiting for something that \
                  never happens"

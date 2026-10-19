@@ -458,6 +458,7 @@ fn finish(
         let mut report = FailureReport::new(&failure, run.clone(), None, timeout);
         report.run_dir.clone_from(&dir);
         report.can_trace = sim.as_ref().is_some_and(Sim::can_trace);
+        report.cycle = sim.as_ref().and_then(Sim::sync_cycle);
         report.failed_branch = crate::fork::take_failed_branch();
         if report.failed_branch.is_some() {
             // The message lists every failed branch with its own help; the parent's
@@ -625,6 +626,7 @@ fn replay_with_waves(
         to: None,
         precision: outcome.precision.unwrap_or(Precision::PS),
         verdict: super::waves::Verdict::NotRun(why.to_owned()),
+        events_compared: false,
     };
     let (Some(run_dir), Some(precision), Some(end)) =
         (&outcome.run_dir, outcome.precision, outcome.end_time)

@@ -100,6 +100,34 @@ fn feature_duts() -> Vec<Dut> {
     ]
 }
 
+/// Models whose evals do more than their writes say: logic fed by a `public_flat_rw`
+/// variable, which every eval runs (`tests/model_tests/elision.rs`), and a design that
+/// writes its own input (`tests/model_tests/walks.rs`).
+fn eval_duts() -> Vec<Dut> {
+    vec![
+        // A public_flat_rw probe feeding $time-reading comb logic.
+        Dut::new("rw_time")
+            .sources(["tests/model_tests/rw_time.sv"])
+            .top("rw_time")
+            .verilator_args(TIMESCALE)
+            .probe(
+                "rw_time.knob",
+                "rw_time",
+                ProbeType::Bits { width: 8 },
+                ProbeAccess::ReadWrite,
+            ),
+        // The same with the variable public_flat_rw by a metacomment, unprobed.
+        Dut::new("rw_meta")
+            .sources(["tests/model_tests/rw_meta.sv"])
+            .top("rw_meta")
+            .verilator_args(TIMESCALE),
+        Dut::new("writes_input")
+            .sources(["tests/model_tests/writes_input.sv"])
+            .top("writes_input")
+            .verilator_args(TIMESCALE),
+    ]
+}
+
 fn duts() -> Vec<Dut> {
     let async_fifo = shared("async_fifo", &["async_fifo.sv"])
         .param("WIDTH", 8)
@@ -176,10 +204,15 @@ fn duts() -> Vec<Dut> {
     ]
     .into_iter()
     .chain(feature_duts())
+    .chain(eval_duts())
     .collect()
 }
 
 fn main() {
+    // The target simjig is built for, the test binary's too: the `<triple>/` level of its
+    // path under `--target` (`harness::rundir::target_dir_of`).
+    let triple = std::env::var("TARGET").unwrap_or_default();
+    println!("cargo::rustc-env=SIMJIG_TARGET_TRIPLE={triple}");
     println!("cargo::rustc-check-cfg=cfg(simjig_test_models)");
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=SIMJIG_TEST_MODELS");

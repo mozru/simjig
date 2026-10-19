@@ -356,7 +356,8 @@ fn a_build_that_fails_its_checks_leaves_no_prefix_claim() {
 
 /// A model Verilator did not split for a parallel build (`VM_PARALLEL_BUILDS = 0`) is
 /// compiled as one unit including every generated class, as `verilated.mk` does with its
-/// `__ALL.cpp`; the includer sits next to the output in the cache entry.
+/// `__ALL.cpp`; the includer sits next to the output in the cache entry and names each
+/// class relative to itself.
 #[test]
 fn an_unsplit_model_is_compiled_as_one_unit() {
     let s = Sandbox::new();
@@ -373,10 +374,40 @@ fn an_unsplit_model_is_compiled_as_one_unit() {
         built.prefix.clone(),
         format!("{}___024root__Slow", built.prefix),
     ] {
-        let file = built.obj_dir.join(format!("{class}.cpp"));
         assert!(
-            text.contains(&format!("#include \"{}\"", file.display())),
+            text.contains(&format!("#include \"obj/{class}.cpp\"")),
             "{text}"
         );
     }
+}
+
+/// The includer is in the cache entry when the entry is published, so no later build
+/// writes into a published entry: a build that stops right after verilating (a probe whose
+/// width the scope table contradicts) leaves an entry that already has it.
+#[test]
+fn the_includer_is_published_with_the_entry() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let err = Dut::new("probed")
+        .sources([rtl.join("probed.sv")])
+        .top("lp")
+        .probe(
+            "lp.u_core.result",
+            "lp_core",
+            simjig_build::ProbeType::Bits { width: 5 },
+            simjig_build::ProbeAccess::Read,
+        )
+        .build_in(&s.env())
+        .unwrap_err();
+    assert!(err.to_string().contains("8 bits wide"), "{err}");
+    let entries: Vec<_> = std::fs::read_dir(s.path().join("cache/models"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let files: Vec<String> = std::fs::read_dir(&entries[0])
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(files.iter().any(|f| f.ends_with("__ALL.cpp")), "{files:?}");
 }

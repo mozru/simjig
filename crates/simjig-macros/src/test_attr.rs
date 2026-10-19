@@ -422,7 +422,7 @@ fn emit(args: &Args, test: &TestFn) -> TokenStream {
     body.vis = Visibility::Inherited;
     let (dut_ty, dut_pat, dut_vars) = dut_parts(&test.duts);
     let (ctx_pat, call_args) = closure_params(test, &dut_vars);
-    let allow = allow();
+    let allow = allow(args);
     let output_check = output_check(args, sig);
     let run = run_call(args, test, &dut_ty, &ctx_pat, &dut_pat, ident, &call_args);
     quote! {
@@ -444,12 +444,20 @@ fn krate(args: &Args) -> TokenStream {
         .map_or_else(|| quote!(::simjig), |path| quote!(#path))
 }
 
-/// The lints the user's function is exempt from.
-fn allow() -> TokenStream {
+/// The lints the user's function is exempt from, and for a synchronous test the one it
+/// must not break.
+fn allow(args: &Args) -> TokenStream {
     // Whether these fire depends on user code, so this is `allow`, not `expect` (an
     // unfulfilled `expect` would warn instead): a body need not await, and the test's
     // `simjig::Result` carries the plain-data `Failure`, which is large by design.
-    quote!(#[allow(clippy::unused_async, clippy::result_large_err)])
+    let allow = quote!(#[allow(clippy::unused_async, clippy::result_large_err)]);
+    if !args.sync {
+        return allow;
+    }
+    // A synchronous body cannot await, so an async helper called in it (`reset(dut);`)
+    // only makes a future and drops it: the helper never runs. That is an unused
+    // `#[must_use]` value, which rustc otherwise only warns about.
+    quote!(#allow #[deny(unused_must_use)])
 }
 
 /// The check that the function's output is one a test may return, at its type's span.
@@ -572,7 +580,7 @@ fn emit_each(args: &Args, test: &TestFn, duts: &[Type]) -> syn::Result<TokenStre
             }
         })
         .collect();
-    let allow = allow();
+    let allow = allow(args);
     Ok(quote! {
         #(#mod_attrs)*
         #vis mod #ident {

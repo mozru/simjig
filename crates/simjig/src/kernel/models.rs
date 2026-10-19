@@ -231,9 +231,13 @@ impl Models {
     /// mid-eval, so the run must stop as it does for `$fatal`.
     ///
     /// A model that settles and was written nothing since its last eval is not evaluated:
-    /// its eval would be a no-op. The kernel still counts and records it as an eval, so
-    /// the trace (and its hash) is the same as if it ran. In a clocked testbench this
-    /// skips the eval that opens each timestep and the last one of each delta loop.
+    /// its backend promises that such an eval would be a no-op ([`ModelBackend::settles`]).
+    /// That is a property of how the model was built, not of the writes alone: a Verilator
+    /// model with a variable C++ may write (`public_flat_rw`, `--public-flat-rw`, a
+    /// read-write probe) runs the logic that variable feeds on every eval, and so does not
+    /// settle. The kernel still counts and records a skipped eval, so the trace (and its
+    /// hash) is the same as if it ran. In a clocked testbench this skips the eval that
+    /// opens each timestep and the last one of each delta loop.
     ///
     /// `time` is the current time (the last [`set_time`](Self::set_time)): a held model is
     /// evaluated with [`ModelBackend::eval_at`], which sets it again in the same call.

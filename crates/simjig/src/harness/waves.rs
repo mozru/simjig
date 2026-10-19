@@ -280,6 +280,9 @@ pub struct WavesReplay {
     pub precision: Precision,
     /// The verdict.
     pub verdict: Verdict,
+    /// Whether the verdict compared the kernel events too (both runs kept a trace hash);
+    /// a synchronous test or `trace_hash = false` keeps none, so only the outcome is.
+    pub events_compared: bool,
 }
 
 /// One FST file of a replay, and its `GTKWave` save file.
@@ -394,9 +397,14 @@ impl fmt::Display for WavesReplay {
             write!(f, "\n            {}", file.line(&what))?;
         }
         match &self.verdict {
-            Verdict::Reproduced => write!(
+            Verdict::Reproduced if self.events_compared => write!(
                 f,
                 "\n  replay:   reproduced (same seed, same ending at the same time, same events)"
+            ),
+            Verdict::Reproduced => write!(
+                f,
+                "\n  replay:   reproduced (same seed, same outcome at the same time; the run \
+                 keeps no trace hash, so its events were not compared)"
             ),
             Verdict::NonDeterministic(lines) => {
                 write!(

@@ -37,8 +37,8 @@ use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
 use super::abi::{
-    self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Dir, Handle, ModelVtable,
-    Msg, Narrow, OwnedMsg, Signal,
+    self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Handle, ModelVtable, Msg,
+    Narrow, OwnedMsg, Signal,
 };
 use super::meta::{Vtable, row_problem};
 use crate::kernel::cell::{Direct, HeldEval};
@@ -390,12 +390,6 @@ impl RawModel {
         }
     }
 
-    /// Whether slot `slot` is a top-level input: the design never changes it, since
-    /// Verilator rejects an assignment to an input (`ASSIGNIN`).
-    pub(crate) fn is_input(&self, slot: usize) -> bool {
-        self.signals[slot].dir == Dir::In
-    }
-
     /// The direct way to slot `slot` ([`Direct`]), if it is a readable narrow row.
     pub(crate) fn direct(&self, slot: usize) -> Option<Direct> {
         let row = &self.signals[slot];
@@ -545,6 +539,12 @@ pub(crate) mod fake {
         pub(crate) trace_statuses: VecDeque<Status>,
         /// The last create's `init` and `init_seed`.
         pub(crate) init: Option<(u32, u32)>,
+        /// The width the next create gives `a` (4 when unset).
+        pub(crate) a_width: Option<u32>,
+        /// The access bits the next create gives `y` (read-only when unset).
+        pub(crate) y_access: Option<u8>,
+        /// Every `trace_dump` of the traced vtable: its time and the value of `a` then.
+        pub(crate) dumps: Vec<(u64, u8)>,
         rows: Vec<Signal>,
     }
 
@@ -572,8 +572,10 @@ pub(crate) mod fake {
         STATE.with_borrow_mut(|s| {
             s.init = Some((opts.init, opts.init_seed));
             let base = s.members.as_mut_ptr();
-            let mut a = row(0, 4, Dir::In, ACCESS_READ | ACCESS_WRITE, c"fake.a");
-            let mut y = row(1, 8, Dir::Out, ACCESS_READ, c"fake.y");
+            let width = s.a_width.unwrap_or(4);
+            let mut a = row(0, width, Dir::In, ACCESS_READ | ACCESS_WRITE, c"fake.a");
+            let y_access = s.y_access.unwrap_or(ACCESS_READ);
+            let mut y = row(1, 8, Dir::Out, y_access, c"fake.y");
             a.ptr = base.cast::<c_void>();
             // SAFETY: `members` has two bytes; offset 1 stays inside it.
             y.ptr = unsafe { base.add(1) }.cast::<c_void>();
@@ -629,6 +631,10 @@ pub(crate) mod fake {
     }
 
     extern "C" fn rec_dump(_h: *mut Handle, t: u64) -> i32 {
+        STATE.with_borrow_mut(|s| {
+            let a = s.members[0];
+            s.dumps.push((t, a));
+        });
         traced(format!("dump {t}"))
     }
 

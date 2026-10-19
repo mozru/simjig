@@ -720,6 +720,25 @@ fn counts(ctx: &TestCtx, dut: counter::Dut) {
 }
 ```
 
+Bind every handle the hot loop touches, several at once with a tuple; `cyc.cycle()` is the
+number of rising edges so far:
+
+```rust
+#[simjig::test(sync)]
+fn counts_bound(dut: counter::Dut) {
+    let mut cyc = SyncClock::new(dut.clk, ns(10));
+    let (rst, en, count) = (cyc.bind(dut.rst), cyc.bind(dut.en), cyc.bind(dut.count));
+    rst.set(1);
+    cyc.tick();
+    rst.set(0);
+    en.set(1);
+    while cyc.cycle() < 100 {
+        cyc.tick();
+    }
+    assert_eq!(count.get().to_u128(), 99);
+}
+```
+
 `SyncClock::tick()` is one cycle and exactly two evals, as a hand-written Verilator loop
 does it: the clock rises, the model is evaluated, the clock falls, the model is evaluated;
 `rise()` and `fall()` are the halves, `ticks(n)` is `n` cycles. A `set` goes into the model
@@ -728,16 +747,21 @@ at once and the next eval takes it, together with that eval's clock edge; a `get
 `Bound` (or, for a writable handle, a `BoundMut`) that reads and writes the model's storage
 directly; the handle's own `get` and `set` work too, with a lookup each. The same `Dut`
 types, `duts = [..]` sweeps, `init`, the seed and `ctx.rng`, the time limit and the failure
-report with its `repro:` line work as in async tests, and so do waves on failure (the
-replay runs the test again, traced).
+report with its `repro:` line (its header gives the cycle too) work as in async tests, and
+so do waves on failure (the replay runs the test again, traced).
 
 What a synchronous test does not have:
-- **no scheduler**: no tasks (`spawn`), no triggers (`rising`, `Timer`, events), no
-  kernel clocks, no `ReadWrite`/`ReadOnly` regions; each panics, naming the mode;
+- **no scheduler**: no tasks and no kernel clocks (`spawn` and `clock(..).start()` panic,
+  naming the mode), no triggers, `with_timeout` or `ReadWrite`/`ReadOnly` regions (a
+  plain `fn` cannot await them). An async helper called from the body (`reset(dut);`)
+  would only make a future that never runs, so `#[simjig::test(sync)]` denies
+  `unused_must_use` there: it is a compile error;
 - **no delta cycles visible to the testbench**: the model settles inside each eval, and
   the testbench sees only settled values between evals; a write takes effect at the next
   eval, not after a delta;
-- **one clock**: the `SyncClock`'s; a second clock domain needs an async test;
+- **one clock**: the `SyncClock`'s (a second `SyncClock::new` panics, as do a `rise()`
+  while the clock is high and a `fall()` while it is low); a second clock domain needs an
+  async test;
 - **no trace hash**: none is kept (the report's and `summary.json`'s are null), so the
   determinism check compares only how the run ended.
 
@@ -757,7 +781,8 @@ the comparison with cocotb). For the fastest runs:
   little over it but costs little to build:
 
   ```toml
-  # Cargo.toml: `cargo test --release` uses this profile for the test binaries
+  # The workspace root's Cargo.toml (Cargo reads profiles only there):
+  # `cargo test --release` uses this profile for the test binaries
   [profile.release]
   codegen-units = 1
   lto = "thin"
@@ -765,8 +790,9 @@ the comparison with cocotb). For the fastest runs:
 - **The model's C++ is always optimised** (`-O2`, even in a debug build), so a dev build
   of a testbench simulates a fast model; `SIMJIG_CXX_OPT=3` asks for `-O3`. It is compiled
   as `verilated.mk` compiles it: one translation unit for a model Verilator did not split,
-  and frame pointers only where the platform keeps them (`CXXFLAGS=-fno-omit-frame-pointer`
-  for a profiler that needs them everywhere). Flags for the
+  and frame pointers only where the platform keeps them: on Linux, `perf record
+  --call-graph fp` then loses the model's frames, so profile with `--call-graph dwarf` or
+  build with `CXXFLAGS=-fno-omit-frame-pointer`. Flags for the
   host CPU (`CXXFLAGS=-mcpu=native`, or `-march=native` on x86) are opt-in: they make the
   model unportable, and gained nothing measurable on the benchmark's small design.
 - **Waves cost.** While a model writes waves, every eval is sampled and none is skipped;
@@ -776,6 +802,9 @@ the comparison with cocotb). For the fastest runs:
   = false)]` keeps none. The run is otherwise the same, but the report and `summary.json`
   carry no hash, so two runs cannot be compared by it, and a waves replay can check only
   that it ended the same way.
-- **`--timing` costs.** A model verilated without `--timing` is not evaluated at a
-  timestep's start, nor again when nothing was written since its last eval; a `--timing`
-  model has events of its own and is evaluated every time.
+- **`--timing` and writable public variables cost.** A model verilated without
+  `--timing` is not evaluated at a timestep's start, nor again when nothing was written
+  since its last eval. A `--timing` model has events of its own, and a model with a
+  variable C++ may write (`public_flat_rw` in the source or a `.vlt`, `--public-flat-rw`,
+  a read-write probe) runs the logic that variable feeds on every eval (Verilator
+  schedules it so), so both are evaluated every time.

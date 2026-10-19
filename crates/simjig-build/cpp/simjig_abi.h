@@ -168,6 +168,12 @@ typedef struct simjig_cov_run {
 /* Verilated with --x-initial unique (Verilator's default) by a shim that reads
  * `simjig_create_opts.init`: SIMJIG_INIT_RANDOM randomizes the initial values. */
 #define SIMJIG_FEATURE_RANDOM_INIT 8u
+/* The model has a variable C++ may write (Verilator's VLVF_PUB_RW: `public_flat_rw`, `public`
+ * or `public_flat` on a variable, `--public-flat-rw`, a read-write probe). Verilator 5.052
+ * schedules the logic such a variable feeds under the 'ico' region's 'first iteration'
+ * trigger, so every eval() runs it again, written or not: an eval with nothing written is
+ * not a no-op. Set when the shim is compiled with SIMJIG_PUBLIC_RW=1. */
+#define SIMJIG_FEATURE_PUBLIC_RW 16u
 
 typedef struct simjig_model_vtable {
     uint32_t abi_version;          /* SIMJIG_ABI_VERSION the model was built against */

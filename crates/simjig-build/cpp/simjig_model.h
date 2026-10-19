@@ -441,7 +441,15 @@ struct Vtable final {
         }
     }
 
-    static constexpr uint64_t kFeatures = (Traits::kTiming ? SIMJIG_FEATURE_TIMING : 0)
+    // simjig-build defines SIMJIG_PUBLIC_RW=1 for a model whose scope table has a writable
+    // variable (`syms::writable_public`), known only once Verilator has run, after the shim
+    // was emitted.
+#if defined(SIMJIG_PUBLIC_RW) && SIMJIG_PUBLIC_RW
+    static constexpr uint64_t kPublicRw = SIMJIG_FEATURE_PUBLIC_RW;
+#else
+    static constexpr uint64_t kPublicRw = 0;
+#endif
+    static constexpr uint64_t kFeatures = kPublicRw | (Traits::kTiming ? SIMJIG_FEATURE_TIMING : 0)
                                           | (kTrace ? SIMJIG_FEATURE_TRACE_FST : 0)
                                           | (kCoverage ? SIMJIG_FEATURE_COVERAGE : 0)
                                           | (x_initial_unique_of<Traits>()

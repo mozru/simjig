@@ -31,6 +31,7 @@ verilator --cc --exe --build -j 4 "$here/fat.sv" --Mdir "$out/fat" --prefix Vfat
   "$VERILATOR_ROOT/include/verilated_timing.cpp" >/dev/null
 cd "$here"  # bad.hex is read relative to the working directory
 "$out/fat/Vfat" fat
+"$out/fat/Vfat" held
 "$out/fat/Vfat" delay
 echo "== delay_internal (internal fatal inside a coroutine; expected to abort) =="
 set +e

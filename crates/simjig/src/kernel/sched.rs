@@ -371,7 +371,8 @@ fn apply_and_compare(k: &Kernel) -> bool {
 /// primed before that walk took the value then, every group primed since took it when
 /// primed, and values change only in an eval or when the log is applied, never during a
 /// walk; so no group could differ from its snapshot. So is a walk after evals alone when
-/// every primed group watches a slot no eval changes (an input): only a write changes it.
+/// every primed group watches a slot no eval changes (`ModelBackend::eval_changes`): only a
+/// write changes it.
 fn fire_value_changes(k: &Kernel) {
     let now = {
         let models = k.models.borrow();

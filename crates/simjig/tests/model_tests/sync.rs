@@ -105,6 +105,9 @@ fn the_time_limit_ends_the_body() {
         "{failure}"
     );
     assert_eq!(failure.time, SimTime(100));
+    // No tasks to blame in a synchronous test.
+    let help = failure.help().unwrap();
+    assert!(!help.contains("task"), "{help}");
 }
 
 /// A panic in the body is a `TaskPanic` of `main`, at the panicking line.
@@ -131,6 +134,94 @@ fn message(failure: &simjig::Failure) -> String {
     }
 }
 
+/// A panic in the body: its message and line (a `TaskPanic` of `main`).
+fn panicked(body: impl FnOnce(counter::Dut)) -> (String, Option<u32>) {
+    let (mut sim, dut) = sim::<counter::Dut>();
+    let failure = sim.run_sync(|| body(dut)).unwrap_err();
+    (
+        message(&failure),
+        failure.location.map(simjig::SourceLocation::line),
+    )
+}
+
+/// One clock per synchronous test: a second `SyncClock` is refused at its line.
+#[test]
+fn a_second_sync_clock_is_refused() {
+    let line = line!() + 3;
+    let (text, at) = panicked(|dut| {
+        let _first = clock(dut.clk.raw());
+        let _second = SyncClock::new(dut.en, ticks(10));
+    });
+    assert!(text.contains("one clock per synchronous test"), "{text}");
+    assert_eq!(at, Some(line));
+}
+
+/// A rise while the clock is high, or a fall while it is low, is no edge: refused at the
+/// line that asks for it, through `tick` and `ticks` too.
+#[test]
+fn a_rise_while_high_and_a_fall_while_low_are_refused() {
+    let line = line!() + 4;
+    let (text, at) = panicked(|dut| {
+        let mut cyc = clock(dut.clk.raw());
+        cyc.rise();
+        cyc.rise();
+    });
+    assert_eq!(
+        (text.as_str(), at),
+        (
+            "SyncClock::rise while the clock is high: call fall() first, or tick()",
+            Some(line)
+        )
+    );
+    let line = line!() + 4;
+    let (text, at) = panicked(|dut| {
+        let mut cyc = clock(dut.clk.raw());
+        cyc.rise();
+        cyc.tick();
+    });
+    assert!(
+        text.starts_with("SyncClock::rise while the clock is high"),
+        "{text}"
+    );
+    assert_eq!(at, Some(line));
+    let line = line!() + 3;
+    let (text, at) = panicked(|dut| {
+        let mut cyc = clock(dut.clk.raw());
+        cyc.fall();
+    });
+    assert_eq!(
+        (text.as_str(), at),
+        (
+            "SyncClock::fall while the clock is low: call rise() first, or tick()",
+            Some(line)
+        )
+    );
+}
+
+/// `cycle()` counts rising edges; a rise that the time limit stops is not one.
+#[test]
+fn cycle_counts_rising_edges() {
+    let (mut sim, dut) = sim::<counter::Dut>();
+    sim.set_time_limit(SimTime(100));
+    let mut seen = Vec::new();
+    let failure = sim
+        .run_sync(|| {
+            let mut cyc = clock(dut.clk.raw());
+            seen.push(cyc.cycle());
+            cyc.rise();
+            seen.push(cyc.cycle());
+            cyc.fall();
+            cyc.ticks(8);
+            seen.push(cyc.cycle());
+            cyc.tick();
+            seen.push(cyc.cycle());
+            cyc.rise();
+        })
+        .unwrap_err();
+    assert_eq!(seen, [0, 1, 9, 10]);
+    assert!(matches!(failure.kind, FailureKind::TimeLimit { .. }));
+}
+
 /// `spawn`, a kernel clock and an awaited trigger name the mode instead of running.
 #[test]
 fn async_features_are_refused_by_name() {
@@ -147,6 +238,12 @@ fn async_features_are_refused_by_name() {
     refused("clock", &|dut| {
         simjig::clock(dut.clk.raw(), SimDuration::from_ticks(10)).start();
     });
+    // At the line that starts it.
+    let line = line!() + 2;
+    let (_, at) = panicked(|dut| {
+        simjig::clock(dut.clk.raw(), SimDuration::from_ticks(10)).start();
+    });
+    assert_eq!(at, Some(line));
     refused("trigger", &|dut| {
         let mut edge = pin!(dut.clk.rising());
         let mut cx = Context::from_waker(Waker::noop());
@@ -217,4 +314,19 @@ fn readme_counts(dut: counter::Dut) {
         cyc.tick();
         assert_eq!(count.get().to_u128(), i % 256);
     }
+}
+
+/// The README's example of several bound handles and `cycle()`, as written there.
+#[simjig::test(sync)]
+fn counts_bound(dut: counter::Dut) {
+    let mut cyc = SyncClock::new(dut.clk, simjig::ns(10));
+    let (rst, en, count) = (cyc.bind(dut.rst), cyc.bind(dut.en), cyc.bind(dut.count));
+    rst.set(1);
+    cyc.tick();
+    rst.set(0);
+    en.set(1);
+    while cyc.cycle() < 100 {
+        cyc.tick();
+    }
+    assert_eq!(count.get().to_u128(), 99);
 }

@@ -154,17 +154,50 @@ pub(crate) fn binary_name(exe: &Path) -> Option<String> {
     Some(name.to_owned())
 }
 
-/// `<target>/simjig/runs`, where `<target>` is Cargo's target directory: the nearest
-/// ancestor of the test binary (`<target>/[<triple>/]<profile>/deps/<bin>`) that holds the
-/// `CACHEDIR.TAG` Cargo writes there.
+/// `<target>/simjig/runs`, where `<target>` is Cargo's target directory
+/// ([`target_dir_of`] the running test binary).
 pub(crate) fn default_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let target = exe
+    let cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
+    let target = target_dir_of(
+        &exe,
+        env!("SIMJIG_TARGET_TRIPLE"),
+        cargo_target_dir.as_deref(),
+    )?;
+    Some(target.join("simjig").join("runs"))
+}
+
+/// The Cargo target directory of the test binary `exe`, found as simjig-build finds the
+/// build cache's (`BuildEnv::cache_dir`): the nearest ancestor (of the five a binary in
+/// `<target>/[<triple>/]<profile>/deps/<bin>` has) holding the `CACHEDIR.TAG` Cargo writes
+/// at the root of a target directory it creates; else an absolute `CARGO_TARGET_DIR` that
+/// holds `exe`; else the directory Cargo's layout names, with the `<triple>/` level when
+/// its name is `triple`, the target simjig was built for.
+///
+/// The tag alone is not enough: Cargo writes it only when it creates the directory, so a
+/// `target/` another tool made first (`--target-dir target/rust-analyzer` creates it on
+/// its way) never gets one.
+fn target_dir_of(exe: &Path, triple: &str, cargo_target_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(tagged) = exe
         .ancestors()
         .skip(1)
         .take(5)
-        .find(|dir| dir.join("CACHEDIR.TAG").is_file())?;
-    Some(target.join("simjig").join("runs"))
+        .find(|dir| dir.join("CACHEDIR.TAG").is_file())
+    {
+        return Some(tagged.to_path_buf());
+    }
+    if let Some(dir) = cargo_target_dir.filter(|d| d.is_absolute() && exe.starts_with(d)) {
+        return Some(dir.to_path_buf());
+    }
+    let name = |p: &Path| p.file_name().and_then(|n| n.to_str()).map(str::to_owned);
+    let deps = exe
+        .parent()
+        .filter(|d| name(d).as_deref() == Some("deps"))?;
+    let above = deps.parent()?.parent()?;
+    match above.parent() {
+        Some(target) if name(above).as_deref() == Some(triple) => Some(target.to_path_buf()),
+        _ => Some(above.to_path_buf()),
+    }
 }
 
 /// The contents of `summary.json`, before rendering.
@@ -359,6 +392,44 @@ mod tests {
             out,
             "{\n  \"a\": 1,\n  \"b\": {\n    \"c\": null\n  },\n  \"d\": {}\n}"
         );
+    }
+
+    /// A target directory without Cargo's `CACHEDIR.TAG` is still found: by an absolute
+    /// `CARGO_TARGET_DIR` that holds the binary, else by Cargo's layout, with or without
+    /// the `<triple>/` level; a tag wins over both.
+    #[test]
+    fn the_target_dir_is_found_without_its_cachedir_tag() {
+        let root = std::env::temp_dir().join(format!("simjig-target-dir-{}", std::process::id()));
+        let target = root.join("target");
+        let plain = target.join("debug/deps/harness_tests-0123456789abcdef");
+        let cross = target.join("aarch64-apple-darwin/release/deps/t-0123456789abcdef");
+        let found =
+            |exe: &Path, ctd: Option<&Path>| target_dir_of(exe, "aarch64-apple-darwin", ctd);
+        assert_eq!(found(&plain, None), Some(target.clone()));
+        assert_eq!(found(&cross, None), Some(target.clone()));
+        // Another triple's directory is not this build's `<triple>/` level.
+        assert_eq!(
+            target_dir_of(&cross, "x86_64-unknown-linux-gnu", None),
+            Some(target.join("aarch64-apple-darwin"))
+        );
+        assert_eq!(found(&plain, Some(&target)), Some(target.clone()));
+        // A relative one, or one that does not hold the binary, is not it.
+        assert_eq!(
+            found(&plain, Some(Path::new("target"))),
+            Some(target.clone())
+        );
+        let elsewhere = root.join("elsewhere");
+        assert_eq!(found(&plain, Some(&elsewhere)), Some(target.clone()));
+        // Not a binary in `deps/`, no tag: no target directory.
+        assert_eq!(found(&root.join("bin/tool"), None), None);
+        // A tag wins (a nested target directory, `target/rust-analyzer`).
+        let nested = target.join("ra");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("CACHEDIR.TAG"), "Signature: x").unwrap();
+        let in_nested = nested.join("debug/deps/t-0123456789abcdef");
+        let result = found(&in_nested, Some(&target));
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(result, Some(nested));
     }
 
     #[test]

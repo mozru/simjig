@@ -2,7 +2,8 @@
 //!
 //! Layout under the cache root (see [`crate::BuildEnv::cache_dir`]):
 //! - `models/<full key>/obj/`: Verilator output; `models/<full key>/deps`: every file
-//!   Verilator read (its `.d` file's list).
+//!   Verilator read (its `.d` file's list); `models/<full key>/<prefix>__ALL.cpp`: the
+//!   one-unit includer of an unsplit model (`compile::write_includer`).
 //! - `manifests/<pre key>`: the input list of the last build with that pre key (of a
 //!   verilation, of an archive compile, see `archive`, or of a DUT's IR, see `front`).
 //! - `inputs/<hash>/<name>`: generated Verilator inputs, content-addressed.
@@ -137,6 +138,10 @@ impl Cache {
         let mut cmd = verilator.command();
         cmd.arg("-Mdir").arg(&obj).args(args);
         if let Err(e) = verilator::run(&mut cmd, &format!("verilating DUT `{dut}`")) {
+            remove_best_effort(&work);
+            return Err(e);
+        }
+        if let Err(e) = crate::compile::write_includer(&obj, prefix) {
             remove_best_effort(&work);
             return Err(e);
         }

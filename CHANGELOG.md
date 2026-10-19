@@ -4,6 +4,50 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Fix: the waves of a synchronous test (`#[simjig::test(sync)]` with `SIMJIG_WAVES` or
+  waves on failure) showed each timestep with the next edge's clock and inputs, half a
+  period early: `SyncClock` and `set` write into the model before the next timestep
+  starts, which is when a timestep was dumped. Each timestep of a synchronous run is now
+  dumped right after its eval. Async runs are unchanged.
+- Fix: eval elision (an eval with nothing written since the last one is skipped) no longer
+  applies to a model with a variable C++ may write: `public_flat_rw` (or `public`,
+  `public_flat`) on a variable in the source or a `.vlt`, `--public-flat-rw`,
+  `--public-depth`, `--public-params`, or a read-write probe. Verilator 5.052 runs the
+  logic such a variable feeds on every `eval()`, written or not, so skipping the eval
+  changed what that logic saw (`$time`) and did (`$display`, DPI-C calls); such a model is
+  now evaluated every time, as a C++ loop does. simjig-build finds these variables in the
+  model's scope table and compiles the shim with `SIMJIG_PUBLIC_RW=1`; the C ABI gains the
+  feature bit `SIMJIG_FEATURE_PUBLIC_RW` (16). Models without such a variable are
+  unchanged.
+- Fix: a trigger on a Verilator model's input (`changed()`, `rising()`, `falling()`) fired
+  half a period late, at the next write, when the design itself changed that input in an
+  eval (possible once its `ASSIGNIN` lint is waived): the value-change walk after an eval
+  was skipped when only inputs were watched. That walk now always runs.
+- `#[simjig::test(sync)]` denies `unused_must_use` in the test's body: an async helper
+  called there (`reset(dut);`) only made a future and dropped it, so it silently did
+  nothing, with only rustc's warning to show it. It is now a compile error. Generated
+  code: the user's function gains `#[deny(unused_must_use)]` (snapshot `expands_sync`,
+  reviewed). A body that discards another `#[must_use]` value on purpose writes
+  `let _ = ..;`.
+- Synchronous tests: `clock(..).start()` panics at the caller's line (it named a line
+  inside simjig), and a `TimeLimit` failure with no blocked task (always so in a
+  synchronous test) no longer blames a listed task in its `help:` line.
+- `SyncClock`: a second `SyncClock::new` in one synchronous test panics ("one clock per
+  synchronous test"), and so do a `rise()` while the clock is high and a `fall()` while it
+  is low (both were silently accepted: a second clock advanced the same time axis, two
+  rises made no edge); each panic names the caller's line, through `tick()` and
+  `ticks(n)` too. New: `SyncClock::cycle()`, the rising edges so far.
+- The failure report of a synchronous test gives the cycle its `SyncClock` reached after
+  the time (`t=3 us (cycle 300)`); `FailureReport` gains `cycle: Option<u64>`.
+- Fix: the run directory (`<target>/simjig/runs/..`) was not written, and the report
+  said "no target directory found", when the target directory had no `CACHEDIR.TAG` (a
+  `target/` another tool created first). The test binary's target directory is now found
+  as the build cache's is: the tag, else an absolute `CARGO_TARGET_DIR` holding the
+  binary, else Cargo's `<target>/[<triple>/]<profile>/deps/` layout.
+- The waves replay of a run without a trace hash (a synchronous test, `trace_hash = false`)
+  reports `reproduced (same seed, same outcome at the same time; ..events were not
+  compared)` instead of claiming the same events. `WavesReplay` gains the public field
+  `events_compared`.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

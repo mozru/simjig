@@ -41,18 +41,36 @@ use super::signal::RawSig;
 use super::state::{self, Kernel, Phase};
 use super::tasks;
 use super::time::{Precision, SimDuration, SimTime, TimeDisplay};
-use super::waits::{EdgeKind, Registration, WaitOn};
+use super::waits::{EdgeKind, EdgeRegistration, Registration, WaitOn};
+
+/// A registration a trigger holds between its first poll and the poll that sees it fire.
+trait Registered {
+    /// Whether it fired; if not, makes sure `cx`'s waker is the one woken.
+    fn take_fired(&mut self, cx: &Context<'_>) -> bool;
+}
+
+impl Registered for Registration {
+    fn take_fired(&mut self, cx: &Context<'_>) -> bool {
+        Self::take_fired(self, cx)
+    }
+}
+
+impl Registered for EdgeRegistration {
+    fn take_fired(&mut self, cx: &Context<'_>) -> bool {
+        Self::take_fired(self, cx)
+    }
+}
 
 /// Shared poll logic: register on first poll, then complete once fired.
 ///
 /// `at` is where the trigger was made: misuse that `register` detects (it returns the
 /// message) panics there, at the user's line, rather than in this module.
-fn poll_registered(
-    reg: &mut Option<Registration>,
+fn poll_registered<R: Registered>(
+    reg: &mut Option<R>,
     cx: &Context<'_>,
     what: &str,
     at: &'static Location<'static>,
-    register: impl FnOnce(&Kernel) -> Result<WaitOn, String>,
+    register: impl FnOnce(&Kernel) -> Result<R, String>,
 ) -> Poll<()> {
     match reg {
         None => {
@@ -64,7 +82,7 @@ fn poll_registered(
                          the test async)"
                     ));
                 }
-                register(k).map(|on| Registration::new(k, on, cx, Some(at)))
+                register(k)
             });
             match registered {
                 Some(Ok(r)) => *reg = Some(r),
@@ -87,6 +105,19 @@ fn poll_registered(
     }
 }
 
+/// [`poll_registered`] for a trigger registered as `on`.
+fn poll_waiting(
+    reg: &mut Option<Registration>,
+    cx: &Context<'_>,
+    what: &str,
+    at: &'static Location<'static>,
+    on: impl FnOnce(&Kernel) -> Result<WaitOn, String>,
+) -> Poll<()> {
+    poll_registered(reg, cx, what, at, |k| {
+        on(k).map(|on| Registration::new(k, on, cx, Some(at)))
+    })
+}
+
 /// Waits for a value change of a signal; made by [`rising`], [`falling`] and [`changed`].
 #[derive(Debug)]
 #[must_use = "triggers do nothing unless awaited"]
@@ -94,7 +125,7 @@ pub struct Edge {
     slot: u32,
     kind: EdgeKind,
     at: &'static Location<'static>,
-    reg: Option<Registration>,
+    reg: Option<EdgeRegistration>,
 }
 
 #[track_caller]
@@ -149,8 +180,8 @@ impl Future for Edge {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let (slot, edge, at) = (self.slot, self.kind, self.at);
-        poll_registered(&mut self.reg, cx, "an edge trigger", at, |_| {
-            Ok(WaitOn::Edge { slot, edge })
+        poll_registered(&mut self.reg, cx, "an edge trigger", at, |k| {
+            Ok(EdgeRegistration::new(k, slot, edge, cx))
         })
     }
 }
@@ -244,7 +275,7 @@ impl Future for Timer {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let (duration, at) = (self.duration, self.at);
-        poll_registered(&mut self.reg, cx, "Timer", at, |k| {
+        poll_waiting(&mut self.reg, cx, "Timer", at, |k| {
             if duration.ticks() == 0 {
                 return Err(
                     "Timer of zero ticks; use yield_now() or ReadWrite to stay in this \
@@ -295,7 +326,7 @@ macro_rules! phase_trigger {
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
                 let at = self.at;
-                poll_registered(&mut self.reg, cx, stringify!($name), at, |k| {
+                poll_waiting(&mut self.reg, cx, stringify!($name), at, |k| {
                     let check: fn(&Kernel) -> Result<(), String> = $check;
                     check(k)?;
                     Ok($on)

@@ -126,7 +126,7 @@ fn model_event_now(k: &Kernel) -> bool {
 fn step(k: &Kernel) {
     let t = k.now.get();
     k.models.borrow_mut().set_time(t);
-    k.record(TraceKind::Step, None, 0, 0);
+    k.record_step();
     k.bump(|c| c.steps += 1);
 
     if k.waits.borrow().region_waited(WaitOn::NextTimeStep) {
@@ -192,7 +192,7 @@ fn step(k: &Kernel) {
         return;
     }
     k.phase.set(Phase::ReadOnly);
-    k.record(TraceKind::ReadOnly, None, 0, 0);
+    k.record_read_only();
     // With no ReadOnly waiter there is nothing to run: the deltas ended with every ready
     // task run.
     if k.waits.borrow().region_waited(WaitOn::ReadOnly) {
@@ -256,7 +256,7 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         return false;
     }
     let status = k.models.borrow_mut().eval(k.now.get());
-    k.record(TraceKind::Eval, None, u64::from(*evals), 0);
+    k.record_eval(*evals);
     k.bump(|c| c.evals += 1);
     *evals += 1;
     let Err((model, status)) = status else {

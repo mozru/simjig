@@ -7,6 +7,8 @@
 //! keys from the deterministic slab), never addresses or the global simulation id.
 
 use std::cell::Cell;
+
+use super::OrInvariant;
 use std::fmt;
 
 use super::time::SimTime;
@@ -233,7 +235,8 @@ impl Fnv {
 }
 
 /// A fixed ring of [`RECORDER_CAPACITY`] records: record `i` (counting from 0) is at
-/// `ring[i % RECORDER_CAPACITY]`, so a record is one store, with no length bookkeeping.
+/// `ring[i % RECORDER_CAPACITY]`, so a record is one store and a count, with no length
+/// bookkeeping.
 ///
 /// Every field is a `Cell`, so recording takes `&self`: the kernel records several times
 /// per timestep, and a `RefCell` around the recorder cost a borrow check each time.
@@ -241,11 +244,7 @@ impl Fnv {
 /// with another.
 #[derive(Debug)]
 pub(crate) struct Recorder {
-    ring: Box<[Cell<TraceRecord>]>,
-    /// Where the next record goes: `count % RECORDER_CAPACITY`.
-    next: Cell<usize>,
-    /// Whether the ring has wrapped (holds `RECORDER_CAPACITY` records).
-    full: Cell<bool>,
+    ring: Box<[Cell<TraceRecord>; RECORDER_CAPACITY]>,
     hash: Cell<Fnv>,
     /// Whether records are hashed (the default); off only for a run that asked to keep no
     /// trace hash (`#[simjig::test(trace_hash = false)]`).
@@ -267,10 +266,12 @@ impl Default for Recorder {
             arg: 0,
             value: 0,
         };
+        let ring: Box<[Cell<TraceRecord>]> =
+            (0..RECORDER_CAPACITY).map(|_| Cell::new(blank)).collect();
         Self {
-            ring: (0..RECORDER_CAPACITY).map(|_| Cell::new(blank)).collect(),
-            next: Cell::new(0),
-            full: Cell::new(false),
+            ring: ring
+                .try_into()
+                .or_invariant("invariant: the ring has RECORDER_CAPACITY records"),
             hash: Cell::new(Fnv::default()),
             hashing: Cell::new(true),
             count: Cell::new(0),
@@ -327,15 +328,16 @@ impl Recorder {
         self.hashing.get().then(|| self.hash())
     }
 
+    #[inline]
     fn store(&self, record: TraceRecord) {
-        let next = self.next.get();
-        self.ring[next].set(record);
-        let next = (next + 1) & (RECORDER_CAPACITY - 1);
-        self.next.set(next);
-        if next == 0 {
-            self.full.set(true);
-        }
-        self.count.set(self.count.get() + 1);
+        let count = self.count.get();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the index is masked to the ring's size"
+        )]
+        let at = count as usize & (RECORDER_CAPACITY - 1);
+        self.ring[at].set(record);
+        self.count.set(count + 1);
     }
 
     pub(crate) fn hash(&self) -> u64 {
@@ -348,8 +350,9 @@ impl Recorder {
 
     /// The kept records, oldest first.
     pub(crate) fn recent(&self) -> Vec<TraceRecord> {
-        let next = self.next.get();
-        let (older, newer) = if self.full.get() {
+        let count = self.count.get();
+        let next = usize::try_from(count % RECORDER_CAPACITY as u64).unwrap_or(0);
+        let (older, newer) = if count >= RECORDER_CAPACITY as u64 {
             (&self.ring[next..], &self.ring[..next])
         } else {
             (&self.ring[..next], &self.ring[..0])

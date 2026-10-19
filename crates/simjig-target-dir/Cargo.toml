@@ -1,0 +1,11 @@
+[package]
+name = "simjig-target-dir"
+description = "Finds the Cargo target directory that holds a build script's OUT_DIR or a test binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

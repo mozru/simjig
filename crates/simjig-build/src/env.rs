@@ -10,7 +10,9 @@
 //! ccache.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use simjig_target_dir::Made;
 
 use crate::Error;
 
@@ -149,8 +151,8 @@ impl BuildEnv {
 
     /// The shared cache directory, in this order: `SIMJIG_CACHE_DIR`;
     /// `$CARGO_TARGET_DIR/simjig-cache` when that is absolute; `simjig-cache` in the target
-    /// directory above `OUT_DIR` (the nearest ancestor holding Cargo's `CACHEDIR.TAG`, else
-    /// the one Cargo's `OUT_DIR` layout names); and as a last resort
+    /// directory above `OUT_DIR` (`simjig_target_dir`: the nearest ancestor holding Cargo's
+    /// `CACHEDIR.TAG`, else the one Cargo's `OUT_DIR` layout names); and as a last resort
     /// `OUT_DIR/simjig-cache`, which is correct but not shared (the build warns).
     pub fn cache_dir(&self) -> PathBuf {
         self.shared_cache_dir()
@@ -176,7 +178,8 @@ impl BuildEnv {
         if let Some(dir) = self.cargo_target_dir.as_ref().filter(|d| d.is_absolute()) {
             return Some(dir.join("simjig-cache"));
         }
-        target_dir_above(&self.out_dir, &self.target).map(|d| d.join("simjig-cache"))
+        simjig_target_dir::target_dir_of(&self.out_dir, Made::OutDir, &self.target, None)
+            .map(|d| d.join("simjig-cache"))
     }
 
     /// Finds an executable named `name` on `PATH`.
@@ -212,47 +215,10 @@ fn cxx_opt(value: Option<OsString>) -> Result<String, Error> {
     }
 }
 
-/// The Cargo target directory `OUT_DIR` is in: the nearest ancestor holding the
-/// `CACHEDIR.TAG` Cargo writes at the root of a target directory it creates; else the one
-/// Cargo's layout names, `<target dir>/[<triple>/]<profile>/build/<pkg>-<hash>/out`.
-///
-/// The tag alone is not enough: Cargo writes it only when it creates the directory, so
-/// one made by another tool first (`--target-dir target/rust-analyzer` creates `target/`
-/// on its way) never gets one.
-fn target_dir_above<'a>(out_dir: &'a Path, triple: &str) -> Option<&'a Path> {
-    let tagged = out_dir
-        .ancestors()
-        .skip(1)
-        .find(|d| d.join("CACHEDIR.TAG").is_file());
-    tagged.or_else(|| target_dir_by_layout(out_dir, triple))
-}
-
-/// The target directory from Cargo's `OUT_DIR` layout (see [`target_dir_above`]). The
-/// `<triple>/` level is there when the build names a target (`--target`), whose triple
-/// Cargo gives the build script as `TARGET`.
-fn target_dir_by_layout<'a>(out_dir: &'a Path, triple: &str) -> Option<&'a Path> {
-    let name = |p: &Path| p.file_name().and_then(|n| n.to_str()).map(str::to_owned);
-    let pkg = out_dir
-        .parent()
-        .filter(|_| name(out_dir).as_deref() == Some("out"))?;
-    let build = pkg
-        .parent()
-        .filter(|_| name(pkg).is_some_and(|n| n.contains('-')))?;
-    let profile = build
-        .parent()
-        .filter(|_| name(build).as_deref() == Some("build"))?;
-    let above = profile.parent()?;
-    match above.parent() {
-        Some(target) if !triple.is_empty() && name(above).as_deref() == Some(triple) => {
-            Some(target)
-        }
-        _ => Some(above),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn env(out_dir: &Path) -> BuildEnv {
         BuildEnv {

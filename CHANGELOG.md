@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The Cargo target directory is found by one rule, in the new crate `simjig-target-dir`,
+  for both simjig-build's model cache and simjig's run directories (it was two copies).
+  One change for the cache: Cargo's `CACHEDIR.TAG` is looked for at most five levels
+  above `OUT_DIR`, as far as Cargo's layout reaches, so a tag on some directory above an
+  untagged target directory no longer moves the cache there.
 - **Behaviour change: eval elision is off by default** (correctness over performance).
   Verilator 5.052 also re-runs, on every `eval()`, logic fed by an input the design writes
   itself (its `ASSIGNIN` lint waived) or by a `$sampled` value; when that logic reads

@@ -14,6 +14,7 @@ svtypes = { path = "crates/svtypes", version = "0.0.0" }
 simjig = { path = "crates/simjig" }
 simjig-bits = { path = "crates/simjig-bits" }
 simjig-build = { path = "crates/simjig-build" }
+simjig-target-dir = { path = "crates/simjig-target-dir" }
 simjig-macros = { path = "crates/simjig-macros", version = "=0.0.0" }
 cargo-simjig = { path = "crates/cargo-simjig", version = "0.0.0" }
 insta = { version = "1.49.0", default-features = false }

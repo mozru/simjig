@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 simjig-bits.workspace = true
 simjig-macros.workspace = true
+simjig-target-dir.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

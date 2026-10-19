@@ -210,6 +210,7 @@ dependencies = [
  "simjig-bits",
  "simjig-build",
  "simjig-macros",
+ "simjig-target-dir",
 ]
 
 [[package]]
@@ -231,6 +232,7 @@ dependencies = [
  "cc",
  "serde_json",
  "sha2",
+ "simjig-target-dir",
  "svtypes",
  "thiserror",
 ]
@@ -243,6 +245,10 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "simjig-target-dir"
+version = "0.0.0"
 
 [[package]]
 name = "svtypes"

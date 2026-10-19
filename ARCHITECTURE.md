@@ -12,6 +12,7 @@ projects built on top of simjig.
 |---|---|
 | `svtypes` | Versioned type IR built from Verilator `--json-only`: widths, offsets, enums, params, ports, interfaces. Python/cocotb emitter. Its `version` module is the single table of supported Verilator versions (`VerilatorVersion`, `SUPPORTED`) for every build-time crate, and its `toolchain` module the single rule for which Verilator to run and whether to accept it (`locate`, `judge`), used by `simjig-build` and `cargo simjig doctor`. |
 | `simjig-bits` | Bit-vector values with SystemVerilog semantics (`Bits<N>`, `WideBits`, `Packed`). |
+| `simjig-target-dir` | The one rule for finding the Cargo target directory that holds an `OUT_DIR` or a test binary (`target_dir_of`): `simjig-build`'s model cache and `simjig`'s run directories. No dependencies. |
 | `simjig-build` | Build time: one lowering feeding every emitter (Rust, C++ vtable, `.vlt`, wrapper SV, layout check, DPI-C trait and trampolines in `codegen::dpi`, with `Dut::dpi_in_c` leaving chosen imports to C; parameter sweeps: `Sweep` in `sweep.rs`, their lowering in `codegen/lower/sweep.rs` and Rust in `codegen/rust/sweep.rs`), probe path resolution (`codegen/lower/path.rs`), the probe check against Verilator's scope table (`syms.rs`), interface-binding diagnostics (`iface_diag.rs`), Verilator invocation, the content-addressed caches (`cache.rs`: Verilator output; `front.rs`: each DUT's IR and layout-check verdict; `archive.rs`: model and runtime archives keyed by sources, flags, compiler identity and `-MD` dependencies; `manifest.rs`: the dependency manifests they share), per-build-script checks (`script`: DUT names, DPI exports, covergroups, one `-rpath` per directory). |
 | `simjig` | Runtime: `kernel` (scheduler, triggers, tasks, failures, recorder; refuses every entry point inside a DPI-C call; `kernel::trigger::TriggerExt`: `.read_write()`/`.read_only()` on edge, cycle and timer triggers), `prelude` (the one glob import of a testbench), `model` (Verilator backend over the C ABI; `model::trace`: FST waves sampled per timestep and moved to a per-branch file in a fork child; coverage counters via `Sim::coverage`), `signal` (typed handles; `Value` and `Vector`, the bounds generic test bodies use), `dpi` (DPI-C imports implemented in Rust, dispatched per model instance; a panic is `FailureKind::DpiPanic`), `harness` (`#[simjig::test]` support, seeds, reports, run dirs; `harness::waves`/`replay`: waves on failure from a traced replay in a child process; `harness::multi`: several DUTs per test as one `DutModel` tuple, `Lockstep`, `Mirror`), `fork` (`run_from_checkpoint`: branches forked from a quiet point, results over a socket, `ForkHook`s for resources a child must not share). |
 | `simjig-macros` | `#[simjig::test]` attribute, `duts = [..]` included (thin; logic unit-tested). |
@@ -19,9 +20,9 @@ projects built on top of simjig.
 | `xtask` | Repository automation: `cargo xtask ci`, `setup` (pinned tools), `doctor`. |
 
 ## Invariants
-- `svtypes` and `simjig-bits` depend on no other workspace crate.
-- `simjig-build` depends only on `svtypes` (and on `simjig-bits` as a dev-dependency, to
-  compile the generated Rust in its tests); `cargo-simjig` depends on `svtypes` (the
+- `svtypes`, `simjig-bits` and `simjig-target-dir` depend on no other workspace crate.
+- `simjig-build` depends only on `svtypes` and `simjig-target-dir` (and on `simjig-bits` as
+  a dev-dependency, to compile the generated Rust in its tests); `cargo-simjig` depends on `svtypes` (the
   `svtypes::version` table and `svtypes::toolchain` rule) and nothing else in the
   workspace.
 - Runtime crates never depend on build-time crates as normal dependencies. `simjig`'s
@@ -60,6 +61,7 @@ listed here with what keeps the copies equal.
 | What `simjig-build` writes into `OUT_DIR` | `emit.rs` (`OUT_DIR/simjig/`; a sweep's module and member files in `emit::place_sweep`, its failure stub in `emit::stub_failed_sweep`); the path `OUT_DIR/simjig/<name>.rs` is read back by `simjig::include_dut!` and by `cargo-simjig`'s `show` (which may not depend on `simjig-build`), kept equal by their docs naming `emit.rs`; after a failed build that file is a `compile_error!` stub (`emit::stub_failed`) |
 | The optional-DUT gate `cfg(simjig_dut_<name>)` | `emit::cfg_directives` |
 | Environment variables that rerun the build script | `BuildEnv::TRACKED_VARS` |
+| The Cargo target directory above an `OUT_DIR` or a test binary | `simjig_target_dir::target_dir_of`, used by `BuildEnv::cache_dir` (after `SIMJIG_CACHE_DIR` and an absolute `CARGO_TARGET_DIR`) and `harness::rundir::default_root` |
 | Which paths a DUT's `rerun-if-changed` lines track (built or failed) | `dut::reruns` over `dut::tracked_files` |
 | Printing a simulation time in physical units | `simjig::kernel::time::TimeDisplay` (`SimTime::display`) |
 | Rendering a failure | `Display` of `kernel::failure::Failure` and of `BlockedTask` (one blocked task); the harness's report (`harness::report::FailureReport`) builds on them |

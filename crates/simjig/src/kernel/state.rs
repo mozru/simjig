@@ -17,6 +17,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -120,11 +121,30 @@ const RETIRED_NAMES: usize = 64;
 /// Slot-name tables (names, model starts) by simulation id.
 type NameTables = VecDeque<(u32, Rc<[Box<str>]>, Rc<[u32]>)>;
 
+/// What every kernel entry point looks up: the installed kernel's address (null while
+/// none is) and the DPI-C import running on this thread, if any. In one thread-local with
+/// no destructor, so a lookup is a single access with no lazy-initialisation state; the
+/// kernel itself is owned by `CURRENT`.
+///
+/// Why a raw address (rule 5): finding the kernel through `CURRENT` (a `RefCell` around an
+/// `Rc`, in a thread-local with a destructor) on every signal access and every await cost
+/// as much as the access. The address is valid exactly while `CURRENT` holds the kernel:
+/// [`install`] sets it after storing the `Rc`, and [`InstallGuard`] clears it before taking
+/// the `Rc` out. Only shared references are made from it, as `CURRENT`'s borrow did.
+struct Entry {
+    kernel: Cell<*const Kernel>,
+    dpi_call: Cell<Option<&'static str>>,
+}
+
 thread_local! {
     static CURRENT: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
+    static ENTRY: Entry = const {
+        Entry {
+            kernel: Cell::new(ptr::null()),
+            dpi_call: Cell::new(None),
+        }
+    };
     static NAMES: RefCell<NameTables> = const { RefCell::new(VecDeque::new()) };
-    /// The DPI-C import running on this thread, if any.
-    static DPI_CALL: Cell<Option<&'static str>> = const { Cell::new(None) };
 }
 
 /// Marks a DPI-C call to `import` in progress on this thread until dropped; see the
@@ -139,30 +159,39 @@ pub(crate) struct DpiCallGuard {
 #[must_use = "the call ends when the guard drops"]
 pub(crate) fn enter_dpi_call(import: &'static str) -> DpiCallGuard {
     DpiCallGuard {
-        previous: DPI_CALL.replace(Some(import)),
+        previous: ENTRY.with(|e| e.dpi_call.replace(Some(import))),
     }
 }
 
 impl Drop for DpiCallGuard {
     fn drop(&mut self) {
-        DPI_CALL.set(self.previous);
+        ENTRY.with(|e| e.dpi_call.set(self.previous));
     }
 }
 
 /// The DPI-C import running on this thread, if one is.
 pub(crate) fn in_dpi_call() -> Option<&'static str> {
-    DPI_CALL.try_with(Cell::get).ok().flatten()
+    ENTRY.with(|e| e.dpi_call.get())
 }
 
 /// Panics if a DPI-C call is in progress; `what` names the attempted operation.
 #[track_caller]
-fn refuse_in_dpi_call(what: &str) {
-    if let Some(import) = in_dpi_call() {
-        panic!(
-            "DPI-C import `{import}` used {what}: DPI functions run inside eval; they can't \
-             access signals or await"
-        );
-    }
+#[cold]
+fn refuse_in_dpi_call(what: &str, import: &str) -> ! {
+    panic!(
+        "DPI-C import `{import}` used {what}: DPI functions run inside eval; they can't \
+         access signals or await"
+    );
+}
+
+/// Runs `f` on the installed kernel (if any) and the DPI-C import running (if any).
+#[expect(unsafe_code, reason = "the installed kernel's address (`Entry`)")]
+fn with_entry<R>(f: impl FnOnce(Option<&Kernel>, Option<&'static str>) -> R) -> R {
+    let (kernel, dpi) = ENTRY.with(|e| (e.kernel.get(), e.dpi_call.get()));
+    // SAFETY: a non-null address is the kernel `CURRENT` holds (see `Entry`). It stays
+    // alive while `f` runs: only the `InstallGuard` of the `Sim::run` below us on the stack
+    // releases it. The reference does not outlive `f`.
+    f(unsafe { kernel.as_ref() }, dpi)
 }
 
 impl Kernel {
@@ -309,11 +338,10 @@ impl Drop for Kernel {
 /// operation in the message.
 #[track_caller]
 pub(crate) fn with_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> R {
-    refuse_in_dpi_call(what);
-    CURRENT.with_borrow(|k| match k {
-        Some(k) => f(k),
+    match try_current(what, f) {
+        Some(r) => r,
         None => panic!("{what} needs a running simulation; call it inside Sim::run"),
-    })
+    }
 }
 
 /// Runs `f` on the current kernel, if one is installed.
@@ -322,23 +350,20 @@ pub(crate) fn with_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> R {
 /// Inside a DPI-C call; `what` names the operation in the message.
 #[track_caller]
 pub(crate) fn try_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> Option<R> {
-    refuse_in_dpi_call(what);
-    CURRENT
-        .try_with(|c| c.borrow().as_deref().map(f))
-        .ok()
-        .flatten()
+    let found = with_entry(|kernel, dpi| match dpi {
+        Some(import) => Err(import),
+        None => Ok(kernel.map(f)),
+    });
+    match found {
+        Ok(r) => r,
+        Err(import) => refuse_in_dpi_call(what, import),
+    }
 }
 
 /// Runs `f` on the current kernel if it is simulation `sim_gen`; for `Drop` paths that
 /// must do nothing once their simulation is gone.
 pub(crate) fn with_sim<R>(sim_gen: u32, f: impl FnOnce(&Kernel) -> R) -> Option<R> {
-    CURRENT
-        .try_with(|c| match c.borrow().as_deref() {
-            Some(k) if k.sim_gen == sim_gen => Some(f(k)),
-            _ => None,
-        })
-        .ok()
-        .flatten()
+    with_entry(|kernel, _| kernel.filter(|k| k.sim_gen == sim_gen).map(f))
 }
 
 /// The flat slot of `model`'s own `slot`, given each model's first flat slot.
@@ -367,7 +392,9 @@ pub(crate) fn install(kernel: Rc<Kernel>) -> InstallGuard {
         let Some(mut c) = installed else {
             panic!("Sim::run cannot be nested inside another Sim::run")
         };
+        let address = Rc::as_ptr(&kernel);
         *c = Some(kernel);
+        ENTRY.with(|e| e.kernel.set(address));
     });
     InstallGuard(())
 }
@@ -376,7 +403,9 @@ pub(crate) struct InstallGuard(());
 
 impl Drop for InstallGuard {
     fn drop(&mut self) {
-        // Take it out first so the kernel is not dropped while the cell is borrowed.
+        // Clear the address before the kernel can go (`Entry`); take it out first so the
+        // kernel is not dropped while the cell is borrowed.
+        ENTRY.with(|e| e.kernel.set(ptr::null()));
         let kernel = CURRENT.with_borrow_mut(Option::take);
         drop(kernel);
     }

@@ -29,7 +29,7 @@ projects built on top of simjig.
   models.
 - Nothing depends on `xtask`. Only `xtask` depends on `cargo-simjig` (for `cargo xtask
   doctor`); runtime crates never depend on it.
-- `unsafe` exists only in `simjig::{model::abi, model::raw, kernel::waker, kernel::cell, kernel::models (two `Direct` accesses), dpi::abi, fork}`
+- `unsafe` exists only in `simjig::{model::abi, model::raw, kernel::waker, kernel::cell, kernel::models (two `Direct` accesses), kernel::state (the installed kernel's address), dpi::abi, fork}`
   and in the expansion of `simjig::__link_model!` (generated code's vtable symbol). The
   workspace denies `unsafe_code` (`[workspace.lints.rust]`, checked by `xtask`'s
   `every_workspace_member_denies_unsafe`); those modules, and the tests that drive the C

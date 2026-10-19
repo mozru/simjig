@@ -22,6 +22,11 @@ simjig-build = { path = "../../crates/simjig-build" }
 unsafe_code = "deny"
 
 # The measured profile: `cargo test --profile bench` is release with line tables, so a
-# profiler can attribute samples to source lines without changing the code generated.
+# profiler can attribute samples to source lines without changing the code generated,
+# plus the settings recommended for testbenches (README, "Performance"): one codegen unit
+# lets the kernel's scheduler loop inline across modules (C: 491 -> 448 ns per cycle);
+# thin LTO adds little over it but costs little.
 [profile.bench]
 debug = "line-tables-only"
+codegen-units = 1
+lto = "thin"

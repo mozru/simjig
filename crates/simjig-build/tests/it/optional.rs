@@ -54,6 +54,9 @@ fn command(krate: &Path, target: &Path, args: &[&str]) -> Command {
         .env("CARGO_TARGET_DIR", target)
         // simjig's own test models are for its repository; the fixture builds none.
         .env("SIMJIG_TEST_MODELS", "0")
+        // The tests match Cargo's messages as plain text (`warning: `); an inherited
+        // `CARGO_TERM_COLOR=always`, as CI sets, wraps them in ANSI escapes.
+        .env("CARGO_TERM_COLOR", "never")
         .env_remove("SIMJIG_CACHE_DIR")
         .env_remove("FIXTURE_BREAK")
         .env_remove("FIXTURE_FATAL")

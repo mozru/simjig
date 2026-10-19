@@ -73,6 +73,9 @@ pub(crate) fn cargo_with(
         .args(args)
         .current_dir(krate)
         .env("CARGO_TARGET_DIR", target)
+        // The tests match Cargo's messages as plain text (`warning: `, `Fresh <crate>`);
+        // an inherited `CARGO_TERM_COLOR=always`, as CI sets, wraps them in ANSI escapes.
+        .env("CARGO_TERM_COLOR", "never")
         .env_remove("SIMJIG_CACHE_DIR")
         .envs(envs.iter().map(|(k, v)| (k, v)))
         .output()

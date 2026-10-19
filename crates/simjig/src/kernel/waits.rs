@@ -44,6 +44,7 @@ use super::backend::words;
 use super::models::Models;
 use super::slab::{Key, Slab};
 use super::state::{self, Kernel};
+use super::tasks::ReadyQueue;
 use super::time::{Precision, SimTime};
 use super::waker;
 
@@ -153,6 +154,8 @@ pub(crate) type Wake = (u64, Waker);
 const NO_GROUP: u32 = u32::MAX;
 
 pub(crate) struct WaitTable {
+    /// The simulation's id: a waker carrying it is one of its tasks' ([`waker::own_task`]).
+    sim_gen: u32,
     seq: u64,
     /// Every registration but the edge ones, which are in their groups.
     waiters: Slab<Waiter>,
@@ -179,6 +182,9 @@ pub(crate) struct WaitTable {
     /// `order[..head]` is stale and skipped (dropping it from a `Vec` would move the rest).
     head: usize,
     stale: usize,
+    /// A value-change walk is under way: `order` is not compacted until it ends, so the
+    /// walk's place in it stays valid ([`fire_next_change`](Self::fire_next_change)).
+    walking: bool,
     /// Key buffers of timer deadlines that left the wheel, for reuse.
     spare_keys: Vec<VecDeque<Key>>,
     /// The value being compared, kept to avoid an allocation per walk step.
@@ -249,9 +255,10 @@ fn remove_key(v: &mut Vec<Key>, key: Key) {
 
 impl WaitTable {
     /// `eval_changes[slot]`: whether an eval may change `slot` ([`Models::eval_changes`]).
-    pub(crate) fn new(eval_changes: Vec<bool>) -> Self {
+    pub(crate) fn new(sim_gen: u32, eval_changes: Vec<bool>) -> Self {
         let slots = eval_changes.len();
         Self {
+            sim_gen,
             eval_changes,
             eval_groups: 0,
             seq: 0,
@@ -262,6 +269,7 @@ impl WaitTable {
             order: Vec::new(),
             head: 0,
             stale: 0,
+            walking: false,
             spare_keys: Vec::new(),
             scratch: Vec::new(),
             wakes: Vec::new(),
@@ -415,6 +423,15 @@ impl WaitTable {
             self.head += 1;
             self.stale -= 1;
         }
+        if !self.walking {
+            self.compact();
+        }
+    }
+
+    /// Drops the stale entries of `order` once they are most of it (see `order`).
+    fn compact(&mut self) {
+        let groups = &self.groups;
+        let live = |&(seq, i): &(u64, u32)| groups[i as usize].primed == Some(seq);
         let kept = self.order.len() - self.head;
         if self.head > 16 && self.head > kept {
             self.order.drain(..self.head);
@@ -560,11 +577,26 @@ impl WaitTable {
         self.seq
     }
 
-    /// One step of a value-change walk: looks at the groups primed after `*after` and no
-    /// later than `until`, oldest first, until one fires. Each group whose slot differs
-    /// from its snapshot takes the new value; a group whose edge that is fires all its
-    /// waiters, in registration order, and is unprimed. Returns whether one fired; `*after`
-    /// is where the next step resumes.
+    /// Starts a value-change walk: until [`end_walk`](Self::end_walk), `order` keeps its
+    /// places, and the walk resumes from where [`fire_next_change`](Self::fire_next_change)
+    /// left `*at` (0 to start).
+    pub(crate) fn begin_walk(&mut self) {
+        self.walking = true;
+    }
+
+    /// Ends a walk begun with [`begin_walk`](Self::begin_walk).
+    pub(crate) fn end_walk(&mut self) {
+        self.walking = false;
+        self.compact();
+    }
+
+    /// One step of a value-change walk: looks at the groups primed no later than `until`
+    /// from place `*at` of `order` on, oldest first, until one fires. Each group whose slot
+    /// differs from its snapshot takes the new value; a group whose edge that is fires all
+    /// its waiters, in registration order, and is unprimed. Returns whether one fired;
+    /// `*at` is where the next step resumes. The waiters that are this simulation's tasks
+    /// are queued in `ready`, in order, when all of them are; otherwise every waker goes to
+    /// `out`, for [`wake_sorted`] to wake in order.
     ///
     /// Edges compare bit 0 of the old and new value. Edge triggers exist only on 1-bit
     /// signals (`trigger::edge` rejects wider ones, as cocotb's `rising_edge` raises
@@ -578,20 +610,17 @@ impl WaitTable {
         &mut self,
         model: &Models,
         until: u64,
-        after: &mut u64,
+        at: &mut usize,
+        ready: &mut ReadyQueue,
         out: &mut Vec<Wake>,
     ) -> bool {
-        if *after >= until {
-            return false;
-        }
-        let live = &self.order[self.head..];
-        let first = live.partition_point(|&(seq, _)| seq <= *after);
-        let mut hit = None;
-        for &(primed, index) in &live[first..] {
+        debug_assert!(self.walking, "invariant: a walk step is inside a walk");
+        let mut i = (*at).max(self.head);
+        while let Some(&(primed, index)) = self.order.get(i) {
             if primed > until {
                 break;
             }
-            *after = primed;
+            i += 1;
             let g = &mut self.groups[index as usize];
             if g.primed != Some(primed) {
                 continue; // stale: unprimed since
@@ -621,21 +650,42 @@ impl WaitTable {
                 EdgeKind::Falling => old == 1 && new == 0,
             };
             if fires {
-                hit = Some(index);
-                break;
+                *at = i;
+                self.fire_group(index, ready, out);
+                return true;
             }
         }
-        let Some(index) = hit else {
-            *after = until;
-            return false;
+        *at = i;
+        false
+    }
+
+    /// Fires every waiter of group `index` and unprimes it; see
+    /// [`fire_next_change`](Self::fire_next_change) for where the wakes go.
+    fn fire_group(&mut self, index: u32, ready: &mut ReadyQueue, out: &mut Vec<Wake>) {
+        let sim_gen = self.sim_gen;
+        let own = |waker: &Waker| {
+            waker::own_task(waker)
+                .filter(|&(g, _, _)| g == sim_gen)
+                .map(|(_, task, gen16)| (task, gen16))
         };
-        // Its wakers move out (in registration order, which is `seq` order); the buffer
-        // stays for its next priming.
         let g = &mut self.groups[index as usize];
         self.edge_live -= g.live;
-        out.extend(g.waiters.drain(..).filter_map(|w| Some((w.seq, w.waker?))));
+        // Queueing a task is all its waker's `wake` would do, in the same order; a
+        // foreign waker may run any code, so with one among them all are woken in order
+        // later, outside the table's borrow.
+        let all_own = g
+            .waiters
+            .iter()
+            .all(|w| w.waker.as_ref().is_none_or(|w| own(w).is_some()));
+        // The buffer stays the group's, for its next priming.
+        for w in g.waiters.drain(..) {
+            let Some(waker) = w.waker else { continue };
+            match own(&waker).filter(|_| all_own) {
+                Some((task, gen16)) => ready.push(task, gen16),
+                None => out.push((w.seq, waker)),
+            }
+        }
         self.unprime(index);
-        true
     }
 
     pub(crate) fn alloc_list(&mut self, kind: ListKind, name: Rc<str>) -> Key {
@@ -771,7 +821,9 @@ impl WaitTable {
 /// [`Sim::run`](crate::Sim::run) as a panic, not as a [`Failure`](crate::Failure); woken
 /// from inside a task (an `Event` it sets), it becomes that task's `TaskPanic`.
 fn wake_sorted(k: &Kernel, wakes: &mut Vec<Wake>) {
-    wakes.sort_by_key(|(seq, _)| *seq);
+    if !wakes.is_sorted_by_key(|(seq, _)| *seq) {
+        wakes.sort_by_key(|(seq, _)| *seq);
+    }
     for (_, waker) in wakes.drain(..) {
         // A task of this simulation is queued here, which is all its waker's `wake` would
         // do (`state::wake_task` finds `k` current); any other waker is woken.

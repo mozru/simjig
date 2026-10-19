@@ -384,18 +384,24 @@ fn fire_value_changes(k: &Kernel) {
     {
         return;
     }
-    let until = k.waits.borrow().last_seq();
-    let mut after = 0;
+    let until = {
+        let mut waits = k.waits.borrow_mut();
+        waits.begin_walk();
+        waits.last_seq()
+    };
+    let mut at = 0;
     while !stopped(k) {
         let fired = fire_and_wake(k, |w, out| {
             let model = k.models.borrow();
-            w.fire_next_change(&model, until, &mut after, out)
+            let mut ready = k.ready.borrow_mut();
+            w.fire_next_change(&model, until, &mut at, &mut ready, out)
         });
         if !fired {
-            return;
+            break;
         }
         run_ready(k);
     }
+    k.waits.borrow_mut().end_walk();
 }
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next

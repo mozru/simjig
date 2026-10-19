@@ -227,6 +227,7 @@ impl Kernel {
             sim_gen,
             precision: models.precision(),
             waits: RefCell::new(WaitTable::new(
+                sim_gen,
                 (0..count).map(|s| models.eval_changes(s)).collect(),
             )),
             log: RefCell::new(WriteLog::new(count as usize)),

@@ -191,6 +191,9 @@ pub(crate) struct WaitTable {
     scratch: Vec<u32>,
     /// The wake buffer [`fire_and_wake`] lends out; empty between calls.
     wakes: Vec<Wake>,
+    /// The wake buffer a value-change walk holds from [`begin_walk`](Self::begin_walk) to
+    /// [`end_walk`](Self::end_walk) (tasks it wakes may use `wakes` meanwhile).
+    walk_wakes: Vec<Wake>,
     wheel: BTreeMap<SimTime, Pending>,
     next_step: Vec<Key>,
     read_write: Vec<Key>,
@@ -273,6 +276,7 @@ impl WaitTable {
             spare_keys: Vec::new(),
             scratch: Vec::new(),
             wakes: Vec::new(),
+            walk_wakes: Vec::new(),
             wheel: BTreeMap::new(),
             next_step: Vec::new(),
             read_write: Vec::new(),
@@ -571,21 +575,19 @@ impl WaitTable {
         self.eval_groups > 0
     }
 
-    /// The `seq` of the newest registration: groups primed after a walk starts have a
-    /// larger one and are not part of that walk.
-    pub(crate) fn last_seq(&self) -> u64 {
-        self.seq
-    }
-
-    /// Starts a value-change walk: until [`end_walk`](Self::end_walk), `order` keeps its
-    /// places, and the walk resumes from where [`fire_next_change`](Self::fire_next_change)
-    /// left `*at` (0 to start).
-    pub(crate) fn begin_walk(&mut self) {
+    /// Starts a value-change walk of the groups primed so far: until
+    /// [`end_walk`](Self::end_walk), `order` keeps its places, and the walk resumes from
+    /// where [`fire_next_change`](Self::fire_next_change) left `*at` (0 to start). Returns
+    /// the walk's bound (the newest registration's `seq`) and its wake buffer (empty).
+    pub(crate) fn begin_walk(&mut self) -> (u64, Vec<Wake>) {
         self.walking = true;
+        (self.seq, std::mem::take(&mut self.walk_wakes))
     }
 
-    /// Ends a walk begun with [`begin_walk`](Self::begin_walk).
-    pub(crate) fn end_walk(&mut self) {
+    /// Ends a walk begun with [`begin_walk`](Self::begin_walk), taking back its buffer.
+    pub(crate) fn end_walk(&mut self, wakes: Vec<Wake>) {
+        debug_assert!(wakes.is_empty(), "invariant: a walk wakes all it fires");
+        self.walk_wakes = wakes;
         self.walking = false;
         self.compact();
     }
@@ -820,7 +822,7 @@ impl WaitTable {
 /// change, a Timer, a phase), which does not run under `catch_unwind`, the panic escapes
 /// [`Sim::run`](crate::Sim::run) as a panic, not as a [`Failure`](crate::Failure); woken
 /// from inside a task (an `Event` it sets), it becomes that task's `TaskPanic`.
-fn wake_sorted(k: &Kernel, wakes: &mut Vec<Wake>) {
+pub(crate) fn wake_sorted(k: &Kernel, wakes: &mut Vec<Wake>) {
     if !wakes.is_sorted_by_key(|(seq, _)| *seq) {
         wakes.sort_by_key(|(seq, _)| *seq);
     }

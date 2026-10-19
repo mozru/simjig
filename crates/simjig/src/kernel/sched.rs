@@ -50,7 +50,7 @@ use super::slab::Key;
 use super::state::{Kernel, Phase};
 use super::tasks::run_ready;
 use super::time::SimTime;
-use super::waits::{WaitOn, WaitTable, fire_and_wake};
+use super::waits::{WaitOn, WaitTable, fire_and_wake, wake_sorted};
 
 /// Evals allowed between two `ReadWrite` rounds of one timestep (or before the first)
 /// before the run fails with `DeltaLimit`.
@@ -390,24 +390,25 @@ fn fire_value_changes(k: &Kernel) {
     {
         return;
     }
-    let until = {
-        let mut waits = k.waits.borrow_mut();
-        waits.begin_walk();
-        waits.last_seq()
-    };
+    let (until, mut wakes) = k.waits.borrow_mut().begin_walk();
     let mut at = 0;
     while !stopped(k) {
-        let fired = fire_and_wake(k, |w, out| {
+        let fired = {
+            let mut waits = k.waits.borrow_mut();
             let model = k.models.borrow();
             let mut ready = k.ready.borrow_mut();
-            w.fire_next_change(&model, until, &mut at, &mut ready, out)
-        });
+            waits.fire_next_change(&model, until, &mut at, &mut ready, &mut wakes)
+        };
         if !fired {
             break;
         }
+        // Foreign wakers are woken outside every borrow: they may run any code.
+        if !wakes.is_empty() {
+            wake_sorted(k, &mut wakes);
+        }
         run_ready(k);
     }
-    k.waits.borrow_mut().end_walk();
+    k.waits.borrow_mut().end_walk(wakes);
 }
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next

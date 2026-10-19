@@ -1,9 +1,8 @@
 name: ci
 
-# Runs on a self-hosted runner (the maintainer's Mac). Only trusted events trigger it:
-# pushes to this repository and pull requests from branches of this repository.
-# Pull requests from forks never run here, because they would execute arbitrary code
-# on the maintainer's machine.
+# Runs the gate (`pixi run cargo xtask ci`, the same command as locally) on GitHub-hosted
+# runners: macOS arm64 and Linux aarch64. Pull requests from forks run too; hosted runners
+# are throwaway VMs, the token is read-only and the workflow uses no secrets.
 on:
   push:
     branches: [main]
@@ -19,29 +18,68 @@ permissions:
 
 jobs:
   gate:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    # A cold run builds the four pinned cargo tools from source first (about 15 minutes).
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
+      PIXI_NO_TELEMETRY: 1
     steps:
-      - uses: actions/checkout@v4
-      - name: Toolchain from rust-toolchain.toml
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Verilator, the C++ compiler, ccache and make, from pixi.lock. The pixi version
+      # matches ci/lima/run.sh. Only pushes to main write the cache.
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+        with:
+          pixi-version: v0.82.0
+          locked: true
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Rust from rust-toolchain.toml
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          rustup show active-toolchain
-      - name: Pinned non-Rust tools (Verilator, C++ compiler, ccache)
-        run: |
-          export PATH="$HOME/.pixi/bin:$PATH" PIXI_NO_TELEMETRY=1
-          pixi install --locked
+          # rustup is preinstalled on the hosted images; install it if an image drops it.
+          if ! command -v rustup >/dev/null; then
+            curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          # The first cargo command installs the pinned toolchain and its components.
+          cargo --version
+          cargo clippy --version
+      # The pinned cargo tools (DEV_TOOLS in xtask/src/setup.rs), cached by that file:
+      # `cargo xtask setup` skips a tool whose binary already reports its pinned version.
+      - name: Cache the pinned cargo tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-nextest
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-machete
+            ~/.cargo/bin/typos
+          key: cargo-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/setup.rs', 'rust-toolchain.toml') }}
+      - name: Cache the cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-${{ runner.arch }}-
+      # Under `pixi run`, so that the tools link with the pinned C toolchain.
+      - name: Pinned cargo tools
+        run: pixi run cargo xtask setup
       - name: Gate (same as `pixi run cargo xtask ci` locally)
-        run: |
-          export PATH="$HOME/.pixi/bin:$HOME/.cargo/bin:$PATH" PIXI_NO_TELEMETRY=1
-          pixi run cargo xtask ci
+        run: pixi run cargo xtask ci
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: junit
+          name: junit-${{ matrix.os }}
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore

@@ -65,7 +65,8 @@ This runs, in order:
 7. typos
 8. cargo-machete
 
-GitHub Actions runs exactly the same command, so a green local run means green CI.
+GitHub Actions runs exactly the same command (see CI below), so a green local run means
+green CI.
 
 ## Miri
 
@@ -89,8 +90,8 @@ code, the executor or the waker.
 
 ## Linux
 
-CI runs on macOS only. To run the gate on Linux from a macOS arm64 host, use the Lima VM
-in `ci/lima/simjig.yaml` (Ubuntu 26.04 LTS arm64, Virtualization.framework, 4 CPUs,
+CI runs the gate on linux-aarch64 too (see CI). To run it on Linux from a macOS arm64
+host, use the Lima VM in `ci/lima/simjig.yaml` (Ubuntu 26.04 LTS arm64, Virtualization.framework, 4 CPUs,
 8 GiB RAM, a sparse 40 GiB disk):
 
 ```sh
@@ -107,25 +108,16 @@ not synced: commit first. The first run takes about 15 minutes (the cargo tools 
 from source). Stop the VM with `limactl stop simjig`; remove it with
 `limactl delete simjig`.
 
-This covers linux-aarch64 only. `pixi.lock` also locks linux-64, but nothing runs it.
+This covers linux-aarch64 only. `pixi.lock` also locks linux-64 (x86_64), but neither CI
+nor the VM runs it.
 
-## Self-hosted runner
+## CI
 
-CI runs on a self-hosted macOS arm64 runner (labels `self-hosted, macOS, ARM64`).
-
-### Setup
-1. On GitHub: **Settings → Actions → Runners → New self-hosted runner → macOS / ARM64**.
-   Follow the download and `./config.sh` steps shown there.
-2. Enter the registration token yourself. Never paste it into a chat or commit it.
-3. Run it as a service: `./svc.sh install && ./svc.sh start`.
-4. Run `cargo xtask setup` as the runner's user. The workflow adds `~/.cargo/bin` to
-   `PATH`.
-
-### Safety rules
-- The workflow refuses pull requests from forks, because they would run arbitrary code on
-  this machine.
-- Also set **Settings → Actions → General → Fork pull request workflows → Require approval
-  for all outside collaborators**.
-- Keep the repository private, or keep these protections on if it becomes public.
-- Give the runner its own macOS user account, with no access to your personal files or
-  keychains.
+`.github/workflows/ci.yml` runs `pixi run cargo xtask ci` on GitHub-hosted runners,
+`macos-15` (arm64) and `ubuntu-24.04-arm` (linux-aarch64), for pushes to `main` and for
+every pull request, forks included. It installs pixi and the locked environment, the Rust
+toolchain from `rust-toolchain.toml` and the pinned cargo tools (`cargo xtask setup`),
+caching the pixi environment, the cargo tools and the cargo registry. The workflow's token
+is read-only and it uses no secrets. Miri and the conformance check
+(`conformance-regen --check`) are not part of it; run them locally before changing
+`unsafe` code or the scheduler.

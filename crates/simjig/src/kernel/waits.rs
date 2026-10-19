@@ -129,6 +129,8 @@ pub(crate) struct WaitTable {
     spare: Vec<Vec<u32>>,
     /// The value being compared, kept to avoid an allocation per walk step.
     scratch: Vec<u32>,
+    /// The wake buffer [`fire_and_wake`] lends out; empty between calls.
+    wakes: Vec<Wake>,
     wheel: BTreeMap<SimTime, Pending>,
     next_step: Vec<Key>,
     read_write: Vec<Key>,
@@ -199,6 +201,7 @@ impl WaitTable {
             group_of: vec![[None; 3]; slots],
             spare: Vec::new(),
             scratch: Vec::new(),
+            wakes: Vec::new(),
             wheel: BTreeMap::new(),
             next_step: Vec::new(),
             read_write: Vec::new(),
@@ -340,14 +343,23 @@ impl WaitTable {
         true
     }
 
+    /// Fires every key of `keys`, emptying it but keeping its capacity.
+    fn fire_drain(&mut self, keys: fn(&mut Self) -> &mut Vec<Key>, out: &mut Vec<Wake>) {
+        if keys(self).is_empty() {
+            return;
+        }
+        let mut taken = std::mem::take(keys(self));
+        self.fire_all(taken.drain(..), out);
+        // Firing registers nothing, so the list is still empty: give it its buffer back.
+        *keys(self) = taken;
+    }
+
     pub(crate) fn fire_next_step(&mut self, out: &mut Vec<Wake>) {
-        let keys = std::mem::take(&mut self.next_step);
-        self.fire_all(keys, out);
+        self.fire_drain(|w| &mut w.next_step, out);
     }
 
     pub(crate) fn fire_read_write(&mut self, out: &mut Vec<Wake>) {
-        let keys = std::mem::take(&mut self.read_write);
-        self.fire_all(keys, out);
+        self.fire_drain(|w| &mut w.read_write, out);
     }
 
     /// The task and trigger location of every pending `ReadWrite` waiter, in
@@ -363,8 +375,7 @@ impl WaitTable {
     }
 
     pub(crate) fn fire_read_only(&mut self, out: &mut Vec<Wake>) {
-        let keys = std::mem::take(&mut self.read_only);
-        self.fire_all(keys, out);
+        self.fire_drain(|w| &mut w.read_only, out);
     }
 
     pub(crate) fn next_timer(&self) -> Option<SimTime> {
@@ -455,15 +466,21 @@ impl WaitTable {
         let Some(l) = self.lists.get_mut(list) else {
             return;
         };
-        let keys = if one {
+        if one {
             if l.waiters.is_empty() {
                 return;
             }
-            vec![l.waiters.remove(0)]
+            let key = l.waiters.remove(0);
+            self.fire(key, out);
         } else {
-            std::mem::take(&mut l.waiters)
-        };
-        self.fire_all(keys, out);
+            // Taken and given back, so the list keeps its capacity; firing registers
+            // nothing, so it is still empty when it gets the buffer back.
+            let mut keys = std::mem::take(&mut l.waiters);
+            self.fire_all(keys.drain(..), out);
+            if let Some(l) = self.lists.get_mut(list) {
+                l.waiters = keys;
+            }
+        }
     }
 
     pub(crate) fn live_waiters(&self) -> usize {
@@ -551,27 +568,53 @@ fn group(groups: &mut BTreeMap<u64, Group>, seq: u64) -> &mut Group {
 /// change, a Timer, a phase), which does not run under `catch_unwind`, the panic escapes
 /// [`Sim::run`](crate::Sim::run) as a panic, not as a [`Failure`](crate::Failure); woken
 /// from inside a task (an `Event` it sets), it becomes that task's `TaskPanic`.
-pub(crate) fn wake_sorted(mut wakes: Vec<Wake>) {
+fn wake_sorted(wakes: &mut Vec<Wake>) {
     wakes.sort_by_key(|(seq, _)| *seq);
-    for (_, waker) in wakes {
+    for (_, waker) in wakes.drain(..) {
         waker.wake();
     }
 }
 
+/// Runs `fire` on the wait table, then wakes what it fired with [`wake_sorted`], after the
+/// table's borrow ends.
+///
+/// The wake buffer is the table's, lent out for the call and given back, so a timestep
+/// allocates none, and a call that fired nothing costs one swap. A waker that fires again
+/// before the outer wake is done (a foreign one can) borrows the empty buffer left behind;
+/// whichever buffer is larger is kept.
+pub(crate) fn fire_and_wake<R>(
+    k: &Kernel,
+    fire: impl FnOnce(&mut WaitTable, &mut Vec<Wake>) -> R,
+) -> R {
+    let (r, mut wakes) = {
+        let mut waits = k.waits.borrow_mut();
+        let mut wakes = std::mem::take(&mut waits.wakes);
+        let r = fire(&mut waits, &mut wakes);
+        if wakes.is_empty() {
+            waits.wakes = wakes;
+            return r;
+        }
+        (r, wakes)
+    };
+    wake_sorted(&mut wakes);
+    let mut waits = k.waits.borrow_mut();
+    if wakes.capacity() > waits.wakes.capacity() {
+        waits.wakes = wakes;
+    }
+    r
+}
+
 /// Fires every waiter on `list`.
 pub(crate) fn wake_all(k: &Kernel, list: Key) {
-    let mut out = Vec::new();
-    k.waits.borrow_mut().fire_list(list, false, &mut out);
-    wake_sorted(out);
+    fire_and_wake(k, |w, out| w.fire_list(list, false, out));
 }
 
 /// Fires the oldest waiter on `list`; returns whether there was one.
 pub(crate) fn wake_one(k: &Kernel, list: Key) -> bool {
-    let mut out = Vec::new();
-    k.waits.borrow_mut().fire_list(list, true, &mut out);
-    let any = !out.is_empty();
-    wake_sorted(out);
-    any
+    fire_and_wake(k, |w, out| {
+        w.fire_list(list, true, out);
+        !out.is_empty()
+    })
 }
 
 /// A trigger's registration in the wait table; dropping it deregisters.

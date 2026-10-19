@@ -50,7 +50,7 @@ use super::slab::Key;
 use super::state::{Kernel, Phase};
 use super::tasks::run_ready;
 use super::time::SimTime;
-use super::waits::{WaitTable, Wake, wake_sorted};
+use super::waits::{WaitTable, fire_and_wake};
 
 /// Evals allowed between two `ReadWrite` rounds of one timestep (or before the first)
 /// before the run fails with `DeltaLimit`.
@@ -71,17 +71,9 @@ fn stopped(k: &Kernel) -> bool {
     k.failed() || k.main_done.get()
 }
 
-fn wake_from(k: &Kernel, fire: impl FnOnce(&mut WaitTable, &mut Vec<Wake>)) {
-    let mut wakes = Vec::new();
-    fire(&mut k.waits.borrow_mut(), &mut wakes);
-    wake_sorted(wakes);
-}
-
 /// Fires the oldest Timer due at `t`; returns whether there was one.
 fn fire_next_timer(k: &Kernel, t: SimTime) -> bool {
-    let mut fired = false;
-    wake_from(k, |w, out| fired = w.fire_next_timer(t, out));
-    fired
+    fire_and_wake(k, |w, out| w.fire_next_timer(t, out))
 }
 
 /// Runs timesteps until the main task completes, a failure is recorded, or time cannot
@@ -137,21 +129,25 @@ fn step(k: &Kernel) {
     k.record(TraceKind::Step, None, 0, 0);
     k.bump(|c| c.steps += 1);
 
-    wake_from(k, WaitTable::fire_next_step);
+    fire_and_wake(k, WaitTable::fire_next_step);
     run_ready(k);
     // The clock edges due at `t` are logged before any Timer task runs, so a Timer task
     // that stops a clock or writes its signal at `t` comes after that edge in the log.
-    let edges: Vec<(u32, u32)> = k
-        .clocks
-        .borrow_mut()
-        .iter_mut()
-        .filter_map(|c| {
-            let schedule = c.running.as_mut().filter(|r| r.next_time == t)?;
-            Some((c.slot, schedule.take_edge()))
-        })
-        .collect();
-    for (slot, level) in edges {
-        signal::write(k, slot, &[level], Writer::Clock, None);
+    // One clock at a time, with no borrow of the clocks held across the write; a write
+    // never touches a clock, so this logs what collecting every edge first would.
+    let clocks = k.clocks.borrow().len();
+    for i in 0..clocks {
+        let edge = {
+            let mut clocks = k.clocks.borrow_mut();
+            let c = &mut clocks[i];
+            c.running
+                .as_mut()
+                .filter(|r| r.next_time == t)
+                .map(|r| (c.slot, r.take_edge()))
+        };
+        if let Some((slot, level)) = edge {
+            signal::write(k, slot, &[level], Writer::Clock, None);
+        }
     }
     // One Timer at a time, each followed by every task it makes ready (cocotb runs its
     // event loop after each GPI callback). So a task woken by an older Timer, and any task
@@ -186,7 +182,7 @@ fn step(k: &Kernel) {
             rounds += 1;
             evals = 0;
         }
-        wake_from(k, WaitTable::fire_read_write);
+        fire_and_wake(k, WaitTable::fire_read_write);
         run_ready(k);
         if stopped(k) {
             return;
@@ -202,7 +198,7 @@ fn step(k: &Kernel) {
     }
     k.phase.set(Phase::ReadOnly);
     k.record(TraceKind::ReadOnly, None, 0, 0);
-    wake_from(k, WaitTable::fire_read_only);
+    fire_and_wake(k, WaitTable::fire_read_only);
     run_ready(k);
     if k.phase.get() == Phase::ReadOnly {
         k.phase.set(Phase::Active);
@@ -343,17 +339,13 @@ fn fire_value_changes(k: &Kernel) {
     let until = k.waits.borrow().last_seq();
     let mut after = 0;
     while !stopped(k) {
-        let mut wakes = Vec::new();
-        let fired = {
+        let fired = fire_and_wake(k, |w, out| {
             let model = k.models.borrow();
-            k.waits
-                .borrow_mut()
-                .fire_next_change(&model, until, &mut after, &mut wakes)
-        };
+            w.fire_next_change(&model, until, &mut after, out)
+        });
         if !fired {
             return;
         }
-        wake_sorted(wakes);
         run_ready(k);
     }
 }

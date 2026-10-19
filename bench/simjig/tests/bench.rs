@@ -17,11 +17,17 @@
 //!
 //! Each test measures its own body (model creation and the harness's report excluded) and
 //! appends one JSON line to the file `BENCH_OUT` (stderr when unset).
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a benchmark measures wall-clock time"
+)]
+
+mod common;
 
 use std::collections::VecDeque;
-use std::io::Write as _;
 use std::time::Instant;
 
+use common::{CONSUMER_SEED, PHASE, PRODUCER_SEED, XorShift32, bit, cycles, report};
 use simjig::bits::Bit;
 use simjig::{clock, ns, spawn};
 
@@ -29,66 +35,15 @@ simjig::include_dut!(bench_fifo); // the sweep: bench_fifo::{Ports, fifo, fifo_p
 
 /// Entries in the FIFO (the `DEPTH` that `build.rs` sets).
 const DEPTH: usize = 16;
-/// A driver redraws its rate every `PHASE` cycles, from [`RATES`] (percent of cycles), so
-/// the FIFO fills and drains in bursts instead of hovering at half full.
-const PHASE: u64 = 24;
-const RATES: [u32; 3] = [10, 50, 90];
-/// Seeds of the producer's and the consumer's streams (any nonzero value).
-const PRODUCER_SEED: u32 = 0x1234_5678;
-const CONSUMER_SEED: u32 = 0x9E37_79B9;
-
-/// Marsaglia's xorshift32 (13, 17, 5): three shifts, so the Python copy is cheap and
-/// draws the same sequence.
-struct XorShift32(u32);
-
-impl XorShift32 {
-    fn next(&mut self) -> u32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.0 = x;
-        x
-    }
-
-    /// The rate for the next phase.
-    fn rate(&mut self) -> u32 {
-        RATES[(self.next() % 3) as usize]
-    }
-}
-
-/// Cycles to run: `BENCH_CYCLES`, else 10 000.
-fn cycles() -> u64 {
-    std::env::var("BENCH_CYCLES").map_or(10_000, |v| v.parse().expect("BENCH_CYCLES"))
-}
-
-/// Appends this run's result to `BENCH_OUT` (or prints it).
-fn report(dut: &str, variant: &str, n: u64, start: Instant, result: &str) {
-    let secs = start.elapsed().as_secs_f64();
-    let line = format!(
-        r#"{{"flow":"simjig","dut":"{dut}","variant":"{variant}","cycles":{n},"seconds":{secs:.6},{result}}}"#
-    );
-    match std::env::var_os("BENCH_OUT") {
-        Some(path) => {
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .expect("BENCH_OUT opens");
-            writeln!(f, "{line}").expect("BENCH_OUT written");
-        }
-        None => eprintln!("{line}"),
-    }
-}
 
 /// The DUT's name in the report: the sweep member's module path.
 fn dut_name<D>() -> &'static str {
     let name = std::any::type_name::<D>();
-    if name.contains("fifo_pub") { "fifo_pub" } else { "fifo" }
-}
-
-fn bit(b: Bit) -> u32 {
-    u32::from(b == Bit::ONE)
+    if name.contains("fifo_pub") {
+        "fifo_pub"
+    } else {
+        "fifo"
+    }
 }
 
 /// (A) The clock alone.
@@ -132,7 +87,13 @@ async fn monitor_only<D: bench_fifo::Ports>(dut: D) {
         hash
     });
     let hash = monitor.await;
-    report(dut_name::<D>(), "monitor_only", n, start, &format!(r#""hash":{hash}"#));
+    report(
+        dut_name::<D>(),
+        "monitor_only",
+        n,
+        start,
+        &format!(r#""hash":{hash}"#),
+    );
 }
 
 /// What the full testbench's monitor counted.
@@ -186,7 +147,11 @@ async fn full<D: bench_fifo::Ports>(dut: D) {
         // entry the last pop removed; zero after reset).
         let mut entries = VecDeque::with_capacity(DEPTH);
         let mut shown = 0u32;
-        let mut st = Stats { pushes: 0, pops: 0, hash: 0 };
+        let mut st = Stats {
+            pushes: 0,
+            pops: 0,
+            hash: 0,
+        };
         for _ in 0..n {
             clk.rising().await;
             let (p, q, w) = (push.get() == Bit::ONE, pop.get() == Bit::ONE, wr.get());
@@ -212,7 +177,10 @@ async fn full<D: bench_fifo::Ports>(dut: D) {
     producer.await;
     consumer.await;
     let st = monitor.await;
-    let result = format!(r#""pushes":{},"pops":{},"hash":{}"#, st.pushes, st.pops, st.hash);
+    let result = format!(
+        r#""pushes":{},"pops":{},"hash":{}"#,
+        st.pushes, st.pops, st.hash
+    );
     report(dut_name::<D>(), "full", n, start, &result);
 }
 

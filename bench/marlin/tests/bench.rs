@@ -27,14 +27,18 @@
 //! (`bench.py build` does it once, with the same `-O2` as the other flows); `BENCH_RTL`
 //! replaces the FIFO's RTL file (`bench.py bug`). Each test times its own body (model
 //! creation excluded) and appends one JSON line to `BENCH_OUT` (stderr when unset).
-#![expect(clippy::disallowed_methods, reason = "a benchmark measures wall-clock time")]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a benchmark measures wall-clock time"
+)]
+
+mod common;
 
 use std::collections::VecDeque;
-use std::io::Write as _;
-use std::path::PathBuf;
 use std::time::Instant;
 
-use marlin::verilator::{VerilatorRuntime, VerilatorRuntimeOptions};
+use common::{CONSUMER_SEED, Driver, PRODUCER_SEED, cycles, manifest_path, report, rtl};
+use marlin::verilator::VerilatorRuntime;
 use marlin::verilog::prelude::*;
 
 #[verilog(src = "rtl/sync_fifo_bench.sv", name = "sync_fifo_bench")]
@@ -42,79 +46,10 @@ struct Fifo;
 
 /// Entries in the FIFO (`rtl/sync_fifo_bench.sv`'s `DEPTH`).
 const DEPTH: usize = 16;
-/// A driver redraws its rate every `PHASE` cycles, from [`RATES`] (percent of cycles).
-const PHASE: u64 = 24;
-const RATES: [u32; 3] = [10, 50, 90];
-const PRODUCER_SEED: u32 = 0x1234_5678;
-const CONSUMER_SEED: u32 = 0x9E37_79B9;
-
-/// Marsaglia's xorshift32 (13, 17, 5), the same stream as the other flows'.
-struct XorShift32(u32);
-
-impl XorShift32 {
-    fn next(&mut self) -> u32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.0 = x;
-        x
-    }
-
-    /// The rate for the next phase.
-    fn rate(&mut self) -> u32 {
-        RATES[(self.next() % 3) as usize]
-    }
-}
-
-/// Cycles to run: `BENCH_CYCLES`, else 10 000.
-fn cycles() -> u64 {
-    std::env::var("BENCH_CYCLES").map_or(10_000, |v| v.parse().expect("BENCH_CYCLES"))
-}
-
-fn manifest_path(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
-}
-
-/// Marlin's runtime: the wrapper plus the FIFO's RTL, built into `BENCH_ARTIFACTS`.
+/// Marlin's runtime: the wrapper plus the FIFO's RTL (`BENCH_RTL` replaces it).
 fn runtime() -> VerilatorRuntime {
-    let rtl = std::env::var_os("BENCH_RTL").map_or_else(
-        || manifest_path("../../examples/lib/rtl/sync_fifo.sv"),
-        PathBuf::from,
-    );
-    let artifacts = std::env::var_os("BENCH_ARTIFACTS").map_or_else(
-        || manifest_path("../../target/bench-marlin/artifacts"),
-        PathBuf::from,
-    );
-    let sources = [manifest_path("rtl/sync_fifo_bench.sv"), rtl];
-    let no_dirs: &[PathBuf] = &[];
-    VerilatorRuntime::new2(
-        artifacts,
-        &sources,
-        no_dirs,
-        [],
-        VerilatorRuntimeOptions::default(),
-    )
-    .expect("Marlin runtime")
-}
-
-/// Appends this run's result to `BENCH_OUT` (or prints it).
-fn report(variant: &str, n: u64, start: Instant, result: &str) {
-    let secs = start.elapsed().as_secs_f64();
-    let line = format!(
-        r#"{{"flow":"marlin","dut":"fifo","variant":"{variant}","cycles":{n},"seconds":{secs:.6},{result}}}"#
-    );
-    match std::env::var_os("BENCH_OUT") {
-        Some(path) => {
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .expect("BENCH_OUT opens");
-            writeln!(f, "{line}").expect("BENCH_OUT written");
-        }
-        None => eprintln!("{line}"),
-    }
+    let fifo = rtl("BENCH_RTL", "../../examples/lib/rtl/sync_fifo.sv");
+    common::runtime(&[manifest_path("rtl/sync_fifo_bench.sv"), fifo])
 }
 
 fn rise(dut: &mut Fifo<'_>) {
@@ -141,7 +76,7 @@ fn a_clock_only() {
         }
         rise(&mut dut);
     }
-    report("clock_only", n, start, r#""hash":0"#);
+    report("fifo", "clock_only", n, start, r#""hash":0"#);
 }
 
 /// (B) A monitor reading six signals per rising edge.
@@ -166,30 +101,13 @@ fn b_monitor_only() {
         hash = hash.wrapping_mul(31).wrapping_add(s);
         rise(&mut dut);
     }
-    report("monitor_only", n, start, &format!(r#""hash":{hash}"#));
-}
-
-/// One driver's stream and the rate of its current phase.
-struct Driver {
-    rng: XorShift32,
-    rate: u32,
-}
-
-impl Driver {
-    fn new(seed: u32) -> Self {
-        Self {
-            rng: XorShift32(seed),
-            rate: 0,
-        }
-    }
-
-    /// Whether to act in cycle `i` (the rate is redrawn at each phase's start).
-    fn fire(&mut self, i: u64) -> bool {
-        if i.is_multiple_of(PHASE) {
-            self.rate = self.rng.rate();
-        }
-        self.rng.next() % 100 < self.rate
-    }
+    report(
+        "fifo",
+        "monitor_only",
+        n,
+        start,
+        &format!(r#""hash":{hash}"#),
+    );
 }
 
 /// The full testbench's reference model and what it counted.
@@ -264,5 +182,5 @@ fn c_full() {
         r#""pushes":{},"pops":{},"hash":{}"#,
         model.pushes, model.pops, model.hash
     );
-    report("full", n, start, &result);
+    report("fifo", "full", n, start, &result);
 }

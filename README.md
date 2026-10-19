@@ -825,3 +825,11 @@ the comparison with cocotb). For the fastest runs:
   - **not safe** when it writes an input it reads (`ASSIGNIN` waived) or uses `$sampled`,
     and logic fed by either does one of those things: a skipped eval then misses a print,
     a draw or a DPI-C call that a C++ loop's eval makes. When unsure, leave it off.
+
+## License
+
+Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or the
+[MIT license](LICENSE-MIT), at your option. Unless you explicitly state otherwise, any
+contribution intentionally submitted for inclusion in simjig by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional terms or
+conditions.

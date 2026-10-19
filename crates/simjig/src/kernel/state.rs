@@ -27,7 +27,9 @@ use super::cell::DirectTable;
 use super::clock::ClockEntry;
 use super::failure::{Failure, FailureKind, SourceLocation};
 use super::models::Models;
-use super::recorder::{EVAL_TAILS, READ_ONLY_TAIL, Recorder, STEP_TAIL, TraceKind, TraceRecord};
+use super::recorder::{
+    EVAL_TAILS, FixedTail, READ_ONLY_TAIL, Recorder, STEP_TAIL, TraceKind, TraceRecord,
+};
 use super::signal::WriteLog;
 use super::slab::Key;
 use super::tasks::{ReadyQueue, TaskTable, UnrunDrop, gen16};
@@ -110,7 +112,11 @@ pub(crate) struct Kernel {
     /// rather than a `RefCell` borrow.
     has_failed: Cell<bool>,
     pub(crate) recorder: Recorder,
-    pub(crate) counters: Cell<KernelStats>,
+    /// The counters of [`KernelStats`] that the kernel keeps (the others are counted when
+    /// asked): one `Cell` each, so a count is one add, not a copy of the whole struct.
+    steps: Cell<u64>,
+    evals: Cell<u64>,
+    polls: Cell<u64>,
     /// The run's time limit, for a synchronous run (`kernel::sync_clock`); an async run checks
     /// `Sim`'s own.
     pub(crate) time_limit: Cell<Option<SimTime>>,
@@ -230,6 +236,7 @@ impl Kernel {
             sim_gen,
             precision: models.precision(),
             waits: RefCell::new(WaitTable::new(
+                sim_gen,
                 (0..count).map(|s| models.eval_changes(s)).collect(),
             )),
             log: RefCell::new(WriteLog::new(count as usize)),
@@ -255,34 +262,53 @@ impl Kernel {
             failure: RefCell::new(None),
             has_failed: Cell::new(false),
             recorder: Recorder::default(),
-            counters: Cell::new(KernelStats::default()),
+            steps: Cell::new(0),
+            evals: Cell::new(0),
+            polls: Cell::new(0),
             walked: Cell::new(None),
             sync_cycles: Cell::new(None),
             time_limit: Cell::new(None),
         }
     }
 
-    pub(crate) fn record(&self, kind: TraceKind, task: Option<Key>, arg: u64, value: u64) {
-        // The records of every timestep (its step, its first evals, its ReadOnly) have a
-        // fixed tail after the time: hashed with one lookup, to the same value.
-        if task.is_none() && value == 0 {
-            let tail = match (kind, arg) {
-                (TraceKind::Step, 0) => Some(&STEP_TAIL),
-                (TraceKind::ReadOnly, 0) => Some(&READ_ONLY_TAIL),
-                (TraceKind::Eval, n) => EVAL_TAILS.get(usize::try_from(n).unwrap_or(usize::MAX)),
-                _ => None,
-            };
-            if let Some(tail) = tail {
-                let record = TraceRecord {
-                    time: self.now.get(),
-                    kind,
-                    task: u64::MAX,
-                    arg,
-                    value,
-                };
-                return self.recorder.record_fixed(record, tail);
-            }
+    /// Records the start of a timestep (`Step`).
+    #[inline]
+    pub(crate) fn record_step(&self) {
+        self.record_fixed(TraceKind::Step, 0, &STEP_TAIL);
+    }
+
+    /// Records the start of the `ReadOnly` region.
+    #[inline]
+    pub(crate) fn record_read_only(&self) {
+        self.record_fixed(TraceKind::ReadOnly, 0, &READ_ONLY_TAIL);
+    }
+
+    /// Records eval number `delta` of the timestep.
+    #[inline]
+    pub(crate) fn record_eval(&self, delta: u32) {
+        match EVAL_TAILS.get(delta as usize) {
+            Some(tail) => self.record_fixed(TraceKind::Eval, u64::from(delta), tail),
+            None => self.record(TraceKind::Eval, None, u64::from(delta), 0),
         }
+    }
+
+    /// A record of `kind` with no task, argument `arg` and value 0, whose tail is `tail`.
+    #[inline]
+    fn record_fixed(&self, kind: TraceKind, arg: u64, tail: &FixedTail) {
+        let record = TraceRecord {
+            time: self.now.get(),
+            kind,
+            task: u64::MAX,
+            arg,
+            value: 0,
+        };
+        self.recorder.record_fixed(record, tail);
+    }
+
+    /// Records an event; the timestep's fixed records have their own entry points
+    /// ([`record_step`](Self::record_step), [`record_eval`](Self::record_eval),
+    /// [`record_read_only`](Self::record_read_only)), which hash to the same values.
+    pub(crate) fn record(&self, kind: TraceKind, task: Option<Key>, arg: u64, value: u64) {
         let task = task.map_or(u64::MAX, |k| {
             u64::from(k.index) << 16 | u64::from(gen16(k.gen_))
         });
@@ -295,10 +321,32 @@ impl Kernel {
         });
     }
 
-    pub(crate) fn bump(&self, f: impl FnOnce(&mut KernelStats)) {
-        let mut c = self.counters.get();
-        f(&mut c);
-        self.counters.set(c);
+    /// Counts a timestep.
+    #[inline]
+    pub(crate) fn count_step(&self) {
+        self.steps.set(self.steps.get() + 1);
+    }
+
+    /// Counts a model eval.
+    #[inline]
+    pub(crate) fn count_eval(&self) {
+        self.evals.set(self.evals.get() + 1);
+    }
+
+    /// Counts a task poll.
+    #[inline]
+    pub(crate) fn count_poll(&self) {
+        self.polls.set(self.polls.get() + 1);
+    }
+
+    /// The counters kept so far ([`KernelStats`] without the table sizes and records).
+    pub(crate) fn counted(&self) -> KernelStats {
+        KernelStats {
+            steps: self.steps.get(),
+            evals: self.evals.get(),
+            polls: self.polls.get(),
+            ..KernelStats::default()
+        }
     }
 
     pub(crate) fn failed(&self) -> bool {

@@ -230,10 +230,8 @@ impl SyncClock {
             }
             None => k.models.borrow_mut().eval_at(t),
         };
-        k.bump(|c| {
-            c.steps += 1;
-            c.evals += 1;
-        });
+        k.count_step();
+        k.count_eval();
         if let Err((model, status)) = status {
             eval_failed(k, model, status);
             stop();
@@ -263,10 +261,8 @@ fn ended(k: &Kernel) -> ! {
 /// timestep does; returns whether the run may go on.
 pub(crate) fn first_eval(k: &Kernel) -> bool {
     let status = k.models.borrow_mut().eval_at(k.now.get());
-    k.bump(|c| {
-        c.steps += 1;
-        c.evals += 1;
-    });
+    k.count_step();
+    k.count_eval();
     match status {
         Ok(()) => true,
         Err((model, status)) => {

@@ -50,7 +50,7 @@ use super::slab::Key;
 use super::state::{Kernel, Phase};
 use super::tasks::run_ready;
 use super::time::SimTime;
-use super::waits::{WaitOn, WaitTable, fire_and_wake};
+use super::waits::{WaitOn, WaitTable, fire_and_wake, wake_sorted};
 
 /// Evals allowed between two `ReadWrite` rounds of one timestep (or before the first)
 /// before the run fails with `DeltaLimit`.
@@ -73,6 +73,10 @@ fn stopped(k: &Kernel) -> bool {
 
 /// Fires the oldest Timer due at `t`; returns whether there was one.
 fn fire_next_timer(k: &Kernel, t: SimTime) -> bool {
+    // Most timesteps have no Timer due: no need to lend out the wake buffer.
+    if k.waits.borrow().next_timer() != Some(t) {
+        return false;
+    }
     fire_and_wake(k, |w, out| w.fire_next_timer(t, out))
 }
 
@@ -126,8 +130,8 @@ fn model_event_now(k: &Kernel) -> bool {
 fn step(k: &Kernel) {
     let t = k.now.get();
     k.models.borrow_mut().set_time(t);
-    k.record(TraceKind::Step, None, 0, 0);
-    k.bump(|c| c.steps += 1);
+    k.record_step();
+    k.count_step();
 
     if k.waits.borrow().region_waited(WaitOn::NextTimeStep) {
         fire_and_wake(k, WaitTable::fire_next_step);
@@ -161,9 +165,10 @@ fn step(k: &Kernel) {
         if stopped(k) {
             return;
         }
-        let waiters = k.waits.borrow().read_write_waiters();
-        if !waiters.is_empty() {
+        let waited = k.waits.borrow().region_waited(WaitOn::ReadWrite);
+        if waited {
             if rounds == READ_WRITE_MAX {
+                let waiters = k.waits.borrow().read_write_waiters();
                 read_write_limit(k, &waiters);
                 return;
             }
@@ -173,7 +178,7 @@ fn step(k: &Kernel) {
         // A round with no ReadWrite waiter and nothing logged would wake nobody, run nothing
         // (every ready task has run), apply nothing and walk nothing (no model changed
         // since the walk after the last eval): skip straight to its end.
-        let quiet = waiters.is_empty() && k.log.borrow().is_empty();
+        let quiet = !waited && k.log.borrow().is_empty();
         let mut applied = false;
         if !quiet {
             fire_and_wake(k, WaitTable::fire_read_write);
@@ -192,7 +197,7 @@ fn step(k: &Kernel) {
         return;
     }
     k.phase.set(Phase::ReadOnly);
-    k.record(TraceKind::ReadOnly, None, 0, 0);
+    k.record_read_only();
     // With no ReadOnly waiter there is nothing to run: the deltas ended with every ready
     // task run.
     if k.waits.borrow().region_waited(WaitOn::ReadOnly) {
@@ -256,8 +261,8 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         return false;
     }
     let status = k.models.borrow_mut().eval(k.now.get());
-    k.record(TraceKind::Eval, None, u64::from(*evals), 0);
-    k.bump(|c| c.evals += 1);
+    k.record_eval(*evals);
+    k.count_eval();
     *evals += 1;
     let Err((model, status)) = status else {
         return true;
@@ -334,20 +339,23 @@ fn read_write_limit(k: &Kernel, waiters: &[(Option<Key>, Option<&'static Locatio
 /// Applies the write log, then fires the value changes since the previous comparison.
 /// Returns whether any write was applied.
 fn apply_and_compare(k: &Kernel) -> bool {
-    // An empty log has nothing to apply, and no slot holds its delta's epoch, so skipping
-    // `take` (which would start a new delta) changes nothing.
-    if k.log.borrow().is_empty() {
-        fire_value_changes(k);
+    let applied = apply(k);
+    fire_value_changes(k);
+    applied
+}
+
+/// Applies the write log in write order, recording each write, and starts a new delta;
+/// returns whether there was a write. No task runs and no write can be logged meanwhile.
+fn apply(k: &Kernel) -> bool {
+    let mut log = k.log.borrow_mut();
+    // An empty log has nothing to apply, and no slot holds its delta's epoch, so not
+    // starting a new delta changes nothing.
+    if log.is_empty() {
         return false;
     }
-    let writes = k.log.borrow_mut().take();
-    {
-        let mut model = k.models.borrow_mut();
-        for (slot, value) in writes.iter() {
-            model.write(slot, value);
-        }
-    }
-    for (slot, value) in writes.iter() {
+    let mut model = k.models.borrow_mut();
+    for (slot, value) in log.iter() {
+        model.write(slot, value);
         let low = value
             .iter()
             .take(2)
@@ -355,10 +363,8 @@ fn apply_and_compare(k: &Kernel) -> bool {
             .fold(0u64, |a, &w| a << 32 | u64::from(w));
         k.record(TraceKind::Write, None, u64::from(slot), low);
     }
-    let applied = !writes.is_empty();
-    k.log.borrow_mut().recycle(writes);
-    fire_value_changes(k);
-    applied
+    log.clear();
+    true
 }
 
 /// Fires the value-change groups whose edge happened, one group at a time in priming
@@ -385,18 +391,25 @@ fn fire_value_changes(k: &Kernel) {
     {
         return;
     }
-    let until = k.waits.borrow().last_seq();
-    let mut after = 0;
+    let (until, mut wakes) = k.waits.borrow_mut().begin_walk();
+    let mut at = 0;
     while !stopped(k) {
-        let fired = fire_and_wake(k, |w, out| {
+        let fired = {
+            let mut waits = k.waits.borrow_mut();
             let model = k.models.borrow();
-            w.fire_next_change(&model, until, &mut after, out)
-        });
+            let mut ready = k.ready.borrow_mut();
+            waits.fire_next_change(&model, until, &mut at, &mut ready, &mut wakes)
+        };
         if !fired {
-            return;
+            break;
+        }
+        // Foreign wakers are woken outside every borrow: they may run any code.
+        if !wakes.is_empty() {
+            wake_sorted(k, &mut wakes);
         }
         run_ready(k);
     }
+    k.waits.borrow_mut().end_walk(wakes);
 }
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next

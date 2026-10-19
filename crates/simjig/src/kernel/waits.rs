@@ -18,6 +18,13 @@
 //! group. It is unprimed when it fires (all its waiters wake together) or when its last
 //! waiter deregisters; the next waiter primes a new group, last in the order.
 //!
+//! Edge registrations ([`EdgeRegistration`]) live in their group, in registration order,
+//! not in the table's slab: firing moves the group's wakers out in that order, and a
+//! registration has fired exactly when its group is no longer primed by the priming it
+//! joined (a registration not yet cancelled keeps its group primed, so only firing can
+//! unprime it). Registering, firing and seeing the fire are then a push, a drain and a
+//! compare; nothing is looked up or freed per waiter.
+//!
 //! After each eval and each application of the write log, the scheduler walks the groups
 //! that were primed before the walk began, oldest first ([`WaitTable::fire_next_change`]),
 //! as Verilator's `callValueCbs` walks its callback list: a group whose slot differs from
@@ -37,6 +44,7 @@ use super::backend::words;
 use super::models::Models;
 use super::slab::{Key, Slab};
 use super::state::{self, Kernel};
+use super::tasks::ReadyQueue;
 use super::time::{Precision, SimTime};
 use super::waker;
 
@@ -112,12 +120,27 @@ struct Group {
     /// `wide`.
     narrow: [u32; 2],
     wide: Vec<u32>,
-    /// In registration order; empty while unprimed.
-    waiters: Pending,
+    /// Its registrations, in registration order (so sorted by `seq`); empty while unprimed.
+    /// A cancelled one stays, without its waker, until the group fires or most are
+    /// cancelled.
+    waiters: Vec<EdgeWaiter>,
+    /// The registrations in `waiters` not cancelled.
+    live: usize,
 }
 
-/// What [`WaitTable::add`] needs to register a waiter.
-struct NewWaiter {
+/// One registration of a [`Group`]. Edge registrations live in their group, not in the
+/// table's slab: the group fires them all at once, in order, and a registration has fired
+/// exactly when its group is no longer primed by the priming it joined
+/// ([`EdgeRegistration`]).
+struct EdgeWaiter {
+    seq: u64,
+    task: Option<Key>,
+    /// `None` once cancelled.
+    waker: Option<Waker>,
+}
+
+/// What [`WaitTable::add`] and [`WaitTable::add_edge`] need to register a waiter.
+pub(crate) struct NewWaiter {
     on: WaitOn,
     task: Option<Key>,
     waker: Waker,
@@ -131,8 +154,13 @@ pub(crate) type Wake = (u64, Waker);
 const NO_GROUP: u32 = u32::MAX;
 
 pub(crate) struct WaitTable {
+    /// The simulation's id: a waker carrying it is one of its tasks' ([`waker::own_task`]).
+    sim_gen: u32,
     seq: u64,
+    /// Every registration but the edge ones, which are in their groups.
     waiters: Slab<Waiter>,
+    /// Edge registrations not yet fired or cancelled, in all groups.
+    edge_live: usize,
     /// Per slot: whether an eval may change it.
     eval_changes: Vec<bool>,
     /// Primed groups on a slot an eval may change.
@@ -154,12 +182,18 @@ pub(crate) struct WaitTable {
     /// `order[..head]` is stale and skipped (dropping it from a `Vec` would move the rest).
     head: usize,
     stale: usize,
+    /// A value-change walk is under way: `order` is not compacted until it ends, so the
+    /// walk's place in it stays valid ([`fire_next_change`](Self::fire_next_change)).
+    walking: bool,
     /// Key buffers of timer deadlines that left the wheel, for reuse.
     spare_keys: Vec<VecDeque<Key>>,
     /// The value being compared, kept to avoid an allocation per walk step.
     scratch: Vec<u32>,
     /// The wake buffer [`fire_and_wake`] lends out; empty between calls.
     wakes: Vec<Wake>,
+    /// The wake buffer a value-change walk holds from [`begin_walk`](Self::begin_walk) to
+    /// [`end_walk`](Self::end_walk) (tasks it wakes may use `wakes` meanwhile).
+    walk_wakes: Vec<Wake>,
     wheel: BTreeMap<SimTime, Pending>,
     next_step: Vec<Key>,
     read_write: Vec<Key>,
@@ -167,11 +201,10 @@ pub(crate) struct WaitTable {
     lists: Slab<WaitList>,
 }
 
-/// Registrations of one group or one timer deadline, in registration order, removed
-/// lazily: a cancelled registration leaves the slab at once and its stale key here is
-/// skipped (and compacted away once most keys are stale). Cancelling one of many waiters
-/// is then O(1), not a search and shift; a group or deadline with nobody left is still
-/// removed at once.
+/// Registrations of one timer deadline, in registration order, removed lazily: a
+/// cancelled registration leaves the slab at once and its stale key here is skipped (and
+/// compacted away once most keys are stale). Cancelling one of many waiters is then O(1),
+/// not a search and shift; a deadline with nobody left is still removed at once.
 #[derive(Default)]
 struct Pending {
     keys: VecDeque<Key>,
@@ -225,21 +258,25 @@ fn remove_key(v: &mut Vec<Key>, key: Key) {
 
 impl WaitTable {
     /// `eval_changes[slot]`: whether an eval may change `slot` ([`Models::eval_changes`]).
-    pub(crate) fn new(eval_changes: Vec<bool>) -> Self {
+    pub(crate) fn new(sim_gen: u32, eval_changes: Vec<bool>) -> Self {
         let slots = eval_changes.len();
         Self {
+            sim_gen,
             eval_changes,
             eval_groups: 0,
             seq: 0,
             waiters: Slab::default(),
+            edge_live: 0,
             groups: Vec::new(),
             group_of: vec![[NO_GROUP; 3]; slots],
             order: Vec::new(),
             head: 0,
             stale: 0,
+            walking: false,
             spare_keys: Vec::new(),
             scratch: Vec::new(),
             wakes: Vec::new(),
+            walk_wakes: Vec::new(),
             wheel: BTreeMap::new(),
             next_step: Vec::new(),
             read_write: Vec::new(),
@@ -248,7 +285,7 @@ impl WaitTable {
         }
     }
 
-    fn add(&mut self, waiter: NewWaiter, model: &Models) -> Key {
+    fn add(&mut self, waiter: NewWaiter) -> Key {
         self.seq += 1;
         let NewWaiter {
             on,
@@ -265,7 +302,7 @@ impl WaitTable {
             at,
         });
         match on {
-            WaitOn::Edge { slot, edge } => self.join_group(slot, edge, key, model),
+            WaitOn::Edge { .. } => unreachable!("invariant: edges register with add_edge"),
             WaitOn::Time(t) => {
                 let spare = &mut self.spare_keys;
                 self.wheel
@@ -287,8 +324,14 @@ impl WaitTable {
         key
     }
 
-    /// Adds `key` to the group of (`slot`, `edge`), priming it if it is not primed.
-    fn join_group(&mut self, slot: u32, edge: EdgeKind, key: Key, model: &Models) {
+    /// Registers `waiter` (which waits on an edge) in the group of its (slot, kind),
+    /// priming the group if it is not primed.
+    pub(crate) fn add_edge(&mut self, waiter: NewWaiter, model: &Models) -> EdgeKey {
+        let WaitOn::Edge { slot, edge } = waiter.on else {
+            unreachable!("invariant: add_edge registers edge waits")
+        };
+        self.seq += 1;
+        let seq = self.seq;
         let cell = &mut self.group_of[slot as usize][edge.index()];
         if *cell == NO_GROUP {
             *cell = u32::try_from(self.groups.len()).or_invariant("invariant: < 2^32 groups");
@@ -299,16 +342,23 @@ impl WaitTable {
                 words: words(model.slot_width(slot)),
                 narrow: [0; 2],
                 wide: Vec::new(),
-                waiters: Pending::default(),
+                waiters: Vec::new(),
+                live: 0,
             });
         }
-        let index = *cell;
-        let g = &mut self.groups[index as usize];
-        g.waiters.push(key);
-        if g.primed.is_some() {
-            return;
+        let group = *cell;
+        let g = &mut self.groups[group as usize];
+        g.waiters.push(EdgeWaiter {
+            seq,
+            task: waiter.task,
+            waker: Some(waiter.waker),
+        });
+        g.live += 1;
+        self.edge_live += 1;
+        if let Some(primed) = g.primed {
+            return EdgeKey { group, primed, seq };
         }
-        g.primed = Some(self.seq);
+        g.primed = Some(seq);
         self.eval_groups += usize::from(self.eval_changes[slot as usize]);
         if g.words <= 2 {
             g.narrow = [0; 2];
@@ -317,7 +367,49 @@ impl WaitTable {
             g.wide.resize(g.words, 0);
             model.read(slot, &mut g.wide);
         }
-        self.order.push((self.seq, index));
+        self.order.push((seq, group));
+        EdgeKey {
+            group,
+            primed: seq,
+            seq,
+        }
+    }
+
+    /// Whether edge registration `key` has fired: its group fired since (and may have been
+    /// primed again). A registration not yet cancelled keeps its group primed, so nothing
+    /// else unprimes it.
+    fn edge_fired(&self, key: EdgeKey) -> bool {
+        self.groups[key.group as usize].primed != Some(key.primed)
+    }
+
+    /// The waiter of edge registration `key`, which has not fired.
+    fn edge_waiter(&mut self, key: EdgeKey) -> Option<&mut EdgeWaiter> {
+        let waiters = &mut self.groups[key.group as usize].waiters;
+        let i = waiters.binary_search_by_key(&key.seq, |w| w.seq).ok()?;
+        waiters.get_mut(i)
+    }
+
+    /// Cancels edge registration `key` if it has not fired, unpriming its group if it was
+    /// the last.
+    fn remove_edge(&mut self, key: EdgeKey) {
+        if self.edge_fired(key) {
+            return;
+        }
+        let Some(w) = self.edge_waiter(key) else {
+            return;
+        };
+        if w.waker.take().is_none() {
+            return;
+        }
+        w.task = None;
+        self.edge_live -= 1;
+        let g = &mut self.groups[key.group as usize];
+        g.live -= 1;
+        if g.live == 0 {
+            self.unprime(key.group);
+        } else if g.waiters.len() > 2 * g.live + 16 {
+            g.waiters.retain(|w| w.waker.is_some());
+        }
     }
 
     /// Unprimes group `index`, leaving its entry in `order` stale; its waiters must already
@@ -326,8 +418,8 @@ impl WaitTable {
         let g = &mut self.groups[index as usize];
         g.primed = None;
         self.eval_groups -= usize::from(self.eval_changes[g.slot as usize]);
-        g.waiters.keys.clear();
-        g.waiters.live = 0;
+        g.waiters.clear();
+        g.live = 0;
         self.stale += 1;
         let groups = &self.groups;
         let live = |&(seq, i): &(u64, u32)| groups[i as usize].primed == Some(seq);
@@ -335,6 +427,15 @@ impl WaitTable {
             self.head += 1;
             self.stale -= 1;
         }
+        if !self.walking {
+            self.compact();
+        }
+    }
+
+    /// Drops the stale entries of `order` once they are most of it (see `order`).
+    fn compact(&mut self) {
+        let groups = &self.groups;
+        let live = |&(seq, i): &(u64, u32)| groups[i as usize].primed == Some(seq);
         let kept = self.order.len() - self.head;
         if self.head > 16 && self.head > kept {
             self.order.drain(..self.head);
@@ -357,13 +458,7 @@ impl WaitTable {
             return;
         }
         match w.on {
-            WaitOn::Edge { slot, edge } => {
-                // An unfired registration is in its (slot, kind)'s group, which is primed.
-                let index = self.group_of[slot as usize][edge.index()];
-                if self.groups[index as usize].waiters.forget(&self.waiters) {
-                    self.unprime(index);
-                }
-            }
+            WaitOn::Edge { .. } => unreachable!("invariant: edge waits are in their groups"),
             WaitOn::Time(t) => {
                 if let Some(due) = self.wheel.get_mut(&t)
                     && due.forget(&self.waiters)
@@ -480,17 +575,30 @@ impl WaitTable {
         self.eval_groups > 0
     }
 
-    /// The `seq` of the newest registration: groups primed after a walk starts have a
-    /// larger one and are not part of that walk.
-    pub(crate) fn last_seq(&self) -> u64 {
-        self.seq
+    /// Starts a value-change walk of the groups primed so far: until
+    /// [`end_walk`](Self::end_walk), `order` keeps its places, and the walk resumes from
+    /// where [`fire_next_change`](Self::fire_next_change) left `*at` (0 to start). Returns
+    /// the walk's bound (the newest registration's `seq`) and its wake buffer (empty).
+    pub(crate) fn begin_walk(&mut self) -> (u64, Vec<Wake>) {
+        self.walking = true;
+        (self.seq, std::mem::take(&mut self.walk_wakes))
     }
 
-    /// One step of a value-change walk: looks at the groups primed after `*after` and no
-    /// later than `until`, oldest first, until one fires. Each group whose slot differs
-    /// from its snapshot takes the new value; a group whose edge that is fires all its
-    /// waiters, in registration order, and is unprimed. Returns whether one fired; `*after`
-    /// is where the next step resumes.
+    /// Ends a walk begun with [`begin_walk`](Self::begin_walk), taking back its buffer.
+    pub(crate) fn end_walk(&mut self, wakes: Vec<Wake>) {
+        debug_assert!(wakes.is_empty(), "invariant: a walk wakes all it fires");
+        self.walk_wakes = wakes;
+        self.walking = false;
+        self.compact();
+    }
+
+    /// One step of a value-change walk: looks at the groups primed no later than `until`
+    /// from place `*at` of `order` on, oldest first, until one fires. Each group whose slot
+    /// differs from its snapshot takes the new value; a group whose edge that is fires all
+    /// its waiters, in registration order, and is unprimed. Returns whether one fired;
+    /// `*at` is where the next step resumes. The waiters that are this simulation's tasks
+    /// are queued in `ready`, in order, when all of them are; otherwise every waker goes to
+    /// `out`, for [`wake_sorted`] to wake in order.
     ///
     /// Edges compare bit 0 of the old and new value. Edge triggers exist only on 1-bit
     /// signals (`trigger::edge` rejects wider ones, as cocotb's `rising_edge` raises
@@ -504,20 +612,17 @@ impl WaitTable {
         &mut self,
         model: &Models,
         until: u64,
-        after: &mut u64,
+        at: &mut usize,
+        ready: &mut ReadyQueue,
         out: &mut Vec<Wake>,
     ) -> bool {
-        if *after >= until {
-            return false;
-        }
-        let live = &self.order[self.head..];
-        let first = live.partition_point(|&(seq, _)| seq <= *after);
-        let mut hit = None;
-        for &(primed, index) in &live[first..] {
+        debug_assert!(self.walking, "invariant: a walk step is inside a walk");
+        let mut i = (*at).max(self.head);
+        while let Some(&(primed, index)) = self.order.get(i) {
             if primed > until {
                 break;
             }
-            *after = primed;
+            i += 1;
             let g = &mut self.groups[index as usize];
             if g.primed != Some(primed) {
                 continue; // stale: unprimed since
@@ -547,20 +652,42 @@ impl WaitTable {
                 EdgeKind::Falling => old == 1 && new == 0,
             };
             if fires {
-                hit = Some(index);
-                break;
+                *at = i;
+                self.fire_group(index, ready, out);
+                return true;
             }
         }
-        let Some(index) = hit else {
-            *after = until;
-            return false;
+        *at = i;
+        false
+    }
+
+    /// Fires every waiter of group `index` and unprimes it; see
+    /// [`fire_next_change`](Self::fire_next_change) for where the wakes go.
+    fn fire_group(&mut self, index: u32, ready: &mut ReadyQueue, out: &mut Vec<Wake>) {
+        let sim_gen = self.sim_gen;
+        let own = |waker: &Waker| {
+            waker::own_task(waker)
+                .filter(|&(g, _, _)| g == sim_gen)
+                .map(|(_, task, gen16)| (task, gen16))
         };
-        // Fired from the group's own buffer, which it keeps for its next priming.
-        let mut keys = std::mem::take(&mut self.groups[index as usize].waiters.keys);
-        self.fire_all(keys.drain(..), out);
-        self.groups[index as usize].waiters.keys = keys;
+        let g = &mut self.groups[index as usize];
+        self.edge_live -= g.live;
+        // Queueing a task is all its waker's `wake` would do, in the same order; a
+        // foreign waker may run any code, so with one among them all are woken in order
+        // later, outside the table's borrow.
+        let all_own = g
+            .waiters
+            .iter()
+            .all(|w| w.waker.as_ref().is_none_or(|w| own(w).is_some()));
+        // The buffer stays the group's, for its next priming.
+        for w in g.waiters.drain(..) {
+            let Some(waker) = w.waker else { continue };
+            match own(&waker).filter(|_| all_own) {
+                Some((task, gen16)) => ready.push(task, gen16),
+                None => out.push((w.seq, waker)),
+            }
+        }
         self.unprime(index);
-        true
     }
 
     pub(crate) fn alloc_list(&mut self, kind: ListKind, name: Rc<str>) -> Key {
@@ -605,7 +732,7 @@ impl WaitTable {
     }
 
     pub(crate) fn live_waiters(&self) -> usize {
-        self.waiters.len()
+        self.waiters.len() + self.edge_live
     }
 
     pub(crate) fn live_lists(&self) -> usize {
@@ -625,6 +752,15 @@ impl WaitTable {
             .filter(|(_, w)| w.task == Some(task) && !w.fired)
             .map(|(_, w)| (w.seq, self.describe_on(w.on, names, precision)))
             .collect();
+        for g in &self.groups {
+            let on = WaitOn::Edge {
+                slot: g.slot,
+                edge: g.edge,
+            };
+            for w in g.waiters.iter().filter(|w| w.task == Some(task)) {
+                found.push((w.seq, self.describe_on(on, names, precision)));
+            }
+        }
         found.sort_by_key(|(seq, _)| *seq);
         found.into_iter().map(|(_, d)| d).collect()
     }
@@ -632,6 +768,10 @@ impl WaitTable {
     /// Whether every unfired registration of `task` is on a wait list (a task, event, lock
     /// or queue), and there is at least one.
     pub(crate) fn only_lists(&self, task: Key) -> bool {
+        let edge = |g: &Group| g.waiters.iter().any(|w| w.task == Some(task));
+        if self.groups.iter().any(edge) {
+            return false;
+        }
         let mut any = false;
         for (_, w) in self.waiters.iter() {
             if w.task == Some(task) && !w.fired {
@@ -682,8 +822,10 @@ impl WaitTable {
 /// change, a Timer, a phase), which does not run under `catch_unwind`, the panic escapes
 /// [`Sim::run`](crate::Sim::run) as a panic, not as a [`Failure`](crate::Failure); woken
 /// from inside a task (an `Event` it sets), it becomes that task's `TaskPanic`.
-fn wake_sorted(k: &Kernel, wakes: &mut Vec<Wake>) {
-    wakes.sort_by_key(|(seq, _)| *seq);
+pub(crate) fn wake_sorted(k: &Kernel, wakes: &mut Vec<Wake>) {
+    if !wakes.is_sorted_by_key(|(seq, _)| *seq) {
+        wakes.sort_by_key(|(seq, _)| *seq);
+    }
     for (_, waker) in wakes.drain(..) {
         // A task of this simulation is queued here, which is all its waker's `wake` would
         // do (`state::wake_task` finds `k` current); any other waker is woken.
@@ -758,14 +900,13 @@ impl Registration {
         at: Option<&'static Location<'static>>,
     ) -> Self {
         k.refuse_in_sync("awaiting a trigger");
-        let model = k.models.borrow();
         let waiter = NewWaiter {
             on,
             task: k.current.get(),
             waker: cx.waker().clone(),
             at,
         };
-        let key = k.waits.borrow_mut().add(waiter, &model);
+        let key = k.waits.borrow_mut().add(waiter);
         Self {
             sim_gen: k.sim_gen,
             key,
@@ -830,5 +971,76 @@ impl Drop for Registration {
             return;
         }
         state::with_sim(self.sim_gen, |k| k.waits.borrow_mut().remove(self.key));
+    }
+}
+
+/// Where an edge registration is: its group, the priming of the group it joined, and its
+/// own `seq` (its place in the group).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EdgeKey {
+    group: u32,
+    primed: u64,
+    seq: u64,
+}
+
+/// An edge trigger's registration, in its group; dropping it deregisters.
+#[derive(Debug)]
+pub(crate) struct EdgeRegistration {
+    sim_gen: u32,
+    key: EdgeKey,
+    /// Already fired and seen by [`take_fired`](Self::take_fired): `Drop` has nothing left
+    /// to do.
+    released: bool,
+}
+
+impl EdgeRegistration {
+    /// Registers the current task as waiting on an edge of `slot`, to be woken through
+    /// `cx`'s waker.
+    pub(crate) fn new(k: &Kernel, slot: u32, edge: EdgeKind, cx: &Context<'_>) -> Self {
+        k.refuse_in_sync("awaiting a trigger");
+        let waiter = NewWaiter {
+            on: WaitOn::Edge { slot, edge },
+            task: k.current.get(),
+            waker: cx.waker().clone(),
+            at: None,
+        };
+        let model = k.models.borrow();
+        let key = k.waits.borrow_mut().add_edge(waiter, &model);
+        Self {
+            sim_gen: k.sim_gen,
+            key,
+            released: false,
+        }
+    }
+
+    /// Whether the registration has fired; if not, makes sure `cx`'s waker is the one
+    /// woken. Once it has, `Drop` costs no lookup of the current kernel.
+    pub(crate) fn take_fired(&mut self, cx: &Context<'_>) -> bool {
+        let key = self.key;
+        let fired = state::with_sim(self.sim_gen, |k| {
+            let mut waits = k.waits.borrow_mut();
+            if waits.edge_fired(key) {
+                return true;
+            }
+            if let Some(w) = waits.edge_waiter(key)
+                && let Some(waker) = &mut w.waker
+                && !waker.will_wake(cx.waker())
+            {
+                waker.clone_from(cx.waker());
+            }
+            false
+        })
+        .unwrap_or(false);
+        self.released |= fired;
+        fired
+    }
+}
+
+impl Drop for EdgeRegistration {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        state::with_sim(self.sim_gen, |k| k.waits.borrow_mut().remove_edge(self.key));
     }
 }

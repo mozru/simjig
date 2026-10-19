@@ -250,6 +250,10 @@ impl ReadyQueue {
         true
     }
 
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     fn pop(&mut self) -> Option<(u32, u16)> {
         let (index, g) = self.queue.pop_front()?;
         if self.queued[index as usize] == Some(g) {
@@ -640,6 +644,9 @@ fn dropped_unpolled(k: &Kernel, key: Key, spawned_at: &'static Location<'static>
 /// cancellation mechanism (DECISION §1): [`Task::cancel`] drops the future the same way,
 /// and says it is deliberate. The trace record keeps every event in run directories.
 pub(crate) fn settle_unrun_drops(k: &Kernel, key: Option<Key>) {
+    if k.unrun_drops.borrow().is_empty() {
+        return;
+    }
     let drops = std::mem::take(&mut *k.unrun_drops.borrow_mut());
     let Some(first) = drops.first() else { return };
     if key.is_some() && k.main.get() == key && k.main_done.get() {
@@ -798,17 +805,18 @@ pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> String {
 ///
 /// A woken helper polls its root task routed to it (`combinator`); a helper that already
 /// finished, or whose root is not waiting, is skipped.
-fn poll_task(k: &Kernel, woken: Key) {
-    let (key, route) = {
-        let tasks = k.tasks.borrow();
-        match tasks.helper(woken) {
+fn poll_task(k: &Kernel, index: u32, gen16_: u16) {
+    let (key, route, future) = {
+        let mut tasks = k.tasks.borrow_mut();
+        // A wake for a slot reused since (another generation) is dropped.
+        let Some(woken) = tasks.by_wake(index, gen16_) else {
+            return;
+        };
+        let (key, route) = match tasks.helper(woken) {
             Some(h) if h.state == HelperState::Done => return,
             Some(h) => (h.root, Some(woken)),
             None => (woken, None),
-        }
-    };
-    let future = {
-        let mut tasks = k.tasks.borrow_mut();
+        };
         let Some(entry) = tasks.get_mut(key) else {
             return;
         };
@@ -817,11 +825,11 @@ fn poll_task(k: &Kernel, woken: Key) {
         }
         entry.state = TaskState::Polling;
         entry.polled = true;
-        entry.future.take()
+        (key, route, entry.future.take())
     };
     let Some(mut future) = future else { return };
     k.record(TraceKind::Poll, Some(key), u64::from(route.is_some()), 0);
-    k.bump(|c| c.polls += 1);
+    k.count_poll();
     let waker = waker::task_waker(k.sim_gen, key.index, gen16(key.gen_));
     let mut cx = Context::from_waker(&waker);
     let previous = k.current.replace(Some(key));
@@ -876,15 +884,24 @@ fn finish_poll(k: &Kernel, key: Key, future: BoxFuture, outcome: std::thread::Re
 
 /// Polls ready tasks in FIFO order until none is ready, a failure is recorded, or the
 /// main task completes.
+#[inline]
 pub(crate) fn run_ready(k: &Kernel) {
+    // The scheduler asks after every region and every group it fires, mostly finding the
+    // queue empty: answered here, without the poll loop's frame.
+    if k.ready.borrow().is_empty() {
+        return;
+    }
+    run_queued(k);
+}
+
+/// [`run_ready`] once something is queued.
+#[inline(never)]
+fn run_queued(k: &Kernel) {
     while !k.failed() && !k.main_done.get() {
         let Some((index, g)) = k.ready.borrow_mut().pop() else {
             return;
         };
-        let key = k.tasks.borrow().by_wake(index, g);
-        if let Some(key) = key {
-            poll_task(k, key);
-        }
+        poll_task(k, index, g);
     }
 }
 

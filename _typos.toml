@@ -5,4 +5,8 @@ dout = "dout"
 
 [files]
 # Verilator output committed as fixtures: its short node ids ("(ND)") are not words.
-extend-exclude = ["crates/svtypes/tests/fixtures/*/tree.json"]
+# The scheduler's corpus (`kernel::differential`): hex digests, not words.
+extend-exclude = [
+    "crates/svtypes/tests/fixtures/*/tree.json",
+    "crates/simjig/src/kernel/differential/corpus.txt",
+]

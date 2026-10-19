@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread::{self, ThreadId};
 
+use super::cell::DirectTable;
 use super::clock::ClockEntry;
 use super::failure::{Failure, FailureKind, SourceLocation};
 use super::models::Models;
@@ -75,6 +76,10 @@ pub(crate) struct Kernel {
     pub(crate) starts: Rc<[u32]>,
     pub(crate) widths: Box<[u32]>,
     pub(crate) models: RefCell<Models>,
+    /// The models' direct ways to their narrow slots ([`DirectTable`]), outside the
+    /// `RefCell`, for signal reads and a synchronous run's writes: the kernel owns `models`
+    /// for as long as this copy, and never reads or writes during a model call.
+    pub(crate) direct: DirectTable,
     pub(crate) now: Cell<SimTime>,
     pub(crate) phase: Cell<Phase>,
     pub(crate) tasks: RefCell<TaskTable>,
@@ -201,6 +206,7 @@ fn with_entry<R>(f: impl FnOnce(Option<&Kernel>, Option<&'static str>) -> R) -> 
 }
 
 impl Kernel {
+    #[expect(unsafe_code, reason = "the kernel's copy of the models' direct table")]
     pub(crate) fn new(models: Models) -> Self {
         let sim_gen = NEXT_SIM_GEN.fetch_add(1, Ordering::Relaxed);
         let count = models.slot_count();
@@ -228,6 +234,9 @@ impl Kernel {
             names,
             starts,
             widths,
+            // SAFETY: `models` moves into this kernel next to the copy, and the kernel uses
+            // the copy only between model calls (DPI-C entry is refused).
+            direct: unsafe { models.share_direct() },
             models: RefCell::new(models),
             now: Cell::new(SimTime::ZERO),
             phase: Cell::new(Phase::Active),

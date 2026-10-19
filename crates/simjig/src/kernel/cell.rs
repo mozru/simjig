@@ -140,6 +140,75 @@ impl Direct {
     }
 }
 
+/// The [`Direct`] way to every flat slot that has one: the reads and writes of narrow
+/// slots that need no backend call. Its owners ([`Models`](super::models::Models), and the
+/// kernel's copy for signal handles) keep the backends that made the `Direct`s alive for as
+/// long as the table, and use it only while none of those backends' entry points runs (the
+/// kernel is single-threaded and refuses entry during a DPI-C call), which is what makes
+/// its safe methods sound.
+#[derive(Debug)]
+pub(crate) struct DirectTable {
+    slots: Box<[Option<Direct>]>,
+}
+
+impl DirectTable {
+    /// # Safety
+    /// Every `Direct` in `slots` comes from a backend that outlives the table, and the
+    /// table is used only while none of those backends' entry points runs.
+    pub(crate) unsafe fn new(slots: Box<[Option<Direct>]>) -> Self {
+        Self { slots }
+    }
+
+    /// A copy for another owner.
+    ///
+    /// # Safety
+    /// As [`new`](Self::new), for the copy.
+    pub(crate) unsafe fn share(&self) -> Self {
+        Self {
+            slots: self.slots.clone(),
+        }
+    }
+
+    /// Reads flat slot `flat` into `out` (one or two words) if it has a `Direct`; returns
+    /// whether it did.
+    #[inline]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "each word takes 32 bits of the value"
+    )]
+    pub(crate) fn read(&self, flat: u32, out: &mut [u32]) -> bool {
+        let Some(Some(d)) = self.slots.get(flat as usize) else {
+            return false;
+        };
+        if out.len() > 2 {
+            return false;
+        }
+        // SAFETY: the table's contract (`new`): the backend is alive and idle.
+        let value = unsafe { d.read() };
+        out[0] = value as u32;
+        if let Some(high) = out.get_mut(1) {
+            *high = (value >> 32) as u32;
+        }
+        true
+    }
+
+    /// Writes `value` (one or two words) to flat slot `flat`, masked to its width, if it
+    /// has a writable `Direct`; returns whether it did.
+    #[inline]
+    pub(crate) fn write(&self, flat: u32, value: &[u32]) -> bool {
+        let Some(Some(d)) = self.slots.get(flat as usize) else {
+            return false;
+        };
+        if !d.writable() || value.len() > 2 {
+            return false;
+        }
+        let high = value.get(1).map_or(0, |&w| u64::from(w));
+        // SAFETY: as in `read`, and the slot is writable.
+        unsafe { d.write(high << 32 | u64::from(value[0])) };
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

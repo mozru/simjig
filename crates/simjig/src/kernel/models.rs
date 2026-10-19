@@ -19,7 +19,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use super::OrInvariant;
 use super::backend::{EvalStatus, ModelBackend, ModelError};
-use super::cell::Direct;
+use super::cell::DirectTable;
 use super::panics;
 use super::tasks::panic_message;
 use super::time::{Precision, SimTime};
@@ -62,18 +62,6 @@ impl fmt::Display for ModelSetError {
 
 impl std::error::Error for ModelSetError {}
 
-/// Splits a narrow value into `out` (one or two words), as a backend's `read` fills it.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "each word takes 32 bits of the value"
-)]
-fn split(value: u64, out: &mut [u32]) {
-    out[0] = value as u32;
-    if let Some(high) = out.get_mut(1) {
-        *high = (value >> 32) as u32;
-    }
-}
-
 /// The failure of a model whose eval panicked: it is left mid-eval, so the run must stop as
 /// it does for `$fatal`.
 fn eval_panic(payload: &(dyn std::any::Any + Send)) -> ModelError {
@@ -92,9 +80,8 @@ pub(crate) struct Models {
     /// Per flat slot: `(model, the model's own slot)`.
     owner: Vec<(usize, u32)>,
     /// Per flat slot: its backend's [`Direct`] way to it, if any. Every entry came from a
-    /// backend in `backends`, which lives exactly as long as this table: that is what
-    /// makes the `unsafe` reads and writes below sound.
-    direct: Vec<Option<Direct>>,
+    /// backend in `backends`, which lives exactly as long as this table.
+    direct: DirectTable,
     /// Per model: evaluated, with nothing written since. An eval of such a model that
     /// [`settles`](ModelBackend::settles) would change nothing, so it is skipped.
     settled: Vec<bool>,
@@ -126,10 +113,14 @@ impl Models {
             owner.extend((0..count).map(|slot| (model, slot)));
         }
         let settled = vec![false; backends.len()];
-        let direct = owner
+        let slots = owner
             .iter()
             .map(|&(model, slot)| backends[model].direct(slot))
             .collect();
+        #[expect(unsafe_code, reason = "the table's contract, kept by this owner")]
+        // SAFETY: the `Direct`s come from `backends`, which this `Models` owns for as long
+        // as the table, and it reads and writes only between backend calls.
+        let direct = unsafe { DirectTable::new(slots) };
         Ok(Self {
             backends,
             first,
@@ -192,42 +183,35 @@ impl Models {
         backend.slot_width(slot)
     }
 
-    #[expect(
-        unsafe_code,
-        reason = "a Direct read of a live backend (the `direct` field)"
-    )]
     pub(crate) fn read(&self, flat: u32, out: &mut [u32]) {
-        if let Some(Some(d)) = self.direct.get(flat as usize)
-            && out.len() <= 2
-        {
-            // SAFETY: `d` came from a backend in `self.backends`, alive while `self` is, and
-            // the kernel never reads during one of its calls (`&self` here).
-            split(unsafe { d.read() }, out);
+        if self.direct.read(flat, out) {
             return;
         }
         let (backend, slot) = self.owner(flat);
         backend.read(slot, out);
     }
 
-    #[expect(
-        unsafe_code,
-        reason = "a Direct write to a live backend (the `direct` field)"
-    )]
     pub(crate) fn write(&mut self, flat: u32, value: &[u32]) {
         let (model, slot) = self.owner[flat as usize];
         self.settled[model] = false;
         self.version += 1;
         self.written += 1;
-        if let Some(Some(d)) = self.direct.get(flat as usize)
-            && d.writable()
-            && value.len() <= 2
-        {
-            let high = value.get(1).map_or(0, |&w| u64::from(w));
-            // SAFETY: as in `read` (`&mut self`: no backend call runs), and `d` is writable.
-            unsafe { d.write(high << 32 | u64::from(value[0])) };
-            return;
+        if !self.direct.write(flat, value) {
+            self.backends[model].write(slot, value);
         }
-        self.backends[model].write(slot, value);
+    }
+
+    /// A copy of the slots' direct ways, for the kernel's signal handles.
+    ///
+    /// # Safety
+    /// The copy is used only while this `Models` is alive, and only between backend calls.
+    #[expect(
+        unsafe_code,
+        reason = "hands out a copy of the table under its contract"
+    )]
+    pub(crate) unsafe fn share_direct(&self) -> DirectTable {
+        // SAFETY: the caller's promise is the table's contract.
+        unsafe { self.direct.share() }
     }
 
     pub(crate) fn set_time(&mut self, time: SimTime) {

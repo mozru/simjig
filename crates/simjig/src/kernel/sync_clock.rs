@@ -142,11 +142,10 @@ impl SyncClock {
             time_limit(k, t, limit);
         }
         k.now.set(t);
-        let status = {
-            let mut models = k.models.borrow_mut();
-            models.write(self.clk, &[level]);
-            models.eval_at(t)
-        };
+        if !k.direct.write(self.clk, &[level]) {
+            k.models.borrow_mut().write(self.clk, &[level]);
+        }
+        let status = k.models.borrow_mut().eval_at(t);
         k.bump(|c| {
             c.steps += 1;
             c.evals += 1;

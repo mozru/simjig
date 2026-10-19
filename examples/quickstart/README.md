@@ -21,10 +21,7 @@ needs `simjig` as a dependency (its `simjig::bits` has the value types) and
 `simjig-build` for the build script. Verilator 5.052 must be on `PATH` (in this
 repository: `pixi run`).
 
-`Cargo.toml` lists its own lints: the repository's, except that `unwrap_used`,
-`expect_used` and `missing_docs` are allowed, so tests can unwrap and need no doc
-comments. Cargo cannot add local entries to `[lints] workspace = true`, so the table
-repeats every lint it keeps.
+`Cargo.toml` allows `unwrap` in tests.
 
 ```sh
 pixi run cargo nextest run -p quickstart
@@ -35,9 +32,9 @@ pixi run cargo nextest run -p quickstart
 simjig is not on crates.io yet, so a copy of this directory elsewhere depends on a simjig
 checkout (`<simjig>` below; a path without spaces) and borrows its pixi environment:
 
-1. In `Cargo.toml`, replace each `.workspace = true` key with its own value, and the
-   dependencies with paths into the checkout. Keep the `[lints.*]` tables, or write
-   your own:
+1. Replace the `[package]`, `[dependencies]` and `[build-dependencies]` tables of
+   `Cargo.toml` with these (the `.workspace = true` keys only work inside this
+   repository). Keep the `[lints.*]` tables, or write your own:
 
    ```toml
    [package]
@@ -53,9 +50,10 @@ checkout (`<simjig>` below; a path without spaces) and borrows its pixi environm
    simjig-build = { path = "<simjig>/crates/simjig-build" }
    ```
 
-   Then `use quickstart::*;` in the tests becomes `use my_tb::*;`.
-2. Copy `<simjig>/rust-toolchain.toml` next to your `Cargo.toml`: simjig needs that
-   exact toolchain (rustup installs it on the first cargo command).
+   Then rename `quickstart` in each test's `use quickstart::*;`: it becomes
+   `use my_tb::*;`.
+2. simjig needs Rust 1.99 or newer; stable works. To build with the exact version simjig's
+   CI uses, copy `<simjig>/rust-toolchain.toml` next to your `Cargo.toml`.
 3. Run cargo through the checkout's pixi environment, which has Verilator:
 
    ```sh
@@ -84,10 +82,8 @@ keep it there when you copy this directory.
 
 ## When a test fails
 
-A panic in the test (a failed `assert!`) shows twice: first Rust's own `thread '...'
-panicked at ...` line, then simjig's report. The first is kept on purpose: it is where a
-`RUST_BACKTRACE=1` backtrace and any panic hook of your own print, and it is the only
-trace of a panic that escapes the simulation.
+A panic in the test shows twice: Rust's own `panicked at` line (where `RUST_BACKTRACE=1`
+prints), then simjig's report.
 
 It prints one block with the failure, its triage signature and a `repro:` line, for
 example `SIMJIG_SEED=0x… pixi run cargo nextest run -p quickstart -E 'binary(=flop) &

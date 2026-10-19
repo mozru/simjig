@@ -23,9 +23,9 @@ async fn q_follows_d(dut: flop::Dut) {
 
 ## Install
 
-You need Verilator 5.052 (other versions are refused), a C++ compiler, cargo-nextest and
-the Rust toolchain in `rust-toolchain.toml`. The pixi environment has Verilator and the
-compiler; run cargo through `pixi run`:
+You need Verilator, a C++ compiler, cargo-nextest and Rust 1.99 or newer. simjig checks
+for exactly Verilator 5.052. The pixi environment has Verilator and the compiler;
+run cargo through `pixi run`:
 
 ```sh
 pixi install --locked
@@ -40,15 +40,25 @@ checkout path; Verilator's launcher breaks on them.
 
 ## Your first test
 
-Copy [`examples/quickstart`](examples/quickstart). Until simjig is on crates.io, depend on
-a checkout:
+Copy [`examples/quickstart`](examples/quickstart) and replace the top of its `Cargo.toml`
+(the `.workspace = true` keys only work inside this repository). Until simjig is on
+crates.io, depend on a checkout, `<simjig>` here:
 
 ```toml
+[package]
+name = "my_tb"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
 [dependencies]
 simjig = { path = "<simjig>/crates/simjig" }
+
 [build-dependencies]
 simjig-build = { path = "<simjig>/crates/simjig-build" }
 ```
+
+In the tests, rename `quickstart` in `use quickstart::*;` to `my_tb`.
 
 The build script verilates each design and generates a Rust module for it:
 
@@ -69,7 +79,7 @@ fn main() -> Result<(), simjig_build::Error> {
 ```
 
 The library includes those modules and holds shared helpers, so each test file starts with
-`use quickstart::*;`:
+one `use`:
 
 ```rust
 // src/lib.rs
@@ -95,9 +105,11 @@ for a 1-bit signal, or a value of the signal's type; a literal that does not fit
 A write is applied at the next eval, so a read right after `set` returns the old value.
 Values are `Bit`, `Bits<N>` (up to 128 bits) and `WideBits`. They compare with literals
 (`dut.count.get() == 3`); typed integers go through `u128::from(x)`. In `assert_eq!`, put
-`Bits::new(want)` on the right so a mismatch prints both sides in hex. Packed structs become Rust structs with public fields, and enums newtypes with a constant
-per variant (`Status::EMPTY`; `s.variant()` to `match`). `cargo simjig show flop` prints
-exactly what was generated.
+`Bits::new(want)` on the right so a mismatch prints both sides in hex.
+
+Packed structs become Rust structs; enums become newtypes with a constant per variant
+(`Status::EMPTY`; `s.variant()` to `match`). `cargo simjig show flop` prints exactly what
+was generated.
 
 ## Clocks and time
 
@@ -112,8 +124,8 @@ at the design at three moments:
 | `dut.clk.rising().read_only()` | final values for this timestep | fail the test |
 
 A driver writes after `rising()` or `.read_write()`; a monitor samples in `.read_only()`.
-`read_write()` and `read_only()` also work alone, for the current timestep, and a timer
-due at an edge resumes before the edge.
+`read_write()` and `read_only()` also work alone, for the current timestep. A timer ending
+on an edge's timestep wakes before the edge.
 
 ## Concurrency
 
@@ -152,23 +164,24 @@ async fn q_follows_random_d(ctx: &TestCtx, dut: flop::Dut) {
 ## When a test fails
 
 ```text
-FAIL q_follows_random_d  seed=0x5502aca5e1b140ed  t=10 ns  [TaskPanic sig=1f2d51e24688445d]
+FAIL q_follows_random_d  seed=0x5502aca5e1b140ed  t=10 ns  [TaskPanic sig=c470890eb03c84d1]
   task:     main.monitor
   at:       examples/quickstart/tests/scoreboard.rs:23:13
   message:  panicked: assertion `left == right` failed
-  repro:    SIMJIG_SEED=0x5502aca5e1b140ed cargo nextest run -p quickstart -E '...'
-  waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x5502aca5e1b140ed cargo nextest run ...
+  repro:    SIMJIG_SEED=0x5502aca5e1b140ed pixi run cargo nextest run -p quickstart -E '...'
+  waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x5502aca5e1b140ed pixi run cargo nextest run ...
 ```
 
 Paste the `repro:` line to rerun the same seed; runs are deterministic. With
 `.trace_fst(true)` and `SIMJIG_WAVES_ON_FAIL=1`, a failing test is replayed into
 `waves.fst` and `waves.gtkw` in the run directory (`cargo simjig waves <test> --seed <s>`
-for one test). Every test has a 10 ms simulation budget (`timeout = "200us"` or `"none"`).
+for one test). A test fails after 10 ms of simulated time; change it with
+`timeout = "200us"` or `"none"`.
 
 ## Parameter sweeps and random init
 
-A `Sweep` in `build.rs` builds several configurations of one module. In `examples/lib`,
-`fifo(name, width, depth)` returns a `Dut` with those parameters:
+A `Sweep` in `build.rs` builds several configurations of one module. Here `fifo(..)` is a
+small closure in `examples/lib/build.rs` that returns a `Dut` with a name, width and depth:
 
 ```rust
 Sweep::new("sync_fifo")
@@ -195,7 +208,7 @@ regions; use async tests for concurrent drivers and monitors, or several clocks.
 #[simjig::test(sync)]
 fn q_follows_d_sync(dut: flop::Dut) {
     let mut cyc = SyncClock::new(dut.clk, ns(10));
-    let q = cyc.bind(dut.q); // a bound handle: a direct read, no lookup
+    let q = cyc.bind(dut.q); // a bound handle: faster reads in the loop
     for d in [true, false, true] {
         dut.d.set(d);
         cyc.tick(); // rise, eval, fall, eval
@@ -214,7 +227,7 @@ cocotb's trigger classes are snake_case functions here: `Timer(...)` becomes `ti
 | `await RisingEdge(dut.clk)`, `FallingEdge`, `ValueChange` | `dut.clk.rising().await`, `.falling()`, `.changed()` |
 | `await ClockCycles(dut.clk, 3)` | `cycles(dut.clk, 3).await` |
 | `await Timer(10, "ns")` | `timer(ns(10)).await` |
-| `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `read_only().await`, `read_write()`, `next_time_step()` |
+| `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `read_only().await`, `read_write().await`, `next_time_step().await` |
 | `cocotb.start_soon(coro)` | `spawn("name", fut).detach()` |
 | `await First(a, b)`, `Combine(a, b)` | `first!(a, b)`, `join!(a, b)` |
 | `await with_timeout(x, 10, "ns")` | `with_timeout(ns(10), x).await` |
@@ -222,24 +235,32 @@ cocotb's trigger classes are snake_case functions here: `Timer(...)` becomes `ti
 | `dut._log.info(...)` | `tb_log!("x={x}")` |
 | `Event`, `Queue`, `Lock` | `Event`, `Queue`, `simjig::Lock` |
 
+- `first!`/`join!` await their operands themselves. `first!` needs operands with one output
+  type; wrap them in `async { …; Enum::X }`.
 - `let _ = spawn(..)` drops the handle and fails the test; use `.detach()`.
 - A `Task` passed by value to `first!` or `with_timeout` is cancelled when it loses. Pass
   `&mut task` to keep it running.
 - A write in `ReadOnly` fails the test. A timeout is a value, not an exception.
-- More differences: `docs/guide.md`, and with tests, `tests/conformance/README.md`.
+- More differences are in `docs/guide.md`. `tests/conformance/README.md` lists each
+  difference with its test.
 
 ## Performance
 
-Async simjig is about 27x faster than cocotb on a tiny FIFO testbench, where the scheduler
-dominates, and 7.4x on a mid-size design, where Verilator's eval does. Sync mode is within
-1.2x of a hand-written C++ loop. Median ns per cycle, 1M cycles, Apple M6:
+These numbers are for the full testbench: reset, a producer, a consumer and a checking
+monitor. Async simjig is about 27x faster than cocotb on a tiny FIFO, where the scheduler
+dominates, and 7.4x on a mid-size design, where Verilator's eval does. Lighter testbenches
+(a clock alone, or a clock and a monitor) are 8.5-21x faster than cocotb on the tiny FIFO.
+Async is slower than a hand-written C++ loop: about 8.6x on the tiny FIFO and 1.2x on the
+mid-size design. Sync mode is within 1.2x of the C++ loop. Median ns per cycle, 1M cycles,
+Apple M6:
 
 | design | simjig | simjig sync | C++ | cocotb |
 |---|---:|---:|---:|---:|
 | tiny FIFO | 298 | 42 | 35 | 8,166 |
 | mid-size pipeline | 1,508 | 1,247 | 1,240 | 11,205 |
 
-Method, Marlin numbers and caveats: [`bench/README.md`](bench/README.md).
+Method, caveats and numbers for Marlin (another Rust Verilator binding):
+[`bench/README.md`](bench/README.md).
 
 ## More docs
 

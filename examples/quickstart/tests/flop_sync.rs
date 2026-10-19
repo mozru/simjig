@@ -6,7 +6,7 @@ use quickstart::*;
 #[simjig::test(sync)]
 fn q_follows_d_sync(dut: flop::Dut) {
     let mut cyc = SyncClock::new(dut.clk, ns(10));
-    let q = cyc.bind(dut.q); // a bound handle: a direct read, no lookup
+    let q = cyc.bind(dut.q); // a bound handle: faster reads in the loop
     for d in [true, false, true] {
         dut.d.set(d);
         cyc.tick(); // rise, eval, fall, eval

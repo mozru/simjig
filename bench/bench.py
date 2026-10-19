@@ -8,7 +8,8 @@
 
 The designs (DESIGNS): `fifo`, the tiny sync_fifo (the default), and `mid`, the mid-size
 bench/rtl/mid_pipe.sv. The flows (FLOWS): simjig (twice: the design's plain model and its
-`_pub` model), simjig-sync (`#[simjig::test(sync)]`: the same testbenches as loops),
+`_pub` model), simjig-elide (the same tests with eval elision opted in, `elide_evals`),
+simjig-sync (`#[simjig::test(sync)]`: the same testbenches as loops),
 cocotb, Marlin and a raw C++ Verilator loop. `build` verilates and compiles every testbench. `run` builds nothing:
 for each size and variant it runs each flow's testbench, each run in a fresh process,
 sequentially, and appends one JSON line per run to FILE: the testbench's own timing of
@@ -51,7 +52,7 @@ RUST_TESTS = {"clock_only": "a_clock_only", "monitor_only": "b_monitor_only", "f
 # Every flow `run` knows, as (flow, the suffix of its model's name: the result's `dut` is
 # the design's name plus it), and the names `--flows` selects them by.
 FLOWS = {"simjig": ("simjig", ""), "simjig_pub": ("simjig", "_pub"),
-         "simjig_sync": ("simjig-sync", ""), "cocotb": ("cocotb", ""),
+         "simjig_elide": ("simjig-elide", ""), "simjig_sync": ("simjig-sync", ""), "cocotb": ("cocotb", ""),
          "marlin": ("marlin", ""),
          "cpp": ("cpp", "")}  # fmt: skip
 
@@ -118,11 +119,15 @@ def build_simjig(design: Design, target: Path, rtl: Path | None = None) -> Path:
     return build_rust("simjig", SIMJIG_DIR, target, design.rust_test, rtl_env(design, rtl))
 
 
-def run_simjig(exe: Path, dut: str, variant: str, n: int, out: Path, sync: bool = False) -> float:
-    """One simjig run (`sync`: the synchronous flow's test); returns the process's wall
+# The suffix of each simjig flow's test names in the test binary.
+SIMJIG_SUFFIX = {"simjig": "", "simjig-elide": "_elide", "simjig-sync": "_sync"}
+
+
+def run_simjig(exe: Path, dut: str, variant: str, n: int, out: Path, flow: str = "simjig") -> float:
+    """One run of a simjig flow's test (SIMJIG_SUFFIX); returns the process's wall
     time."""
     env = dict(os.environ, BENCH_CYCLES=str(n), BENCH_OUT=str(out))
-    test = f"{RUST_TESTS[variant]}{'_sync' if sync else ''}::{dut}"
+    test = f"{RUST_TESTS[variant]}{SIMJIG_SUFFIX[flow]}::{dut}"
     t0 = time.perf_counter()
     r = subprocess.run([str(exe), "--exact", test, "--test-threads", "1", "-q"],
                        env=env, capture_output=True, text=True)  # fmt: skip
@@ -274,8 +279,8 @@ def cmd_build(a: argparse.Namespace) -> None:
 def run_one(built: dict, design: Design, flow: str, dut: str, variant: str, n: int,
             out: Path) -> float:  # fmt: skip
     """One run of one flow; returns the process's wall time."""
-    if flow in ("simjig", "simjig-sync"):
-        return run_simjig(Path(built["simjig"]), dut, variant, n, out, flow == "simjig-sync")
+    if flow in SIMJIG_SUFFIX:
+        return run_simjig(Path(built["simjig"]), dut, variant, n, out, flow)
     if flow == "marlin":
         return run_marlin(Path(built["marlin"]), marlin_artifacts(design), variant, n, out)
     if flow == "cpp":
@@ -389,7 +394,7 @@ def bug_cpp(design: Design, rtl: Path, bug_dir: Path) -> bool:
     return failed
 
 
-TABLE_ORDER = ["simjig", "simjig-sync", "marlin", "cpp", "cocotb"]
+TABLE_ORDER = ["simjig", "simjig-elide", "simjig-sync", "marlin", "cpp", "cocotb"]
 
 
 def ratio(ref: float | None, x: float) -> str:

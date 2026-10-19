@@ -24,7 +24,7 @@ mod common;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use common::{CONSUMER_SEED, PHASE, PRODUCER_SEED, XorShift32, bit, cycles, report, report_flow};
+use common::{CONSUMER_SEED, PHASE, PRODUCER_SEED, XorShift32, bit, cycles, report_flow};
 use simjig::bits::Bit;
 use simjig::{SyncClock, clock, ns, spawn};
 
@@ -52,7 +52,7 @@ fn fold64(x: u128) -> u32 {
 }
 
 /// (A) The clock alone.
-async fn clock_only<D: bench_mid::Ports>(dut: D) {
+async fn clock_only<D: bench_mid::Ports>(dut: D, flow: &str) {
     let n = cycles();
     let start = Instant::now();
     let clk = dut.clk();
@@ -60,11 +60,11 @@ async fn clock_only<D: bench_mid::Ports>(dut: D) {
     for _ in 0..n {
         clk.rising().await;
     }
-    report(dut_name::<D>(), "clock_only", n, start, r#""hash":0"#);
+    report_flow(flow, dut_name::<D>(), "clock_only", n, start, r#""hash":0"#);
 }
 
 /// (B) A monitor reading seven signals per rising edge.
-async fn monitor_only<D: bench_mid::Ports>(dut: D) {
+async fn monitor_only<D: bench_mid::Ports>(dut: D, flow: &str) {
     let n = cycles();
     let start = Instant::now();
     let clk = dut.clk();
@@ -89,7 +89,8 @@ async fn monitor_only<D: bench_mid::Ports>(dut: D) {
         hash
     });
     let hash = monitor.await;
-    report(
+    report_flow(
+        flow,
         dut_name::<D>(),
         "monitor_only",
         n,
@@ -154,7 +155,7 @@ impl Scoreboard {
 }
 
 /// (C) Reset, producer, consumer, and a monitor with a scoreboard.
-async fn full<D: bench_mid::Ports>(dut: D) {
+async fn full<D: bench_mid::Ports>(dut: D, flow: &str) {
     let n = cycles();
     let start = Instant::now();
     let clk = dut.clk();
@@ -222,22 +223,42 @@ async fn full<D: bench_mid::Ports>(dut: D) {
         r#""pushes":{},"pops":{},"hash":{}"#,
         sb.pushes, sb.pops, sb.hash
     );
-    report(dut_name::<D>(), "full", n, start, &result);
+    report_flow(flow, dut_name::<D>(), "full", n, start, &result);
 }
 
 #[simjig::test(timeout = "none", duts = [bench_mid::mid::Dut, bench_mid::mid_pub::Dut])]
 async fn a_clock_only<D: bench_mid::Ports>(dut: D) {
-    clock_only(dut).await;
+    clock_only(dut, "simjig").await;
 }
 
 #[simjig::test(timeout = "none", duts = [bench_mid::mid::Dut, bench_mid::mid_pub::Dut])]
 async fn b_monitor_only<D: bench_mid::Ports>(dut: D) {
-    monitor_only(dut).await;
+    monitor_only(dut, "simjig").await;
 }
 
 #[simjig::test(timeout = "none", duts = [bench_mid::mid::Dut, bench_mid::mid_pub::Dut])]
 async fn c_full<D: bench_mid::Ports>(dut: D) {
-    full(dut).await;
+    full(dut, "simjig").await;
+}
+
+// The same three with eval elision opted in (`elide_evals`): a separately labelled flow,
+// `simjig-elide`, to measure what the default (every eval runs) costs. Safe for this
+// design: it writes none of its inputs and reads no `$time`, prints nothing and calls no
+// DPI-C (`ModelOptions::with_elide_evals`).
+
+#[simjig::test(timeout = "none", elide_evals, duts = [bench_mid::mid::Dut])]
+async fn a_clock_only_elide<D: bench_mid::Ports>(dut: D) {
+    clock_only(dut, "simjig-elide").await;
+}
+
+#[simjig::test(timeout = "none", elide_evals, duts = [bench_mid::mid::Dut])]
+async fn b_monitor_only_elide<D: bench_mid::Ports>(dut: D) {
+    monitor_only(dut, "simjig-elide").await;
+}
+
+#[simjig::test(timeout = "none", elide_evals, duts = [bench_mid::mid::Dut])]
+async fn c_full_elide<D: bench_mid::Ports>(dut: D) {
+    full(dut, "simjig-elide").await;
 }
 
 // The synchronous flow (`#[simjig::test(sync)]`, `SyncClock`), as in `bench.rs`: one

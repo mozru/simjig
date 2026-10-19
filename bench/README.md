@@ -13,7 +13,7 @@ Not part of `cargo xtask ci`: nothing here runs unless you run it.
 bench/run.sh                 # everything below: env, build, bug check, measurements, table
 bench/run.sh build           # build every testbench only
 bench/run.sh run --sizes 10000 --runs 1 --max-load 100 --out target/smoke.jsonl  # a smoke run
-bench/run.sh run --flows simjig,marlin,cpp ...  # some flows (simjig, simjig_pub, simjig_sync, cocotb, marlin, cpp)
+bench/run.sh run --flows simjig,marlin,cpp ...  # some flows (simjig, simjig_pub, simjig_elide, simjig_sync, cocotb, marlin, cpp)
 bench/run.sh table bench/results/raw.jsonl
 bench/run.sh --design mid    # the same sequence for the mid-size design: bench/results/mid/
 bench/run.sh --design mid run --sizes 10000 --runs 1 --max-load 100 --out target/smoke-mid.jsonl
@@ -25,7 +25,7 @@ bench/run.sh --design mid run --sizes 10000 --runs 1 --max-load 100 --out target
 | File | What |
 |---|---|
 | `rtl/mid_pipe.sv` | the mid-size design (see Designs) |
-| `simjig/` | the simjig testbenches: a standalone Cargo workspace (`build.rs`; `tests/bench.rs` for the FIFO, `tests/mid.rs` for `mid`, `tests/common/` shared); flow `simjig` (async, `#[simjig::test]`) and flow `simjig-sync` (`#[simjig::test(sync)]`, `SyncClock`, bound handles: the same three testbenches as loops) |
+| `simjig/` | the simjig testbenches: a standalone Cargo workspace (`build.rs`; `tests/bench.rs` for the FIFO, `tests/mid.rs` for `mid`, `tests/common/` shared); flow `simjig` (async, `#[simjig::test]`), flow `simjig-elide` (the same with eval elision opted in, `#[simjig::test(elide_evals)]`: simjig's default evaluates every time) and flow `simjig-sync` (`#[simjig::test(sync)]`, `SyncClock`, bound handles: the same three testbenches as loops) |
 | `cocotb/test_bench.py`, `cocotb/test_mid.py` | the cocotb testbenches, statement for statement the same (`bench_common.py` shared) |
 | `cocotb/run.py` | builds and runs them with cocotb's Verilator runner; its `DESIGNS` is each design's sources, top and parameters |
 | `marlin/` | the Marlin testbenches: a standalone Cargo workspace (`tests/bench.rs`, `tests/mid.rs`; `rtl/*_bench.sv`, the parameter wrappers Marlin needs) |

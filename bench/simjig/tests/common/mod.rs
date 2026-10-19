@@ -47,12 +47,8 @@ pub fn cycles() -> u64 {
     std::env::var("BENCH_CYCLES").map_or(10_000, |v| v.parse().expect("BENCH_CYCLES"))
 }
 
-/// Appends this run's result to `BENCH_OUT` (or prints it), for the flow `simjig`.
-pub fn report(dut: &str, variant: &str, n: u64, start: Instant, result: &str) {
-    report_flow("simjig", dut, variant, n, start, result);
-}
-
-/// [`report`] for the flow `flow` (`simjig` or `simjig-sync`).
+/// Appends this run's result to `BENCH_OUT` (or prints it), for the flow `flow`
+/// (`simjig`, `simjig-elide` or `simjig-sync`).
 pub fn report_flow(flow: &str, dut: &str, variant: &str, n: u64, start: Instant, result: &str) {
     let secs = start.elapsed().as_secs_f64();
     let line = format!(

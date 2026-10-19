@@ -117,6 +117,9 @@ pub(crate) struct Kernel {
     /// [`Models::version`] and [`Models::written`] when the last value-change walk began
     /// (`sched`).
     pub(crate) walked: Cell<Option<(u64, u64)>>,
+    /// The rising edges of a synchronous run's [`SyncClock`](crate::SyncClock) (its only
+    /// one); `None` until it is made.
+    pub(crate) sync_cycles: Cell<Option<u64>>,
 }
 
 static NEXT_SIM_GEN: AtomicU32 = AtomicU32::new(1);
@@ -254,6 +257,7 @@ impl Kernel {
             recorder: Recorder::default(),
             counters: Cell::new(KernelStats::default()),
             walked: Cell::new(None),
+            sync_cycles: Cell::new(None),
             time_limit: Cell::new(None),
         }
     }

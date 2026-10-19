@@ -32,6 +32,11 @@ the public API, the generated code or simulation semantics.
 - Synchronous tests: `clock(..).start()` panics at the caller's line (it named a line
   inside simjig), and a `TimeLimit` failure with no blocked task (always so in a
   synchronous test) no longer blames a listed task in its `help:` line.
+- `SyncClock`: a second `SyncClock::new` in one synchronous test panics ("one clock per
+  synchronous test"), and so do a `rise()` while the clock is high and a `fall()` while it
+  is low (both were silently accepted: a second clock advanced the same time axis, two
+  rises made no edge); each panic names the caller's line, through `tick()` and
+  `ticks(n)` too. New: `SyncClock::cycle()`, the rising edges so far.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

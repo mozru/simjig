@@ -42,6 +42,8 @@ pub struct SyncClock {
     half: SimDuration,
     /// The held model's eval, called directly on every edge (`None`: not held).
     held: Option<HeldEval>,
+    /// The level the clock was last set to: a `rise` needs it low, a `fall` high.
+    high: bool,
 }
 
 impl fmt::Debug for SyncClock {
@@ -49,6 +51,8 @@ impl fmt::Debug for SyncClock {
         f.debug_struct("SyncClock")
             .field("clk", &self.kernel.names[self.clk as usize])
             .field("half_period", &self.half)
+            .field("high", &self.high)
+            .field("cycle", &self.cycle())
             .finish_non_exhaustive()
     }
 }
@@ -58,8 +62,10 @@ impl SyncClock {
     /// at least 2). It sets `clk` to 0, which the first eval takes.
     ///
     /// # Panics
-    /// Outside a synchronous test, if `clk` is not 1 bit wide or belongs to another
-    /// simulation, or if `period` is not an even number of ticks of at least 2.
+    /// Outside a synchronous test, if the test already made its clock (one per test: the
+    /// run has one time axis, which each edge advances), if `clk` is not 1 bit wide or
+    /// belongs to another simulation, or if `period` is not an even number of ticks of at
+    /// least 2.
     #[track_caller]
     pub fn new(clk: impl Into<RawSig>, period: SimDuration) -> Self {
         let clk = clk.into();
@@ -70,6 +76,12 @@ impl SyncClock {
             kernel.phase.get() == Phase::Sync,
             "SyncClock needs a synchronous test (`#[simjig::test(sync)]`); an async test steps \
              its clocks with `clock(..)` and triggers"
+        );
+        assert!(
+            kernel.sync_cycles.replace(Some(0)).is_none(),
+            "a second SyncClock in one synchronous test: there is one clock per synchronous \
+             test, since each edge advances the run's one time axis by half its period; make \
+             one and step it (or make the test async for several clocks)"
         );
         let ticks = period.ticks();
         assert!(
@@ -93,6 +105,7 @@ impl SyncClock {
             clk: flat,
             half: SimDuration::from_ticks(ticks / 2),
             held,
+            high: false,
         }
     }
 
@@ -117,13 +130,21 @@ impl SyncClock {
     }
 
     /// One cycle: [`rise`](Self::rise), then [`fall`](Self::fall). Two evals.
+    ///
+    /// # Panics
+    /// If the clock is high (a `rise` without its `fall`).
     #[inline]
+    #[track_caller]
     pub fn tick(&mut self) {
         self.rise();
         self.fall();
     }
 
     /// `n` cycles.
+    ///
+    /// # Panics
+    /// If the clock is high (a `rise` without its `fall`).
+    #[track_caller]
     pub fn ticks(&mut self, n: u64) {
         for _ in 0..n {
             self.tick();
@@ -131,20 +152,43 @@ impl SyncClock {
     }
 
     /// Half a period: sets the clock to 1 and evaluates the model.
+    ///
+    /// # Panics
+    /// If the clock is already high: two rises in a row are no edge.
     #[inline]
+    #[track_caller]
     pub fn rise(&mut self) {
+        if self.high {
+            twice("rise", "high", "fall");
+        }
+        self.high = true;
         self.edge(1);
     }
 
     /// Half a period: sets the clock to 0 and evaluates the model.
+    ///
+    /// # Panics
+    /// If the clock is already low: two falls in a row are no edge.
     #[inline]
+    #[track_caller]
     pub fn fall(&mut self) {
+        if !self.high {
+            twice("fall", "low", "rise");
+        }
+        self.high = false;
         self.edge(0);
     }
 
     /// The current simulation time.
     pub fn now(&self) -> SimTime {
         self.kernel.now.get()
+    }
+
+    /// The rising edges so far: the cycle the clock is in (0 before the first `rise`, 1
+    /// from it until the next one), as a failure report counts them.
+    #[must_use]
+    pub fn cycle(&self) -> u64 {
+        self.kernel.sync_cycles.get().unwrap_or(0)
     }
 
     fn edge(&mut self, level: u32) {
@@ -163,6 +207,11 @@ impl SyncClock {
             time_limit(k, t, limit);
         }
         k.now.set(t);
+        if level == 1 {
+            // A rise past the time limit is no cycle; one whose eval fails is.
+            k.sync_cycles
+                .set(Some(k.sync_cycles.get().unwrap_or(0) + 1));
+        }
         if !k.direct.write(self.clk, &[level]) {
             k.models.borrow_mut().write(self.clk, &[level]);
         }
@@ -190,6 +239,13 @@ impl SyncClock {
             stop();
         }
     }
+}
+
+/// A `rise` while high or a `fall` while low.
+#[cold]
+#[track_caller]
+fn twice(edge: &str, level: &str, other: &str) -> ! {
+    panic!("SyncClock::{edge} while the clock is {level}: call {other}() first, or tick()")
 }
 
 /// The run ended (a use after it) or failed (a use after the failure was caught).

@@ -16,6 +16,13 @@
 #[expect(dead_code, reason = "the test uses only part of the ABI mirror")]
 mod abi;
 
+/// `abi` reads and writes narrow storage through the kernel's accessors.
+#[path = "../src/kernel/cell.rs"]
+mod cell;
+mod kernel {
+    pub(crate) use super::cell;
+}
+
 #[cfg(not(simjig_test_models))]
 #[test]
 fn abi_models_were_built() {

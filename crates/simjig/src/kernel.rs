@@ -20,6 +20,7 @@
 //! [`FakeModel`](fake::FakeModel).
 
 pub(crate) mod backend;
+pub(crate) mod cell;
 pub(crate) mod clock;
 pub(crate) mod combinator;
 pub(crate) mod failure;

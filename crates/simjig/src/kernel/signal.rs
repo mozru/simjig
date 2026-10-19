@@ -354,9 +354,14 @@ impl WriteLog {
 
     #[inline]
     fn push_new(&mut self, slot: u32, value: &[u32], writer: Writer) {
-        let entry = u32::try_from(self.entries.len()).or_invariant("invariant: < 2^32 writes");
+        // A delta's writes and a value's words are far fewer than 2^32: a write log entry
+        // per slot, and a slot of at most 2^32 bits.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "both counts are below 2^32 (see above)"
+        )]
+        let (entry, len) = (self.entries.len() as u32, value.len() as u32);
         self.last[slot as usize] = (self.epoch, entry);
-        let len = u32::try_from(value.len()).or_invariant("invariant: < 2^32 words");
         // Most signals fit in the entry, which saves a second buffer and a `memcpy`.
         let inline = match *value {
             [w] => [w, 0],

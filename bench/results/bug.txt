@@ -1,6 +1,15 @@
+design fifo: a full FIFO drops a push that comes with a pop (the `|| do_pop` that the RTL's handshake comment requires is gone)
 injected: 'wire do_push = push && (!full || do_pop);' -> 'wire do_push = push && !full;'
 simjig: FAILED (caught)
-thread 'c_full::fifo' (10460078) panicked at tests/bench.rs:195:13:
+thread 'c_full::fifo' (13446091) panicked at tests/bench.rs:160:13:
+assertion `left == right` failed: count
+  left: 15
+ right: 16
+  message:  panicked: assertion `left == right` failed: count
+              left: 15
+             right: 16
+simjig-sync: FAILED (caught)
+thread 'c_full_sync::fifo' (13446158) panicked at tests/bench.rs:338:9:
 assertion `left == right` failed: count
   left: 15
  right: 16
@@ -11,3 +20,10 @@ cocotb: FAILED (caught)
                                                             assert int(count.value) == length, "count"
                                                         AssertionError: count
                                                         assert 15 == 16
+marlin: FAILED (caught)
+thread 'c_full' (13446332) panicked at tests/bench.rs:132:9:
+assertion `left == right` failed: count
+  left: 15
+ right: 16
+cpp: FAILED (caught)
+check failed: count: dut 15, model 16, at cycle 496

@@ -1,0 +1,29 @@
+design mid: a pop of an empty FIFO sends a stale entry down the pipeline (the `&& !empty` of stage 0's valid is gone)
+injected: 'popped <= !rst && pop && !empty;' -> 'popped <= !rst && pop;'
+simjig: FAILED (caught)
+thread 'c_full::mid' (13450944) panicked at tests/mid.rs:136:9:
+assertion `left == right` failed: out_valid
+  left: true
+ right: false
+  message:  panicked: assertion `left == right` failed: out_valid
+              left: true
+             right: false
+simjig-sync: FAILED (caught)
+thread 'c_full_sync::mid' (13453263) panicked at tests/mid.rs:136:9:
+assertion `left == right` failed: out_valid
+  left: true
+ right: false
+  message:  panicked: assertion `left == right` failed: out_valid
+              left: true
+             right: false
+cocotb: FAILED (caught)
+                                                            assert int(valid.value) == due, "out_valid"
+                                                        AssertionError: out_valid
+                                                        assert 1 == False
+marlin: FAILED (caught)
+thread 'c_full' (13453500) panicked at tests/mid.rs:126:9:
+assertion `left == right` failed: out_valid
+  left: true
+ right: false
+cpp: FAILED (caught)
+check failed: out_valid: dut 1, model 0, at cycle 130

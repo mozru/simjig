@@ -59,6 +59,41 @@ static void fat_case(int sel, uint32_t error_limit) {
     std::printf("  destroyed\n");
 }
 
+// fat_case through the held path a synchronous run takes (hold, eval_held, release): the
+// same failures behind eval_held's barrier, a release that ends the hold, a second release
+// and a NULL one, and a hold of a model the run poisoned.
+static void fat_held_case(int sel) {
+    const simjig_model_vtable* vt = simjig_vtable_Vfat();
+    simjig_create_opts opts{sizeof(opts), 0, "TOP", 0, 0, nullptr};
+    simjig_handle* h = nullptr;
+    simjig_status st = vt->create(&opts, &h);
+    std::printf("fat held sel=%d: create=%s hold=%s\n", sel, kStatus[st], kStatus[vt->hold(h)]);
+    auto* clk = static_cast<uint8_t*>(sig(vt, h, "clk"));
+    auto* s = static_cast<uint8_t*>(sig(vt, h, "sel"));
+    auto* cnt = static_cast<uint32_t*>(sig(vt, h, "cnt"));
+    *s = static_cast<uint8_t>(sel);
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        *clk = 0;
+        st = vt->eval_held(h, 10 * cycle);
+        *clk = 1;
+        st = vt->eval_held(h, 10 * cycle + 5);
+        const bool msgs = (st & SIMJIG_MSGS_PENDING) != 0;
+        st &= ~SIMJIG_MSGS_PENDING;
+        std::printf("  cycle %d: eval_held=%s msgs=%d cnt=%u\n", cycle, kStatus[st], msgs, *cnt);
+        drain(vt, h);
+    }
+    vt->release(h);
+    vt->release(h);
+    vt->release(nullptr);
+    std::printf("  rehold=%s\n", kStatus[vt->hold(h)]);
+    vt->release(h);
+    st = vt->final(h);
+    std::printf("  final=%s\n", kStatus[st]);
+    drain(vt, h);
+    vt->destroy(h);
+    std::printf("  destroyed\n");
+}
+
 static void delay_case(const simjig_model_vtable* vt, bool go) {
     simjig_handle* h = nullptr;
     simjig_status st = vt->create(nullptr, &h);
@@ -90,6 +125,9 @@ int main(int argc, char** argv) {
     if (only.empty() || only == "fat") {
         for (int sel : {1, 2, 3, 4, 5, 6, 7, 8}) fat_case(sel, 0);
         fat_case(3, 3);  // $error under the limit for two cycles, STOP on the third
+    }
+    if (only.empty() || only == "held") {
+        for (int sel : {1, 2, 3, 4, 5, 6, 7, 8}) fat_held_case(sel);
     }
     if (only.empty() || only == "delay") {
         delay_case(simjig_vtable_Vdelay(), false);

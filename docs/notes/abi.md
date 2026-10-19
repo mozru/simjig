@@ -122,7 +122,8 @@ Consequences:
 | internal `vl_fatal` inside a coroutine | **Aborts the process (exit 134).** Returning is UB (see above) and throwing aborts. The runtime writes `simjig: fatal: <file>:<line>: <msg>` to stderr before throwing, so the reason survives. Nothing better is possible without changing Verilator. nextest's process-per-test reports it. |
 
 Sanitizers and leaks:
-- **UBSan** (`run.sh ubsan`): 0 runtime errors over all cases.
+- **UBSan** (`run.sh ubsan`): 0 runtime errors over all cases, the held path (`hold`,
+  `eval_held`, `release`, a hold of a poisoned model: `Vfat held`) included.
 - **`leaks --atExit`** (macOS): 0 leaks after the fatal-unwind and destroy cases, plain and
   `--timing`.
 - **ASan could not run on this host.** The conda clang 21 ASan runtime deadlocks in

@@ -123,3 +123,36 @@ runs env, build, bug, the 120 measured runs and the table, and rewrites
 720 s, Marlin and C++ about 10 s each; with build and bug check about 17 minutes, plus
 any wait for the load gate (< 2.5). Then the Results section of `bench/README.md` needs
 rewriting from `results/table.md`.
+
+## The mid-size design (agent "bench3")
+Why: on the FIFO, Verilator's eval is 7% of simjig's time, so every ratio is a framework
+ratio. `bench/rtl/mid_pipe.sv` (`--design mid`; `bench/README.md`, "Designs") puts a real
+model cost under the same push/pop testbench.
+
+- **Why synthetic, not PicoRV32 or SERV.** No download, no third-party license, and the
+  testbench interface stays the FIFO's: a CPU needs a memory model served by the
+  testbench, which in cocotb is a Python callback per access and would turn the
+  comparison back into a testbench-cost one. The price: it is not a real core (one
+  clock, one long pipeline, no control-heavy logic).
+- **Why stages in inverse pairs.** The checker must be cheap in Python, or cocotb's
+  number measures a reference model. With each odd stage undoing the even one (odd
+  multiplier and its inverse mod 2^64, computed in the RTL by a Newton-iteration constant
+  function), `out_data` is the popped entry: the scoreboard is a queue. Verilator does
+  no algebra across registers, so the work is not optimized away; the CRC lane, which
+  hashes every intermediate value, makes sure each stage's arithmetic is observed (it
+  is in every flow's result hash).
+- **Sizing.** Smoke runs of the C++ flow (load 6 to 8, so rough): 32 stages about
+  0.5 us per cycle, 64 about 0.7 us, 128 about 1.3 us. 128 it is: in the middle of the
+  0.5 to 5 us aimed at, about 12 400 flops. Verilating and compiling it takes seconds.
+- **Smoke run** (10 000 cycles, 1 run, load about 6: not a measurement), ns per cycle,
+  C (full): simjig 2 367, simjig `mid_pub` 2 758, Marlin 1 320, C++ 1 318, cocotb 11 639.
+  Every flow reported the same pushes, pops and hash at every variant.
+- **Bug check.** All four flows fail `c_full` on the injected bug (`out_valid`); the FIFO
+  design's bug check still fails all four too (`count`, cycle 496).
+- **Not done.** No measurement (the director runs it after merging `perf`); no profile
+  of where simjig's extra time per cycle goes on `mid`.
+
+Refactor on the way: each flow's helpers that both designs use (xorshift32, drivers, run
+length, result line, the C++ `Bench` stepper) moved to one shared file per flow
+(`simjig/tests/common/`, `marlin/tests/common/`, `cocotb/bench_common.py`,
+`cpp/common.h`); `cargo fmt` reformatted the two Rust `bench.rs` files it touched.

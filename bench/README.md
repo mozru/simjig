@@ -1,4 +1,4 @@
-# simjig vs cocotb, Marlin and raw C++: a sync_fifo testbench
+# simjig vs cocotb, Marlin and raw C++: a FIFO testbench, on a tiny and a mid-size design
 
 How fast simjig runs a testbench-heavy simulation, compared with the same testbench on
 the same RTL, with the same Verilator, in three other flows:
@@ -15,19 +15,57 @@ bench/run.sh build           # build every testbench only
 bench/run.sh run --sizes 10000 --runs 1 --max-load 100 --out target/smoke.jsonl  # a smoke run
 bench/run.sh run --flows simjig,marlin,cpp ...  # some flows (simjig, simjig_pub, cocotb, marlin, cpp)
 bench/run.sh table bench/results/raw.jsonl
+bench/run.sh --design mid    # the same sequence for the mid-size design: bench/results/mid/
+bench/run.sh --design mid run --sizes 10000 --runs 1 --max-load 100 --out target/smoke-mid.jsonl
 ```
+
+`--design` (before or after the subcommand) picks the design: `fifo` (the default) or
+`mid` (see Designs).
 
 | File | What |
 |---|---|
-| `simjig/` | the simjig testbench: a standalone Cargo workspace (`build.rs`, `tests/bench.rs`) |
-| `cocotb/test_bench.py` | the cocotb testbench, statement for statement the same |
-| `cocotb/run.py` | builds and runs it with cocotb's Verilator runner |
-| `marlin/` | the Marlin testbench: a standalone Cargo workspace (`tests/bench.rs`; `rtl/sync_fifo_bench.sv`, the parameter wrapper Marlin needs) |
-| `cpp/main.cpp` | the raw C++ testbench |
-| `bench.py` | the driver: build, bug check, measured runs, table |
-| `results/` | the committed results: `env.txt`, `bug.txt`, `raw.jsonl` (one line per run), `table.md` |
+| `rtl/mid_pipe.sv` | the mid-size design (see Designs) |
+| `simjig/` | the simjig testbenches: a standalone Cargo workspace (`build.rs`; `tests/bench.rs` for the FIFO, `tests/mid.rs` for `mid`, `tests/common/` shared) |
+| `cocotb/test_bench.py`, `cocotb/test_mid.py` | the cocotb testbenches, statement for statement the same (`bench_common.py` shared) |
+| `cocotb/run.py` | builds and runs them with cocotb's Verilator runner; its `DESIGNS` is each design's sources, top and parameters |
+| `marlin/` | the Marlin testbenches: a standalone Cargo workspace (`tests/bench.rs`, `tests/mid.rs`; `rtl/*_bench.sv`, the parameter wrappers Marlin needs) |
+| `cpp/main.cpp`, `cpp/mid.cpp` | the raw C++ testbenches (`common.h` shared) |
+| `bench.py` | the driver: build, bug check, measured runs, table; its `DESIGNS` is each design's testbenches and injected bug |
+| `results/` | the committed results: `env.txt`, `bug.txt`, `raw.jsonl` (one line per run), `table.md`; `results/mid/` the same for `mid` |
 
-**The results below predate the Marlin and C++ flows**: they are simjig and cocotb only
+## Designs
+
+- **`fifo`**: `examples/lib/rtl/sync_fifo.sv`, 8 bits by 16 entries. Tiny: Verilator's
+  eval is about 7% of simjig's time (`docs/notes/bench.md`), so it measures the
+  frameworks, and overstates the gap a user with a real design sees.
+- **`mid`**: `bench/rtl/mid_pipe.sv` (written for this benchmark; no third-party code).
+  A 64-bit `sync_fifo` of 256 entries feeding a 128-stage pipeline: about 12 400 flops
+  (128 stages of a valid bit, 64 data bits and a 32-bit CRC) plus the FIFO's 16 Kib of
+  storage. Each stage is a 64-bit multiply, a rotate and an xor-shift, plus a bit-serial
+  CRC-32 step over its 64-bit input (64 dependent steps of combinational depth). Stages
+  come in pairs that undo each other (an odd multiplier and its inverse mod 2^64), so
+  `out_data` is the popped entry again, `STAGES + 1` samples after its pop: the
+  scoreboard is a queue, and the testbench stays as small as the FIFO's. A cycle of the
+  model costs about 1.3 us (the C++ flow's B and C at 10 000 cycles: a smoke run on a
+  loaded machine, not a measurement), inside the 0.5 to 5 us aimed at; `STAGES` scales
+  it about linearly (32 stages: about 0.5 us, 64: 0.7 us).
+
+  The port is the FIFO's push side (`push`, `wr_data`) and `pop`, plus `full`, `empty`,
+  `count`, and the pipeline's `out_valid`, `out_data`, `out_crc`. The same three
+  variants: A the clock alone; B a monitor reading 7 signals per rising edge (`push`,
+  `pop`, `full`, `empty`, `count`, `out_valid`, `out_data`) into a hash; C reset, the
+  same producer (now a 64-bit word from two draws, high half first) and consumer, and a
+  monitor that checks `count`, `full`, `empty` and `out_valid` every cycle, and
+  `out_data` (and reads `out_crc`) whenever an entry is due. Its result is the pushes,
+  the pops and a hash of every `out_crc`, which depends on every stage's intermediate
+  value: every flow must report the same.
+
+  Its injected bug (`bench/run.sh --design mid bug`) removes `&& !empty` from stage 0's
+  valid: a pop of an empty FIFO then sends a stale entry down the pipeline. Every flow
+  catches it at the same check, `out_valid` high where no entry is due (C++ reports
+  cycle 130: the first empty pop's stale entry reaching the end).
+
+**The results below are the FIFO's, and predate the Marlin and C++ flows**: they are simjig and cocotb only
 (measured 2026-10-18). The four-flow measurement replaces them.
 
 ## Results
@@ -107,7 +145,10 @@ build process ran during any batch.
 read), verilated by every flow with the same Verilator 5.052 (pixi; Marlin 0.21.1
 supports 5.025 and later). No tracing, no coverage, no `--timing`, no `-O` (Verilator's
 default optimisation in all), one thread.
-The exact Verilator command lines (from each build's `__verFiles.dat`):
+The exact Verilator command lines (from each build's `__verFiles.dat`) are below for the
+FIFO; `mid`'s are the same with `--top-module mid_pipe` (Marlin: `mid_pipe_bench`), the
+sources `bench/rtl/mid_pipe.sv examples/lib/rtl/sync_fifo.sv`, and no `-G` (its
+parameters are its defaults, which Marlin's wrapper repeats as literals):
 
 - simjig (`bench/simjig/build.rs`, model `fifo`):
   `verilator -Mdir <cache>/obj --cc --MMD --prefix Vfifo_ac373c63 --no-timing
@@ -225,9 +266,10 @@ model holds 16 (cycle 496).
   combinational feedback through the testbench or many independent tasks that order is
   the testbench author's job, and the loops' advantage is partly that work not done.
 
-- One design, one size: a tiny FIFO, so the model's eval is cheap and the numbers are
-  dominated by the testbench and the scheduler. A large design narrows the gap, since
-  every flow spends the same time in Verilator's eval.
+- The FIFO is tiny, so its model's eval is cheap and its numbers are dominated by the
+  testbench and the scheduler; `mid` (see Designs) is the counterweight, where every
+  flow spends about the same 1.3 us per cycle in Verilator's eval. It is still synthetic:
+  a single clock, one long pipeline, no X propagation, no memories beyond the FIFO's.
 - The stimulus RNG is a hand-written xorshift32, not `ctx.rng` or Python's `random`: the
   price of identical stimulus. In C it costs cocotb three Python method calls per cycle (two draws by the
   producer, one by the consumer).

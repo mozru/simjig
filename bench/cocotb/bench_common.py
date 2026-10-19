@@ -1,4 +1,5 @@
-"""What the cocotb testbenches of the benchmark share: the stimulus stream, the run length, the clock
+"""What the cocotb testbenches of the benchmark (test_bench.py: the sync_fifo;
+test_mid.py: the mid-size design) share: the stimulus stream, the run length, the clock
 and the result line. The other flows have the same (bench/README.md, "Testbench").
 
 A plain module, not a test module: it holds no cocotb tests, so importing it adds none.
@@ -32,6 +33,11 @@ class XorShift32:
         x ^= (x << 5) & MASK
         self.x = x
         return x
+
+    def next64(self):
+        """A 64-bit value from two draws, the high half first."""
+        hi = self.next()
+        return (hi << 32) | self.next()
 
     def rate(self):
         return RATES[self.next() % 3]

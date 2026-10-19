@@ -1,5 +1,6 @@
-//! What the Marlin testbenches of the benchmark share: the stimulus streams, the run
-//! length, the Marlin runtime and the result line. The other flows have the same (`bench/README.md`, "Testbench").
+//! What the Marlin testbenches of the benchmark (`bench.rs`: the sync_fifo; `mid.rs`: the
+//! mid-size design) share: the stimulus streams, the run length, the Marlin runtime and
+//! the result line. The other flows have the same (`bench/README.md`, "Testbench").
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -24,6 +25,13 @@ impl XorShift32 {
         x ^= x << 5;
         self.0 = x;
         x
+    }
+
+    /// A 64-bit value from two draws, the high half first.
+    #[allow(dead_code, reason = "only the mid-size testbench draws 64-bit values")]
+    pub fn next64(&mut self) -> u64 {
+        let hi = u64::from(self.next());
+        (hi << 32) | u64::from(self.next())
     }
 
     /// The rate for the next phase.

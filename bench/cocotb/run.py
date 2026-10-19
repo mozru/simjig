@@ -1,10 +1,11 @@
 """Build and run the cocotb benchmark testbench (bench/README.md) with cocotb's runner.
 
-    python bench/cocotb/run.py build [--rtl FILE] [--build-dir DIR]
-    python bench/cocotb/run.py test VARIANT CYCLES OUT [--build-dir DIR]
+    python bench/cocotb/run.py build [--design D] [--rtl FILE] [--build-dir DIR]
+    python bench/cocotb/run.py test VARIANT CYCLES OUT [--design D] [--build-dir DIR]
 
 `build` verilates and compiles once (not timed); `test` runs one variant for CYCLES
-cycles in a fresh simulator process and appends its JSON line to OUT. Run under
+cycles in a fresh simulator process and appends its JSON line to OUT. The design (DESIGNS)
+is `fifo` (the default) or `mid`; `--rtl` replaces its own RTL file (the first source). Run under
 `pixi run -e conformance`, which pins cocotb 2.1.0 and Verilator 5.052.
 
 The C++ is compiled at -O2, the level simjig-build uses (`BuildEnv::DEFAULT_CXX_OPT`),
@@ -20,14 +21,39 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 RTL = ROOT / "examples" / "lib" / "rtl" / "sync_fifo.sv"
-BUILD = ROOT / "target" / "bench-cocotb"
-PARAMS = {"WIDTH": 8, "DEPTH": 16, "FWFT": 0}
 OPT = "OPT_FAST=-O2 OPT_SLOW=-O2 OPT_GLOBAL=-O2"
+
+
+@dataclass(frozen=True)
+class Design:
+    """One of the benchmark's designs, as every flow verilates it (bench/README.md)."""
+
+    rtl: Path  # its own RTL file: the one `bench.py bug` injects a bug into
+    others: tuple[Path, ...]  # the other sources it needs
+    top: str
+    params: dict  # -G overrides (mid_pipe: none, its defaults are the benchmark's)
+    test_module: str  # its cocotb testbench, in this directory
+
+    def sources(self, rtl: Path | None = None) -> list[Path]:
+        return [rtl or self.rtl, *self.others]
+
+
+DESIGNS = {
+    "fifo": Design(RTL, (), "sync_fifo", {"WIDTH": 8, "DEPTH": 16, "FWFT": 0}, "test_bench"),
+    "mid": Design(HERE.parent / "rtl" / "mid_pipe.sv", (RTL,), "mid_pipe", {}, "test_mid"),
+}
+
+
+def build_dir_of(design: str) -> Path:
+    """Where a design's cocotb build goes: target/bench-cocotb for the FIFO (as before
+    the mid-size design existed), target/bench-cocotb-<design> for the others."""
+    return ROOT / "target" / ("bench-cocotb" if design == "fifo" else f"bench-cocotb-{design}")
 
 
 def runner():
@@ -36,15 +62,15 @@ def runner():
     return get_runner("verilator")
 
 
-def build(rtl: Path, build_dir: Path) -> None:
+def build(design: Design, build_dir: Path, rtl: Path | None = None) -> None:
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
     os.environ["MAKEFLAGS"] = OPT
     runner().build(
-        sources=[rtl],
-        hdl_toplevel="sync_fifo",
-        parameters=PARAMS,
+        sources=design.sources(rtl),
+        hdl_toplevel=design.top,
+        parameters=design.params,
         build_dir=build_dir,
         timescale=("1ns", "1ps"),
         always=True,
@@ -52,7 +78,7 @@ def build(rtl: Path, build_dir: Path) -> None:
     )
 
 
-def test(variant: str, n: int, out: Path, build_dir: Path) -> None:
+def test(design: Design, variant: str, n: int, out: Path, build_dir: Path) -> None:
     from cocotb_tools.check_results import get_results
 
     sys.path.insert(0, str(HERE))  # the runner passes sys.path on as PYTHONPATH
@@ -61,8 +87,8 @@ def test(variant: str, n: int, out: Path, build_dir: Path) -> None:
     log = build_dir / f"{variant}.log"
     t0 = time.perf_counter()
     results = runner().test(
-        test_module="test_bench",
-        hdl_toplevel="sync_fifo",
+        test_module=design.test_module,
+        hdl_toplevel=design.top,
         hdl_toplevel_lang="verilog",  # a fresh runner has no sources to infer it from
         testcase=variant,
         build_dir=build_dir,
@@ -87,14 +113,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cmd", choices=["build", "test"])
     ap.add_argument("args", nargs="*")
-    ap.add_argument("--rtl", type=Path, default=RTL)
-    ap.add_argument("--build-dir", type=Path, default=BUILD)
+    ap.add_argument("--design", choices=list(DESIGNS), default="fifo")
+    ap.add_argument("--rtl", type=Path, default=None)
+    ap.add_argument("--build-dir", type=Path, default=None)
     a = ap.parse_args()
+    design = DESIGNS[a.design]
+    build_dir = (a.build_dir or build_dir_of(a.design)).resolve()
     if a.cmd == "build":
-        build(a.rtl.resolve(), a.build_dir.resolve())
+        build(design, build_dir, a.rtl and a.rtl.resolve())
     else:
         variant, n, out = a.args
-        test(variant, int(n), Path(out).resolve(), a.build_dir.resolve())
+        test(design, variant, int(n), Path(out).resolve(), build_dir)
 
 
 if __name__ == "__main__":

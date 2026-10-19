@@ -1,4 +1,5 @@
-// What the raw C++ testbenches of the benchmark share: the stimulus streams, the checks, and the result line. Each
+// What the raw C++ testbenches of the benchmark (main.cpp: the sync_fifo; mid.cpp: the
+// mid-size design) share: the stimulus streams, the checks, and the result line. Each
 // is the same as in the other flows (bench/README.md, "Testbench").
 #pragma once
 
@@ -30,6 +31,11 @@ struct XorShift32 {
         return x;
     }
     uint32_t rate() { return kRates[next() % 3]; }
+    // A 64-bit value from two draws, the high half first.
+    uint64_t next64() {
+        uint64_t hi = next();
+        return hi << 32 | next();
+    }
 };
 
 // One driver's stream and the rate of its current phase.
@@ -82,7 +88,7 @@ inline void report(const char* dut, const char* variant, uint64_t n, double secs
 
 // The model and its context, and the three ways a testbench steps it: time 0's first
 // eval, and the two edges (each advances time by a half period, as a Verilator main does;
-// the design has no delays, so nothing reads it).
+// neither design has delays, so nothing reads it).
 template <typename Model>
 struct Bench {
     VerilatedContext& ctx;

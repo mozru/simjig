@@ -27,7 +27,7 @@ use super::cell::DirectTable;
 use super::clock::ClockEntry;
 use super::failure::{Failure, FailureKind, SourceLocation};
 use super::models::Models;
-use super::recorder::{Recorder, TraceKind, TraceRecord};
+use super::recorder::{EVAL_TAILS, READ_ONLY_TAIL, Recorder, STEP_TAIL, TraceKind, TraceRecord};
 use super::signal::WriteLog;
 use super::slab::Key;
 use super::tasks::{ReadyQueue, TaskTable, UnrunDrop, gen16};
@@ -259,6 +259,26 @@ impl Kernel {
     }
 
     pub(crate) fn record(&self, kind: TraceKind, task: Option<Key>, arg: u64, value: u64) {
+        // The records of every timestep (its step, its first evals, its ReadOnly) have a
+        // fixed tail after the time: hashed with one lookup, to the same value.
+        if task.is_none() && value == 0 {
+            let tail = match (kind, arg) {
+                (TraceKind::Step, 0) => Some(&STEP_TAIL),
+                (TraceKind::ReadOnly, 0) => Some(&READ_ONLY_TAIL),
+                (TraceKind::Eval, n) => EVAL_TAILS.get(usize::try_from(n).unwrap_or(usize::MAX)),
+                _ => None,
+            };
+            if let Some(tail) = tail {
+                let record = TraceRecord {
+                    time: self.now.get(),
+                    kind,
+                    task: u64::MAX,
+                    arg,
+                    value,
+                };
+                return self.recorder.record_fixed(record, tail);
+            }
+        }
         let task = task.map_or(u64::MAX, |k| {
             u64::from(k.index) << 16 | u64::from(gen16(k.gen_))
         });

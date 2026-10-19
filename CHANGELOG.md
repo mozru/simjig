@@ -4,6 +4,14 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Performance (no change to semantics, the trace hash or `Sim::stats`): the scheduler
+  allocates nothing per timestep in steady state (`tests/alloc_steady.rs`); a model
+  verilated without `--timing` and not writing waves is not evaluated when nothing was
+  written since its last eval (the eval is still counted and recorded); value-change walks
+  and empty regions are skipped when they could do nothing; the trace hash computes the
+  same FNV-1a values with fewer dependent steps. The benchmark's full FIFO testbench runs
+  2.5x faster (`docs/notes/perf.md`). README: a "Performance" section with the
+  recommended release profile (`codegen-units = 1`).
 - `#[simjig::test]`: the error for a context parameter after a DUT now suggests
   `(ctx: &simjig::TestCtx, dut: Dut)` (was `sim`), and the macro's docs, grammar and
   expansion name the context `ctx` throughout (`__simjig_ctx` in the generated closure;

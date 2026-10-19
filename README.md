@@ -698,3 +698,28 @@ A model built with `.coverage(true)` exposes its counters: `Sim::coverage(model)
 `write_coverage(model, "coverage.dat")` writes Verilator's file with every point's name,
 for `verilator_coverage`. `model` is the model index: 0 for the first DUT, then the
 test's DUT parameters in order.
+
+## Performance
+simjig's own cost per timestep is small but not zero; most of a simple testbench's time is
+the scheduler, not the model (`docs/notes/perf.md` has the breakdown, `bench/README.md`
+the comparison with cocotb). For the fastest runs:
+
+- **Build the tests with one codegen unit.** The scheduler loop then inlines across the
+  kernel's modules: about 10% faster on the benchmark's FIFO testbench. Thin LTO adds
+  little over it but costs little to build:
+
+  ```toml
+  # Cargo.toml: `cargo test --release` uses this profile for the test binaries
+  [profile.release]
+  codegen-units = 1
+  lto = "thin"
+  ```
+- **The model's C++ is always optimised** (`-O2`, even in a debug build), so a dev build
+  of a testbench simulates a fast model; `SIMJIG_CXX_OPT=3` asks for `-O3`. Flags for the
+  host CPU (`CXXFLAGS=-mcpu=native`, or `-march=native` on x86) are opt-in: they make the
+  model unportable, and gained nothing measurable on the benchmark's small design.
+- **Waves cost.** While a model writes waves, every eval is sampled and none is skipped;
+  waves on failure (above) write them only in the replay of a failed test.
+- **`--timing` costs.** A model verilated without `--timing` is not evaluated at a
+  timestep's start, nor again when nothing was written since its last eval; a `--timing`
+  model has events of its own and is evaluated every time.

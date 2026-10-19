@@ -802,9 +802,12 @@ the comparison with cocotb). For the fastest runs:
   = false)]` keeps none. The run is otherwise the same, but the report and `summary.json`
   carry no hash, so two runs cannot be compared by it, and a waves replay can check only
   that it ended the same way.
-- **`--timing` and writable public variables cost.** A model verilated without
-  `--timing` is not evaluated at a timestep's start, nor again when nothing was written
-  since its last eval. A `--timing` model has events of its own, and a model with a
-  variable C++ may write (`public_flat_rw` in the source or a `.vlt`, `--public-flat-rw`,
-  a read-write probe) runs the logic that variable feeds on every eval (Verilator
-  schedules it so), so both are evaluated every time.
+- **Eval elision is an opt-in.** By default every eval runs, as a C++ loop's do.
+  `#[simjig::test(elide_evals)]` (or `ModelOptions::with_elide_evals(true)`) skips an
+  eval with nothing written since the last one, about 9% of the benchmark FIFO's async
+  time. It is safe only when no logic that reads `$time`, prints, draws `$urandom` or
+  calls DPI-C is fed by an input the design writes itself (`ASSIGNIN` waived) or by a
+  `$sampled` value: Verilator runs such logic on every eval, and simjig cannot see it
+  (`ModelOptions::with_elide_evals` has the details). Even opted in, a `--timing` model
+  and a model with a variable C++ may write (`public_flat_rw` in the source or a `.vlt`,
+  `--public-flat-rw`, a read-write probe) are evaluated every time.

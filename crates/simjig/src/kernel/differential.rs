@@ -8,7 +8,7 @@
 //! `cycles`, edges followed by a region, Timers, regions, events, locks, queues, spawns,
 //! cancellations, `first!`, `join!`, `with_timeout`, a combinator with a foreign waker,
 //! clocks stopped and started, loops that re-arm one trigger, triggers dropped before or
-//! after their first poll, and panics. Every resumption records the time, the task, the
+//! after their first poll, edges re-polled under another waker, and panics. Every resumption records the time, the task, the
 //! step and every signal's value.
 //!
 //! A seed's digest covers its outcome (the failure report, with source lines blanked so
@@ -17,6 +17,10 @@
 //! digests in `corpus.txt` were produced by the scheduler before the fast paths
 //! (`SIMJIG_CORPUS_BLESS=1`); every later scheduler must reproduce them. Bless again only
 //! for a deliberate change of semantics, which then needs its own review.
+//!
+//! Operations added later are appended: only seeds from [`FIRST_SEEDS`] on draw them, so
+//! the first seeds' programs, and their digests from before the fast paths, are unchanged.
+//! The later seeds' digests were blessed by the scheduler of their time.
 //!
 //! A failing seed is printed; rerun it alone with `SIMJIG_CORPUS_SEED=<n>`.
 
@@ -43,7 +47,14 @@ use super::trigger::{
 use crate::{first, join};
 
 /// Seeds in the corpus; the corpus file has one digest per seed, in order.
-const SEEDS: u64 = 4096;
+const SEEDS: u64 = 2 * FIRST_SEEDS;
+
+/// The seeds blessed before the fast paths, which draw none of the [`APPENDED`] operations.
+const FIRST_SEEDS: u64 = 4096;
+
+/// Operations appended to [`op`]'s draw after the first seeds were blessed: one,
+/// [`Op::Repolled`].
+const APPENDED: u64 = 1;
 
 /// xorshift64*: tiny, deterministic, good enough to pick operations.
 struct Rng(u64);
@@ -137,17 +148,26 @@ enum Op {
     StopClock(usize),
     StartClock(usize),
     Panic,
+    /// A rising edge polled once under a waker that does nothing, then awaited under the
+    /// task's: the edge must wake the newest waker (`Future::poll`'s contract).
+    Repolled(usize),
 }
 
-fn program(rng: &mut Rng, depth: u32) -> Rc<[Op]> {
+/// A random program; `appended` is how many of the [`APPENDED`] operations it may draw.
+fn program(rng: &mut Rng, depth: u32, appended: u64) -> Rc<[Op]> {
     let len = 1 + rng.below(7);
-    (0..len).map(|_| op(rng, depth)).collect()
+    (0..len).map(|_| op(rng, depth, appended)).collect()
 }
 
-fn op(rng: &mut Rng, depth: u32) -> Op {
+fn op(rng: &mut Rng, depth: u32, appended: u64) -> Op {
     let nested = depth < 2;
     let c = rng.index(CLOCKS);
-    match rng.below(if nested { 40 } else { 30 }) {
+    let base = if nested { 40 } else { 30 };
+    let p = |rng: &mut Rng| program(rng, depth + 1, appended);
+    match rng.below(base + appended) {
+        // After every original operation, so that with `appended == 0` each draw picks
+        // what it picked when the first seeds were blessed.
+        k if k >= base => Op::Repolled(c),
         0..=2 => Op::Write(rng.index(3), rng.below(4)),
         3 => Op::WriteWide(rng.next()),
         4..=6 => Op::Rising(c),
@@ -190,13 +210,13 @@ fn op(rng: &mut Rng, depth: u32) -> Op {
             }
         }
         29 => Op::AwaitChild,
-        30..=32 => Op::Spawn(program(rng, depth + 1)),
-        33 => Op::SpawnDetached(program(rng, depth + 1)),
-        34 => Op::Timeout(program(rng, depth + 1), 1 + rng.below(30)),
-        35 => Op::First(program(rng, depth + 1), program(rng, depth + 1)),
-        36 => Op::Join(program(rng, depth + 1), program(rng, depth + 1)),
-        37 => Op::Foreign(program(rng, depth + 1), program(rng, depth + 1)),
-        _ => Op::Loop(2 + rng.below(12), program(rng, depth + 1)),
+        30..=32 => Op::Spawn(p(rng)),
+        33 => Op::SpawnDetached(p(rng)),
+        34 => Op::Timeout(p(rng), 1 + rng.below(30)),
+        35 => Op::First(p(rng), p(rng)),
+        36 => Op::Join(p(rng), p(rng)),
+        37 => Op::Foreign(p(rng), p(rng)),
+        _ => Op::Loop(2 + rng.below(12), p(rng)),
     }
 }
 
@@ -288,6 +308,28 @@ impl Future for Both {
     }
 }
 
+/// Polls the future once under a waker that does nothing, then under the caller's.
+struct Repoll(Boxed, bool);
+
+impl Future for Repoll {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if !self.1 {
+            self.1 = true;
+            if self
+                .0
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+            {
+                return Poll::Ready(());
+            }
+        }
+        self.0.as_mut().poll(cx)
+    }
+}
+
 fn both(a: Boxed, b: Boxed) -> Both {
     Both {
         futures: [Some(a), Some(b)],
@@ -339,6 +381,7 @@ async fn leaf(world: &World, op: &Op) -> bool {
             }
         }
         Op::Panic => panic!("corpus panic"),
+        Op::Repolled(c) => Repoll(Box::pin(rising(world.clocks[*c])), false).await,
         _ => return false,
     }
     true
@@ -682,7 +725,10 @@ fn run_seed(seed: u64) -> (u64, String) {
     let mut rng = Rng::new(seed);
     let (mut sim, second) = simulation(&mut rng);
     let plans = plan_clocks(&mut rng, &mut sim);
-    let programs: Vec<Rc<[Op]>> = (0..=rng.below(5)).map(|_| program(&mut rng, 0)).collect();
+    let appended = if seed < FIRST_SEEDS { 0 } else { APPENDED };
+    let programs: Vec<Rc<[Op]>> = (0..=rng.below(5))
+        .map(|_| program(&mut rng, 0, appended))
+        .collect();
     let s = signals(&sim, second);
     let (outcome, folded, resumptions) = run_programs(&mut sim, plans, s, programs);
     let summary = match &outcome {
@@ -722,7 +768,7 @@ fn the_scheduler_reproduces_the_corpus() {
     let bless = std::env::var_os("SIMJIG_CORPUS_BLESS").is_some();
     let seeds: Vec<u64> = match std::env::var("SIMJIG_CORPUS_SEED") {
         Ok(s) => vec![s.parse().unwrap_or(0)],
-        Err(_) if cfg!(miri) => (0..6).collect(),
+        Err(_) if cfg!(miri) => (0..4).chain(FIRST_SEEDS..FIRST_SEEDS + 2).collect(),
         Err(_) => (0..SEEDS).collect(),
     };
     let expected: Vec<&str> = CORPUS.lines().filter(|l| !l.starts_with('#')).collect();

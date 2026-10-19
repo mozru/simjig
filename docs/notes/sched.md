@@ -190,3 +190,14 @@ without a re-bless. That is expected: a fake model's eval never writes an input,
 it the skip was sound and changed nothing observable (the digest has no walk count).
 The draw that chose "inputs eval-unchanged" is kept, unused, so each seed still draws
 the simulation and programs it was blessed with.
+
+## Corpus seeds 4096-8191: an edge re-polled under another waker (int-q)
+
+`EdgeRegistration::take_fired` refreshes the stored waker when a registered edge is
+polled under another one; no seed reached it (mutant m5, which skips the refresh,
+survived). A new operation, `Op::Repolled` (a rising edge polled once under
+`Waker::noop()`, then awaited), is appended to the draw for seeds 4096 and up only, so seeds
+0-4095 draw exactly the programs they did and their 4096 digests are unchanged (the bless
+added lines only). Seeds 4096-8191 were blessed on int-q. With m5 applied, 1129 of the 8192
+seeds differ, all of them new ones, and `cancel::an_edge_repolled_with_another_waker_wakes_the_newest`
+fails.

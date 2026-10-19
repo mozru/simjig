@@ -588,3 +588,39 @@ fn a_task_operand_by_value_is_cancelled_and_by_reference_keeps_running() {
     );
     assert_clean(&d.sim);
 }
+
+/// Polls `inner` once with a waker that does nothing, then with the task's: a trigger
+/// re-polled with another waker must wake the newest one (`Future::poll`'s contract), as a
+/// combinator with wakers of its own, or a future handed to another task, relies on.
+struct RepolledWithAnotherWaker<F>(std::pin::Pin<Box<F>>, bool);
+
+impl<F: Future<Output = ()>> Future for RepolledWithAnotherWaker<F> {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        if !self.1 {
+            self.1 = true;
+            let mut noop = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(self.0.as_mut().poll(&mut noop).is_pending());
+        }
+        self.0.as_mut().poll(cx)
+    }
+}
+
+#[test]
+fn an_edge_repolled_with_another_waker_wakes_the_newest() {
+    let mut d = clocked();
+    let clk = d.clk;
+    let at = d.sim.run(async move {
+        Timer::new(ticks(1)).await;
+        let woken = RepolledWithAnotherWaker(Box::pin(rising(clk)), false);
+        (with_timeout(ticks(100), woken).await.is_ok(), now())
+    });
+    let (woken, at) = at.unwrap();
+    assert!(woken, "the edge woke the first waker, not the newest");
+    assert_eq!(at.ticks(), 10);
+    assert_clean(&d.sim);
+}

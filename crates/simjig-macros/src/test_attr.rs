@@ -467,8 +467,10 @@ fn allow(args: &Args) -> TokenStream {
     }
     // A synchronous body cannot await, so an async helper called in it (`reset(dut);`)
     // only makes a future and drops it: the helper never runs. That is an unused
-    // `#[must_use]` value, which rustc otherwise only warns about.
-    quote!(#allow #[deny(unused_must_use)])
+    // `#[must_use]` value, which rustc otherwise only warns about. `let _ = reset(dut);`
+    // uses the value, so rustc is silent; clippy's `let_underscore_future` catches it,
+    // under `cargo clippy` only (rustc accepts and ignores a `clippy::` lint).
+    quote!(#allow #[deny(unused_must_use, clippy::let_underscore_future)])
 }
 
 /// The check that the function's output is one a test may return, at its type's span.

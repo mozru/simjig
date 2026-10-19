@@ -755,7 +755,9 @@ What a synchronous test does not have:
   naming the mode), no triggers, `with_timeout` or `ReadWrite`/`ReadOnly` regions (a
   plain `fn` cannot await them). An async helper called from the body (`reset(dut);`)
   would only make a future that never runs, so `#[simjig::test(sync)]` denies
-  `unused_must_use` there: it is a compile error;
+  `unused_must_use` there: it is a compile error. `let _ = reset(dut);` uses the future,
+  so rustc says nothing; the test also denies clippy's `let_underscore_future`, which
+  catches it under `cargo clippy` only;
 - **no delta cycles visible to the testbench**: the model settles inside each eval, and
   the testbench sees only settled values between evals; a write takes effect at the next
   eval, not after a delta;

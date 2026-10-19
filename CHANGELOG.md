@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- A synchronous test (`#[simjig::test(sync)]`) also denies clippy's `let_underscore_future`,
+  so `let _ = reset(dut);` of an async helper is an error under `cargo clippy` (rustc
+  ignores the lint). Generated code: the `#[deny(..)]` on the test function gains it,
+  snapshot reviewed.
 - Fix: the failure header of a synchronous test that made a second `SyncClock` said
   `cycle 0`; refusing the second clock reset the first one's count. It now gives the first
   clock's cycle.

@@ -5,7 +5,7 @@ expression: "render(quote!(sync, timeout = \"1us\"), quote!\n{ fn drive(ctx: &Te
 #[::core::prelude::v1::test]
 fn drive() {
     #[allow(clippy::unused_async, clippy::result_large_err)]
-    #[deny(unused_must_use)]
+    #[deny(unused_must_use, clippy::let_underscore_future)]
     fn drive(ctx: &TestCtx, dut: Counter) -> simjig::Result {
         Ok(())
     }

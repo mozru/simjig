@@ -353,3 +353,30 @@ fn a_build_that_fails_its_checks_leaves_no_prefix_claim() {
         .collect();
     assert!(claims.is_empty(), "{claims:?}");
 }
+
+/// A model Verilator did not split for a parallel build (`VM_PARALLEL_BUILDS = 0`) is
+/// compiled as one unit including every generated class, as `verilated.mk` does with its
+/// `__ALL.cpp`; the includer sits next to the output in the cache entry.
+#[test]
+fn an_unsplit_model_is_compiled_as_one_unit() {
+    let s = Sandbox::new();
+    let rtl = s.rtl();
+    let built = counter(&rtl, 8).build_in(&s.env()).unwrap();
+    let mk = std::fs::read_to_string(built.obj_dir.join(format!("{}_classes.mk", built.prefix)))
+        .unwrap();
+    assert!(mk.contains("VM_PARALLEL_BUILDS = 0"), "{mk}");
+    let all = built
+        .obj_dir
+        .with_file_name(format!("{}__ALL.cpp", built.prefix));
+    let text = std::fs::read_to_string(&all).unwrap();
+    for class in [
+        built.prefix.clone(),
+        format!("{}___024root__Slow", built.prefix),
+    ] {
+        let file = built.obj_dir.join(format!("{class}.cpp"));
+        assert!(
+            text.contains(&format!("#include \"{}\"", file.display())),
+            "{text}"
+        );
+    }
+}

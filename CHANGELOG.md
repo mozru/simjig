@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- simjig-build compiles a model that Verilator did not split for a parallel build
+  (`VM_PARALLEL_BUILDS = 0` in its `_classes.mk`) as one translation unit including every
+  generated class (`<prefix>__ALL.cpp`, next to the Verilator output), as `verilated.mk`
+  does: each eval of a small design is a few percent cheaper. A split model is compiled
+  file by file, as before.
 - Synchronous tests: `#[simjig::test(sync)]` on a plain `fn` (also with `duts = [..]`,
   `init`, `timeout`) runs it through `Sim::run_sync`, with `simjig::SyncClock` (`tick()`:
   rise, eval, fall, eval; `rise()`, `fall()`, `ticks(n)`) as its clock. A `set` goes into the

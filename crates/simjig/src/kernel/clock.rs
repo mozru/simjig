@@ -399,6 +399,7 @@ impl ClockHandle {
     #[track_caller]
     pub fn start(self) -> Self {
         let (slot, level) = self.with(|k, entry| {
+            k.refuse_in_sync("a kernel clock");
             let name = &k.names[entry.slot as usize];
             if entry.running.is_some() {
                 return Err(format!("the clock of `{name}` is already running"));

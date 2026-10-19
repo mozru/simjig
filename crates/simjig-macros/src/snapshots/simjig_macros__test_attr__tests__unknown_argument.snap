@@ -2,4 +2,4 @@
 source: crates/simjig-macros/src/test_attr.rs
 expression: "render(quote!(seed = 1), quote! { async fn t() {} })"
 ---
-error: unknown `#[simjig::test]` argument; the arguments are `timeout = "<duration>"` (for example `timeout = "2ms"`), `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, and `crate = <path to simjig>`
+error: unknown `#[simjig::test]` argument; the arguments are `timeout = "<duration>"` (for example `timeout = "2ms"`), `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, `trace_hash = false`, `sync`, and `crate = <path to simjig>`

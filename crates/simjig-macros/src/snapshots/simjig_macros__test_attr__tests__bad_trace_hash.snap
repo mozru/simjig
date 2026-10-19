@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(trace_hash = off), quote! { async fn t() {} })"
+---
+error: `trace_hash` is `true` (the default) or `false`

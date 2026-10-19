@@ -13,7 +13,7 @@ bench/run.sh table bench/results/raw.jsonl
 
 | File | What |
 |---|---|
-| `simjig/` | the simjig testbench: a standalone Cargo workspace (`build.rs`, `tests/bench.rs`) |
+| `simjig/` | the simjig testbench: a standalone Cargo workspace (`build.rs`, `tests/bench.rs`); flow `simjig` (async, `#[simjig::test]`) and flow `simjig-sync` (`#[simjig::test(sync)]`, `SyncClock`, bound handles: the same three testbenches as loops) |
 | `cocotb/test_bench.py` | the cocotb testbench, statement for statement the same |
 | `cocotb/run.py` | builds and runs it with cocotb's Verilator runner |
 | `bench.py` | the driver: build, bug check, measured runs, table |
@@ -118,7 +118,9 @@ costs a simjig model, so the model cost can be compared like for like.
 (`SIMJIG_CXX_OPT`), and for cocotb `OPT_FAST=-O2 OPT_SLOW=-O2 OPT_GLOBAL=-O2` (through
 `MAKEFLAGS`) instead of `verilated.mk`'s `-Os`. Both also get conda's `CXXFLAGS`
 (`-O2 -ftree-vectorize -fstack-protector-strong -D_FORTIFY_SOURCE=2 ...`). The Rust is
-built with `cargo test --profile bench` (release, plus line tables).
+built with `cargo test --profile bench` (release, plus line tables). That profile has since
+gained `codegen-units = 1` and thin LTO (`bench/simjig/Cargo.toml`), and the kernel has
+changed (`docs/notes/perf.md`): the results below predate both.
 
 **Testbench** (identical in both; `tests/bench.rs` and `cocotb/test_bench.py`):
 - a 10 ns clock from the simulator's own clock: simjig's kernel clock

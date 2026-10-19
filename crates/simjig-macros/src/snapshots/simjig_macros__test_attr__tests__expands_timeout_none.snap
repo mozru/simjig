@@ -19,6 +19,7 @@ fn soak() {
             ignored: false,
             should_panic: false,
             init: ::core::option::Option::None,
+            trace_hash: true,
         },
         |_, _| async move { soak().await },
     );

@@ -428,6 +428,11 @@ impl WriteLog {
         Ok(())
     }
 
+    /// Whether nothing was logged since the last `take`.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Slots with a pending write, in write order.
     pub(crate) fn pending_slots(&self) -> Vec<u32> {
         self.entries.iter().map(|e| e.slot).collect()
@@ -473,6 +478,14 @@ pub(crate) fn write(
         Phase::Active => {}
         Phase::Ended => return,
         Phase::ReadOnly => return write_in_read_only(k, slot, writer, location),
+        // No log: the model is never mid-eval while the testbench runs, and the next eval
+        // takes the value (`kernel::sync_clock`).
+        Phase::Sync => {
+            if !k.direct.write(slot, value) {
+                k.models.borrow_mut().write(slot, value);
+            }
+            return;
+        }
     }
     let pushed = k.log.borrow_mut().push(slot, value, writer);
     if let Err(first) = pushed {

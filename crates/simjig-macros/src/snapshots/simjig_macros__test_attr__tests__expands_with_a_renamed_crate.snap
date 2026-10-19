@@ -25,6 +25,7 @@ fn renamed() {
             ignored: false,
             should_panic: false,
             init: ::core::option::Option::None,
+            trace_hash: true,
         },
         |_, __simjig_dut| async move { renamed(__simjig_dut).await },
     );

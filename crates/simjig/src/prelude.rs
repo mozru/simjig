@@ -3,6 +3,7 @@
 //! | Names | For |
 //! |---|---|
 //! | [`clock`], [`cycles`], [`ns`], [`us`], [`ps`], [`ms`] | clocks and durations |
+//! | [`SyncClock`] | the clock of a synchronous test (`#[simjig::test(sync)]`) |
 //! | [`spawn`], [`first!`], [`join!`], [`with_timeout`] | concurrency |
 //! | [`Timer`], [`ReadWrite`], [`ReadOnly`], [`TriggerExt`] | time and regions (`.read_write()`, `.read_only()`) |
 //! | [`Queue`], [`Event`] | task communication |
@@ -44,6 +45,7 @@ pub use crate::harness::ctx::TestCtx;
 pub use crate::harness::seed::Rng;
 pub use crate::kernel::clock::clock;
 pub use crate::kernel::sync::{Event, Queue};
+pub use crate::kernel::sync_clock::SyncClock;
 pub use crate::kernel::tasks::spawn;
 pub use crate::kernel::time::{ms, ns, ps, us};
 pub use crate::kernel::trigger::{ReadOnly, ReadWrite, Timer, TriggerExt, cycles, with_timeout};

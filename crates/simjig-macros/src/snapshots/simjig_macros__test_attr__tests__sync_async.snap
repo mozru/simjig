@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(sync), quote! { async fn t(dut: Counter) {} })"
+---
+error: `#[simjig::test(sync)]` takes a plain `fn`: a synchronous test steps the clock itself and awaits nothing; drop `async`

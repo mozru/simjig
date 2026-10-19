@@ -3,14 +3,14 @@
 
 use std::fmt;
 use std::future::Future;
-use std::panic::Location;
+use std::panic::{self, AssertUnwindSafe, Location};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::OrInvariant;
 use super::backend::{CoverageFault, ModelBackend};
 use super::clock::{Clock, ClockEntry, ClockError, ClockHandle, ClockState};
-use super::failure::Failure;
+use super::failure::{Failure, FailureKind};
 use super::fake::FakeModel;
 use super::models::{ModelSetError, Models};
 use super::panics;
@@ -18,6 +18,7 @@ use super::recorder::TraceRecord;
 use super::sched;
 use super::signal::RawSig;
 use super::state::{self, Kernel, KernelStats, Phase};
+use super::sync_clock;
 use super::tasks;
 use super::time::{Precision, SimTime};
 
@@ -244,21 +245,81 @@ impl Sim {
         let k = Rc::clone(&self.kernel);
         let guard = state::install(Rc::clone(&k));
         let capture = panics::capture();
+        // A lone model with nothing to do around an eval stays installed for the run.
+        k.models.borrow_mut().sync_begin();
         let mut main = tasks::spawn_in(&k, None, "main", main, Location::caller());
         k.main.set(main.key());
         sched::run_loop(&k, self.time_limit);
         // Handles are dropped inside polls, which settle them; this is a backstop.
         tasks::settle_unrun_drops(&k, None);
         let result = main.take_result(&k);
+        k.models.borrow_mut().sync_end();
         k.phase.set(Phase::Ended);
         drop(main);
         tasks::drop_all(&k);
         drop(capture);
         drop(guard);
-        match (k.failure.borrow_mut().take(), result) {
+        match (k.take_failure(), result) {
             (Some(failure), _) => Err(failure),
             (None, Some(value)) => Ok(value),
             (None, None) => unreachable!("invariant: a run ends with a result or a failure"),
+        }
+    }
+
+    /// Runs `body` as a synchronous test (`#[simjig::test(sync)]`): no tasks, triggers or
+    /// regions; the body steps the clock with [`SyncClock`](crate::SyncClock), sets inputs and
+    /// reads outputs (see `kernel::sync_clock`). The model is evaluated once at t = 0 first. No
+    /// trace hash is kept.
+    ///
+    /// A failure of the model or the time limit ends the body (it unwinds out of the
+    /// `SyncClock` call) and is returned; a panic in the body is a `TaskPanic` of `main`.
+    ///
+    /// # Panics
+    /// If called twice on one `Sim`, or from inside another `Sim::run` on this thread.
+    #[expect(
+        clippy::result_large_err,
+        reason = "a run returns once, and Failure stays plain data that tests match on"
+    )]
+    pub fn run_sync<T>(&mut self, body: impl FnOnce() -> T) -> Result<T, Failure> {
+        assert!(!self.ran, "Sim::run can be called only once per Sim");
+        self.ran = true;
+        let k = Rc::clone(&self.kernel);
+        k.recorder.stop_hashing();
+        k.time_limit.set(self.time_limit);
+        let guard = state::install(Rc::clone(&k));
+        let capture = panics::capture();
+        k.phase.set(Phase::Sync);
+        k.models.borrow_mut().sync_begin();
+        let result = if sync_clock::first_eval(&k) {
+            panics::forget();
+            match panic::catch_unwind(AssertUnwindSafe(body)) {
+                Ok(value) => Some(value),
+                Err(payload) if payload.is::<sync_clock::Stopped>() => None,
+                Err(payload) => {
+                    let location = panics::take();
+                    let message = tasks::panic_message(&*payload);
+                    k.fail_named(
+                        FailureKind::TaskPanic {
+                            message: message.clone(),
+                        },
+                        Some("main".to_owned()),
+                        location,
+                        format!("panicked: {message}"),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        k.models.borrow_mut().sync_end();
+        k.phase.set(Phase::Ended);
+        drop(capture);
+        drop(guard);
+        match (k.take_failure(), result) {
+            (Some(failure), _) => Err(failure),
+            (None, Some(value)) => Ok(value),
+            (None, None) => unreachable!("invariant: a stopped run recorded its failure"),
         }
     }
 
@@ -272,13 +333,25 @@ impl Sim {
     /// test.
     #[must_use]
     pub fn trace_hash(&self) -> u64 {
-        self.kernel.recorder.borrow().hash()
+        self.kernel.recorder.hash()
+    }
+
+    /// Keeps no trace hash from here on: later events are still recorded (the
+    /// [`recent_trace`](Self::recent_trace) window, the count), but not hashed.
+    pub(crate) fn stop_trace_hash(&mut self) {
+        self.kernel.recorder.stop_hashing();
+    }
+
+    /// The [`trace_hash`](Self::trace_hash), unless some events were not hashed
+    /// ([`stop_trace_hash`](Self::stop_trace_hash)).
+    pub(crate) fn full_trace_hash(&self) -> Option<u64> {
+        self.kernel.recorder.full_hash()
     }
 
     /// The most recent kernel events, oldest first (a bounded window).
     #[must_use]
     pub fn recent_trace(&self) -> Vec<TraceRecord> {
-        self.kernel.recorder.borrow().recent()
+        self.kernel.recorder.recent()
     }
 
     /// Kernel counters and table sizes; after a run, the tables must be empty.
@@ -289,7 +362,7 @@ impl Sim {
         let waits = self.kernel.waits.borrow();
         stats.live_waiters = waits.live_waiters();
         stats.live_wait_lists = waits.live_lists();
-        stats.records = self.kernel.recorder.borrow().count();
+        stats.records = self.kernel.recorder.count();
         stats
     }
 }

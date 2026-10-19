@@ -261,6 +261,12 @@ struct Vtable final {
         return guard(h, [h] { model(h).eval(); });
     }
 
+    static simjig_status eval_held(simjig_handle* h, uint64_t time) noexcept {
+        if (h == nullptr) return SIMJIG_EXCEPTION;
+        return h->guard_held(time, [](simjig_handle& hh, void*) { model(&hh).eval(); },
+                             nullptr);
+    }
+
     static simjig_status final_blocks(simjig_handle* h) noexcept {
         return guard(h, [h] { model(h).final(); });
     }
@@ -468,6 +474,9 @@ struct Vtable final {
         &cov_zero,
         &cov_write,
         &simjig_rt_rng_seed,
+        &simjig_rt_hold,
+        &simjig_rt_release,
+        &eval_held,
     };
 };
 

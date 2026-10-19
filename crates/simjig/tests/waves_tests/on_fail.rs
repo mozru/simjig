@@ -32,6 +32,20 @@ async fn counter_overflows(dut: counter_fst::Dut) {
     assert_eq!(count, 0, "the counter kept counting");
 }
 
+/// `counter_overflows` as a synchronous test: fails after the 300th cycle, at t = 3000 ns.
+#[simjig::test(sync, timeout = "10us")]
+#[ignore = "fails on purpose; run by the tests below in a child process"]
+fn counter_overflows_sync(dut: counter_fst::Dut) {
+    let mut cyc = simjig::SyncClock::new(dut.clk, ns(10));
+    dut.rst.set(1);
+    dut.en.set(1);
+    cyc.tick();
+    dut.rst.set(0);
+    cyc.ticks(299);
+    let count = dut.count.get().to_u128();
+    assert_eq!(count, 0, "the counter kept counting");
+}
+
 /// Passes after 50 cycles.
 #[simjig::test(timeout = "10us")]
 #[ignore = "run by the tests below in a child process"]
@@ -233,6 +247,24 @@ fn a_failure_with_waves_on_fail_gets_waves_from_a_replay() {
         "{gtkw}"
     );
     assert!(dir.join("replay/summary.json").is_file());
+}
+
+/// A synchronous test gets waves on failure the same way: the replay (traced, so not
+/// held) reproduces the failure, and the waves end at it.
+#[test]
+fn a_failing_sync_test_gets_waves_from_a_replay() {
+    let test = "on_fail::counter_overflows_sync";
+    let (output, dir) = run_child(test, "on-fail-sync", &[("SIMJIG_WAVES_ON_FAIL", "1")]);
+    let err = stderr(&output);
+    assert!(!output.status.success(), "{err}");
+    let fail_time = summary(&dir)["failure"]["time"]["ticks"]
+        .as_u64()
+        .expect("a failure time");
+    assert_eq!(fail_time, 3_000_000, "{err}");
+    assert!(err.contains("replay:   reproduced"), "{err}");
+    assert!(err.contains("repro:"), "{err}");
+    let waves = fst::read(&dir.join("waves.fst"));
+    assert_eq!(waves.end, fail_time, "the waves end at the failure");
 }
 
 #[test]

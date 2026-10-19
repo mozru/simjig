@@ -70,6 +70,12 @@ unsafe fn wake_by_ref(data: *const ()) {
 
 unsafe fn drop_waker(_data: *const ()) {}
 
+/// The `(sim_gen, index, gen16)` a waker made by [`task_waker`] carries, or `None` for any
+/// other waker: the kernel queues its own tasks without a round trip through the waker.
+pub(crate) fn own_task(waker: &Waker) -> Option<(u32, u32, u16)> {
+    ptr::eq(waker.vtable(), &raw const VTABLE).then(|| unpack(waker.data().addr()))
+}
+
 /// A waker that queues task (`index`, `gen16`) of simulation `sim_gen` when woken.
 ///
 /// # Panics

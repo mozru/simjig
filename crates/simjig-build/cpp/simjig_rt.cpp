@@ -114,17 +114,26 @@ VlRNG& thread_rng() noexcept {
     return *t_rng;
 }
 
-Scope::Scope(Runtime& rt) noexcept : m_rt{rt}, m_previous{t_active} {
+Scope::Scope(Runtime& rt) noexcept : m_rt{rt}, m_previous{t_active}, m_slot{nullptr} {
+    if (m_previous == &rt) {
+        m_reentered = true;
+        return;
+    }
     t_active = &rt;
     // Verilator's hooks and VL_*_MT wrappers use the thread context, not the model's: point it
     // at this model's context so several models on one thread stay separate. It must be set
     // before thread_rng(), whose reseed path reads it.
     Verilated::threadContextp(&rt.context());
-    std::swap(thread_rng(), rt.rng());
+    m_slot = &thread_rng();
+    std::swap(*m_slot, rt.rng());
 }
 
 Scope::~Scope() {
-    std::swap(thread_rng(), m_rt.rng());
+    if (m_reentered) return;
+    // No epoch sync here (thread_rng() would only resync and restore the same state): the
+    // slot holds this model's state, which goes back to it unchanged either way, and every
+    // entry syncs before it swaps.
+    std::swap(*m_slot, m_rt.rng());
     t_active = m_previous;
     if (m_previous != nullptr) Verilated::threadContextp(&m_previous->context());
 }
@@ -455,6 +464,15 @@ void Runtime::on_exception(const char* what) noexcept {
     m_poisoned = true;
 }
 
+void Runtime::hold() {
+    if (m_hold == nullptr) m_hold = new Scope{*this};
+}
+
+void Runtime::release() noexcept {
+    delete m_hold;
+    m_hold = nullptr;
+}
+
 simjig_status Runtime::outcome() {
     if (m_fatal) {
         m_poisoned = true;
@@ -467,7 +485,7 @@ simjig_status Runtime::outcome() {
 
 size_t Runtime::drain(simjig_msg* out, size_t cap) noexcept {
     const size_t pending = m_ring.size() + (m_dropped > 0 ? 1 : 0);
-    if (out == nullptr || cap == 0) return pending;
+    if (out == nullptr || cap == 0 || pending == 0) return pending;
     m_drained.clear();
     try {
         m_drained.reserve(std::min(cap, pending));
@@ -493,6 +511,33 @@ size_t Runtime::drain(simjig_msg* out, size_t cap) noexcept {
 }
 
 }  // namespace simjig
+
+simjig_status simjig_handle::guard_held(uint64_t time, void (*fn)(simjig_handle&, void*),
+                                        void* arg) noexcept {
+    if (!rt.held()) {
+        rt.context().time(time);
+        const simjig_status s = guard(fn, arg);
+        return s | (rt.msgs_pending() ? SIMJIG_MSGS_PENDING : 0);
+    }
+    if (rt.poisoned()) return SIMJIG_POISONED;
+    // The same barrier as guard(), without the Scope: the hold installed the model.
+    simjig_status s = SIMJIG_OK;
+    try {
+        rt.context().time(time);
+        fn(*this, arg);
+        s = rt.outcome();
+    } catch (const simjig::FatalUnwind&) {
+        rt.poison();  // the hook recorded the message before throwing
+        s = SIMJIG_FATAL;
+    } catch (const std::exception& e) {
+        rt.on_exception(e.what());
+        s = SIMJIG_EXCEPTION;
+    } catch (...) {
+        rt.on_exception("unknown C++ exception");
+        s = SIMJIG_EXCEPTION;
+    }
+    return s | (rt.msgs_pending() ? SIMJIG_MSGS_PENDING : 0);
+}
 
 simjig_status simjig_handle::guard(void (*fn)(simjig_handle&, void*), void* arg) noexcept {
     if (rt.poisoned()) return SIMJIG_POISONED;
@@ -576,6 +621,7 @@ extern "C" {
 
 void simjig_rt_destroy(simjig_handle* h) {
     if (h == nullptr) return;
+    h->rt.release();  // a hold's Scope must not outlive its runtime
     {
         // The model's destructor may consult the thread context, so make this model's current.
         const simjig::Scope scope{h->rt};
@@ -586,6 +632,21 @@ void simjig_rt_destroy(simjig_handle* h) {
     // ~VerilatedContext leaves the thread context null; an enclosing entry point (a DPI call
     // that destroyed another model) needs its own back.
     if (simjig::Runtime* outer = simjig::active()) Verilated::threadContextp(&outer->context());
+}
+
+simjig_status simjig_rt_hold(simjig_handle* h) {
+    if (h == nullptr) return SIMJIG_EXCEPTION;
+    if (h->rt.poisoned()) return SIMJIG_POISONED;
+    try {
+        h->rt.hold();
+    } catch (...) {
+        return SIMJIG_EXCEPTION;  // out of memory: nothing is held
+    }
+    return SIMJIG_OK;
+}
+
+void simjig_rt_release(simjig_handle* h) {
+    if (h != nullptr) h->rt.release();
 }
 
 void simjig_rt_set_time(simjig_handle* h, uint64_t time) {
@@ -632,6 +693,9 @@ const simjig_abi_field* simjig_rt_abi_fields(size_t* count) {
         SIMJIG_FIELD(simjig_model_vtable, cov_zero),
         SIMJIG_FIELD(simjig_model_vtable, cov_write),
         SIMJIG_FIELD(simjig_model_vtable, rng_seed),
+        SIMJIG_FIELD(simjig_model_vtable, hold),
+        SIMJIG_FIELD(simjig_model_vtable, release),
+        SIMJIG_FIELD(simjig_model_vtable, eval_held),
         SIMJIG_FIELD(simjig_signal, id),
         SIMJIG_FIELD(simjig_signal, width),
         SIMJIG_FIELD(simjig_signal, words),

@@ -41,7 +41,7 @@
 
 use std::panic::Location;
 
-use super::backend::{EvalStatus, ModelErrorKind};
+use super::backend::{EvalStatus, ModelError, ModelErrorKind};
 use super::clock::ClockEntry;
 use super::failure::{BlockedTask, FailureKind};
 use super::recorder::TraceKind;
@@ -50,7 +50,7 @@ use super::slab::Key;
 use super::state::{Kernel, Phase};
 use super::tasks::run_ready;
 use super::time::SimTime;
-use super::waits::{WaitTable, Wake, wake_sorted};
+use super::waits::{WaitOn, WaitTable, fire_and_wake};
 
 /// Evals allowed between two `ReadWrite` rounds of one timestep (or before the first)
 /// before the run fails with `DeltaLimit`.
@@ -71,17 +71,9 @@ fn stopped(k: &Kernel) -> bool {
     k.failed() || k.main_done.get()
 }
 
-fn wake_from(k: &Kernel, fire: impl FnOnce(&mut WaitTable, &mut Vec<Wake>)) {
-    let mut wakes = Vec::new();
-    fire(&mut k.waits.borrow_mut(), &mut wakes);
-    wake_sorted(wakes);
-}
-
 /// Fires the oldest Timer due at `t`; returns whether there was one.
 fn fire_next_timer(k: &Kernel, t: SimTime) -> bool {
-    let mut fired = false;
-    wake_from(k, |w, out| fired = w.fire_next_timer(t, out));
-    fired
+    fire_and_wake(k, |w, out| w.fire_next_timer(t, out))
 }
 
 /// Runs timesteps until the main task completes, a failure is recorded, or time cannot
@@ -137,22 +129,14 @@ fn step(k: &Kernel) {
     k.record(TraceKind::Step, None, 0, 0);
     k.bump(|c| c.steps += 1);
 
-    wake_from(k, WaitTable::fire_next_step);
+    if k.waits.borrow().region_waited(WaitOn::NextTimeStep) {
+        fire_and_wake(k, WaitTable::fire_next_step);
+    }
+    // Not only for NextTimeStep waiters: the main task's first poll is this one.
     run_ready(k);
     // The clock edges due at `t` are logged before any Timer task runs, so a Timer task
     // that stops a clock or writes its signal at `t` comes after that edge in the log.
-    let edges: Vec<(u32, u32)> = k
-        .clocks
-        .borrow_mut()
-        .iter_mut()
-        .filter_map(|c| {
-            let schedule = c.running.as_mut().filter(|r| r.next_time == t)?;
-            Some((c.slot, schedule.take_edge()))
-        })
-        .collect();
-    for (slot, level) in edges {
-        signal::write(k, slot, &[level], Writer::Clock, None);
-    }
+    log_clock_edges(k, t);
     // One Timer at a time, each followed by every task it makes ready (cocotb runs its
     // event loop after each GPI callback). So a task woken by an older Timer, and any task
     // it wakes in turn, runs before the waiter of a younger Timer due at the same time:
@@ -186,13 +170,20 @@ fn step(k: &Kernel) {
             rounds += 1;
             evals = 0;
         }
-        wake_from(k, WaitTable::fire_read_write);
-        run_ready(k);
-        if stopped(k) {
-            return;
+        // A round with no ReadWrite waiter and nothing logged would wake nobody, run nothing
+        // (every ready task has run), apply nothing and walk nothing (no model changed
+        // since the walk after the last eval): skip straight to its end.
+        let quiet = waiters.is_empty() && k.log.borrow().is_empty();
+        let mut applied = false;
+        if !quiet {
+            fire_and_wake(k, WaitTable::fire_read_write);
+            run_ready(k);
+            if stopped(k) {
+                return;
+            }
+            applied = apply_and_compare(k);
+            run_ready(k);
         }
-        let applied = apply_and_compare(k);
-        run_ready(k);
         if !applied && !model_event_now(k) {
             break;
         }
@@ -202,10 +193,35 @@ fn step(k: &Kernel) {
     }
     k.phase.set(Phase::ReadOnly);
     k.record(TraceKind::ReadOnly, None, 0, 0);
-    wake_from(k, WaitTable::fire_read_only);
-    run_ready(k);
+    // With no ReadOnly waiter there is nothing to run: the deltas ended with every ready
+    // task run.
+    if k.waits.borrow().region_waited(WaitOn::ReadOnly) {
+        fire_and_wake(k, WaitTable::fire_read_only);
+        run_ready(k);
+    }
     if k.phase.get() == Phase::ReadOnly {
         k.phase.set(Phase::Active);
+    }
+}
+
+/// Logs the edge of every clock due at `t`, in declaration order.
+///
+/// One clock at a time, with no borrow of the clocks held across the write; a write never
+/// touches a clock, so this logs what collecting every edge first would.
+fn log_clock_edges(k: &Kernel, t: SimTime) {
+    let clocks = k.clocks.borrow().len();
+    for i in 0..clocks {
+        let edge = {
+            let mut clocks = k.clocks.borrow_mut();
+            let c = &mut clocks[i];
+            c.running
+                .as_mut()
+                .filter(|r| r.next_time == t)
+                .map(|r| (c.slot, r.take_edge()))
+        };
+        if let Some((slot, level)) = edge {
+            signal::write(k, slot, &[level], Writer::Clock, None);
+        }
     }
 }
 
@@ -239,13 +255,19 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         );
         return false;
     }
-    let status = k.models.borrow_mut().eval();
+    let status = k.models.borrow_mut().eval(k.now.get());
     k.record(TraceKind::Eval, None, u64::from(*evals), 0);
     k.bump(|c| c.evals += 1);
     *evals += 1;
     let Err((model, status)) = status else {
         return true;
     };
+    eval_failed(k, model, status);
+    false
+}
+
+/// Fails the run for model `model`'s eval `status` (anything but `Running`).
+pub(crate) fn eval_failed(k: &Kernel, model: usize, status: Result<EvalStatus, ModelError>) {
     // With one model, messages stay as they were; with several, they name the model.
     let which = if k.models.borrow().len() > 1 {
         format!("model {model}: ")
@@ -277,7 +299,6 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
             k.fail(kind, None, e.location, message);
         }
     }
-    false
 }
 
 /// Fails the run as `ReadWriteLimit`, naming the `ReadWrite` waiters (the first one is the
@@ -313,6 +334,12 @@ fn read_write_limit(k: &Kernel, waiters: &[(Option<Key>, Option<&'static Locatio
 /// Applies the write log, then fires the value changes since the previous comparison.
 /// Returns whether any write was applied.
 fn apply_and_compare(k: &Kernel) -> bool {
+    // An empty log has nothing to apply, and no slot holds its delta's epoch, so skipping
+    // `take` (which would start a new delta) changes nothing.
+    if k.log.borrow().is_empty() {
+        fire_value_changes(k);
+        return false;
+    }
     let writes = k.log.borrow_mut().take();
     {
         let mut model = k.models.borrow_mut();
@@ -339,21 +366,34 @@ fn apply_and_compare(k: &Kernel) -> bool {
 /// value-change callback at a time (`callValueCbs`, in registration order) and its whole
 /// event loop inside each. A task woken by one group that waits on a younger group not yet
 /// reached in this walk joins it; groups primed during the walk wait for the next change.
+///
+/// A walk when no model changed since the previous walk began is skipped: every group
+/// primed before that walk took the value then, every group primed since took it when
+/// primed, and values change only in an eval or when the log is applied, never during a
+/// walk; so no group could differ from its snapshot. So is a walk after evals alone when
+/// every primed group watches a slot no eval changes (an input): only a write changes it.
 fn fire_value_changes(k: &Kernel) {
+    let now = {
+        let models = k.models.borrow();
+        (models.version(), models.written())
+    };
+    let last = k.walked.replace(Some(now));
+    if last == Some(now)
+        || last.is_some_and(|(_, written)| written == now.1)
+            && !k.waits.borrow().watches_eval_changes()
+    {
+        return;
+    }
     let until = k.waits.borrow().last_seq();
     let mut after = 0;
     while !stopped(k) {
-        let mut wakes = Vec::new();
-        let fired = {
+        let fired = fire_and_wake(k, |w, out| {
             let model = k.models.borrow();
-            k.waits
-                .borrow_mut()
-                .fire_next_change(&model, until, &mut after, &mut wakes)
-        };
+            w.fire_next_change(&model, until, &mut after, out)
+        });
         if !fired {
             return;
         }
-        wake_sorted(wakes);
         run_ready(k);
     }
 }
@@ -428,6 +468,7 @@ fn blocked_tasks(k: &Kernel) -> Vec<BlockedTask> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::OrInvariant;
     use super::super::backend::{ModelBackend, ModelError};
     use super::super::failure::FailureKind;
     use super::super::sim::Sim;
@@ -466,6 +507,76 @@ mod tests {
         fn next_time_slot(&self) -> SimTime {
             SimTime::ZERO
         }
+    }
+
+    /// A one-bit model (`clk`) that settles, counting the evals it really runs.
+    struct Settles {
+        clk: u32,
+        evals: std::rc::Rc<std::cell::Cell<u32>>,
+    }
+
+    impl ModelBackend for Settles {
+        fn precision(&self) -> Precision {
+            Precision::NS
+        }
+        fn slot_count(&self) -> u32 {
+            1
+        }
+        fn slot_name(&self, _slot: u32) -> &'static str {
+            "clk"
+        }
+        fn slot_width(&self, _slot: u32) -> u32 {
+            1
+        }
+        fn read(&self, _slot: u32, out: &mut [u32]) {
+            out[0] = self.clk;
+        }
+        fn write(&mut self, _slot: u32, value: &[u32]) {
+            self.clk = value[0];
+        }
+        fn set_time(&mut self, _time: SimTime) {}
+        fn eval(&mut self) -> Result<EvalStatus, ModelError> {
+            self.evals.set(self.evals.get() + 1);
+            Ok(EvalStatus::Running)
+        }
+        fn settles(&self) -> bool {
+            true
+        }
+        fn events_pending(&self) -> bool {
+            false
+        }
+        fn next_time_slot(&self) -> SimTime {
+            SimTime::ZERO
+        }
+    }
+
+    /// The eval that opens a timestep and the one that ends its delta loop find nothing
+    /// written since the previous eval: a model that settles is not evaluated then, but
+    /// the kernel still counts (and records) every eval.
+    #[test]
+    fn a_settled_model_is_evaluated_only_after_a_write() {
+        let evals = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut sim = Sim::from_backend(Box::new(Settles {
+            clk: 0,
+            evals: std::rc::Rc::clone(&evals),
+        }));
+        let clk = sim.signal("clk").or_invariant("the slot exists");
+        sim.add_clock(super::super::clock::Clock::new(
+            clk,
+            SimDuration::from_ticks(10),
+        ))
+        .or_invariant("a clock");
+        // Edges at 0, 5, .., 95, and the Timer's own timestep at 99.
+        let edges = 20;
+        sim.run(Timer::new(SimDuration::from_ticks(99)))
+            .or_invariant("the run passes");
+        let stats = sim.stats();
+        assert_eq!(stats.steps, edges + 1);
+        // Counted: per edge, the eval that opens the timestep and the one after the edge
+        // is applied; none at t=99, where the Timer ends the run before the deltas.
+        assert_eq!(stats.evals, 2 * edges);
+        // Run: the one after each edge, and the run's very first eval (t=0).
+        assert_eq!(u64::from(evals.get()), edges + 1);
     }
 
     #[test]

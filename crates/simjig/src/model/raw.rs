@@ -37,10 +37,11 @@ use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
 use super::abi::{
-    self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Handle, ModelVtable, Msg,
-    Narrow, OwnedMsg, Signal,
+    self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Dir, Handle, ModelVtable,
+    Msg, Narrow, OwnedMsg, Signal,
 };
 use super::meta::{Vtable, row_problem};
+use crate::kernel::cell::{Direct, HeldEval};
 
 /// Checks the vtable a model's symbol returned ([`ModelVtable::check`]: ABI version, size,
 /// IR hash) and only then returns it as a reference.
@@ -271,6 +272,46 @@ impl RawModel {
         unsafe { (self.vt.eval)(self.handle.as_ptr()) }
     }
 
+    /// Installs the model on this thread for a run of [`eval_held`](Self::eval_held)
+    /// calls (`hold`); the raw status code.
+    pub(crate) fn hold(&mut self) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.hold)(self.handle.as_ptr()) }
+    }
+
+    /// The held eval as a kernel [`HeldEval`], for a synchronous run's clock; calling it is
+    /// sound while this model lives and is held ([`HeldEval::call`]'s contract).
+    pub(crate) fn held_eval(&self) -> HeldEval {
+        /// `eval_held` through the vtable `table` points to, on `handle`.
+        ///
+        /// # Safety
+        /// `table` and `handle` are a live model's vtable and handle.
+        unsafe fn call(table: *const (), handle: *mut (), ticks: u64) -> i32 {
+            // SAFETY: the caller's promise: `table` is a `&'static ModelVtable`.
+            let vt = unsafe { &*table.cast::<ModelVtable>() };
+            // SAFETY: the caller's promise: `handle` is that model's live handle.
+            unsafe { (vt.eval_held)(handle.cast(), ticks) }
+        }
+        let table = ptr::from_ref::<ModelVtable>(self.vt).cast::<()>();
+        // SAFETY: `call` is sound on this model's vtable and handle while the model lives
+        // (and is held), which is what `HeldEval::call` demands of its callers.
+        unsafe { HeldEval::new(call, table, self.handle.as_ptr().cast()) }
+    }
+
+    /// Ends [`hold`](Self::hold).
+    pub(crate) fn release(&mut self) {
+        // SAFETY: as in `eval`; `release` accepts a handle that is not held.
+        unsafe { (self.vt.release)(self.handle.as_ptr()) }
+    }
+
+    /// Sets the time to `ticks` and evaluates once (`eval_held`); the raw status code, with
+    /// [`abi::MSGS_PENDING`] or'ed in when messages wait.
+    #[inline]
+    pub(crate) fn eval_held(&mut self, ticks: u64) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.eval_held)(self.handle.as_ptr(), ticks) }
+    }
+
     /// Runs the model's `final` blocks; the raw status code.
     pub(crate) fn final_blocks(&mut self) -> i32 {
         // SAFETY: as in `eval`.
@@ -318,6 +359,13 @@ impl RawModel {
 
     /// Moves every pending message into `out`, oldest first.
     pub(crate) fn drain(&mut self, out: &mut Vec<OwnedMsg>) {
+        // Nearly every eval prints nothing: ask first (`cap == 0` only counts), which spares
+        // filling the record buffer below on every eval.
+        // SAFETY: `handle` is live; with `cap == 0` the call writes nothing.
+        let pending = unsafe { (self.vt.drain_msgs)(self.handle.as_ptr(), ptr::null_mut(), 0) };
+        if pending == 0 {
+            return;
+        }
         let empty = Msg {
             kind: 0,
             line: 0,
@@ -339,6 +387,26 @@ impl RawModel {
             if n < buf.len() {
                 return;
             }
+        }
+    }
+
+    /// Whether slot `slot` is a top-level input: the design never changes it, since
+    /// Verilator rejects an assignment to an input (`ASSIGNIN`).
+    pub(crate) fn is_input(&self, slot: usize) -> bool {
+        self.signals[slot].dir == Dir::In
+    }
+
+    /// The direct way to slot `slot` ([`Direct`]), if it is a readable narrow row.
+    pub(crate) fn direct(&self, slot: usize) -> Option<Direct> {
+        let row = &self.signals[slot];
+        match row.cell {
+            Cell::Narrow(cell) if row.access & ACCESS_READ != 0 => {
+                // SAFETY: a validated row of this model's table, readable; writable exactly
+                // when its access says so. The model lives until this `RawModel` drops, and
+                // its owner (the backend) owns this `RawModel`.
+                Some(unsafe { Direct::new(cell, row.width, row.access & ACCESS_WRITE != 0) })
+            }
+            _ => None,
         }
     }
 
@@ -598,6 +666,9 @@ pub(crate) mod fake {
 
     extern "C" fn drain(_h: *mut Handle, out: *mut Msg, cap: usize) -> usize {
         STATE.with_borrow_mut(|s| {
+            if cap == 0 {
+                return s.pending.len(); // the ABI's count-only call
+            }
             let mut n = 0;
             while n < cap {
                 let Some((kind, text)) = s.pending.pop_front() else {
@@ -643,6 +714,19 @@ pub(crate) mod fake {
         Status::Unsupported as i32
     }
 
+    extern "C" fn rng_hold(_h: *mut Handle) -> i32 {
+        STATE.with_borrow_mut(|s| s.calls.push("hold".to_owned()));
+        0
+    }
+
+    extern "C" fn rng_release(_h: *mut Handle) {
+        STATE.with_borrow_mut(|s| s.calls.push("release".to_owned()));
+    }
+
+    extern "C" fn eval_held(h: *mut Handle, _t: u64) -> i32 {
+        eval(h)
+    }
+
     extern "C" fn rng_seed(_h: *mut Handle, _seed: u64) -> i32 {
         Status::Unsupported as i32
     }
@@ -657,7 +741,7 @@ pub(crate) mod fake {
     pub(crate) fn vtable() -> ModelVtable {
         ModelVtable {
             abi_version: ABI_VERSION,
-            size: 192,
+            size: 216,
             prefix: c"Vfake".as_ptr(),
             verilator_version: c"fake".as_ptr(),
             ir_hash: 7,
@@ -681,6 +765,9 @@ pub(crate) mod fake {
             cov_zero: unsupported,
             cov_write: trace_open,
             rng_seed,
+            hold: rng_hold,
+            release: rng_release,
+            eval_held,
         }
     }
 

@@ -31,6 +31,9 @@ their layout. The old trace/coverage slots are now filled.
 | 168 | `cov_zero` | `simjig_status (*)(h)` | zero every counter |
 | 176 | `cov_write` | `simjig_status (*)(h, const char* path)` | write `coverage.dat`; NULL = Verilator's default name |
 | 184 | `rng_seed` | `simjig_status (*)(h, uint64_t seed)` | private `$urandom` state = `VlRNG(seed)` |
+| 192 | `hold` | `simjig_status (*)(h)` | install the model on this thread until `release` (synchronous runs) |
+| 200 | `release` | `void (*)(h)` | end `hold`; accepts an unheld handle |
+| 208 | `eval_held` | `simjig_status (*)(h, uint64_t time)` | set the time, eval; `SIMJIG_MSGS_PENDING` or'ed in when messages wait |
 
 New status: **`SIMJIG_IO_ERROR 7`**: a file the call names cannot be created, or
 `trace_reopen` was given the inherited file itself. A WARNING message names the file. Nothing

@@ -19,6 +19,7 @@ fn pair() {
             ignored: false,
             should_panic: false,
             init: ::core::option::Option::None,
+            trace_hash: true,
         },
         |__simjig_ctx, (__simjig_dut0, __simjig_dut1)| async move {
             pair(&__simjig_ctx, __simjig_dut0, __simjig_dut1).await

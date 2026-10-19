@@ -29,14 +29,15 @@ use std::ffi::CString;
 use std::path::Path;
 
 use super::abi::{
-    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_RANDOM_INIT, FEATURE_TRACE_FST, MsgKind, OwnedMsg,
-    Status,
+    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_RANDOM_INIT, FEATURE_TIMING, FEATURE_TRACE_FST,
+    MSGS_PENDING, MsgKind, OwnedMsg, Status,
 };
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
 use super::trace::{TraceOptions, Tracer};
 use crate::dpi::{DpiFailure, ModelDpi};
 use crate::kernel::backend::{CoverageFault, EvalStatus, ModelBackend, ModelError};
+use crate::kernel::cell::{Direct, HeldEval};
 use crate::kernel::time::{Precision, SimTime};
 
 /// A generated Verilator model behind the kernel's backend interface.
@@ -55,6 +56,8 @@ pub(crate) struct VerilatorModel {
     tracer: Option<Tracer>,
     /// The time of the current timestep (the last `set_time`).
     now: SimTime,
+    /// Held for a synchronous run (`sync_begin`): evals go through `eval_held`.
+    held: bool,
 }
 
 impl VerilatorModel {
@@ -114,6 +117,7 @@ impl VerilatorModel {
                 .then(|| ModelDpi::new(meta.prefix, meta.dut_name())),
             tracer: None,
             now: SimTime::ZERO,
+            held: false,
         };
         if let Err(e) = model.outcome(status) {
             // A model that failed to construct runs no final blocks when dropped.
@@ -267,6 +271,52 @@ impl ModelBackend for VerilatorModel {
         self.raw.write(slot as usize, value);
     }
 
+    // Held only with nothing to do around an eval: no waves to sample, no DPI-C context to
+    // install, a healthy model. Otherwise every eval keeps the full path.
+    fn sync_begin(&mut self) -> bool {
+        if self.tracer.is_none() && self.dpi.is_none() && self.poisoned.is_none() {
+            self.held = self.raw.hold() == Status::Ok as i32;
+        }
+        self.held
+    }
+
+    fn held_eval(&self) -> Option<HeldEval> {
+        self.held.then(|| self.raw.held_eval())
+    }
+
+    fn held_outcome(&mut self, raw: i32) -> Result<EvalStatus, ModelError> {
+        self.outcome(raw & !MSGS_PENDING)
+    }
+
+    fn sync_end(&mut self) {
+        if std::mem::take(&mut self.held) {
+            self.raw.release();
+        }
+    }
+
+    #[inline]
+    fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {
+        if !self.held {
+            self.set_time(time);
+            return self.eval();
+        }
+        self.now = time;
+        let status = self.raw.eval_held(time.ticks());
+        if status == Status::Ok as i32 {
+            return Ok(EvalStatus::Running);
+        }
+        // Messages to print, or a failure: the same handling as `eval`'s.
+        self.outcome(status & !MSGS_PENDING)
+    }
+
+    fn eval_changes(&self, slot: u32) -> bool {
+        !self.raw.is_input(slot as usize)
+    }
+
+    fn direct(&self, slot: u32) -> Option<Direct> {
+        self.raw.direct(slot as usize)
+    }
+
     fn set_time(&mut self, time: SimTime) {
         // The kernel sets the time once per timestep, before applying any of its writes, so
         // the model still holds the previous timestep's final state (`model::trace`).
@@ -312,8 +362,19 @@ impl ModelBackend for VerilatorModel {
         }
     }
 
+    // Without `--timing`, an eval runs only what a deposit since the last one triggers,
+    // and Verilator's eval loop returns settled; with waves on, every eval is sampled.
+    fn settles(&self) -> bool {
+        self.raw.features() & FEATURE_TIMING == 0
+            && self.tracer.is_none()
+            && self.poisoned.is_none()
+    }
+
     fn events_pending(&self) -> bool {
-        self.poisoned.is_none() && self.raw.events_pending()
+        // Only a `--timing` model has events of its own; skip the call into C++.
+        self.raw.features() & FEATURE_TIMING != 0
+            && self.poisoned.is_none()
+            && self.raw.events_pending()
     }
 
     fn next_time_slot(&self) -> SimTime {
@@ -383,6 +444,7 @@ fn dpi_scope<R>(dpi: Option<&mut ModelDpi>, f: impl FnOnce() -> R) -> (R, Option
 
 impl Drop for VerilatorModel {
     fn drop(&mut self) {
+        self.sync_end();
         if self.poisoned.is_none() {
             if let Some(tracer) = &self.tracer {
                 tracer.end_timestep();
@@ -608,7 +670,7 @@ mod tests {
             LoadError::VtableSize {
                 prefix: "Vfake",
                 model: 136,
-                runtime: 192
+                runtime: 216
             }
         );
         assert_eq!(counts(), (0, 0, 0), "nothing was created");

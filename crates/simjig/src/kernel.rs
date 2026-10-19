@@ -20,6 +20,7 @@
 //! [`FakeModel`](fake::FakeModel).
 
 pub(crate) mod backend;
+pub(crate) mod cell;
 pub(crate) mod clock;
 pub(crate) mod combinator;
 pub(crate) mod failure;
@@ -33,6 +34,7 @@ pub(crate) mod sim;
 mod slab;
 pub(crate) mod state;
 pub(crate) mod sync;
+pub(crate) mod sync_clock;
 pub(crate) mod tasks;
 pub(crate) mod time;
 pub(crate) mod trigger;

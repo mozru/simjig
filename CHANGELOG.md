@@ -4,6 +4,41 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- simjig-build no longer forces frame pointers in the model's C++ when debug info is on
+  (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
+  a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them
+  back (it comes later on the command line).
+- simjig-build compiles a model that Verilator did not split for a parallel build
+  (`VM_PARALLEL_BUILDS = 0` in its `_classes.mk`) as one translation unit including every
+  generated class (`<prefix>__ALL.cpp`, next to the Verilator output), as `verilated.mk`
+  does: each eval of a small design is a few percent cheaper. A split model is compiled
+  file by file, as before.
+- Synchronous tests: `#[simjig::test(sync)]` on a plain `fn` (also with `duts = [..]`,
+  `init`, `timeout`) runs it through `Sim::run_sync`, with `simjig::SyncClock` (`tick()`:
+  rise, eval, fall, eval; `rise()`, `fall()`, `ticks(n)`) as its clock. A `set` goes into the
+  model at once and the next eval takes it; there are no tasks, triggers, regions or delta
+  cycles (`spawn`, a kernel clock and an awaited trigger panic, naming the mode); no trace
+  hash is kept. Seeds, `ctx.rng`, random init, the time limit and the failure report with
+  its `repro:` line work as in async tests. Generated code: `run_sync_test` for a `sync`
+  test (snapshot `expands_sync`); the macro's errors mention `sync`
+  (`harness_ui/not_async.stderr`, `bad_timeout.stderr`, reviewed). `SyncClock::bind`
+  makes `Bound`/`BoundMut` handles that read and write the model's storage directly (trait
+  `Bind`). The C ABI gains `hold`, `release` and `eval_held` (appended; vtable size 216),
+  which a lone model without waves or Rust DPI-C imports uses for a synchronous run. README:
+  "Synchronous testbenches".
+- `#[simjig::test(trace_hash = false)]`: the run keeps no trace hash (about 16% faster on
+  the benchmark's FIFO testbench). Generated code: `TestMeta` gains `trace_hash` (every
+  expansion snapshot of `simjig_macros::test_attr` shows `trace_hash: true`; reviewed);
+  the unknown-argument error lists the new argument (`harness_ui/bad_timeout.stderr`).
+  The outcome's and `summary.json`'s `trace_hash` are then null.
+- Performance (no change to semantics, the trace hash or `Sim::stats`): the scheduler
+  allocates nothing per timestep in steady state (`tests/alloc_steady.rs`); a model
+  verilated without `--timing` and not writing waves is not evaluated when nothing was
+  written since its last eval (the eval is still counted and recorded); value-change walks
+  and empty regions are skipped when they could do nothing; the trace hash computes the
+  same FNV-1a values with fewer dependent steps. The benchmark's full FIFO testbench runs
+  2.5x faster (`docs/notes/perf.md`). README: a "Performance" section with the
+  recommended release profile (`codegen-units = 1`).
 - `#[simjig::test]`: the error for a context parameter after a DUT now suggests
   `(ctx: &simjig::TestCtx, dut: Dut)` (was `sim`), and the macro's docs, grammar and
   expansion name the context `ctx` throughout (`__simjig_ctx` in the generated closure;

@@ -19,6 +19,7 @@ fn no_reset() {
             ignored: false,
             should_panic: false,
             init: ::core::option::Option::Some(::simjig::InitValues::Random),
+            trace_hash: true,
         },
         |_, __simjig_dut| async move { no_reset(__simjig_dut).await },
     );

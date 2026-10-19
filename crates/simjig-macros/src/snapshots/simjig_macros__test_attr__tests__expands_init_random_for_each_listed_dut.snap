@@ -22,6 +22,7 @@ mod resets {
                 ignored: false,
                 should_panic: false,
                 init: ::core::option::Option::Some(::simjig::InitValues::Random),
+                trace_hash: true,
             },
             |_, __simjig_dut| async move { resets(__simjig_dut).await },
         );
@@ -41,6 +42,7 @@ mod resets {
                 ignored: false,
                 should_panic: false,
                 init: ::core::option::Option::Some(::simjig::InitValues::Random),
+                trace_hash: true,
             },
             |_, __simjig_dut| async move { resets(__simjig_dut).await },
         );

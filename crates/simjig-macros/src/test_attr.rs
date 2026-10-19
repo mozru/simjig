@@ -6,6 +6,8 @@
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
 //! #[simjig::test(timeout = "none")]                 no time limit
 //! #[simjig::test(init = random)]                    random initial values (or `zero`)
+//! #[simjig::test(trace_hash = false)]               keep no trace hash (faster)
+//! #[simjig::test(sync)]                             a synchronous test: a plain `fn`
 //! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<ctx>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
 //!
@@ -38,7 +40,7 @@ use syn::{FnArg, ItemFn, Lit, LitStr, ReturnType, Safety, Type, Visibility};
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args = parse_args(attr)?;
     let func: ItemFn = syn::parse2(item)?;
-    let test = TestFn::validate(func, args.duts.is_some())?;
+    let test = TestFn::validate(func, args.duts.is_some(), args.sync)?;
     match &args.duts {
         Some(duts) => emit_each(&args, &test, duts),
         None => Ok(emit(&args, &test)),
@@ -57,6 +59,10 @@ struct Args {
     /// The `simjig::InitValues` variant name of an `init` argument; `None` without one
     /// (`SIMJIG_INIT` decides at run time).
     init: Option<&'static str>,
+    /// `trace_hash = <bool>`; `None` without the argument (a hash is kept).
+    trace_hash: Option<bool>,
+    /// `sync`: a synchronous test, a plain `fn` run by `run_sync_test`.
+    sync: bool,
 }
 
 /// `init` values and their `simjig::InitValues` variants.
@@ -110,15 +116,22 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             if args.init.is_some() {
                 return Err(meta.error("`init` is given twice"));
             }
-            let value: Ident = meta.value()?.parse()?;
-            let Some(&(_, variant)) = INITS.iter().find(|(name, _)| value == name) else {
-                return Err(syn::Error::new_spanned(
-                    value,
-                    "the initial values are `init = zero` (Verilator's default) or \
-                     `init = random`",
-                ));
-            };
-            args.init = Some(variant);
+            args.init = Some(parse_init(&meta)?);
+            Ok(())
+        } else if meta.path.is_ident("trace_hash") {
+            if args.trace_hash.is_some() {
+                return Err(meta.error("`trace_hash` is given twice"));
+            }
+            let value: syn::LitBool = meta.value()?.parse().map_err(|e| {
+                syn::Error::new(e.span(), "`trace_hash` is `true` (the default) or `false`")
+            })?;
+            args.trace_hash = Some(value.value);
+            Ok(())
+        } else if meta.path.is_ident("sync") {
+            if args.sync {
+                return Err(meta.error("`sync` is given twice"));
+            }
+            args.sync = true;
             Ok(())
         } else if meta.path.is_ident("crate") {
             if args.krate.is_some() {
@@ -130,26 +143,49 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             if args.duts.is_some() {
                 return Err(meta.error("`duts` is given twice"));
             }
-            let content;
-            let value = meta.value()?;
-            syn::bracketed!(content in value);
-            let list = content.parse_terminated(Type::parse, syn::Token![,])?;
-            if list.is_empty() {
-                return Err(meta.error("`duts` lists no DUT type: `duts = [small::Dut, big::Dut]`"));
-            }
-            args.duts = Some(list.into_iter().collect());
+            args.duts = Some(parse_duts(&meta)?);
             Ok(())
         } else {
             Err(meta.error(
                 "unknown `#[simjig::test]` argument; the arguments are \
                  `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`), \
-                 `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, and \
-                 `crate = <path to simjig>`",
+                 `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, \
+                 `trace_hash = false`, `sync`, and `crate = <path to simjig>`",
             ))
         }
     });
     parser.parse2(attr)?;
+    if args.sync && args.trace_hash.is_some() {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            "a synchronous test (`sync`) keeps no trace hash; drop `trace_hash`",
+        ));
+    }
     Ok(args)
+}
+
+/// The `simjig::InitValues` variant of `init = <value>`.
+fn parse_init(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<&'static str> {
+    let value: Ident = meta.value()?.parse()?;
+    let Some(&(_, variant)) = INITS.iter().find(|(name, _)| value == name) else {
+        return Err(syn::Error::new_spanned(
+            value,
+            "the initial values are `init = zero` (Verilator's default) or `init = random`",
+        ));
+    };
+    Ok(variant)
+}
+
+/// The types of `duts = [<type>, ..]`, at least one.
+fn parse_duts(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<Vec<Type>> {
+    let content;
+    let value = meta.value()?;
+    syn::bracketed!(content in value);
+    let list = content.parse_terminated(Type::parse, syn::Token![,])?;
+    if list.is_empty() {
+        return Err(meta.error("`duts` lists no DUT type: `duts = [small::Dut, big::Dut]`"));
+    }
+    Ok(list.into_iter().collect())
 }
 
 /// Parses `"none"`, `"2ms"`, `"10 us"` or `"1_000ns"`.
@@ -202,9 +238,9 @@ impl TestFn {
     /// Checks the signature, collecting every error so the user sees them all at once.
     /// `each`: the attribute has `duts`, so the function may be generic and must take
     /// exactly one DUT.
-    fn validate(func: ItemFn, each: bool) -> syn::Result<Self> {
+    fn validate(func: ItemFn, each: bool, sync: bool) -> syn::Result<Self> {
         let mut errors = Vec::new();
-        check_qualifiers(&func, each, &mut errors);
+        check_qualifiers(&func, each, sync, &mut errors);
         let (ctx, duts) = classify_params(&func, &mut errors);
         if each && duts.len() != 1 {
             errors.push(syn::Error::new_spanned(
@@ -224,14 +260,20 @@ impl TestFn {
     }
 }
 
-fn check_qualifiers(func: &ItemFn, each: bool, errors: &mut Vec<syn::Error>) {
+fn check_qualifiers(func: &ItemFn, each: bool, sync: bool, errors: &mut Vec<syn::Error>) {
     let sig = &func.sig;
-    if sig.asyncness.is_none() {
-        errors.push(syn::Error::new(
+    match (&sig.asyncness, sync) {
+        (None, false) => errors.push(syn::Error::new(
             sig.fn_token.span,
             "`#[simjig::test]` needs an `async fn`: the body runs as the simulation's \
-             main task",
-        ));
+             main task (or write a synchronous test, a plain `fn`, with `#[simjig::test(sync)]`)",
+        )),
+        (Some(token), true) => errors.push(syn::Error::new(
+            token.span,
+            "`#[simjig::test(sync)]` takes a plain `fn`: a synchronous test steps the clock \
+             itself and awaits nothing; drop `async`",
+        )),
+        _ => {}
     }
     if let Some(constness) = &sig.constness {
         errors.push(syn::Error::new(
@@ -440,12 +482,24 @@ fn run_call(
             quote!(::core::option::Option::Some(#krate::InitValues::#variant))
         }
     };
+    let trace_hash = args.trace_hash.unwrap_or(!args.sync);
     let attrs = &test.func.attrs;
     let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
     let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
     let func = &test.func.sig.ident;
+    let (runner, body) = if args.sync {
+        (
+            quote!(run_sync_test::<#dut_ty, _, _>),
+            quote!(|#ctx_pat, #dut_pat| #func(#(#call_args),*)),
+        )
+    } else {
+        (
+            quote!(run_test::<#dut_ty, _, _>),
+            quote!(|#ctx_pat, #dut_pat| async move { #func(#(#call_args),*).await }),
+        )
+    };
     quote! {
-        #krate::__private::run_test::<#dut_ty, _, _>(
+        #krate::__private::#runner(
             &#krate::__private::TestMeta {
                 module_path: ::core::module_path!(),
                 name: ::core::stringify!(#name),
@@ -454,8 +508,9 @@ fn run_call(
                 ignored: #ignored,
                 should_panic: #should_panic,
                 init: #init,
+                trace_hash: #trace_hash,
             },
-            |#ctx_pat, #dut_pat| async move { #func(#(#call_args),*).await },
+            #body,
         );
     }
 }
@@ -600,6 +655,37 @@ mod tests {
     }
 
     #[test]
+    fn expands_trace_hash_false() {
+        insta::assert_snapshot!(render(
+            quote!(trace_hash = false),
+            quote! { async fn fast(dut: Counter) {} }
+        ));
+    }
+
+    #[test]
+    fn expands_sync() {
+        insta::assert_snapshot!(render(
+            quote!(sync, timeout = "1us"),
+            quote! { fn drive(ctx: &TestCtx, dut: Counter) -> simjig::Result { Ok(()) } }
+        ));
+    }
+
+    #[test]
+    fn rejects_an_async_sync_test_and_a_hash_in_one() {
+        insta::assert_snapshot!(
+            "sync_async",
+            render(quote!(sync), quote! { async fn t(dut: Counter) {} })
+        );
+        insta::assert_snapshot!(
+            "sync_trace_hash",
+            render(
+                quote!(sync, trace_hash = false),
+                quote! { fn t(dut: Counter) {} }
+            )
+        );
+    }
+
+    #[test]
     fn expands_timeout_none() {
         insta::assert_snapshot!(render(
             quote!(timeout = "none"),
@@ -674,6 +760,10 @@ mod tests {
         insta::assert_snapshot!(
             "bad_init",
             render(quote!(init = x), quote! { async fn t() {} })
+        );
+        insta::assert_snapshot!(
+            "bad_trace_hash",
+            render(quote!(trace_hash = off), quote! { async fn t() {} })
         );
         insta::assert_snapshot!(
             "duplicate_timeout",

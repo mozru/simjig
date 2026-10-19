@@ -26,6 +26,7 @@
 use std::fmt;
 use std::path::Path;
 
+use super::cell::{Direct, HeldEval};
 use super::failure::SourceLocation;
 use super::time::{Precision, SimTime};
 
@@ -140,6 +141,55 @@ pub(crate) trait ModelBackend {
     /// Evaluates the model until it is stable at the current time. Switches the thread's
     /// Verilator context to this model first (see the module docs).
     fn eval(&mut self) -> Result<EvalStatus, ModelError>;
+    /// A direct way to the narrow storage of `slot`, if the backend has one: the kernel
+    /// then reads and writes the slot through it instead of [`read`](Self::read) and
+    /// [`write`](Self::write), which must behave the same. `None` (the default) for a slot
+    /// or backend without one.
+    fn direct(&self, _slot: u32) -> Option<Direct> {
+        None
+    }
+    /// Starts a run of a lone model (`Sim::run`, `Sim::run_sync`): until
+    /// [`sync_end`](Self::sync_end), every eval comes through [`eval_at`](Self::eval_at) and
+    /// no other model of the simulation is evaluated, so the backend may keep its model
+    /// installed between evals. Returns
+    /// whether it did ("held"): then nothing runs around an eval, no waves are sampled and
+    /// no DPI-C import implemented in Rust exists, so no Rust code runs during an eval.
+    fn sync_begin(&mut self) -> bool {
+        false
+    }
+    /// Ends [`sync_begin`](Self::sync_begin).
+    fn sync_end(&mut self) {}
+    /// While held ([`sync_begin`](Self::sync_begin) returned `true`): the held eval to call
+    /// directly, if the backend has one; a status other than OK goes to
+    /// [`held_outcome`](Self::held_outcome).
+    fn held_eval(&self) -> Option<HeldEval> {
+        None
+    }
+    /// What a [`HeldEval`]'s non-OK raw status means (messages printed, failures
+    /// reported), as [`eval_at`](Self::eval_at) would have returned it.
+    fn held_outcome(&mut self, raw: i32) -> Result<EvalStatus, ModelError> {
+        Err(ModelError::fatal(format!(
+            "a held eval returned status {raw} to a backend that has none"
+        )))
+    }
+    /// [`set_time`](Self::set_time) then [`eval`](Self::eval), which a backend may do in
+    /// one call.
+    fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {
+        self.set_time(time);
+        self.eval()
+    }
+    /// Whether an `eval` may change `slot`'s value; `false` only for a slot that nothing
+    /// but [`write`](Self::write) changes. `true` (the default) is always safe.
+    fn eval_changes(&self, _slot: u32) -> bool {
+        true
+    }
+    /// Whether an `eval` with no `write` since the previous `eval` is sure to change
+    /// nothing and call nothing (no timed events of its own, no per-eval waves sampling):
+    /// the eval loop has already settled every value. [`Models`](super::models::Models)
+    /// then skips such an eval; `false` (the default) evaluates every time.
+    fn settles(&self) -> bool {
+        false
+    }
     /// Whether the model has scheduled events of its own (`--timing` delays).
     fn events_pending(&self) -> bool;
     /// The time of the model's next scheduled event; only valid if `events_pending()`.

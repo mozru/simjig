@@ -17,15 +17,17 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread::{self, ThreadId};
 
+use super::cell::DirectTable;
 use super::clock::ClockEntry;
 use super::failure::{Failure, FailureKind, SourceLocation};
 use super::models::Models;
-use super::recorder::{Recorder, TraceKind, TraceRecord};
+use super::recorder::{EVAL_TAILS, READ_ONLY_TAIL, Recorder, STEP_TAIL, TraceKind, TraceRecord};
 use super::signal::WriteLog;
 use super::slab::Key;
 use super::tasks::{ReadyQueue, TaskTable, UnrunDrop, gen16};
@@ -41,6 +43,9 @@ pub(crate) enum Phase {
     ReadOnly,
     /// The run is over and tasks are being dropped; writes are discarded.
     Ended,
+    /// A synchronous test ([`Sim::run_sync`](crate::Sim::run_sync)) is running: writes go
+    /// to the model at once, and there are no tasks, triggers or regions.
+    Sync,
 }
 
 /// Counters exposed through [`Sim::stats`](crate::Sim::stats).
@@ -71,6 +76,10 @@ pub(crate) struct Kernel {
     pub(crate) starts: Rc<[u32]>,
     pub(crate) widths: Box<[u32]>,
     pub(crate) models: RefCell<Models>,
+    /// The models' direct ways to their narrow slots ([`DirectTable`]), outside the
+    /// `RefCell`, for signal reads and a synchronous run's writes: the kernel owns `models`
+    /// for as long as this copy, and never reads or writes during a model call.
+    pub(crate) direct: DirectTable,
     pub(crate) now: Cell<SimTime>,
     pub(crate) phase: Cell<Phase>,
     pub(crate) tasks: RefCell<TaskTable>,
@@ -94,9 +103,20 @@ pub(crate) struct Kernel {
     pub(crate) log: RefCell<WriteLog>,
     /// Kernel clocks, in declaration order (the order coincident edges are logged in).
     pub(crate) clocks: RefCell<Vec<ClockEntry>>,
-    pub(crate) failure: RefCell<Option<Failure>>,
-    pub(crate) recorder: RefCell<Recorder>,
+    /// Read only through [`Kernel::failed`] and [`Kernel::take_failure`], which keep
+    /// `has_failed` equal to `failure.is_some()`.
+    failure: RefCell<Option<Failure>>,
+    /// Whether `failure` is set: asked after every task poll and eval, so a plain flag
+    /// rather than a `RefCell` borrow.
+    has_failed: Cell<bool>,
+    pub(crate) recorder: Recorder,
     pub(crate) counters: Cell<KernelStats>,
+    /// The run's time limit, for a synchronous run (`kernel::sync_clock`); an async run checks
+    /// `Sim`'s own.
+    pub(crate) time_limit: Cell<Option<SimTime>>,
+    /// [`Models::version`] and [`Models::written`] when the last value-change walk began
+    /// (`sched`).
+    pub(crate) walked: Cell<Option<(u64, u64)>>,
 }
 
 static NEXT_SIM_GEN: AtomicU32 = AtomicU32::new(1);
@@ -112,11 +132,30 @@ const RETIRED_NAMES: usize = 64;
 /// Slot-name tables (names, model starts) by simulation id.
 type NameTables = VecDeque<(u32, Rc<[Box<str>]>, Rc<[u32]>)>;
 
+/// What every kernel entry point looks up: the installed kernel's address (null while
+/// none is) and the DPI-C import running on this thread, if any. In one thread-local with
+/// no destructor, so a lookup is a single access with no lazy-initialisation state; the
+/// kernel itself is owned by `CURRENT`.
+///
+/// Why a raw address (rule 5): finding the kernel through `CURRENT` (a `RefCell` around an
+/// `Rc`, in a thread-local with a destructor) on every signal access and every await cost
+/// as much as the access. The address is valid exactly while `CURRENT` holds the kernel:
+/// [`install`] sets it after storing the `Rc`, and [`InstallGuard`] clears it before taking
+/// the `Rc` out. Only shared references are made from it, as `CURRENT`'s borrow did.
+struct Entry {
+    kernel: Cell<*const Kernel>,
+    dpi_call: Cell<Option<&'static str>>,
+}
+
 thread_local! {
     static CURRENT: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
+    static ENTRY: Entry = const {
+        Entry {
+            kernel: Cell::new(ptr::null()),
+            dpi_call: Cell::new(None),
+        }
+    };
     static NAMES: RefCell<NameTables> = const { RefCell::new(VecDeque::new()) };
-    /// The DPI-C import running on this thread, if any.
-    static DPI_CALL: Cell<Option<&'static str>> = const { Cell::new(None) };
 }
 
 /// Marks a DPI-C call to `import` in progress on this thread until dropped; see the
@@ -131,33 +170,43 @@ pub(crate) struct DpiCallGuard {
 #[must_use = "the call ends when the guard drops"]
 pub(crate) fn enter_dpi_call(import: &'static str) -> DpiCallGuard {
     DpiCallGuard {
-        previous: DPI_CALL.replace(Some(import)),
+        previous: ENTRY.with(|e| e.dpi_call.replace(Some(import))),
     }
 }
 
 impl Drop for DpiCallGuard {
     fn drop(&mut self) {
-        DPI_CALL.set(self.previous);
+        ENTRY.with(|e| e.dpi_call.set(self.previous));
     }
 }
 
 /// The DPI-C import running on this thread, if one is.
 pub(crate) fn in_dpi_call() -> Option<&'static str> {
-    DPI_CALL.try_with(Cell::get).ok().flatten()
+    ENTRY.with(|e| e.dpi_call.get())
 }
 
 /// Panics if a DPI-C call is in progress; `what` names the attempted operation.
 #[track_caller]
-fn refuse_in_dpi_call(what: &str) {
-    if let Some(import) = in_dpi_call() {
-        panic!(
-            "DPI-C import `{import}` used {what}: DPI functions run inside eval; they can't \
-             access signals or await"
-        );
-    }
+#[cold]
+fn refuse_in_dpi_call(what: &str, import: &str) -> ! {
+    panic!(
+        "DPI-C import `{import}` used {what}: DPI functions run inside eval; they can't \
+         access signals or await"
+    );
+}
+
+/// Runs `f` on the installed kernel (if any) and the DPI-C import running (if any).
+#[expect(unsafe_code, reason = "the installed kernel's address (`Entry`)")]
+fn with_entry<R>(f: impl FnOnce(Option<&Kernel>, Option<&'static str>) -> R) -> R {
+    let (kernel, dpi) = ENTRY.with(|e| (e.kernel.get(), e.dpi_call.get()));
+    // SAFETY: a non-null address is the kernel `CURRENT` holds (see `Entry`). It stays
+    // alive while `f` runs: only the `InstallGuard` of the `Sim::run` below us on the stack
+    // releases it. The reference does not outlive `f`.
+    f(unsafe { kernel.as_ref() }, dpi)
 }
 
 impl Kernel {
+    #[expect(unsafe_code, reason = "the kernel's copy of the models' direct table")]
     pub(crate) fn new(models: Models) -> Self {
         let sim_gen = NEXT_SIM_GEN.fetch_add(1, Ordering::Relaxed);
         let count = models.slot_count();
@@ -177,12 +226,17 @@ impl Kernel {
         Self {
             sim_gen,
             precision: models.precision(),
-            waits: RefCell::new(WaitTable::new(count as usize)),
+            waits: RefCell::new(WaitTable::new(
+                (0..count).map(|s| models.eval_changes(s)).collect(),
+            )),
             log: RefCell::new(WriteLog::new(count as usize)),
             clocks: RefCell::new(Vec::new()),
             names,
             starts,
             widths,
+            // SAFETY: `models` moves into this kernel next to the copy, and the kernel uses
+            // the copy only between model calls (DPI-C entry is refused).
+            direct: unsafe { models.share_direct() },
             models: RefCell::new(models),
             now: Cell::new(SimTime::ZERO),
             phase: Cell::new(Phase::Active),
@@ -196,16 +250,39 @@ impl Kernel {
             cancelling_operand: Cell::new(false),
             unrun_drops: RefCell::new(Vec::new()),
             failure: RefCell::new(None),
-            recorder: RefCell::new(Recorder::default()),
+            has_failed: Cell::new(false),
+            recorder: Recorder::default(),
             counters: Cell::new(KernelStats::default()),
+            walked: Cell::new(None),
+            time_limit: Cell::new(None),
         }
     }
 
     pub(crate) fn record(&self, kind: TraceKind, task: Option<Key>, arg: u64, value: u64) {
+        // The records of every timestep (its step, its first evals, its ReadOnly) have a
+        // fixed tail after the time: hashed with one lookup, to the same value.
+        if task.is_none() && value == 0 {
+            let tail = match (kind, arg) {
+                (TraceKind::Step, 0) => Some(&STEP_TAIL),
+                (TraceKind::ReadOnly, 0) => Some(&READ_ONLY_TAIL),
+                (TraceKind::Eval, n) => EVAL_TAILS.get(usize::try_from(n).unwrap_or(usize::MAX)),
+                _ => None,
+            };
+            if let Some(tail) = tail {
+                let record = TraceRecord {
+                    time: self.now.get(),
+                    kind,
+                    task: u64::MAX,
+                    arg,
+                    value,
+                };
+                return self.recorder.record_fixed(record, tail);
+            }
+        }
         let task = task.map_or(u64::MAX, |k| {
             u64::from(k.index) << 16 | u64::from(gen16(k.gen_))
         });
-        self.recorder.borrow_mut().record(TraceRecord {
+        self.recorder.record(TraceRecord {
             time: self.now.get(),
             kind,
             task,
@@ -221,7 +298,18 @@ impl Kernel {
     }
 
     pub(crate) fn failed(&self) -> bool {
-        self.failure.borrow().is_some()
+        self.has_failed.get()
+    }
+
+    /// The run's failure so far, if any.
+    pub(crate) fn failure(&self) -> Option<Failure> {
+        self.failure.borrow().clone()
+    }
+
+    /// Takes the run's failure, if any (the run is over).
+    pub(crate) fn take_failure(&self) -> Option<Failure> {
+        self.has_failed.set(false);
+        self.failure.borrow_mut().take()
     }
 
     /// Records a failure caused by `task`; only the first failure of a run is kept.
@@ -250,6 +338,7 @@ impl Kernel {
             return;
         }
         self.record(TraceKind::Failure, None, 0, 0);
+        self.has_failed.set(true);
         *self.failure.borrow_mut() = Some(Failure {
             kind,
             time: self.now.get(),
@@ -258,6 +347,14 @@ impl Kernel {
             location,
             message,
         });
+    }
+
+    /// Panics if a synchronous test is running: `what` needs the async scheduler.
+    #[track_caller]
+    pub(crate) fn refuse_in_sync(&self, what: &str) {
+        if self.phase.get() == Phase::Sync {
+            refuse_sync(what);
+        }
     }
 
     /// The hierarchical name of a task, or a placeholder if it no longer exists.
@@ -278,6 +375,16 @@ impl Drop for Kernel {
     }
 }
 
+/// Panics: `what` was used in a synchronous test, which has no scheduler.
+#[track_caller]
+#[cold]
+pub(crate) fn refuse_sync(what: &str) -> ! {
+    panic!(
+        "{what} in a synchronous test (`#[simjig::test(sync)]`): it has no scheduler, tasks \
+         or triggers; step the clock with `SyncClock` (or make the test async)"
+    );
+}
+
 /// Runs `f` on the current kernel.
 ///
 /// # Panics
@@ -285,11 +392,10 @@ impl Drop for Kernel {
 /// operation in the message.
 #[track_caller]
 pub(crate) fn with_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> R {
-    refuse_in_dpi_call(what);
-    CURRENT.with_borrow(|k| match k {
-        Some(k) => f(k),
+    match try_current(what, f) {
+        Some(r) => r,
         None => panic!("{what} needs a running simulation; call it inside Sim::run"),
-    })
+    }
 }
 
 /// Runs `f` on the current kernel, if one is installed.
@@ -298,23 +404,20 @@ pub(crate) fn with_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> R {
 /// Inside a DPI-C call; `what` names the operation in the message.
 #[track_caller]
 pub(crate) fn try_current<R>(what: &str, f: impl FnOnce(&Kernel) -> R) -> Option<R> {
-    refuse_in_dpi_call(what);
-    CURRENT
-        .try_with(|c| c.borrow().as_deref().map(f))
-        .ok()
-        .flatten()
+    let found = with_entry(|kernel, dpi| match dpi {
+        Some(import) => Err(import),
+        None => Ok(kernel.map(f)),
+    });
+    match found {
+        Ok(r) => r,
+        Err(import) => refuse_in_dpi_call(what, import),
+    }
 }
 
 /// Runs `f` on the current kernel if it is simulation `sim_gen`; for `Drop` paths that
 /// must do nothing once their simulation is gone.
 pub(crate) fn with_sim<R>(sim_gen: u32, f: impl FnOnce(&Kernel) -> R) -> Option<R> {
-    CURRENT
-        .try_with(|c| match c.borrow().as_deref() {
-            Some(k) if k.sim_gen == sim_gen => Some(f(k)),
-            _ => None,
-        })
-        .ok()
-        .flatten()
+    with_entry(|kernel, _| kernel.filter(|k| k.sim_gen == sim_gen).map(f))
 }
 
 /// The flat slot of `model`'s own `slot`, given each model's first flat slot.
@@ -334,6 +437,11 @@ pub(crate) fn retired_name(sim_gen: u32, model: usize, slot: u32) -> Option<Box<
     })
 }
 
+/// The installed kernel, shared, if any.
+pub(crate) fn current_kernel() -> Option<Rc<Kernel>> {
+    CURRENT.with_borrow(Option::clone)
+}
+
 /// Installs `kernel` as current until the guard drops.
 pub(crate) fn install(kernel: Rc<Kernel>) -> InstallGuard {
     // `try_borrow_mut`: a combinator polls its operands while it borrows the kernel, so a
@@ -343,7 +451,9 @@ pub(crate) fn install(kernel: Rc<Kernel>) -> InstallGuard {
         let Some(mut c) = installed else {
             panic!("Sim::run cannot be nested inside another Sim::run")
         };
+        let address = Rc::as_ptr(&kernel);
         *c = Some(kernel);
+        ENTRY.with(|e| e.kernel.set(address));
     });
     InstallGuard(())
 }
@@ -352,7 +462,9 @@ pub(crate) struct InstallGuard(());
 
 impl Drop for InstallGuard {
     fn drop(&mut self) {
-        // Take it out first so the kernel is not dropped while the cell is borrowed.
+        // Clear the address before the kernel can go (`Entry`); take it out first so the
+        // kernel is not dropped while the cell is borrowed.
+        ENTRY.with(|e| e.kernel.set(ptr::null()));
         let kernel = CURRENT.with_borrow_mut(Option::take);
         drop(kernel);
     }

@@ -356,7 +356,7 @@ void a_real_is_refused_by_its_type() {
 void abi_field_table_covers_every_field() {
     size_t n = 0;
     const simjig_abi_field* f = simjig_rt_abi_fields(&n);
-    CHECK_EQ(n, 51u);
+    CHECK_EQ(n, 54u);
     const std::pair<const char*, size_t> types[] = {
         {"simjig_model_vtable", sizeof(simjig_model_vtable)},
         {"simjig_signal", sizeof(simjig_signal)},
@@ -376,6 +376,7 @@ void abi_field_table_covers_every_field() {
     }
     CHECK_EQ(i, n);
     CHECK(std::strcmp(f[24].name, "rng_seed") == 0 && f[24].offset == 184);
+    CHECK(std::strcmp(f[27].name, "eval_held") == 0 && f[27].offset == 208);
 }
 
 void plain_model_reports_unsupported() {
@@ -835,6 +836,51 @@ void urandom_streams_are_per_model_and_reproducible() {
     CHECK(draws(p, 8) != alone);
 }
 
+// hold / eval_held / release: held evaluation gives the very values, `$urandom` stream and
+// messages of set_time + eval, reports pending messages in its status, nests with another
+// model's entry points, and an entry point called while held (a trace sample, plain eval)
+// still works; release (and destroy) leave the thread as an unheld run would.
+void held_evaluation_matches_plain_evaluation() {
+    std::vector<uint32_t> plain;
+    {
+        Model a{simjig_vtable_Vtc_full(), "A"};
+        a.reset();
+        plain = draws(a, 8);
+    }
+    Model a{simjig_vtable_Vtc_full(), "A"};
+    a.reset();
+    const simjig_model_vtable* vt = a.vt();
+    CHECK_EQ(vt->hold(a.h()), SIMJIG_OK);
+    std::vector<uint32_t> held;
+    bool display_pending = false;
+    uint64_t t = a.time();
+    for (int i = 0; i < 8; ++i) {
+        a.poke8(0, 1);
+        const simjig_status rise = vt->eval_held(a.h(), t += 5);
+        CHECK_EQ(rise & ~SIMJIG_MSGS_PENDING, SIMJIG_OK);
+        display_pending |= (rise & SIMJIG_MSGS_PENDING) != 0;
+        held.push_back(a.peek32(3));
+        a.poke8(0, 0);
+        CHECK_EQ(vt->eval_held(a.h(), t += 5) & ~SIMJIG_MSGS_PENDING, SIMJIG_OK);
+        if (i == 3) {
+            // Another model's entry points between two held evals, and one of A's own.
+            Model b{simjig_vtable_Vtc_plain(), "B"};
+            b.reset();
+            CHECK_EQ(vt->trace_dump(a.h(), t), SIMJIG_OK);
+        }
+    }
+    CHECK(held == plain);
+    CHECK(display_pending);  // tc's $display at cnt == 3
+    bool display = false;
+    for (const simjig_msg& m : a.drain()) display |= m.kind == SIMJIG_MSG_DISPLAY;
+    CHECK(display);
+    vt->release(a.h());
+    vt->release(a.h());  // twice is harmless
+    // Unheld again: eval_held is set_time + eval.
+    a.poke8(0, 1);
+    CHECK_EQ(vt->eval_held(a.h(), t + 5) & ~SIMJIG_MSGS_PENDING, SIMJIG_OK);
+}
+
 // SIMJIG_INIT_RANDOM draws every initial value from init_seed: the same seed gives the same
 // values and another seed others, while SIMJIG_INIT_ZERO (and a caller compiled before the
 // field, whose `size` ends at argv) gets zeros. Nothing else changes: after a reset the model's
@@ -963,6 +1009,7 @@ int main(int argc, char** argv) {
         {"urandom_streams_are_per_model_and_reproducible",
          urandom_streams_are_per_model_and_reproducible},
         {"random_init_draws_from_its_seed_alone", random_init_draws_from_its_seed_alone},
+        {"held_evaluation_matches_plain_evaluation", held_evaluation_matches_plain_evaluation},
         {"display_is_attributed_to_its_model", display_is_attributed_to_its_model},
         {"contexts_start_no_threads", contexts_start_no_threads},
         {"timing_model_traces_its_own_slots", timing_model_traces_its_own_slots},

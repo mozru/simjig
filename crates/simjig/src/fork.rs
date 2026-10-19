@@ -704,7 +704,7 @@ impl Drop for ChildGuard {
 /// Ends a branch's child that has no result: with the kernel's failure if one was
 /// recorded, else with a failure saying `why`.
 fn end_child_early(why: &str) -> ! {
-    let failure = state::try_current("a fork branch", |k| k.failure.borrow().clone())
+    let failure = state::try_current("a fork branch", state::Kernel::failure)
         .flatten()
         .unwrap_or_else(|| ended_without_result(why));
     imp::finish_child(&wire::failure_report(&failure))

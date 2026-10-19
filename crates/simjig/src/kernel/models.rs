@@ -19,6 +19,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use super::OrInvariant;
 use super::backend::{EvalStatus, ModelBackend, ModelError};
+use super::cell::{DirectTable, HeldEval};
 use super::panics;
 use super::tasks::panic_message;
 use super::time::{Precision, SimTime};
@@ -61,6 +62,16 @@ impl fmt::Display for ModelSetError {
 
 impl std::error::Error for ModelSetError {}
 
+/// The failure of a model whose eval panicked: it is left mid-eval, so the run must stop as
+/// it does for `$fatal`.
+fn eval_panic(payload: &(dyn std::any::Any + Send)) -> ModelError {
+    let at = panics::take().map_or_else(String::new, |l| format!(" at {l}"));
+    ModelError::fatal(format!(
+        "the model panicked during eval: {}{at}",
+        panic_message(payload)
+    ))
+}
+
 /// The models of one simulation; see the module docs.
 pub(crate) struct Models {
     backends: Vec<Box<dyn ModelBackend>>,
@@ -68,6 +79,18 @@ pub(crate) struct Models {
     first: Vec<u32>,
     /// Per flat slot: `(model, the model's own slot)`.
     owner: Vec<(usize, u32)>,
+    /// Per flat slot: its backend's [`Direct`] way to it, if any. Every entry came from a
+    /// backend in `backends`, which lives exactly as long as this table.
+    direct: DirectTable,
+    /// Per model: evaluated, with nothing written since. An eval of such a model that
+    /// [`settles`](ModelBackend::settles) would change nothing, so it is skipped.
+    settled: Vec<bool>,
+    /// Bumped whenever any model's state may have changed (a write, an eval that ran).
+    version: u64,
+    /// Bumped by every write.
+    written: u64,
+    /// Held for a synchronous run ([`sync_begin`](Self::sync_begin)).
+    held: bool,
 }
 
 impl Models {
@@ -91,10 +114,24 @@ impl Models {
             first.push(end);
             owner.extend((0..count).map(|slot| (model, slot)));
         }
+        let settled = vec![false; backends.len()];
+        let slots = owner
+            .iter()
+            .map(|&(model, slot)| backends[model].direct(slot))
+            .collect();
+        #[expect(unsafe_code, reason = "the table's contract, kept by this owner")]
+        // SAFETY: the `Direct`s come from `backends`, which this `Models` owns for as long
+        // as the table, and it reads and writes only between backend calls.
+        let direct = unsafe { DirectTable::new(slots) };
         Ok(Self {
             backends,
             first,
             owner,
+            direct,
+            settled,
+            version: 0,
+            written: 0,
+            held: false,
         })
     }
 
@@ -150,13 +187,34 @@ impl Models {
     }
 
     pub(crate) fn read(&self, flat: u32, out: &mut [u32]) {
+        if self.direct.read(flat, out) {
+            return;
+        }
         let (backend, slot) = self.owner(flat);
         backend.read(slot, out);
     }
 
     pub(crate) fn write(&mut self, flat: u32, value: &[u32]) {
         let (model, slot) = self.owner[flat as usize];
-        self.backends[model].write(slot, value);
+        self.settled[model] = false;
+        self.version += 1;
+        self.written += 1;
+        if !self.direct.write(flat, value) {
+            self.backends[model].write(slot, value);
+        }
+    }
+
+    /// A copy of the slots' direct ways, for the kernel's signal handles.
+    ///
+    /// # Safety
+    /// The copy is used only while this `Models` is alive, and only between backend calls.
+    #[expect(
+        unsafe_code,
+        reason = "hands out a copy of the table under its contract"
+    )]
+    pub(crate) unsafe fn share_direct(&self) -> DirectTable {
+        // SAFETY: the caller's promise is the table's contract.
+        unsafe { self.direct.share() }
     }
 
     pub(crate) fn set_time(&mut self, time: SimTime) {
@@ -171,18 +229,127 @@ impl Models {
     /// A panic inside a model's eval (a [`FakeModel`](super::fake::FakeModel) closure) is
     /// a fatal error of that model, naming the panic and its line: the model is left
     /// mid-eval, so the run must stop as it does for `$fatal`.
-    pub(crate) fn eval(&mut self) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+    ///
+    /// A model that settles and was written nothing since its last eval is not evaluated:
+    /// its eval would be a no-op. The kernel still counts and records it as an eval, so
+    /// the trace (and its hash) is the same as if it ran. In a clocked testbench this
+    /// skips the eval that opens each timestep and the last one of each delta loop.
+    ///
+    /// `time` is the current time (the last [`set_time`](Self::set_time)): a held model is
+    /// evaluated with [`ModelBackend::eval_at`], which sets it again in the same call.
+    pub(crate) fn eval(
+        &mut self,
+        time: SimTime,
+    ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+        if self.held {
+            if self.settled[0] && self.backends[0].settles() {
+                return Ok(());
+            }
+            self.version += 1;
+            // No panic barrier: a held model runs no Rust code in its eval (`eval_at`).
+            return match self.backends[0].eval_at(time) {
+                Ok(EvalStatus::Running) => {
+                    self.settled[0] = true;
+                    Ok(())
+                }
+                other => Err((0, other)),
+            };
+        }
         for (model, backend) in self.backends.iter_mut().enumerate() {
+            if self.settled[model] && backend.settles() {
+                continue;
+            }
+            self.version += 1;
             panics::forget();
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval()));
-            let status = outcome.unwrap_or_else(|payload| {
-                let at = panics::take().map_or_else(String::new, |l| format!(" at {l}"));
-                Err(ModelError::fatal(format!(
-                    "the model panicked during eval: {}{at}",
-                    panic_message(&*payload)
-                )))
-            });
+            let status = outcome.unwrap_or_else(|payload| Err(eval_panic(&*payload)));
             match status {
+                Ok(EvalStatus::Running) => self.settled[model] = true,
+                other => return Err((model, other)),
+            }
+        }
+        Ok(())
+    }
+
+    /// A number that changes whenever any model's values may have changed: equal numbers
+    /// mean nothing was written and nothing evaluated in between.
+    pub(crate) fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// A number that changes with every write (not with evals).
+    pub(crate) fn written(&self) -> u64 {
+        self.written
+    }
+
+    /// Whether an eval may change flat slot `flat` ([`ModelBackend::eval_changes`]).
+    pub(crate) fn eval_changes(&self, flat: u32) -> bool {
+        let (backend, slot) = self.owner(flat);
+        backend.eval_changes(slot)
+    }
+
+    /// Starts a run ([`ModelBackend::sync_begin`]); only a lone model is held, since a held
+    /// model must be the only one evaluated.
+    pub(crate) fn sync_begin(&mut self) {
+        if let [backend] = self.backends.as_mut_slice() {
+            self.held = backend.sync_begin();
+        }
+    }
+
+    /// Ends [`sync_begin`](Self::sync_begin).
+    pub(crate) fn sync_end(&mut self) {
+        self.held = false;
+        for backend in &mut self.backends {
+            backend.sync_end();
+        }
+    }
+
+    /// The held model's eval, while held ([`ModelBackend::held_eval`]).
+    pub(crate) fn held_eval(&self) -> Option<HeldEval> {
+        if self.held {
+            self.backends[0].held_eval()
+        } else {
+            None
+        }
+    }
+
+    /// What the held model's non-OK raw status means ([`ModelBackend::held_outcome`]).
+    pub(crate) fn held_outcome(
+        &mut self,
+        raw: i32,
+    ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+        match self.backends[0].held_outcome(raw) {
+            Ok(EvalStatus::Running) => Ok(()),
+            other => Err((0, other)),
+        }
+    }
+
+    /// Whether the models are held for a synchronous run: no backend call can run while
+    /// the testbench does (no waves to sample, no DPI-C import implemented in Rust).
+    pub(crate) fn held(&self) -> bool {
+        self.held
+    }
+
+    /// Evaluates every model at `time`, in declaration order, as [`eval`](Self::eval) does
+    /// (with the same handling of a panic), through [`ModelBackend::eval_at`]; for a
+    /// synchronous run, where every eval runs.
+    pub(crate) fn eval_at(
+        &mut self,
+        time: SimTime,
+    ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+        self.version += 1;
+        if self.held {
+            // A held model runs no Rust code in its eval (no DPI-C import implemented in
+            // Rust, no waves), so nothing can panic there to catch.
+            return match self.backends[0].eval_at(time) {
+                Ok(EvalStatus::Running) => Ok(()),
+                other => Err((0, other)),
+            };
+        }
+        for (model, backend) in self.backends.iter_mut().enumerate() {
+            panics::forget();
+            let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval_at(time)));
+            match outcome.unwrap_or_else(|payload| Err(eval_panic(&*payload))) {
                 Ok(EvalStatus::Running) => {}
                 other => return Err((model, other)),
             }

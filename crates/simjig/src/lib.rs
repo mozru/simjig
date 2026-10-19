@@ -92,6 +92,7 @@ pub use kernel::signal::RawSig;
 pub use kernel::sim::{CoverageError, Sim};
 pub use kernel::state::KernelStats;
 pub use kernel::sync::{Event, EventWait, Get, Lock, LockFuture, LockGuard, Put, Queue};
+pub use kernel::sync_clock::SyncClock;
 pub use kernel::tasks::{Task, scope, spawn};
 pub use kernel::time::{
     Precision, SimDuration, SimTime, TimeDisplay, TimeError, TimeUnit, fs, ms, ns, ps, us,
@@ -103,7 +104,9 @@ pub use kernel::trigger::{
 pub use model::meta::LoadError;
 pub use model::trace::TraceOptions;
 pub use model::values::{FieldDiff, InvalidEnum};
-pub use signal::{In, InOut, Out, PublicRd, PublicRw, RawWords, Value, Vector};
+pub use signal::{
+    Bind, Bound, BoundMut, In, InOut, Out, PublicRd, PublicRw, RawWords, Value, Vector,
+};
 
 /// Bit-vector values with SystemVerilog semantics (`Bit`, `Bits<N>`, `WideBits`, the
 /// `Packed` trait): the `simjig-bits` crate.
@@ -117,7 +120,7 @@ pub use simjig_macros::test;
 pub mod __private {
     pub use crate::harness::runner::{
         DEFAULT_TIMEOUT_MS, RunEnv, TestMeta, TestOutcome, Timeout, TimeoutArg, assert_test_output,
-        run, run_test,
+        run, run_sync, run_sync_test, run_test,
     };
     pub use crate::harness::waves::{WavesRequest, WavesWhen, Window, WindowEnd};
     pub use crate::kernel::combinator::{Fork, MaybeDone, Operand};

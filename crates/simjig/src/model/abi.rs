@@ -22,8 +22,13 @@ use std::ffi::{CStr, c_char, c_void};
 use std::marker::{PhantomData, PhantomPinned};
 use std::mem::{align_of, offset_of, size_of};
 
+pub(crate) use crate::kernel::cell::{Narrow, read_narrow, write_narrow};
+
 /// `SIMJIG_ABI_VERSION`: bumped only on an incompatible change.
 pub(crate) const ABI_VERSION: u32 = 1;
+
+/// `SIMJIG_MSGS_PENDING`: or'ed into `eval_held`'s status when messages wait to be drained.
+pub(crate) const MSGS_PENDING: i32 = 0x100;
 
 /// `SIMJIG_TIME_NONE`: `next_time_slot` found no pending timed event.
 pub(crate) const TIME_NONE: u64 = u64::MAX;
@@ -31,6 +36,8 @@ pub(crate) const TIME_NONE: u64 = u64::MAX;
 /// `SIMJIG_CREATE_ECHO`: also print captured messages to stdout.
 pub(crate) const CREATE_ECHO: u32 = 1;
 
+/// `SIMJIG_FEATURE_TIMING`: verilated with `--timing`, so the model has timed events.
+pub(crate) const FEATURE_TIMING: u64 = 1;
 /// `SIMJIG_FEATURE_TRACE_FST`: verilated with `--trace-fst`, so the `trace_*` entries work.
 pub(crate) const FEATURE_TRACE_FST: u64 = 2;
 /// `SIMJIG_FEATURE_COVERAGE`: verilated with `--coverage` (any kind), so the `cov_*`
@@ -266,6 +273,11 @@ pub(crate) struct ModelVtable {
     pub(crate) cov_zero: unsafe extern "C" fn(*mut Handle) -> i32,
     pub(crate) cov_write: unsafe extern "C" fn(*mut Handle, *const c_char) -> i32,
     pub(crate) rng_seed: unsafe extern "C" fn(*mut Handle, u64) -> i32,
+    /// `hold`: installs the model on this thread until `release` (held evaluation).
+    pub(crate) hold: unsafe extern "C" fn(*mut Handle) -> i32,
+    pub(crate) release: unsafe extern "C" fn(*mut Handle),
+    /// `eval_held`: set the time and eval; [`MSGS_PENDING`] or'ed in when messages wait.
+    pub(crate) eval_held: unsafe extern "C" fn(*mut Handle, u64) -> i32,
 }
 
 /// One field of a mirrored struct, named as in the header.
@@ -325,7 +337,7 @@ macro_rules! abi_fields {
 }
 
 abi_fields! {
-    "simjig_model_vtable" ModelVtable = 192 {
+    "simjig_model_vtable" ModelVtable = 216 {
         abi_version @ 0,
         size @ 4,
         prefix @ 8,
@@ -351,6 +363,9 @@ abi_fields! {
         cov_zero @ 168,
         cov_write @ 176,
         rng_seed @ 184,
+        hold @ 192,
+        release @ 200,
+        eval_held @ 208,
     }
     "simjig_signal" Signal = 32 {
         id @ 0,
@@ -573,15 +588,6 @@ pub(crate) enum Cell {
     Wide(*mut u32),
 }
 
-/// A pointer to a `CData`, `SData`, `IData` or `QData` member.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Narrow {
-    C(*mut u8),
-    S(*mut u16),
-    I(*mut u32),
-    Q(*mut u64),
-}
-
 impl Cell {
     /// The storage class this cell was decoded from.
     pub(crate) fn storage(self) -> Storage {
@@ -603,62 +609,6 @@ impl Decoded {
     pub(crate) unsafe fn name(&self) -> String {
         // SAFETY: the table's names are NUL-terminated static strings (caller's precondition).
         unsafe { c_string(self.name) }
-    }
-}
-
-/// Mask of the bits a `width`-bit value may use in its lowest 64 bits.
-fn mask(width: u32) -> u64 {
-    if width >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << width) - 1
-    }
-}
-
-/// Reads a signal of at most 64 bits.
-///
-/// # Safety
-/// - `cell` comes from a row of a live model's signal table with `ACCESS_READ`;
-/// - no entry point of that model runs concurrently.
-#[inline]
-pub(crate) unsafe fn read_narrow(cell: Narrow) -> u64 {
-    // Each pointer is a live, aligned member of exactly that storage type (the C++ shim
-    // static_asserts type and size; `decode` checked the class); the caller guarantees
-    // liveness.
-    match cell {
-        // SAFETY: a live CData (u8).
-        Narrow::C(p) => u64::from(unsafe { p.read() }),
-        // SAFETY: a live, 2-aligned SData (u16).
-        Narrow::S(p) => u64::from(unsafe { p.read() }),
-        // SAFETY: a live, 4-aligned IData (u32).
-        Narrow::I(p) => u64::from(unsafe { p.read() }),
-        // SAFETY: a live, 8-aligned QData (u64).
-        Narrow::Q(p) => unsafe { p.read() },
-    }
-}
-
-/// Writes a signal of at most 64 bits, masking `value` to `width`: Verilator assumes the
-/// unused upper bits are zero.
-///
-/// # Safety
-/// As for [`read_narrow`], with `ACCESS_WRITE`, and `width` is the row's width.
-#[inline]
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "the value is masked to the width, which fits the storage"
-)]
-pub(crate) unsafe fn write_narrow(cell: Narrow, width: u32, value: u64) {
-    let v = value & mask(width);
-    // As in read_narrow; after masking, `v` fits the storage type, so the casts lose nothing.
-    match cell {
-        // SAFETY: a live, writable CData (u8).
-        Narrow::C(p) => unsafe { p.write(v as u8) },
-        // SAFETY: a live, writable, 2-aligned SData (u16).
-        Narrow::S(p) => unsafe { p.write(v as u16) },
-        // SAFETY: a live, writable, 4-aligned IData (u32).
-        Narrow::I(p) => unsafe { p.write(v as u32) },
-        // SAFETY: a live, writable, 8-aligned QData (u64).
-        Narrow::Q(p) => unsafe { p.write(v) },
     }
 }
 

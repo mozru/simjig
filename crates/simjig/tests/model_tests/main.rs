@@ -45,6 +45,8 @@ mod handles;
 mod init;
 #[cfg(simjig_test_models)]
 mod messages;
+#[cfg(simjig_test_models)]
+mod sync;
 
 #[cfg(simjig_test_models)]
 use simjig::{Clock, Precision, RawSig, Sim, SimDuration, TimeUnit};

@@ -1,7 +1,6 @@
 # simjig guide
 
-The longer user topics that the top `README.md` only touches. Each section stands on its
-own.
+Topics the README only touches on. Each section stands on its own.
 
 ## Tests
 
@@ -20,9 +19,7 @@ reads that file at the root of the Cargo workspace.
 testbench's own under a glob import: write `use simjig::{In, Out};` in a helper that names
 a handle type.
 
-The quickstart's `Cargo.toml` has an optional lint table: the repository's lints, with
-`unwrap_used`, `expect_used` and `missing_docs` allowed so tests may unwrap. Cargo cannot
-extend `[lints] workspace = true` with local entries, so the table lists every lint.
+The quickstart's `Cargo.toml` allows `unwrap` in tests.
 
 ## Values
 
@@ -238,10 +235,10 @@ start, and the `repro:` line carries `SIMJIG_INIT=random`. `$urandom` is not aff
 
 ## Waves
 
-A run is never traced while it first runs. When you ask for waves, the harness replays the
-test with the same seed in a child process, traces the end of the run, checks that the
-replay ended the same way, and writes `waves.fst` and a GTKWave `waves.gtkw` (with a marker
-at the failure) into the run directory. Each model and each `fork` branch gets its own
+Tests run untraced; for waves simjig replays the seed with tracing on. The replay runs in
+a child process, traces the end of the run, checks that it ended the same way, and writes
+`waves.fst` and a GTKWave `waves.gtkw` (with a marker at the failure) into the run
+directory. Each model and each `fork` branch gets its own
 file, listed in the report.
 
 ```sh
@@ -369,7 +366,8 @@ work as in async tests. What a synchronous test does not have:
   only by `cargo clippy` (`let_underscore_future`).
 - No delta cycles: the model settles inside each eval.
 - One clock. A second clock domain needs an async test.
-- No trace hash, so the determinism check compares only how the run ended.
+- No trace hash (a per-run fingerprint of every event), so the determinism check compares
+  only how the run ended.
 
 ## Differences from cocotb
 

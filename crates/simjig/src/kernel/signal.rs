@@ -428,6 +428,11 @@ impl WriteLog {
         Ok(())
     }
 
+    /// Whether nothing was logged since the last `take`.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Slots with a pending write, in write order.
     pub(crate) fn pending_slots(&self) -> Vec<u32> {
         self.entries.iter().map(|e| e.slot).collect()

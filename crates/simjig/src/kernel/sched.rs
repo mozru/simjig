@@ -133,22 +133,7 @@ fn step(k: &Kernel) {
     run_ready(k);
     // The clock edges due at `t` are logged before any Timer task runs, so a Timer task
     // that stops a clock or writes its signal at `t` comes after that edge in the log.
-    // One clock at a time, with no borrow of the clocks held across the write; a write
-    // never touches a clock, so this logs what collecting every edge first would.
-    let clocks = k.clocks.borrow().len();
-    for i in 0..clocks {
-        let edge = {
-            let mut clocks = k.clocks.borrow_mut();
-            let c = &mut clocks[i];
-            c.running
-                .as_mut()
-                .filter(|r| r.next_time == t)
-                .map(|r| (c.slot, r.take_edge()))
-        };
-        if let Some((slot, level)) = edge {
-            signal::write(k, slot, &[level], Writer::Clock, None);
-        }
-    }
+    log_clock_edges(k, t);
     // One Timer at a time, each followed by every task it makes ready (cocotb runs its
     // event loop after each GPI callback). So a task woken by an older Timer, and any task
     // it wakes in turn, runs before the waiter of a younger Timer due at the same time:
@@ -182,13 +167,20 @@ fn step(k: &Kernel) {
             rounds += 1;
             evals = 0;
         }
-        fire_and_wake(k, WaitTable::fire_read_write);
-        run_ready(k);
-        if stopped(k) {
-            return;
+        // A round with no ReadWrite waiter and nothing logged would wake nobody, run nothing
+        // (every ready task has run), apply nothing and walk nothing (no model changed
+        // since the walk after the last eval): skip straight to its end.
+        let quiet = waiters.is_empty() && k.log.borrow().is_empty();
+        let mut applied = false;
+        if !quiet {
+            fire_and_wake(k, WaitTable::fire_read_write);
+            run_ready(k);
+            if stopped(k) {
+                return;
+            }
+            applied = apply_and_compare(k);
+            run_ready(k);
         }
-        let applied = apply_and_compare(k);
-        run_ready(k);
         if !applied && !model_event_now(k) {
             break;
         }
@@ -202,6 +194,27 @@ fn step(k: &Kernel) {
     run_ready(k);
     if k.phase.get() == Phase::ReadOnly {
         k.phase.set(Phase::Active);
+    }
+}
+
+/// Logs the edge of every clock due at `t`, in declaration order.
+///
+/// One clock at a time, with no borrow of the clocks held across the write; a write never
+/// touches a clock, so this logs what collecting every edge first would.
+fn log_clock_edges(k: &Kernel, t: SimTime) {
+    let clocks = k.clocks.borrow().len();
+    for i in 0..clocks {
+        let edge = {
+            let mut clocks = k.clocks.borrow_mut();
+            let c = &mut clocks[i];
+            c.running
+                .as_mut()
+                .filter(|r| r.next_time == t)
+                .map(|r| (c.slot, r.take_edge()))
+        };
+        if let Some((slot, level)) = edge {
+            signal::write(k, slot, &[level], Writer::Clock, None);
+        }
     }
 }
 
@@ -309,6 +322,12 @@ fn read_write_limit(k: &Kernel, waiters: &[(Option<Key>, Option<&'static Locatio
 /// Applies the write log, then fires the value changes since the previous comparison.
 /// Returns whether any write was applied.
 fn apply_and_compare(k: &Kernel) -> bool {
+    // An empty log has nothing to apply, and no slot holds its delta's epoch, so skipping
+    // `take` (which would start a new delta) changes nothing.
+    if k.log.borrow().is_empty() {
+        fire_value_changes(k);
+        return false;
+    }
     let writes = k.log.borrow_mut().take();
     {
         let mut model = k.models.borrow_mut();

@@ -302,6 +302,9 @@ impl ReadyQueue {
 #[track_caller]
 pub fn spawn<T: 'static>(name: &str, future: impl Future<Output = T> + 'static) -> Task<T> {
     let at = Location::caller();
+    if state::with_current("spawn", |k| k.phase.get()) == Phase::Sync {
+        state::refuse_sync("spawn");
+    }
     state::with_current("spawn", |k| {
         let parent = k.current.get();
         spawn_in(k, parent, name, future, at)

@@ -57,6 +57,13 @@ fn poll_registered(
     match reg {
         None => {
             let registered = state::try_current(what, |k| {
+                if k.phase.get() == Phase::Sync {
+                    return Err(format!(
+                        "{what} awaited in a synchronous test (`#[simjig::test(sync)]`): it has \
+                         no scheduler, tasks or triggers; step the clock with `SyncClock` (or make \
+                         the test async)"
+                    ));
+                }
                 register(k).map(|on| Registration::new(k, on, cx, Some(at)))
             });
             match registered {

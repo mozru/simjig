@@ -41,7 +41,7 @@
 
 use std::panic::Location;
 
-use super::backend::{EvalStatus, ModelErrorKind};
+use super::backend::{EvalStatus, ModelError, ModelErrorKind};
 use super::clock::ClockEntry;
 use super::failure::{BlockedTask, FailureKind};
 use super::recorder::TraceKind;
@@ -262,6 +262,12 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
     let Err((model, status)) = status else {
         return true;
     };
+    eval_failed(k, model, status);
+    false
+}
+
+/// Fails the run for model `model`'s eval `status` (anything but `Running`).
+pub(crate) fn eval_failed(k: &Kernel, model: usize, status: Result<EvalStatus, ModelError>) {
     // With one model, messages stay as they were; with several, they name the model.
     let which = if k.models.borrow().len() > 1 {
         format!("model {model}: ")
@@ -293,7 +299,6 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
             k.fail(kind, None, e.location, message);
         }
     }
-    false
 }
 
 /// Fails the run as `ReadWriteLimit`, naming the `ReadWrite` waiters (the first one is the

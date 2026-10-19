@@ -294,6 +294,10 @@ struct Executed {
 ///
 /// # Panics
 /// If the test's `timeout` is not a whole number of ticks of the design's precision.
+#[expect(
+    clippy::result_large_err,
+    reason = "a run returns once, and Failure stays plain data that tests match on"
+)]
 pub fn run<D, F, Fut>(meta: &TestMeta, env: &RunEnv, body: F) -> TestOutcome
 where
     D: DutModel,
@@ -301,6 +305,36 @@ where
     Fut: Future + 'static,
     Fut::Output: TestOutput,
 {
+    run_with(meta, env, |sim: &mut Sim, ctx, dut| {
+        sim.run(body(ctx, dut)).and_then(TestOutput::into_result)
+    })
+}
+
+/// As [`run`], for a synchronous test (`#[simjig::test(sync)]`): `body` runs through
+/// [`Sim::run_sync`].
+#[expect(
+    clippy::result_large_err,
+    reason = "a run returns once, and Failure stays plain data that tests match on"
+)]
+pub fn run_sync<D, F, R>(meta: &TestMeta, env: &RunEnv, body: F) -> TestOutcome
+where
+    D: DutModel,
+    F: FnOnce(TestCtx, D) -> R,
+    R: TestOutput,
+{
+    run_with(meta, env, |sim: &mut Sim, ctx, dut| {
+        sim.run_sync(|| body(ctx, dut))
+            .and_then(TestOutput::into_result)
+    })
+}
+
+/// [`run`] and [`run_sync`]: the seed, options, context and run directory around
+/// `go`, which runs the body on the built simulation.
+fn run_with<D: DutModel>(
+    meta: &TestMeta,
+    env: &RunEnv,
+    go: impl FnOnce(&mut Sim, TestCtx, D) -> Result<(), Failure>,
+) -> TestOutcome {
     // A branch an earlier run on this thread recorded is not this run's.
     crate::fork::forget_failed_branch();
     let test = meta.test_path();
@@ -323,7 +357,7 @@ where
         launcher: env.launcher.clone(),
         binary: env.binary.clone(),
     };
-    let executed = execute(meta, &options, ctx, body);
+    let executed = execute(meta, &options, ctx, go);
     finish(run, env, &options, executed)
 }
 
@@ -334,13 +368,12 @@ fn init_values(meta: &TestMeta, env: &RunEnv) -> InitValues {
     meta.init.or(env.init).unwrap_or_default()
 }
 
-fn execute<D, F, Fut>(meta: &TestMeta, options: &ModelOptions, ctx: TestCtx, body: F) -> Executed
-where
-    D: DutModel,
-    F: FnOnce(TestCtx, D) -> Fut,
-    Fut: Future + 'static,
-    Fut::Output: TestOutput,
-{
+fn execute<D: DutModel>(
+    meta: &TestMeta,
+    options: &ModelOptions,
+    ctx: TestCtx,
+    go: impl FnOnce(&mut Sim, TestCtx, D) -> Result<(), Failure>,
+) -> Executed {
     let failed = |sim, result| Executed {
         sim,
         timeout: None,
@@ -361,7 +394,7 @@ where
     if let Some(timeout) = timeout {
         sim.set_time_limit(SimTime(timeout.duration.ticks()));
     }
-    let result = sim.run(body(ctx, dut)).and_then(TestOutput::into_result);
+    let result = go(&mut sim, ctx, dut);
     Executed {
         sim: Some(sim),
         timeout,
@@ -516,13 +549,33 @@ where
 {
     let env = RunEnv::from_process();
     let outcome = run(meta, &env, body);
+    report_test(meta, &env, outcome);
+}
+
+/// As [`run_test`], for a synchronous test (`#[simjig::test(sync)]`).
+///
+/// # Panics
+/// If the test failed, with the report as the payload (printed once, on stderr).
+pub fn run_sync_test<D, F, R>(meta: &TestMeta, body: F)
+where
+    D: DutModel,
+    F: FnOnce(TestCtx, D) -> R,
+    R: TestOutput,
+{
+    let env = RunEnv::from_process();
+    let outcome = run_sync(meta, &env, body);
+    report_test(meta, &env, outcome);
+}
+
+/// Replays for waves if asked, prints the report, and fails the calling `#[test]`.
+fn report_test(meta: &TestMeta, env: &RunEnv, outcome: TestOutcome) {
     if let Some(error) = &outcome.run_dir_error {
         eprintln!("simjig: run directory not written: {error}");
     }
     let waves = env
         .waves
         .filter(|w| w.applies(outcome.failure.is_some()) && worth_replaying(w, &outcome))
-        .map(|request| replay_with_waves(meta, &env, &outcome, &request));
+        .map(|request| replay_with_waves(meta, env, &outcome, &request));
     if let Some(mut report) = outcome.failure {
         report.waves = waves;
         let text = report.to_string();

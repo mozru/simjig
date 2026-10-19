@@ -42,6 +42,9 @@ pub(crate) enum Phase {
     ReadOnly,
     /// The run is over and tasks are being dropped; writes are discarded.
     Ended,
+    /// A synchronous test ([`Sim::run_sync`](crate::Sim::run_sync)) is running: writes go
+    /// to the model at once, and there are no tasks, triggers or regions.
+    Sync,
 }
 
 /// Counters exposed through [`Sim::stats`](crate::Sim::stats).
@@ -103,6 +106,9 @@ pub(crate) struct Kernel {
     has_failed: Cell<bool>,
     pub(crate) recorder: Recorder,
     pub(crate) counters: Cell<KernelStats>,
+    /// The run's time limit, for a synchronous run (`kernel::sync_clock`); an async run checks
+    /// `Sim`'s own.
+    pub(crate) time_limit: Cell<Option<SimTime>>,
     /// [`Models::version`] and [`Models::written`] when the last value-change walk began
     /// (`sched`).
     pub(crate) walked: Cell<Option<(u64, u64)>>,
@@ -239,6 +245,7 @@ impl Kernel {
             recorder: Recorder::default(),
             counters: Cell::new(KernelStats::default()),
             walked: Cell::new(None),
+            time_limit: Cell::new(None),
         }
     }
 
@@ -313,6 +320,14 @@ impl Kernel {
         });
     }
 
+    /// Panics if a synchronous test is running: `what` needs the async scheduler.
+    #[track_caller]
+    pub(crate) fn refuse_in_sync(&self, what: &str) {
+        if self.phase.get() == Phase::Sync {
+            refuse_sync(what);
+        }
+    }
+
     /// The hierarchical name of a task, or a placeholder if it no longer exists.
     pub(crate) fn task_name(&self, key: Key) -> String {
         self.tasks
@@ -329,6 +344,16 @@ impl Drop for Kernel {
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|&(g, _)| g != self.sim_gen);
     }
+}
+
+/// Panics: `what` was used in a synchronous test, which has no scheduler.
+#[track_caller]
+#[cold]
+pub(crate) fn refuse_sync(what: &str) -> ! {
+    panic!(
+        "{what} in a synchronous test (`#[simjig::test(sync)]`): it has no scheduler, tasks \
+         or triggers; step the clock with `SyncClock` (or make the test async)"
+    );
 }
 
 /// Runs `f` on the current kernel.
@@ -381,6 +406,11 @@ pub(crate) fn retired_name(sim_gen: u32, model: usize, slot: u32) -> Option<Box<
         let flat = flat_slot(starts, model, slot)?;
         names.get(flat as usize).cloned()
     })
+}
+
+/// The installed kernel, shared, if any.
+pub(crate) fn current_kernel() -> Option<Rc<Kernel>> {
+    CURRENT.with_borrow(Option::clone)
 }
 
 /// Installs `kernel` as current until the guard drops.

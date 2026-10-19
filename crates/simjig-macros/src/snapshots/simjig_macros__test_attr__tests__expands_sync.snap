@@ -1,0 +1,32 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(sync, timeout = \"1us\"), quote!\n{ fn drive(ctx: &TestCtx, dut: Counter) -> simjig::Result { Ok(()) } })"
+---
+#[::core::prelude::v1::test]
+fn drive() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    fn drive(ctx: &TestCtx, dut: Counter) -> simjig::Result {
+        Ok(())
+    }
+    ::simjig::__private::assert_test_output::<simjig::Result>();
+    ::simjig::__private::run_sync_test::<
+        Counter,
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(drive),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::simjig::__private::TimeoutArg::Given(::simjig::__private::Timeout {
+                value: 1u64,
+                unit: ::simjig::TimeUnit::Us,
+            }),
+            ignored: false,
+            should_panic: false,
+            init: ::core::option::Option::None,
+            trace_hash: false,
+        },
+        |__simjig_ctx, __simjig_dut| drive(&__simjig_ctx, __simjig_dut),
+    );
+}

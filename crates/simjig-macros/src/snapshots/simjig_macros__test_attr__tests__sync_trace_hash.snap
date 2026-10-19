@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(sync, trace_hash = false), quote! { fn t(dut: Counter) {} })"
+---
+error: a synchronous test (`sync`) keeps no trace hash; drop `trace_hash`

@@ -3,14 +3,14 @@
 
 use std::fmt;
 use std::future::Future;
-use std::panic::Location;
+use std::panic::{self, AssertUnwindSafe, Location};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::OrInvariant;
 use super::backend::{CoverageFault, ModelBackend};
 use super::clock::{Clock, ClockEntry, ClockError, ClockHandle, ClockState};
-use super::failure::Failure;
+use super::failure::{Failure, FailureKind};
 use super::fake::FakeModel;
 use super::models::{ModelSetError, Models};
 use super::panics;
@@ -18,6 +18,7 @@ use super::recorder::TraceRecord;
 use super::sched;
 use super::signal::RawSig;
 use super::state::{self, Kernel, KernelStats, Phase};
+use super::sync_clock;
 use super::tasks;
 use super::time::{Precision, SimTime};
 
@@ -259,6 +260,61 @@ impl Sim {
             (Some(failure), _) => Err(failure),
             (None, Some(value)) => Ok(value),
             (None, None) => unreachable!("invariant: a run ends with a result or a failure"),
+        }
+    }
+
+    /// Runs `body` as a synchronous test (`#[simjig::test(sync)]`): no tasks, triggers or
+    /// regions; the body steps the clock with [`SyncClock`](crate::SyncClock), sets inputs and
+    /// reads outputs (see `kernel::sync_clock`). The model is evaluated once at t = 0 first. No
+    /// trace hash is kept.
+    ///
+    /// A failure of the model or the time limit ends the body (it unwinds out of the
+    /// `SyncClock` call) and is returned; a panic in the body is a `TaskPanic` of `main`.
+    ///
+    /// # Panics
+    /// If called twice on one `Sim`, or from inside another `Sim::run` on this thread.
+    #[expect(
+        clippy::result_large_err,
+        reason = "a run returns once, and Failure stays plain data that tests match on"
+    )]
+    pub fn run_sync<T>(&mut self, body: impl FnOnce() -> T) -> Result<T, Failure> {
+        assert!(!self.ran, "Sim::run can be called only once per Sim");
+        self.ran = true;
+        let k = Rc::clone(&self.kernel);
+        k.recorder.stop_hashing();
+        k.time_limit.set(self.time_limit);
+        let guard = state::install(Rc::clone(&k));
+        let capture = panics::capture();
+        k.phase.set(Phase::Sync);
+        let result = if sync_clock::first_eval(&k) {
+            panics::forget();
+            match panic::catch_unwind(AssertUnwindSafe(body)) {
+                Ok(value) => Some(value),
+                Err(payload) if payload.is::<sync_clock::Stopped>() => None,
+                Err(payload) => {
+                    let location = panics::take();
+                    let message = tasks::panic_message(&*payload);
+                    k.fail_named(
+                        FailureKind::TaskPanic {
+                            message: message.clone(),
+                        },
+                        Some("main".to_owned()),
+                        location,
+                        format!("panicked: {message}"),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        k.phase.set(Phase::Ended);
+        drop(capture);
+        drop(guard);
+        match (k.take_failure(), result) {
+            (Some(failure), _) => Err(failure),
+            (None, Some(value)) => Ok(value),
+            (None, None) => unreachable!("invariant: a stopped run recorded its failure"),
         }
     }
 

@@ -2,7 +2,7 @@
 source: crates/simjig-macros/src/test_attr.rs
 expression: "render(quote!(), quote!\n{ const unsafe fn bad<T>(a: &mut Ctx, b: A, c: B, d: C, e: D, f: E) {} })"
 ---
-error: `#[simjig::test]` needs an `async fn`: the body runs as the simulation's main task
+error: `#[simjig::test]` needs an `async fn`: the body runs as the simulation's main task (or write a synchronous test, a plain `fn`, with `#[simjig::test(sync)]`)
 error: a simjig test cannot be `const`
 error: a simjig test cannot be `unsafe`
 error: a simjig test cannot be generic; name the DUT type in the parameter list, or list the DUT types to run a generic body on: `duts = [small::Dut, big::Dut]`

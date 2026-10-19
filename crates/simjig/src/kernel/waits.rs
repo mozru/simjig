@@ -757,6 +757,7 @@ impl Registration {
         cx: &Context<'_>,
         at: Option<&'static Location<'static>>,
     ) -> Self {
+        k.refuse_in_sync("awaiting a trigger");
         let model = k.models.borrow();
         let waiter = NewWaiter {
             on,

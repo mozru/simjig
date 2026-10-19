@@ -4,6 +4,15 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Synchronous tests: `#[simjig::test(sync)]` on a plain `fn` (also with `duts = [..]`,
+  `init`, `timeout`) runs it through `Sim::run_sync`, with `simjig::SyncClock` (`tick()`:
+  rise, eval, fall, eval; `rise()`, `fall()`, `ticks(n)`) as its clock. A `set` goes into the
+  model at once and the next eval takes it; there are no tasks, triggers, regions or delta
+  cycles (`spawn`, a kernel clock and an awaited trigger panic, naming the mode); no trace
+  hash is kept. Seeds, `ctx.rng`, random init, the time limit and the failure report with
+  its `repro:` line work as in async tests. Generated code: `run_sync_test` for a `sync`
+  test (snapshot `expands_sync`); the macro's errors mention `sync`
+  (`harness_ui/not_async.stderr`, `bad_timeout.stderr`, reviewed).
 - `#[simjig::test(trace_hash = false)]`: the run keeps no trace hash (about 16% faster on
   the benchmark's FIFO testbench). Generated code: `TestMeta` gains `trace_hash` (every
   expansion snapshot of `simjig_macros::test_attr` shows `trace_hash: true`; reviewed);

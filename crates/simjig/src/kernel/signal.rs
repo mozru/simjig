@@ -478,6 +478,9 @@ pub(crate) fn write(
         Phase::Active => {}
         Phase::Ended => return,
         Phase::ReadOnly => return write_in_read_only(k, slot, writer, location),
+        // No log: the model is never mid-eval while the testbench runs, and the next eval
+        // takes the value (`kernel::sync_clock`).
+        Phase::Sync => return k.models.borrow_mut().write(slot, value),
     }
     let pushed = k.log.borrow_mut().push(slot, value, writer);
     if let Err(first) = pushed {

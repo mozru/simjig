@@ -148,9 +148,10 @@ pub(crate) trait ModelBackend {
     fn direct(&self, _slot: u32) -> Option<Direct> {
         None
     }
-    /// Starts a synchronous run (`Sim::run_sync`): until [`sync_end`](Self::sync_end), every
-    /// eval comes through [`eval_at`](Self::eval_at) and no other model of the simulation is
-    /// evaluated, so the backend may keep its model installed between evals. Returns
+    /// Starts a run of a lone model (`Sim::run`, `Sim::run_sync`): until
+    /// [`sync_end`](Self::sync_end), every eval comes through [`eval_at`](Self::eval_at) and
+    /// no other model of the simulation is evaluated, so the backend may keep its model
+    /// installed between evals. Returns
     /// whether it did ("held"): then nothing runs around an eval, no waves are sampled and
     /// no DPI-C import implemented in Rust exists, so no Rust code runs during an eval.
     fn sync_begin(&mut self) -> bool {

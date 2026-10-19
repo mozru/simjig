@@ -234,7 +234,27 @@ impl Models {
     /// its eval would be a no-op. The kernel still counts and records it as an eval, so
     /// the trace (and its hash) is the same as if it ran. In a clocked testbench this
     /// skips the eval that opens each timestep and the last one of each delta loop.
-    pub(crate) fn eval(&mut self) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+    ///
+    /// `time` is the current time (the last [`set_time`](Self::set_time)): a held model is
+    /// evaluated with [`ModelBackend::eval_at`], which sets it again in the same call.
+    pub(crate) fn eval(
+        &mut self,
+        time: SimTime,
+    ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+        if self.held {
+            if self.settled[0] && self.backends[0].settles() {
+                return Ok(());
+            }
+            self.version += 1;
+            // No panic barrier: a held model runs no Rust code in its eval (`eval_at`).
+            return match self.backends[0].eval_at(time) {
+                Ok(EvalStatus::Running) => {
+                    self.settled[0] = true;
+                    Ok(())
+                }
+                other => Err((0, other)),
+            };
+        }
         for (model, backend) in self.backends.iter_mut().enumerate() {
             if self.settled[model] && backend.settles() {
                 continue;
@@ -268,8 +288,8 @@ impl Models {
         backend.eval_changes(slot)
     }
 
-    /// Starts a synchronous run ([`ModelBackend::sync_begin`]); only a lone model is held,
-    /// since a held model must be the only one evaluated.
+    /// Starts a run ([`ModelBackend::sync_begin`]); only a lone model is held, since a held
+    /// model must be the only one evaluated.
     pub(crate) fn sync_begin(&mut self) {
         if let [backend] = self.backends.as_mut_slice() {
             self.held = backend.sync_begin();

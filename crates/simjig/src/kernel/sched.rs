@@ -255,7 +255,7 @@ fn eval(k: &Kernel, evals: &mut u32) -> bool {
         );
         return false;
     }
-    let status = k.models.borrow_mut().eval();
+    let status = k.models.borrow_mut().eval(k.now.get());
     k.record(TraceKind::Eval, None, u64::from(*evals), 0);
     k.bump(|c| c.evals += 1);
     *evals += 1;

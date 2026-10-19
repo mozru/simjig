@@ -245,12 +245,15 @@ impl Sim {
         let k = Rc::clone(&self.kernel);
         let guard = state::install(Rc::clone(&k));
         let capture = panics::capture();
+        // A lone model with nothing to do around an eval stays installed for the run.
+        k.models.borrow_mut().sync_begin();
         let mut main = tasks::spawn_in(&k, None, "main", main, Location::caller());
         k.main.set(main.key());
         sched::run_loop(&k, self.time_limit);
         // Handles are dropped inside polls, which settle them; this is a backstop.
         tasks::settle_unrun_drops(&k, None);
         let result = main.take_result(&k);
+        k.models.borrow_mut().sync_end();
         k.phase.set(Phase::Ended);
         drop(main);
         tasks::drop_all(&k);

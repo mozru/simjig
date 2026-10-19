@@ -255,7 +255,7 @@ impl Sim {
         tasks::drop_all(&k);
         drop(capture);
         drop(guard);
-        match (k.failure.borrow_mut().take(), result) {
+        match (k.take_failure(), result) {
             (Some(failure), _) => Err(failure),
             (None, Some(value)) => Ok(value),
             (None, None) => unreachable!("invariant: a run ends with a result or a failure"),

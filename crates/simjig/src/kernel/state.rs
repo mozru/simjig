@@ -94,7 +94,12 @@ pub(crate) struct Kernel {
     pub(crate) log: RefCell<WriteLog>,
     /// Kernel clocks, in declaration order (the order coincident edges are logged in).
     pub(crate) clocks: RefCell<Vec<ClockEntry>>,
-    pub(crate) failure: RefCell<Option<Failure>>,
+    /// Read only through [`Kernel::failed`] and [`Kernel::take_failure`], which keep
+    /// `has_failed` equal to `failure.is_some()`.
+    failure: RefCell<Option<Failure>>,
+    /// Whether `failure` is set: asked after every task poll and eval, so a plain flag
+    /// rather than a `RefCell` borrow.
+    has_failed: Cell<bool>,
     pub(crate) recorder: RefCell<Recorder>,
     pub(crate) counters: Cell<KernelStats>,
     /// [`Models::version`] when the last value-change walk began (`sched`).
@@ -198,6 +203,7 @@ impl Kernel {
             cancelling_operand: Cell::new(false),
             unrun_drops: RefCell::new(Vec::new()),
             failure: RefCell::new(None),
+            has_failed: Cell::new(false),
             recorder: RefCell::new(Recorder::default()),
             counters: Cell::new(KernelStats::default()),
             walked: Cell::new(None),
@@ -224,7 +230,18 @@ impl Kernel {
     }
 
     pub(crate) fn failed(&self) -> bool {
-        self.failure.borrow().is_some()
+        self.has_failed.get()
+    }
+
+    /// The run's failure so far, if any.
+    pub(crate) fn failure(&self) -> Option<Failure> {
+        self.failure.borrow().clone()
+    }
+
+    /// Takes the run's failure, if any (the run is over).
+    pub(crate) fn take_failure(&self) -> Option<Failure> {
+        self.has_failed.set(false);
+        self.failure.borrow_mut().take()
     }
 
     /// Records a failure caused by `task`; only the first failure of a run is kept.
@@ -253,6 +270,7 @@ impl Kernel {
             return;
         }
         self.record(TraceKind::Failure, None, 0, 0);
+        self.has_failed.set(true);
         *self.failure.borrow_mut() = Some(Failure {
             kind,
             time: self.now.get(),

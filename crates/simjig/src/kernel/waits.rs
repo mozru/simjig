@@ -140,11 +140,14 @@ pub(crate) struct WaitTable {
     /// `(primed, group index)` of every priming, in priming order (`primed` only grows, so
     /// this is sorted): a walk visits the primed groups in this order. Unpriming leaves its
     /// entry behind, stale (the group's `primed` no longer matches); `stale` counts them.
-    /// Stale entries at the front are dropped at once (the group that fires is usually the
-    /// oldest), the rest compacted away once they outnumber the live ones, so a walk seldom
-    /// steps over one. Priming, firing and unpriming are O(1) amortized, and a walk finds
+    /// Stale entries at the front are skipped at once by moving `head` past them (the
+    /// group that fires is usually the oldest), and dropped once they are most of the
+    /// list; stale entries elsewhere are compacted away once they outnumber the live ones,
+    /// so a walk seldom steps over one. Priming, firing and unpriming are O(1) amortized, and a walk finds
     /// its start by binary search.
-    order: VecDeque<(u64, u32)>,
+    order: Vec<(u64, u32)>,
+    /// `order[..head]` is stale and skipped (dropping it from a `Vec` would move the rest).
+    head: usize,
     stale: usize,
     /// Key buffers of timer deadlines that left the wheel, for reuse.
     spare_keys: Vec<VecDeque<Key>>,
@@ -222,7 +225,8 @@ impl WaitTable {
             waiters: Slab::default(),
             groups: Vec::new(),
             group_of: vec![[NO_GROUP; 3]; slots],
-            order: VecDeque::new(),
+            order: Vec::new(),
+            head: 0,
             stale: 0,
             spare_keys: Vec::new(),
             scratch: Vec::new(),
@@ -303,7 +307,7 @@ impl WaitTable {
             g.wide.resize(g.words, 0);
             model.read(slot, &mut g.wide);
         }
-        self.order.push_back((self.seq, index));
+        self.order.push((self.seq, index));
     }
 
     /// Unprimes group `index`, leaving its entry in `order` stale; its waiters must already
@@ -316,11 +320,18 @@ impl WaitTable {
         self.stale += 1;
         let groups = &self.groups;
         let live = |&(seq, i): &(u64, u32)| groups[i as usize].primed == Some(seq);
-        while self.order.front().is_some_and(|e| !live(e)) {
-            self.order.pop_front();
+        while self.order.get(self.head).is_some_and(|e| !live(e)) {
+            self.head += 1;
             self.stale -= 1;
         }
-        if self.stale > 4 && 2 * self.stale > self.order.len() {
+        let kept = self.order.len() - self.head;
+        if self.head > 16 && self.head > kept {
+            self.order.drain(..self.head);
+            self.head = 0;
+        }
+        if self.stale > 4 && 2 * self.stale > kept {
+            self.order.drain(..self.head);
+            self.head = 0;
             self.order.retain(live);
             self.stale = 0;
         }
@@ -483,9 +494,10 @@ impl WaitTable {
         if *after >= until {
             return false;
         }
-        let first = self.order.partition_point(|&(seq, _)| seq <= *after);
+        let live = &self.order[self.head..];
+        let first = live.partition_point(|&(seq, _)| seq <= *after);
         let mut hit = None;
-        for &(primed, index) in self.order.range(first..) {
+        for &(primed, index) in &live[first..] {
             if primed > until {
                 break;
             }

@@ -73,6 +73,10 @@ fn stopped(k: &Kernel) -> bool {
 
 /// Fires the oldest Timer due at `t`; returns whether there was one.
 fn fire_next_timer(k: &Kernel, t: SimTime) -> bool {
+    // Most timesteps have no Timer due: no need to lend out the wake buffer.
+    if k.waits.borrow().next_timer() != Some(t) {
+        return false;
+    }
     fire_and_wake(k, |w, out| w.fire_next_timer(t, out))
 }
 
@@ -161,9 +165,10 @@ fn step(k: &Kernel) {
         if stopped(k) {
             return;
         }
-        let waiters = k.waits.borrow().read_write_waiters();
-        if !waiters.is_empty() {
+        let waited = k.waits.borrow().region_waited(WaitOn::ReadWrite);
+        if waited {
             if rounds == READ_WRITE_MAX {
+                let waiters = k.waits.borrow().read_write_waiters();
                 read_write_limit(k, &waiters);
                 return;
             }
@@ -173,7 +178,7 @@ fn step(k: &Kernel) {
         // A round with no ReadWrite waiter and nothing logged would wake nobody, run nothing
         // (every ready task has run), apply nothing and walk nothing (no model changed
         // since the walk after the last eval): skip straight to its end.
-        let quiet = waiters.is_empty() && k.log.borrow().is_empty();
+        let quiet = !waited && k.log.borrow().is_empty();
         let mut applied = false;
         if !quiet {
             fire_and_wake(k, WaitTable::fire_read_write);
@@ -334,20 +339,23 @@ fn read_write_limit(k: &Kernel, waiters: &[(Option<Key>, Option<&'static Locatio
 /// Applies the write log, then fires the value changes since the previous comparison.
 /// Returns whether any write was applied.
 fn apply_and_compare(k: &Kernel) -> bool {
-    // An empty log has nothing to apply, and no slot holds its delta's epoch, so skipping
-    // `take` (which would start a new delta) changes nothing.
-    if k.log.borrow().is_empty() {
-        fire_value_changes(k);
+    let applied = apply(k);
+    fire_value_changes(k);
+    applied
+}
+
+/// Applies the write log in write order, recording each write, and starts a new delta;
+/// returns whether there was a write. No task runs and no write can be logged meanwhile.
+fn apply(k: &Kernel) -> bool {
+    let mut log = k.log.borrow_mut();
+    // An empty log has nothing to apply, and no slot holds its delta's epoch, so not
+    // starting a new delta changes nothing.
+    if log.is_empty() {
         return false;
     }
-    let writes = k.log.borrow_mut().take();
-    {
-        let mut model = k.models.borrow_mut();
-        for (slot, value) in writes.iter() {
-            model.write(slot, value);
-        }
-    }
-    for (slot, value) in writes.iter() {
+    let mut model = k.models.borrow_mut();
+    for (slot, value) in log.iter() {
+        model.write(slot, value);
         let low = value
             .iter()
             .take(2)
@@ -355,10 +363,8 @@ fn apply_and_compare(k: &Kernel) -> bool {
             .fold(0u64, |a, &w| a << 32 | u64::from(w));
         k.record(TraceKind::Write, None, u64::from(slot), low);
     }
-    let applied = !writes.is_empty();
-    k.log.borrow_mut().recycle(writes);
-    fire_value_changes(k);
-    applied
+    log.clear();
+    true
 }
 
 /// Fires the value-change groups whose edge happened, one group at a time in priming

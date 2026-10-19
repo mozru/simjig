@@ -303,8 +303,8 @@ fn copy_small(dst: &mut [u32], src: &[u32]) {
 /// Writes waiting for the next eval, in write order.
 ///
 /// The hot path (one write of a slot not yet written this delta) allocates nothing once
-/// the buffers have grown: entries and words are reused across deltas, see
-/// [`take`](Self::take) and [`recycle`](Self::recycle).
+/// the buffers have grown: entries and words are kept across deltas
+/// ([`clear`](Self::clear)).
 #[derive(Debug)]
 pub(crate) struct WriteLog {
     entries: Vec<Entry>,
@@ -317,26 +317,6 @@ pub(crate) struct WriteLog {
     /// `(entry index, writer)` of every further writer that wrote an entry's current
     /// value this delta; rare (agreeing writers), so kept out of the entries.
     agreeing: Vec<(usize, Writer)>,
-    /// Emptied buffers of the last batch, kept for their capacity.
-    spare: Option<Batch>,
-}
-
-/// The writes of one delta, in write order; see [`WriteLog::take`].
-#[derive(Debug, Default)]
-pub(crate) struct Batch {
-    entries: Vec<Entry>,
-    words: Vec<u32>,
-}
-
-impl Batch {
-    /// `(slot, value)` of every write, in write order.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &[u32])> {
-        self.entries.iter().map(|e| (e.slot, e.value(&self.words)))
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 impl WriteLog {
@@ -347,7 +327,6 @@ impl WriteLog {
             epoch: 1,
             last: vec![(0, 0); slots],
             agreeing: Vec::new(),
-            spare: None,
         }
     }
 
@@ -438,9 +417,13 @@ impl WriteLog {
         self.entries.iter().map(|e| e.slot).collect()
     }
 
-    /// Takes every logged write and starts a new delta; hand the batch back with
-    /// [`recycle`](Self::recycle) once applied.
-    pub(crate) fn take(&mut self) -> Batch {
+    /// `(slot, value)` of every logged write, in write order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &[u32])> {
+        self.entries.iter().map(|e| (e.slot, e.value(&self.words)))
+    }
+
+    /// Forgets every logged write (they were applied) and starts a new delta.
+    pub(crate) fn clear(&mut self) {
         self.epoch = self.epoch.wrapping_add(1);
         if self.epoch == 0 {
             // Wrapped: forget every slot's epoch so no stale one can match.
@@ -448,17 +431,8 @@ impl WriteLog {
             self.epoch = 1;
         }
         self.agreeing.clear();
-        let mut spare = self.spare.take().unwrap_or_default();
-        std::mem::swap(&mut spare.entries, &mut self.entries);
-        std::mem::swap(&mut spare.words, &mut self.words);
-        spare
-    }
-
-    /// Keeps an applied batch's buffers for the next delta.
-    pub(crate) fn recycle(&mut self, mut batch: Batch) {
-        batch.entries.clear();
-        batch.words.clear();
-        self.spare = Some(batch);
+        self.entries.clear();
+        self.words.clear();
     }
 }
 
@@ -567,12 +541,11 @@ mod tests {
         assert_eq!(log.push(0, &[7], b), Err(a));
         assert_eq!(log.push(0, &[8], c), Err(a));
         assert_eq!(log.push(1, &[1], Writer::Clock), Ok(()));
-        let batch = log.take();
-        let applied: Vec<(u32, Vec<u32>)> = batch.iter().map(|(s, v)| (s, v.to_vec())).collect();
+        let applied: Vec<(u32, Vec<u32>)> = log.iter().map(|(s, v)| (s, v.to_vec())).collect();
         assert_eq!(applied, [(0, vec![6]), (1, vec![1])]);
-        log.recycle(batch);
+        log.clear();
         // A new delta: the old writers no longer count.
         assert_eq!(log.push(0, &[9], c), Ok(()));
-        assert_eq!(log.take().iter().count(), 1);
+        assert_eq!(log.iter().count(), 1);
     }
 }

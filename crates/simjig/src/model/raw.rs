@@ -41,6 +41,7 @@ use super::abi::{
     Narrow, OwnedMsg, Signal,
 };
 use super::meta::{Vtable, row_problem};
+use crate::kernel::cell::Direct;
 
 /// Checks the vtable a model's symbol returned ([`ModelVtable::check`]: ABI version, size,
 /// IR hash) and only then returns it as a reference.
@@ -346,6 +347,20 @@ impl RawModel {
             if n < buf.len() {
                 return;
             }
+        }
+    }
+
+    /// The direct way to slot `slot` ([`Direct`]), if it is a readable narrow row.
+    pub(crate) fn direct(&self, slot: usize) -> Option<Direct> {
+        let row = &self.signals[slot];
+        match row.cell {
+            Cell::Narrow(cell) if row.access & ACCESS_READ != 0 => {
+                // SAFETY: a validated row of this model's table, readable; writable exactly
+                // when its access says so. The model lives until this `RawModel` drops, and
+                // its owner (the backend) owns this `RawModel`.
+                Some(unsafe { Direct::new(cell, row.width, row.access & ACCESS_WRITE != 0) })
+            }
+            _ => None,
         }
     }
 

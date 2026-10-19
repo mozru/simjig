@@ -19,6 +19,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use super::OrInvariant;
 use super::backend::{EvalStatus, ModelBackend, ModelError};
+use super::cell::Direct;
 use super::panics;
 use super::tasks::panic_message;
 use super::time::{Precision, SimTime};
@@ -61,6 +62,18 @@ impl fmt::Display for ModelSetError {
 
 impl std::error::Error for ModelSetError {}
 
+/// Splits a narrow value into `out` (one or two words), as a backend's `read` fills it.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "each word takes 32 bits of the value"
+)]
+fn split(value: u64, out: &mut [u32]) {
+    out[0] = value as u32;
+    if let Some(high) = out.get_mut(1) {
+        *high = (value >> 32) as u32;
+    }
+}
+
 /// The models of one simulation; see the module docs.
 pub(crate) struct Models {
     backends: Vec<Box<dyn ModelBackend>>,
@@ -68,6 +81,10 @@ pub(crate) struct Models {
     first: Vec<u32>,
     /// Per flat slot: `(model, the model's own slot)`.
     owner: Vec<(usize, u32)>,
+    /// Per flat slot: its backend's [`Direct`] way to it, if any. Every entry came from a
+    /// backend in `backends`, which lives exactly as long as this table: that is what
+    /// makes the `unsafe` reads and writes below sound.
+    direct: Vec<Option<Direct>>,
     /// Per model: evaluated, with nothing written since. An eval of such a model that
     /// [`settles`](ModelBackend::settles) would change nothing, so it is skipped.
     settled: Vec<bool>,
@@ -97,10 +114,15 @@ impl Models {
             owner.extend((0..count).map(|slot| (model, slot)));
         }
         let settled = vec![false; backends.len()];
+        let direct = owner
+            .iter()
+            .map(|&(model, slot)| backends[model].direct(slot))
+            .collect();
         Ok(Self {
             backends,
             first,
             owner,
+            direct,
             settled,
             version: 0,
         })
@@ -157,15 +179,40 @@ impl Models {
         backend.slot_width(slot)
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "a Direct read of a live backend (the `direct` field)"
+    )]
     pub(crate) fn read(&self, flat: u32, out: &mut [u32]) {
+        if let Some(Some(d)) = self.direct.get(flat as usize)
+            && out.len() <= 2
+        {
+            // SAFETY: `d` came from a backend in `self.backends`, alive while `self` is, and
+            // the kernel never reads during one of its calls (`&self` here).
+            split(unsafe { d.read() }, out);
+            return;
+        }
         let (backend, slot) = self.owner(flat);
         backend.read(slot, out);
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "a Direct write to a live backend (the `direct` field)"
+    )]
     pub(crate) fn write(&mut self, flat: u32, value: &[u32]) {
         let (model, slot) = self.owner[flat as usize];
         self.settled[model] = false;
         self.version += 1;
+        if let Some(Some(d)) = self.direct.get(flat as usize)
+            && d.writable()
+            && value.len() <= 2
+        {
+            let high = value.get(1).map_or(0, |&w| u64::from(w));
+            // SAFETY: as in `read` (`&mut self`: no backend call runs), and `d` is writable.
+            unsafe { d.write(high << 32 | u64::from(value[0])) };
+            return;
+        }
         self.backends[model].write(slot, value);
     }
 

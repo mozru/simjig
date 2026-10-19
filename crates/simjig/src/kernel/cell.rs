@@ -87,3 +87,91 @@ pub(crate) unsafe fn write_narrow(cell: Narrow, width: u32, value: u64) {
         Narrow::Q(p) => unsafe { p.write(v) },
     }
 }
+
+/// A readable narrow slot of a live backend, with what writing it needs: the kernel's way
+/// to a port without the backend's dynamic call ([`ModelBackend::direct`]).
+///
+/// [`ModelBackend::direct`]: super::backend::ModelBackend::direct
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Direct {
+    cell: Narrow,
+    width: u32,
+    writable: bool,
+}
+
+impl Direct {
+    /// # Safety
+    /// `cell` comes from a row of the backend's live signal table with `ACCESS_READ` (and
+    /// `ACCESS_WRITE` if `writable`), `width` is that row's width, and the backend that
+    /// hands this out keeps the model alive for as long as it lives itself.
+    pub(crate) const unsafe fn new(cell: Narrow, width: u32, writable: bool) -> Self {
+        Self {
+            cell,
+            width,
+            writable,
+        }
+    }
+
+    /// Whether the testbench may write the slot (an input, or a `public_flat_rw` probe).
+    pub(crate) const fn writable(self) -> bool {
+        self.writable
+    }
+
+    /// The slot's value.
+    ///
+    /// # Safety
+    /// The backend that returned this is alive, and none of its entry points runs.
+    #[inline]
+    pub(crate) unsafe fn read(self) -> u64 {
+        // SAFETY: `new`'s contract makes `cell` a readable row of the live model; the caller
+        // keeps the backend alive and idle.
+        unsafe { read_narrow(self.cell) }
+    }
+
+    /// Writes `value`, masked to the slot's width.
+    ///
+    /// # Safety
+    /// As for [`read`](Self::read), and the slot is [`writable`](Self::writable).
+    #[inline]
+    pub(crate) unsafe fn write(self, value: u64) {
+        debug_assert!(self.writable, "invariant: only writable slots are written");
+        // SAFETY: as in `read`, and the caller checked that the row has `ACCESS_WRITE`.
+        unsafe { write_narrow(self.cell, self.width, value) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reads and writes through every storage class, against local integers (so Miri can
+    /// check the accesses): a write masks to the width and leaves the rest of the storage
+    /// zero, as Verilator assumes.
+    #[test]
+    fn a_direct_slot_reads_and_writes_its_storage() {
+        let (mut cdata, mut sdata, mut idata, mut qdata) = (0u8, 0u16, 0u32, 0u64);
+        let cells = [
+            (Narrow::C(&raw mut cdata), 5),
+            (Narrow::S(&raw mut sdata), 12),
+            (Narrow::I(&raw mut idata), 32),
+            (Narrow::Q(&raw mut qdata), 33),
+        ];
+        for (cell, width) in cells {
+            // SAFETY: each pointer is a live, aligned local of its storage type, only
+            // accessed through `slot` until the end of this iteration.
+            let slot = unsafe { Direct::new(cell, width, true) };
+            // SAFETY: as above.
+            unsafe { slot.write(u64::MAX) };
+            // SAFETY: as above.
+            assert_eq!(unsafe { slot.read() }, mask(width), "width {width}");
+            // SAFETY: as above.
+            unsafe { slot.write(0b1010) };
+            // SAFETY: as above.
+            assert_eq!(unsafe { slot.read() }, 0b1010, "width {width}");
+        }
+        assert_eq!(
+            (cdata, sdata, idata, qdata),
+            (0b1010, 0b1010, 0b1010, 0b1010)
+        );
+    }
+}

@@ -26,6 +26,7 @@
 use std::fmt;
 use std::path::Path;
 
+use super::cell::Direct;
 use super::failure::SourceLocation;
 use super::time::{Precision, SimTime};
 
@@ -140,6 +141,13 @@ pub(crate) trait ModelBackend {
     /// Evaluates the model until it is stable at the current time. Switches the thread's
     /// Verilator context to this model first (see the module docs).
     fn eval(&mut self) -> Result<EvalStatus, ModelError>;
+    /// A direct way to the narrow storage of `slot`, if the backend has one: the kernel
+    /// then reads and writes the slot through it instead of [`read`](Self::read) and
+    /// [`write`](Self::write), which must behave the same. `None` (the default) for a slot
+    /// or backend without one.
+    fn direct(&self, _slot: u32) -> Option<Direct> {
+        None
+    }
     /// Whether an `eval` with no `write` since the previous `eval` is sure to change
     /// nothing and call nothing (no timed events of its own, no per-eval waves sampling):
     /// the eval loop has already settled every value. [`Models`](super::models::Models)

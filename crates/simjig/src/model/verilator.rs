@@ -37,6 +37,7 @@ use super::raw::{CreateError, RawModel, check_vtable};
 use super::trace::{TraceOptions, Tracer};
 use crate::dpi::{DpiFailure, ModelDpi};
 use crate::kernel::backend::{CoverageFault, EvalStatus, ModelBackend, ModelError};
+use crate::kernel::cell::Direct;
 use crate::kernel::time::{Precision, SimTime};
 
 /// A generated Verilator model behind the kernel's backend interface.
@@ -265,6 +266,10 @@ impl ModelBackend for VerilatorModel {
 
     fn write(&mut self, slot: u32, value: &[u32]) {
         self.raw.write(slot as usize, value);
+    }
+
+    fn direct(&self, slot: u32) -> Option<Direct> {
+        self.raw.direct(slot as usize)
     }
 
     fn set_time(&mut self, time: SimTime) {

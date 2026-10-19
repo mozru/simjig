@@ -21,7 +21,11 @@ the public API, the generated code or simulation semantics.
   hash is kept. Seeds, `ctx.rng`, random init, the time limit and the failure report with
   its `repro:` line work as in async tests. Generated code: `run_sync_test` for a `sync`
   test (snapshot `expands_sync`); the macro's errors mention `sync`
-  (`harness_ui/not_async.stderr`, `bad_timeout.stderr`, reviewed).
+  (`harness_ui/not_async.stderr`, `bad_timeout.stderr`, reviewed). `SyncClock::bind`
+  makes `Bound`/`BoundMut` handles that read and write the model's storage directly (trait
+  `Bind`). The C ABI gains `hold`, `release` and `eval_held` (appended; vtable size 216),
+  which a lone model without waves or Rust DPI-C imports uses for a synchronous run. README:
+  "Synchronous testbenches".
 - `#[simjig::test(trace_hash = false)]`: the run keeps no trace hash (about 16% faster on
   the benchmark's FIFO testbench). Generated code: `TestMeta` gains `trace_hash` (every
   expansion snapshot of `simjig_macros::test_attr` shows `trace_hash: true`; reviewed);

@@ -202,3 +202,19 @@ fn bound_handles_of_two_models_take_the_handle_path() {
     // `b`'s clock is never driven: it stays in reset at 0.
     assert_eq!(seen, (3, 0));
 }
+
+/// The README's synchronous test ("Synchronous testbenches"), as written there but for the
+/// unused context.
+#[simjig::test(sync, timeout = "1ms")]
+fn readme_counts(dut: counter::Dut) {
+    let mut cyc = SyncClock::new(dut.clk, simjig::ns(10));
+    dut.rst.set(1);
+    cyc.tick(); // rise, eval, fall, eval
+    dut.rst.set(0);
+    dut.en.set(1);
+    let count = cyc.bind(dut.count); // a bound handle: a direct read, no lookup
+    for i in 1..=1000u128 {
+        cyc.tick();
+        assert_eq!(count.get().to_u128(), i % 256);
+    }
+}

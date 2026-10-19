@@ -699,6 +699,54 @@ A model built with `.coverage(true)` exposes its counters: `Sim::coverage(model)
 for `verilator_coverage`. `model` is the model index: 0 for the first DUT, then the
 test's DUT parameters in order.
 
+## Synchronous testbenches
+For a hot loop that only drives, steps one clock and checks, a test can be a plain `fn`:
+
+```rust
+use simjig::prelude::*;
+
+#[simjig::test(sync, timeout = "1ms")]
+fn counts(ctx: &TestCtx, dut: counter::Dut) {
+    let mut cyc = SyncClock::new(dut.clk, ns(10));
+    dut.rst.set(1);
+    cyc.tick();                     // rise, eval, fall, eval
+    dut.rst.set(0);
+    dut.en.set(1);
+    let count = cyc.bind(dut.count); // a bound handle: a direct read, no lookup
+    for i in 1..=1000u128 {
+        cyc.tick();
+        assert_eq!(count.get().to_u128(), i % 256);
+    }
+}
+```
+
+`SyncClock::tick()` is one cycle and exactly two evals, as a hand-written Verilator loop
+does it: the clock rises, the model is evaluated, the clock falls, the model is evaluated;
+`rise()` and `fall()` are the halves, `ticks(n)` is `n` cycles. A `set` goes into the model
+at once and the next eval takes it, together with that eval's clock edge; a `get` after
+`tick()` sees the values the falling edge's eval settled. `cyc.bind(handle)` makes a
+`Bound` (or, for a writable handle, a `BoundMut`) that reads and writes the model's storage
+directly; the handle's own `get` and `set` work too, with a lookup each. The same `Dut`
+types, `duts = [..]` sweeps, `init`, the seed and `ctx.rng`, the time limit and the failure
+report with its `repro:` line work as in async tests, and so do waves on failure (the
+replay runs the test again, traced).
+
+What a synchronous test does not have:
+- **no scheduler**: no tasks (`spawn`), no triggers (`rising`, `Timer`, events), no
+  kernel clocks, no `ReadWrite`/`ReadOnly` regions; each panics, naming the mode;
+- **no delta cycles visible to the testbench**: the model settles inside each eval, and
+  the testbench sees only settled values between evals; a write takes effect at the next
+  eval, not after a delta;
+- **one clock**: the `SyncClock`'s; a second clock domain needs an async test;
+- **no trace hash**: none is kept (the report's and `summary.json`'s are null), so the
+  determinism check compares only how the run ended.
+
+Use one for the inner loop of a block-level test, a long soak with a reference model, or
+anything that is "drive, tick, check"; use an async test for concurrent drivers and
+monitors, handshakes waited on as events, several clocks, timeouts and regions. On the
+benchmark's FIFO testbench (`bench/`), a synchronous test runs at about 1.2x a hand-written
+C++ Verilator loop (a held model, bound handles); an async one at about 10x.
+
 ## Performance
 simjig's own cost per timestep is small but not zero; most of a simple testbench's time is
 the scheduler, not the model (`docs/notes/perf.md` has the breakdown, `bench/README.md`

@@ -65,10 +65,11 @@ def build_simjig(target: Path, rtl: Path | None = None) -> Path:
     sys.exit("simjig build: no test executable named `bench`")
 
 
-def run_simjig(exe: Path, dut: str, variant: str, n: int, out: Path) -> float:
-    """One simjig run; returns the process's wall time."""
+def run_simjig(exe: Path, dut: str, variant: str, n: int, out: Path, sync: bool = False) -> float:
+    """One simjig run (`sync`: the synchronous flow's test); returns the process's wall
+    time."""
     env = dict(os.environ, BENCH_CYCLES=str(n), BENCH_OUT=str(out))
-    test = f"{SIMJIG_TESTS[variant]}::{dut}"
+    test = f"{SIMJIG_TESTS[variant]}{'_sync' if sync else ''}::{dut}"
     t0 = time.perf_counter()
     r = subprocess.run([str(exe), "--exact", test, "--test-threads", "1", "-q"],
                        env=env, capture_output=True, text=True)  # fmt: skip
@@ -144,7 +145,8 @@ def cmd_run(a: argparse.Namespace) -> None:
     cocotb_dir = COCOTB_DIR
     for n in a.sizes:
         for variant in a.variants:
-            flows = [("simjig", d) for d in SIMJIG_DUTS] + [("cocotb", "fifo")]
+            flows = [("simjig", d) for d in SIMJIG_DUTS] + [("simjig-sync", "fifo")]
+            flows += [("cocotb", "fifo")]
             if n > a.cocotb_max:
                 flows = flows[:-1]
             for flow, dut in flows:
@@ -152,8 +154,8 @@ def cmd_run(a: argparse.Namespace) -> None:
                 print(f"{flow}/{dut} {variant} {n}: {a.runs} runs (load {load:.2f})",
                       file=sys.stderr)  # fmt: skip
                 for _ in range(a.runs):
-                    if flow == "simjig":
-                        wall = run_simjig(exe, dut, variant, n, out)
+                    if flow in ("simjig", "simjig-sync"):
+                        wall = run_simjig(exe, dut, variant, n, out, flow == "simjig-sync")
                     else:
                         wall = run_cocotb(variant, n, out, cocotb_dir)
                     tag_last(out, process_seconds=round(wall, 6), load=round(load, 2),
@@ -209,7 +211,7 @@ def cmd_table(a: argparse.Namespace) -> None:
         secs = [r["seconds"] for r in g]
         proc = statistics.median(r["process_seconds"] for r in g)
         ref = med.get((variant, n, "cocotb", "fifo"))
-        speed = f"{ref / med[k]:.1f}x" if ref and flow == "simjig" else ""
+        speed = f"{ref / med[k]:.1f}x" if ref and flow.startswith("simjig") else ""
         loads = [r["load"] for r in g]
         load = f"{max(loads):.2f}" + ("" if all(r["quiet"] for r in g) else " (!)")
         name = flow if dut == "fifo" else f"{flow} ({dut})"

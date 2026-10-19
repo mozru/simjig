@@ -80,7 +80,7 @@ fn feature_duts() -> Vec<Dut> {
                 ProbeType::Bits { width: 16 },
                 ProbeAccess::Read,
             ),
-        // The counter with coverage counters (tests/e2e_stage3).
+        // The counter with coverage counters (tests/e2e_capabilities).
         shared_as("counter_cov", "counter").coverage(true),
         Dut::new("dpi")
             .sources(["../../tests/duts/dpi/dpi.sv"])

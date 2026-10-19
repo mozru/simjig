@@ -1,13 +1,13 @@
-//! Stage 3's exit tests: real Verilator models built by `build.rs`, driven only through
-//! simjig's public API, one file per capability:
-//! - `cdc`: `async_fifo` on two unrelated kernel clocks, data crossing intact (a);
-//! - `timing`: `timing_dut` (`--timing`) with timers and a kernel clock interleaved (b);
-//! - `multi`: two models in one test, and lockstep divergence (c);
-//! - `derived`: triggers on `derived_clk`'s divided clock (d);
-//! - `waves`: waves on failure for a failing test (e);
-//! - `dpi`: DPI-C round trips, Rust and C implementations (f);
-//! - `iface`: `iface_top` with probes behind the interface wrapper (g);
-//! - `coverage`: coverage counters read from Rust (h).
+//! End-to-end tests of each capability: real Verilator models built by `build.rs`, driven
+//! only through simjig's public API, one file per capability:
+//! - `cdc`: `async_fifo` on two unrelated kernel clocks, data crossing intact;
+//! - `timing`: `timing_dut` (`--timing`) with timers and a kernel clock interleaved;
+//! - `multi`: two models in one test, and lockstep divergence;
+//! - `derived`: triggers on `derived_clk`'s divided clock;
+//! - `waves`: waves on failure for a failing test;
+//! - `dpi`: DPI-C round trips, Rust and C implementations;
+//! - `iface`: `iface_top` with probes behind the interface wrapper;
+//! - `coverage`: coverage counters read from Rust.
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,

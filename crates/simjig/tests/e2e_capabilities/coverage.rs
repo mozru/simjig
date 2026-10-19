@@ -101,7 +101,7 @@ async fn counters_can_be_zeroed_and_written_with_their_names(ctx: &TestCtx, dut:
         dut.clk.rising().await;
     }
     read_only().await;
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-stage3-coverage.dat");
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-capabilities-coverage.dat");
     std::fs::remove_file(&path).ok();
     ctx.write_coverage(0, &path).unwrap();
     let counters = ctx.coverage(0).unwrap();
@@ -142,7 +142,7 @@ async fn counters_can_be_zeroed_and_written_with_their_names(ctx: &TestCtx, dut:
 fn coverage_errors_name_the_model_and_the_fix() {
     let mut sim = counter::Dut::instantiate(&options()).unwrap();
     let _dut = counter::Dut::create(&mut sim).unwrap();
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-stage3-none.dat");
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-capabilities-none.dat");
     let error = sim.write_coverage(0, &path).unwrap_err();
     assert_eq!(error, CoverageError::NotBuilt { model: 0 });
     assert!(error.to_string().contains(".coverage(true)"), "{error}");

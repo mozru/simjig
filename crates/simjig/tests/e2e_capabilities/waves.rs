@@ -29,7 +29,7 @@ async fn the_counter_misses_its_target(dut: Dut) {
 #[test]
 fn a_failing_test_gets_waves_from_its_replay() {
     let test = "waves::the_counter_misses_its_target";
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-stage3-waves");
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-capabilities-waves");
     std::fs::remove_dir_all(&root).ok();
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -51,7 +51,7 @@ fn a_failing_test_gets_waves_from_its_replay() {
 
     let tests = root
         .join("simjig")
-        .join("e2e_stage3")
+        .join("e2e_capabilities")
         .join(test.replace("::", "__"));
     let dir = std::fs::read_dir(&tests)
         .unwrap()

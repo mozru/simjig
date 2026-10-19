@@ -117,7 +117,7 @@ nor the VM runs it.
 `macos-15` (arm64) and `ubuntu-24.04-arm` (linux-aarch64), for pushes to `main` and for
 every pull request, forks included. It installs pixi and the locked environment, the Rust
 toolchain from `rust-toolchain.toml` and the pinned cargo tools (`cargo xtask setup`),
-caching the pixi environment, the cargo tools and the cargo registry. The workflow's token
-is read-only and it uses no secrets. Miri and the conformance check
-(`conformance-regen --check`) are not part of it; run them locally before changing
-`unsafe` code or the scheduler.
+caching the pixi environment, the cargo tools and the cargo registry. A second job runs the
+conformance check, `pixi run -e conformance conformance-regen --check`, on `macos-15`. The
+workflow's token is read-only and it uses no secrets. Miri is not part of it; run
+`cargo xtask miri` locally before changing `unsafe` code, the executor or the waker.

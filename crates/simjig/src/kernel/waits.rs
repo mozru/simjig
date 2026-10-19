@@ -590,10 +590,11 @@ impl WaitTable {
     /// signals (`trigger::edge` rejects wider ones, as cocotb's `rising_edge` raises
     /// `TypeError` for a multi-bit signal), so bit 0 is the whole value.
     ///
-    /// `until` mirrors `callValueCbs`, which skips callbacks added during the walk. With
-    /// writes held in the write log, a group primed during the walk snapshots the value
-    /// already changed and could not fire anyway; the bound keeps that a property of the
-    /// walk rather than of the write log, and spares looking at such groups.
+    /// `until` is an optimisation, not an ordering rule: it only spares looking at groups
+    /// primed during the walk. Such a group snapshots the value when primed, and no value
+    /// changes during a walk (writes wait in the write log, and no eval runs), so it could
+    /// not fire in this walk anyway; removing the bound changes no order. The result is
+    /// what `callValueCbs` does by skipping callbacks added during its walk.
     pub(crate) fn fire_next_change(
         &mut self,
         model: &Models,

@@ -372,6 +372,8 @@ fn apply(k: &Kernel) -> bool {
 /// value-change callback at a time (`callValueCbs`, in registration order) and its whole
 /// event loop inside each. A task woken by one group that waits on a younger group not yet
 /// reached in this walk joins it; groups primed during the walk wait for the next change.
+/// That follows from their snapshot, not from the walk's `until` bound, which is only an
+/// optimisation (`WaitTable::fire_next_change`).
 ///
 /// A walk when no model changed since the previous walk began is skipped: every group
 /// primed before that walk took the value then, every group primed since took it when

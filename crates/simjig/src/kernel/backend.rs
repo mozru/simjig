@@ -173,7 +173,10 @@ pub(crate) trait ModelBackend {
         )))
     }
     /// [`set_time`](Self::set_time) then [`eval`](Self::eval), which a backend may do in
-    /// one call.
+    /// one call. Unless held ([`sync_begin`](Self::sync_begin)), the kernel calls it only in
+    /// a synchronous run, once per timestep, where the testbench writes the next timestep's
+    /// inputs straight into the model right after it: so a backend that samples per
+    /// timestep (waves) must sample here, not at the next `set_time`.
     fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {
         self.set_time(time);
         self.eval()

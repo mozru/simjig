@@ -297,8 +297,17 @@ impl ModelBackend for VerilatorModel {
     #[inline]
     fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {
         if !self.held {
+            // A synchronous run (`ModelBackend::eval_at`): this is the timestep's only
+            // eval, and `SyncClock` and a sync `set` write the next timestep's inputs into
+            // the model before the next `set_time`, so the sample is taken now.
             self.set_time(time);
-            return self.eval();
+            let result = self.eval();
+            if self.poisoned.is_none()
+                && let Some(tracer) = &self.tracer
+            {
+                tracer.end_timestep();
+            }
+            return result;
         }
         self.now = time;
         let status = self.raw.eval_held(time.ticks());
@@ -790,6 +799,51 @@ mod tests {
         model.set_time(SimTime(6));
         drop(model);
         assert_eq!(calls(), ["eval", "eval", "dump 0", "eval", "destroy"]);
+    }
+
+    /// A synchronous run with waves (not held, so every eval goes through `set_time`):
+    /// each timestep's sample must hold that timestep's values. `SyncClock` and a sync
+    /// `set` write straight into the model *before* `eval_at` calls `set_time`, which is
+    /// when the previous timestep is dumped (`model::trace`), so each sample shows the
+    /// next edge's clock level.
+    #[test]
+    fn a_sync_run_samples_each_timestep_before_the_next_edge_is_written() {
+        static CLOCKED: ModelMeta = ModelMeta {
+            vtable: traced_vtable,
+            signals: &[
+                SignalMeta {
+                    name: "fake.a",
+                    slot: 0,
+                    width: 1,
+                    storage: Storage::CData,
+                    access: Access::In,
+                },
+                SignalMeta {
+                    name: "fake.y",
+                    slot: 1,
+                    width: 8,
+                    storage: Storage::CData,
+                    access: Access::Out,
+                },
+            ],
+            ..FAKE
+        };
+        fake::reset();
+        STATE.with_borrow_mut(|s| s.a_width = Some(1));
+        let options = TraceOptions::new("w.fst");
+        let model = VerilatorModel::load(&CLOCKED, &[], None, Some(&options)).unwrap();
+        let mut sim = crate::Sim::from_backend(Box::new(model));
+        let clk = sim.signal("fake.a").unwrap();
+        sim.run_sync(|| {
+            let mut cyc = crate::SyncClock::new(clk, crate::SimDuration::from_ticks(10));
+            cyc.tick();
+            cyc.tick();
+        })
+        .unwrap();
+        drop(sim);
+        let dumps = STATE.with_borrow(|s| s.dumps.clone());
+        // clk is 0 at t=0 (SyncClock::new), 1 at 5, 0 at 10, 1 at 15, 0 at 20.
+        assert_eq!(dumps, [(0, 0), (5, 1), (10, 0), (15, 1), (20, 0)]);
     }
 
     /// In a fork child, a healthy trace moves to the branch's file and is closed there at

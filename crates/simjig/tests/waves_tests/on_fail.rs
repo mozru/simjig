@@ -250,7 +250,8 @@ fn a_failure_with_waves_on_fail_gets_waves_from_a_replay() {
 }
 
 /// A synchronous test gets waves on failure the same way: the replay (traced, so not
-/// held) reproduces the failure, and the waves end at it.
+/// held) reproduces the failure, and the waves end at it, with a sample at every edge.
+/// (What each sample holds is checked against the model's dumps in `model::verilator`.)
 #[test]
 fn a_failing_sync_test_gets_waves_from_a_replay() {
     let test = "on_fail::counter_overflows_sync";
@@ -265,6 +266,11 @@ fn a_failing_sync_test_gets_waves_from_a_replay() {
     assert!(err.contains("repro:"), "{err}");
     let waves = fst::read(&dir.join("waves.fst"));
     assert_eq!(waves.end, fail_time, "the waves end at the failure");
+    // One sample per edge (each half period is a timestep with one eval, dumped right
+    // after it), every one in the default window of 1 us before the failure.
+    let from = fail_time - 1_000_000;
+    let edges: Vec<u64> = (from..=fail_time).step_by(5_000).collect();
+    assert_eq!(waves.times, edges);
 }
 
 #[test]

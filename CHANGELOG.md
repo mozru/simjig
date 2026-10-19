@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Fix: the waves of a synchronous test (`#[simjig::test(sync)]` with `SIMJIG_WAVES` or
+  waves on failure) showed each timestep with the next edge's clock and inputs, half a
+  period early: `SyncClock` and `set` write into the model before the next timestep
+  starts, which is when a timestep was dumped. Each timestep of a synchronous run is now
+  dumped right after its eval. Async runs are unchanged.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

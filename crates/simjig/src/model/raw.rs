@@ -545,6 +545,10 @@ pub(crate) mod fake {
         pub(crate) trace_statuses: VecDeque<Status>,
         /// The last create's `init` and `init_seed`.
         pub(crate) init: Option<(u32, u32)>,
+        /// The width the next create gives `a` (4 when unset).
+        pub(crate) a_width: Option<u32>,
+        /// Every `trace_dump` of the traced vtable: its time and the value of `a` then.
+        pub(crate) dumps: Vec<(u64, u8)>,
         rows: Vec<Signal>,
     }
 
@@ -572,7 +576,8 @@ pub(crate) mod fake {
         STATE.with_borrow_mut(|s| {
             s.init = Some((opts.init, opts.init_seed));
             let base = s.members.as_mut_ptr();
-            let mut a = row(0, 4, Dir::In, ACCESS_READ | ACCESS_WRITE, c"fake.a");
+            let width = s.a_width.unwrap_or(4);
+            let mut a = row(0, width, Dir::In, ACCESS_READ | ACCESS_WRITE, c"fake.a");
             let mut y = row(1, 8, Dir::Out, ACCESS_READ, c"fake.y");
             a.ptr = base.cast::<c_void>();
             // SAFETY: `members` has two bytes; offset 1 stays inside it.
@@ -629,6 +634,10 @@ pub(crate) mod fake {
     }
 
     extern "C" fn rec_dump(_h: *mut Handle, t: u64) -> i32 {
+        STATE.with_borrow_mut(|s| {
+            let a = s.members[0];
+            s.dumps.push((t, a));
+        });
         traced(format!("dump {t}"))
     }
 

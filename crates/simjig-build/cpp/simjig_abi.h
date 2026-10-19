@@ -62,6 +62,9 @@ typedef int32_t simjig_status;
  * A WARNING message names the file and the reason. Nothing ran; the model state is unchanged. */
 #define SIMJIG_IO_ERROR 7
 
+/* Or'ed into `eval_held`'s status when the model has messages to drain (`drain_msgs`). */
+#define SIMJIG_MSGS_PENDING 0x100
+
 /* `next_time_slot` returns this when the model has no pending timed events. */
 #define SIMJIG_TIME_NONE UINT64_MAX
 
@@ -256,6 +259,20 @@ typedef struct simjig_model_vtable {
      * (VlRNG(seed)). Each handle starts with VlRNG(seed from +verilator+seed+, default 1),
      * which is Verilator's own single-model stream. */
     simjig_status (*rng_seed)(simjig_handle* h, uint64_t seed);
+
+    /* ---- Appended after size 192 (SIMJIG_ABI_VERSION 1): held evaluation. ---- */
+
+    /* Installs the model as this thread's current model (its context, its `$urandom`
+     * state) until `release`, for a run of `eval_held` calls with no other model's entry
+     * point between them (a synchronous testbench). OK, or POISONED. Entry points called
+     * while held work as before. */
+    simjig_status (*hold)(simjig_handle* h);
+    /* Ends `hold`. Accepts a handle that is not held (and NULL). */
+    void (*release)(simjig_handle* h);
+    /* Sets the context time to `time` and runs one eval(), as set_time and eval do, behind
+     * the same exception barrier; while held, without installing the model again. The status
+     * has SIMJIG_MSGS_PENDING or'ed in when messages wait to be drained. */
+    simjig_status (*eval_held)(simjig_handle* h, uint64_t time);
     /* Append new entries here. */
 } simjig_model_vtable;
 

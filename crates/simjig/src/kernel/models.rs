@@ -74,6 +74,16 @@ fn split(value: u64, out: &mut [u32]) {
     }
 }
 
+/// The failure of a model whose eval panicked: it is left mid-eval, so the run must stop as
+/// it does for `$fatal`.
+fn eval_panic(payload: &(dyn std::any::Any + Send)) -> ModelError {
+    let at = panics::take().map_or_else(String::new, |l| format!(" at {l}"));
+    ModelError::fatal(format!(
+        "the model panicked during eval: {}{at}",
+        panic_message(payload)
+    ))
+}
+
 /// The models of one simulation; see the module docs.
 pub(crate) struct Models {
     backends: Vec<Box<dyn ModelBackend>>,
@@ -245,13 +255,7 @@ impl Models {
             self.version += 1;
             panics::forget();
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval()));
-            let status = outcome.unwrap_or_else(|payload| {
-                let at = panics::take().map_or_else(String::new, |l| format!(" at {l}"));
-                Err(ModelError::fatal(format!(
-                    "the model panicked during eval: {}{at}",
-                    panic_message(&*payload)
-                )))
-            });
+            let status = outcome.unwrap_or_else(|payload| Err(eval_panic(&*payload)));
             match status {
                 Ok(EvalStatus::Running) => self.settled[model] = true,
                 other => return Err((model, other)),
@@ -275,6 +279,40 @@ impl Models {
     pub(crate) fn eval_changes(&self, flat: u32) -> bool {
         let (backend, slot) = self.owner(flat);
         backend.eval_changes(slot)
+    }
+
+    /// Starts a synchronous run ([`ModelBackend::sync_begin`]); only a lone model is held,
+    /// since a held model must be the only one evaluated.
+    pub(crate) fn sync_begin(&mut self) {
+        if let [backend] = self.backends.as_mut_slice() {
+            backend.sync_begin();
+        }
+    }
+
+    /// Ends [`sync_begin`](Self::sync_begin).
+    pub(crate) fn sync_end(&mut self) {
+        for backend in &mut self.backends {
+            backend.sync_end();
+        }
+    }
+
+    /// Evaluates every model at `time`, in declaration order, as [`eval`](Self::eval) does
+    /// (with the same handling of a panic), through [`ModelBackend::eval_at`]; for a
+    /// synchronous run, where every eval runs.
+    pub(crate) fn eval_at(
+        &mut self,
+        time: SimTime,
+    ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
+        self.version += 1;
+        for (model, backend) in self.backends.iter_mut().enumerate() {
+            panics::forget();
+            let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval_at(time)));
+            match outcome.unwrap_or_else(|payload| Err(eval_panic(&*payload))) {
+                Ok(EvalStatus::Running) => {}
+                other => return Err((model, other)),
+            }
+        }
+        Ok(())
     }
 
     /// The earliest pending model event and the first model that has it, asking only

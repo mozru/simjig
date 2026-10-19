@@ -148,6 +148,18 @@ pub(crate) trait ModelBackend {
     fn direct(&self, _slot: u32) -> Option<Direct> {
         None
     }
+    /// Starts a synchronous run (`Sim::run_sync`): until [`sync_end`](Self::sync_end), every
+    /// eval comes through [`eval_at`](Self::eval_at) and no other model of the simulation is
+    /// evaluated, so the backend may keep its model installed between evals.
+    fn sync_begin(&mut self) {}
+    /// Ends [`sync_begin`](Self::sync_begin).
+    fn sync_end(&mut self) {}
+    /// [`set_time`](Self::set_time) then [`eval`](Self::eval), which a backend may do in
+    /// one call.
+    fn eval_at(&mut self, time: SimTime) -> Result<EvalStatus, ModelError> {
+        self.set_time(time);
+        self.eval()
+    }
     /// Whether an `eval` may change `slot`'s value; `false` only for a slot that nothing
     /// but [`write`](Self::write) changes. `true` (the default) is always safe.
     fn eval_changes(&self, _slot: u32) -> bool {

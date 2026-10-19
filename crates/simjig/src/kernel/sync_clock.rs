@@ -145,8 +145,7 @@ impl SyncClock {
         let status = {
             let mut models = k.models.borrow_mut();
             models.write(self.clk, &[level]);
-            models.set_time(t);
-            models.eval()
+            models.eval_at(t)
         };
         k.bump(|c| {
             c.steps += 1;
@@ -162,11 +161,7 @@ impl SyncClock {
 /// Evaluates the model at the start of a synchronous run (t = 0), as an async run's first
 /// timestep does; returns whether the run may go on.
 pub(crate) fn first_eval(k: &Kernel) -> bool {
-    let status = {
-        let mut models = k.models.borrow_mut();
-        models.set_time(k.now.get());
-        models.eval()
-    };
+    let status = k.models.borrow_mut().eval_at(k.now.get());
     k.bump(|c| {
         c.steps += 1;
         c.evals += 1;

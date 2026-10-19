@@ -82,6 +82,8 @@ struct Record {
     std::string msg;
 };
 
+class Scope;
+
 class Runtime final {
 public:
     // `coroutines`: the model was verilated with --timing. A C++ exception that leaves a
@@ -126,6 +128,12 @@ public:
 
     // Status after a completed (non-throwing) call; poisons on a deferred fatal.
     simjig_status outcome();
+    // Whether messages wait to be drained.
+    bool msgs_pending() const noexcept { return !m_ring.empty() || m_dropped > 0; }
+    // The Scope `simjig_rt_hold` keeps (nullptr while not held).
+    bool held() const noexcept { return m_hold != nullptr; }
+    void hold();
+    void release() noexcept;
     size_t drain(simjig_msg* out, size_t cap) noexcept;
 
 private:
@@ -137,6 +145,7 @@ private:
                      const char* hier) noexcept;
 
     std::unique_ptr<VerilatedContext> m_context;
+    Scope* m_hold = nullptr;  // owned; deleted by release()
     VlRNG m_rng{0};  // reseeded by create (see Vtable::create); VlRNG(0) draws nothing
     std::deque<Record> m_ring;
     std::vector<Record> m_drained;  // backs the string pointers handed out by drain()
@@ -168,6 +177,9 @@ public:
 private:
     Runtime& m_rt;
     Runtime* m_previous;
+    // Entered while this runtime is already the active one (an entry point called while
+    // held, or from inside its own model code): the model is installed, so nothing is done.
+    bool m_reentered = false;
     // The thread's `$urandom` slot, found (and its epoch synced) on entry: the exit swaps
     // through it without a second sync, which the next entry does before any model code.
     VlRNG* m_slot;
@@ -228,6 +240,9 @@ struct simjig_handle {
     // Runs `fn(*this)` behind the barrier. Not a template on purpose: keeps the barrier in
     // one audited place (simjig_rt.cpp).
     simjig_status guard(void (*fn)(simjig_handle&, void*), void* arg) noexcept;
+    // guard() for `eval_held`: sets the time to `time` first; while held, skips installing
+    // the model (the hold did); ors SIMJIG_MSGS_PENDING into the status.
+    simjig_status guard_held(uint64_t time, void (*fn)(simjig_handle&, void*), void* arg) noexcept;
 
     simjig::Runtime rt;
 };
@@ -249,6 +264,8 @@ simjig_status guard(simjig_handle* h, F&& body) noexcept {
 extern "C" {
 void simjig_rt_destroy(simjig_handle* h);
 void simjig_rt_set_time(simjig_handle* h, uint64_t time);
+simjig_status simjig_rt_hold(simjig_handle* h);
+void simjig_rt_release(simjig_handle* h);
 size_t simjig_rt_drain_msgs(simjig_handle* h, simjig_msg* out, size_t cap);
 simjig_status simjig_rt_rng_seed(simjig_handle* h, uint64_t seed);
 // The ABI structs' layout as this compiler sees it, for the Rust mirror's tests: writes up to

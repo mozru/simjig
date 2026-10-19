@@ -286,6 +286,7 @@ impl Sim {
         let guard = state::install(Rc::clone(&k));
         let capture = panics::capture();
         k.phase.set(Phase::Sync);
+        k.models.borrow_mut().sync_begin();
         let result = if sync_clock::first_eval(&k) {
             panics::forget();
             match panic::catch_unwind(AssertUnwindSafe(body)) {
@@ -308,6 +309,7 @@ impl Sim {
         } else {
             None
         };
+        k.models.borrow_mut().sync_end();
         k.phase.set(Phase::Ended);
         drop(capture);
         drop(guard);

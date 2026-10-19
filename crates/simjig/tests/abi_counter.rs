@@ -286,7 +286,7 @@ mod with_models {
             .map(|f| (f.ty.to_owned(), f.name.to_owned(), f.offset, f.size))
             .collect();
         assert_eq!(rust, cpp);
-        assert_eq!(cpp.len(), 51);
+        assert_eq!(cpp.len(), 54);
     }
 
     #[test]

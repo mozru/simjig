@@ -272,6 +272,27 @@ impl RawModel {
         unsafe { (self.vt.eval)(self.handle.as_ptr()) }
     }
 
+    /// Installs the model on this thread for a run of [`eval_held`](Self::eval_held)
+    /// calls (`hold`); the raw status code.
+    pub(crate) fn hold(&mut self) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.hold)(self.handle.as_ptr()) }
+    }
+
+    /// Ends [`hold`](Self::hold).
+    pub(crate) fn release(&mut self) {
+        // SAFETY: as in `eval`; `release` accepts a handle that is not held.
+        unsafe { (self.vt.release)(self.handle.as_ptr()) }
+    }
+
+    /// Sets the time to `ticks` and evaluates once (`eval_held`); the raw status code, with
+    /// [`abi::MSGS_PENDING`] or'ed in when messages wait.
+    #[inline]
+    pub(crate) fn eval_held(&mut self, ticks: u64) -> i32 {
+        // SAFETY: as in `eval`.
+        unsafe { (self.vt.eval_held)(self.handle.as_ptr(), ticks) }
+    }
+
     /// Runs the model's `final` blocks; the raw status code.
     pub(crate) fn final_blocks(&mut self) -> i32 {
         // SAFETY: as in `eval`.
@@ -674,6 +695,19 @@ pub(crate) mod fake {
         Status::Unsupported as i32
     }
 
+    extern "C" fn rng_hold(_h: *mut Handle) -> i32 {
+        STATE.with_borrow_mut(|s| s.calls.push("hold".to_owned()));
+        0
+    }
+
+    extern "C" fn rng_release(_h: *mut Handle) {
+        STATE.with_borrow_mut(|s| s.calls.push("release".to_owned()));
+    }
+
+    extern "C" fn eval_held(h: *mut Handle, _t: u64) -> i32 {
+        eval(h)
+    }
+
     extern "C" fn rng_seed(_h: *mut Handle, _seed: u64) -> i32 {
         Status::Unsupported as i32
     }
@@ -688,7 +722,7 @@ pub(crate) mod fake {
     pub(crate) fn vtable() -> ModelVtable {
         ModelVtable {
             abi_version: ABI_VERSION,
-            size: 192,
+            size: 216,
             prefix: c"Vfake".as_ptr(),
             verilator_version: c"fake".as_ptr(),
             ir_hash: 7,
@@ -712,6 +746,9 @@ pub(crate) mod fake {
             cov_zero: unsupported,
             cov_write: trace_open,
             rng_seed,
+            hold: rng_hold,
+            release: rng_release,
+            eval_held,
         }
     }
 

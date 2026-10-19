@@ -27,6 +27,9 @@ pub(crate) use crate::kernel::cell::{Narrow, read_narrow, write_narrow};
 /// `SIMJIG_ABI_VERSION`: bumped only on an incompatible change.
 pub(crate) const ABI_VERSION: u32 = 1;
 
+/// `SIMJIG_MSGS_PENDING`: or'ed into `eval_held`'s status when messages wait to be drained.
+pub(crate) const MSGS_PENDING: i32 = 0x100;
+
 /// `SIMJIG_TIME_NONE`: `next_time_slot` found no pending timed event.
 pub(crate) const TIME_NONE: u64 = u64::MAX;
 
@@ -270,6 +273,11 @@ pub(crate) struct ModelVtable {
     pub(crate) cov_zero: unsafe extern "C" fn(*mut Handle) -> i32,
     pub(crate) cov_write: unsafe extern "C" fn(*mut Handle, *const c_char) -> i32,
     pub(crate) rng_seed: unsafe extern "C" fn(*mut Handle, u64) -> i32,
+    /// `hold`: installs the model on this thread until `release` (held evaluation).
+    pub(crate) hold: unsafe extern "C" fn(*mut Handle) -> i32,
+    pub(crate) release: unsafe extern "C" fn(*mut Handle),
+    /// `eval_held`: set the time and eval; [`MSGS_PENDING`] or'ed in when messages wait.
+    pub(crate) eval_held: unsafe extern "C" fn(*mut Handle, u64) -> i32,
 }
 
 /// One field of a mirrored struct, named as in the header.
@@ -329,7 +337,7 @@ macro_rules! abi_fields {
 }
 
 abi_fields! {
-    "simjig_model_vtable" ModelVtable = 192 {
+    "simjig_model_vtable" ModelVtable = 216 {
         abi_version @ 0,
         size @ 4,
         prefix @ 8,
@@ -355,6 +363,9 @@ abi_fields! {
         cov_zero @ 168,
         cov_write @ 176,
         rng_seed @ 184,
+        hold @ 192,
+        release @ 200,
+        eval_held @ 208,
     }
     "simjig_signal" Signal = 32 {
         id @ 0,

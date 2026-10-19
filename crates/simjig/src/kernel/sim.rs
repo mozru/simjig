@@ -275,6 +275,18 @@ impl Sim {
         self.kernel.recorder.hash()
     }
 
+    /// Keeps no trace hash from here on: later events are still recorded (the
+    /// [`recent_trace`](Self::recent_trace) window, the count), but not hashed.
+    pub(crate) fn stop_trace_hash(&mut self) {
+        self.kernel.recorder.stop_hashing();
+    }
+
+    /// The [`trace_hash`](Self::trace_hash), unless some events were not hashed
+    /// ([`stop_trace_hash`](Self::stop_trace_hash)).
+    pub(crate) fn full_trace_hash(&self) -> Option<u64> {
+        self.kernel.recorder.full_hash()
+    }
+
     /// The most recent kernel events, oldest first (a bounded window).
     #[must_use]
     pub fn recent_trace(&self) -> Vec<TraceRecord> {

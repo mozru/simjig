@@ -188,6 +188,9 @@ pub(crate) struct Recorder {
     /// Whether the ring has wrapped (holds `RECORDER_CAPACITY` records).
     full: Cell<bool>,
     hash: Cell<Fnv>,
+    /// Whether records are hashed (the default); off only for a run that asked to keep no
+    /// trace hash (`#[simjig::test(trace_hash = false)]`).
+    hashing: Cell<bool>,
     count: Cell<u64>,
 }
 
@@ -210,6 +213,7 @@ impl Default for Recorder {
             next: Cell::new(0),
             full: Cell::new(false),
             hash: Cell::new(Fnv::default()),
+            hashing: Cell::new(true),
             count: Cell::new(0),
         }
     }
@@ -217,6 +221,13 @@ impl Default for Recorder {
 
 impl Recorder {
     pub(crate) fn record(&self, record: TraceRecord) {
+        if self.hashing.get() {
+            self.hash_record(&record);
+        }
+        self.store(record);
+    }
+
+    fn hash_record(&self, record: &TraceRecord) {
         let mut hash = self.hash.get();
         // The bytes hashed are the five words' little-endian bytes, in this order.
         for word in [
@@ -229,6 +240,19 @@ impl Recorder {
             hash.write_u64(word);
         }
         self.hash.set(hash);
+    }
+
+    /// Stops hashing: later records are kept in the ring and counted, not hashed.
+    pub(crate) fn stop_hashing(&self) {
+        self.hashing.set(false);
+    }
+
+    /// The hash of every record, if every record was hashed.
+    pub(crate) fn full_hash(&self) -> Option<u64> {
+        self.hashing.get().then(|| self.hash())
+    }
+
+    fn store(&self, record: TraceRecord) {
         let next = self.next.get();
         self.ring[next].set(record);
         let next = (next + 1) & (RECORDER_CAPACITY - 1);
@@ -338,6 +362,20 @@ mod tests {
             });
         }
         assert_eq!(r.hash(), STABLE_HASH);
+    }
+
+    #[test]
+    fn a_recorder_that_stops_hashing_keeps_recording_but_has_no_full_hash() {
+        let r = Recorder::default();
+        r.record(rec(1));
+        assert_eq!(r.full_hash(), Some(r.hash()));
+        r.stop_hashing();
+        let before = r.hash();
+        r.record(rec(2));
+        assert_eq!(r.hash(), before, "not hashed");
+        assert_eq!(r.full_hash(), None);
+        assert_eq!(r.count(), 2);
+        assert_eq!(r.recent().len(), 2);
     }
 
     #[test]

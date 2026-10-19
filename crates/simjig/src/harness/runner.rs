@@ -73,6 +73,8 @@ pub struct TestMeta {
     /// The `init` argument (`init = random`); `None` without one, when `SIMJIG_INIT`
     /// decides.
     pub init: Option<InitValues>,
+    /// Whether the run keeps a trace hash (`true` unless `trace_hash = false`).
+    pub trace_hash: bool,
 }
 
 impl TestMeta {
@@ -352,6 +354,9 @@ where
         Ok(dut) => dut,
         Err(failure) => return failed(Some(sim), Err(failure)),
     };
+    if !meta.trace_hash {
+        sim.stop_trace_hash();
+    }
     let timeout = time_limit(meta.timeout, sim.precision(), ctx.test_name());
     if let Some(timeout) = timeout {
         sim.set_time_limit(SimTime(timeout.duration.ticks()));
@@ -444,7 +449,7 @@ fn finish(
     TestOutcome {
         test: run.test,
         seed: run.seed,
-        trace_hash: sim.as_ref().map(Sim::trace_hash),
+        trace_hash: sim.as_ref().and_then(Sim::full_trace_hash),
         precision: sim.as_ref().map(Sim::precision),
         end_time: sim.as_ref().map(Sim::now),
         failure,
@@ -483,7 +488,7 @@ fn summary<'a>(
             }
             _ => Json::Null,
         },
-        trace_hash: sim.map(Sim::trace_hash),
+        trace_hash: sim.and_then(Sim::full_trace_hash),
         events: None,
         failure,
     }

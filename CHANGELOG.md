@@ -4,6 +4,11 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- `#[simjig::test(trace_hash = false)]`: the run keeps no trace hash (about 16% faster on
+  the benchmark's FIFO testbench). Generated code: `TestMeta` gains `trace_hash` (every
+  expansion snapshot of `simjig_macros::test_attr` shows `trace_hash: true`; reviewed);
+  the unknown-argument error lists the new argument (`harness_ui/bad_timeout.stderr`).
+  The outcome's and `summary.json`'s `trace_hash` are then null.
 - Performance (no change to semantics, the trace hash or `Sim::stats`): the scheduler
   allocates nothing per timestep in steady state (`tests/alloc_steady.rs`); a model
   verilated without `--timing` and not writing waves is not evaluated when nothing was

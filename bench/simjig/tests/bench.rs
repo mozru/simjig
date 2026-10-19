@@ -230,3 +230,20 @@ async fn b_monitor_only<D: bench_fifo::Ports>(dut: D) {
 async fn c_full<D: bench_fifo::Ports>(dut: D) {
     full(dut).await;
 }
+
+// The same three without a trace hash (`trace_hash = false`), to measure what it costs.
+
+#[simjig::test(timeout = "none", trace_hash = false, duts = [bench_fifo::fifo::Dut])]
+async fn a_clock_only_nohash<D: bench_fifo::Ports>(dut: D) {
+    clock_only(dut).await;
+}
+
+#[simjig::test(timeout = "none", trace_hash = false, duts = [bench_fifo::fifo::Dut])]
+async fn b_monitor_only_nohash<D: bench_fifo::Ports>(dut: D) {
+    monitor_only(dut).await;
+}
+
+#[simjig::test(timeout = "none", trace_hash = false, duts = [bench_fifo::fifo::Dut])]
+async fn c_full_nohash<D: bench_fifo::Ports>(dut: D) {
+    full(dut).await;
+}

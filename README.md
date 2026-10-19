@@ -720,6 +720,11 @@ the comparison with cocotb). For the fastest runs:
   model unportable, and gained nothing measurable on the benchmark's small design.
 - **Waves cost.** While a model writes waves, every eval is sampled and none is skipped;
   waves on failure (above) write them only in the replay of a failed test.
+- **The trace hash costs about a sixth** of a busy clocked testbench's time: every kernel
+  event is hashed into it, one dependent multiplication per byte. `#[simjig::test(trace_hash
+  = false)]` keeps none. The run is otherwise the same, but the report and `summary.json`
+  carry no hash, so two runs cannot be compared by it, and a waves replay can check only
+  that it ended the same way.
 - **`--timing` costs.** A model verilated without `--timing` is not evaluated at a
   timestep's start, nor again when nothing was written since its last eval; a `--timing`
   model has events of its own and is evaluated every time.

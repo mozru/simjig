@@ -21,6 +21,7 @@ fn meta(name: &'static str) -> TestMeta {
         ignored: false,
         should_panic: false,
         init: None,
+        trace_hash: true,
     }
 }
 
@@ -66,6 +67,24 @@ fn the_same_seed_gives_the_same_trace_hash() {
         a.trace_hash, c.trace_hash,
         "the stimulus depends on the seed"
     );
+}
+
+/// `trace_hash = false`: the run is the same (same end, same records counted), but it keeps
+/// no hash, so the outcome and `summary.json` report none.
+#[test]
+fn a_run_without_a_trace_hash_reports_none() {
+    let hashed = run_stimulus("nohash", Some(7), "nohash-a");
+    let meta = TestMeta {
+        trace_hash: false,
+        ..meta("nohash")
+    };
+    let unhashed = run::<counter::Dut, _, _>(&meta, &env(Some(7), "nohash-b"), random_stimulus);
+    assert!(unhashed.failure.is_none(), "{:?}", unhashed.failure);
+    assert!(hashed.trace_hash.is_some());
+    assert_eq!(unhashed.trace_hash, None);
+    assert_eq!(unhashed.end_time, hashed.end_time);
+    let summary = read_json(&unhashed.run_dir.expect("written").join("summary.json"));
+    assert!(summary["trace_hash"].is_null(), "{summary}");
 }
 
 #[test]

@@ -19,6 +19,7 @@ fn a() {
             ignored: false,
             should_panic: false,
             init: ::core::option::Option::None,
+            trace_hash: true,
         },
         |_, __simjig_dut| async move { a(__simjig_dut).await },
     );

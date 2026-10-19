@@ -6,6 +6,7 @@
 //! #[simjig::test(timeout = "<integer><unit>")]      unit: fs ps ns us ms s
 //! #[simjig::test(timeout = "none")]                 no time limit
 //! #[simjig::test(init = random)]                    random initial values (or `zero`)
+//! #[simjig::test(trace_hash = false)]               keep no trace hash (faster)
 //! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<ctx>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
 //!
@@ -57,6 +58,8 @@ struct Args {
     /// The `simjig::InitValues` variant name of an `init` argument; `None` without one
     /// (`SIMJIG_INIT` decides at run time).
     init: Option<&'static str>,
+    /// `trace_hash = <bool>`; `None` without the argument (a hash is kept).
+    trace_hash: Option<bool>,
 }
 
 /// `init` values and their `simjig::InitValues` variants.
@@ -120,6 +123,15 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             };
             args.init = Some(variant);
             Ok(())
+        } else if meta.path.is_ident("trace_hash") {
+            if args.trace_hash.is_some() {
+                return Err(meta.error("`trace_hash` is given twice"));
+            }
+            let value: syn::LitBool = meta.value()?.parse().map_err(|e| {
+                syn::Error::new(e.span(), "`trace_hash` is `true` (the default) or `false`")
+            })?;
+            args.trace_hash = Some(value.value);
+            Ok(())
         } else if meta.path.is_ident("crate") {
             if args.krate.is_some() {
                 return Err(meta.error("`crate` is given twice"));
@@ -143,8 +155,8 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             Err(meta.error(
                 "unknown `#[simjig::test]` argument; the arguments are \
                  `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`), \
-                 `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, and \
-                 `crate = <path to simjig>`",
+                 `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, \
+                 `trace_hash = false`, and `crate = <path to simjig>`",
             ))
         }
     });
@@ -440,6 +452,7 @@ fn run_call(
             quote!(::core::option::Option::Some(#krate::InitValues::#variant))
         }
     };
+    let trace_hash = args.trace_hash.unwrap_or(true);
     let attrs = &test.func.attrs;
     let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
     let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
@@ -454,6 +467,7 @@ fn run_call(
                 ignored: #ignored,
                 should_panic: #should_panic,
                 init: #init,
+                trace_hash: #trace_hash,
             },
             |#ctx_pat, #dut_pat| async move { #func(#(#call_args),*).await },
         );
@@ -600,6 +614,14 @@ mod tests {
     }
 
     #[test]
+    fn expands_trace_hash_false() {
+        insta::assert_snapshot!(render(
+            quote!(trace_hash = false),
+            quote! { async fn fast(dut: Counter) {} }
+        ));
+    }
+
+    #[test]
     fn expands_timeout_none() {
         insta::assert_snapshot!(render(
             quote!(timeout = "none"),
@@ -674,6 +696,10 @@ mod tests {
         insta::assert_snapshot!(
             "bad_init",
             render(quote!(init = x), quote! { async fn t() {} })
+        );
+        insta::assert_snapshot!(
+            "bad_trace_hash",
+            render(quote!(trace_hash = off), quote! { async fn t() {} })
         );
         insta::assert_snapshot!(
             "duplicate_timeout",

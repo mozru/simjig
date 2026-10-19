@@ -357,3 +357,37 @@ all of `fifo`'s cost to the walk: 303.2 before, 314.3 after, 302.5 with the skip
 `fifo_pub` pays about 11 ns for the walk and 30 ns for evaluating every eval, as a C++
 loop does. Correctness over performance (constitution); a provable form of the walk skip
 would need Verilator to say which inputs a design writes.
+
+# Eval elision off by default (int-q)
+
+## Decision
+`p1-fix` left a known gap: Verilator 5.052 re-runs, on every `eval()`, the logic under the
+'ico' region's 'first iteration' trigger, which includes logic fed by an input the design
+writes itself (`ASSIGNIN` waived) and by a `$sampled` value. If that logic is impure
+(`$time`/`$realtime`, `$display`/`$write`, `$random`/`$urandom`, a DPI-C import), a skipped
+eval differs from a C++ loop. Correctness first, so elision is now **off by default** and
+an explicit opt-in: `#[simjig::test(elide_evals)]`, `ModelOptions::with_elide_evals(true)`
+(its rustdoc states when it is safe). The opt-in still never elides for a model the build
+shows is unsafe (`SIMJIG_FEATURE_PUBLIC_RW`, a writable non-input row, `--timing`, waves).
+
+The alternative, proving a design pure from `--json-only` or the scope table and keeping
+elision on for exactly those designs, was not built: the proof needs "writes no input",
+which neither output shows (`--json-only` marks the written submodule port, not the top's
+input; see "Corrections" above), so it could not be made conservative. Tests:
+`model_tests::elision` (`input_time.sv`: by default `t_out` follows `$time` with nothing
+written; opted in it stays stale, the documented limit; opted in on `rw_meta` it still
+evaluates every time).
+
+## Cost (bench C on `fifo`, 1M cycles, 5 interleaved rounds, idle-gated)
+Gate: 1-minute load < 2.5 and no cargo, rustc, clang, verilator or nextest process before
+each run (loads 2.34 to 2.46). int-q after the merges of `p1-fix` and `sched`. Both
+reported the same pushes, pops and hash (402910, 402901, 3888034673).
+
+| Flow | median ns/cycle | runs |
+|---|---:|---|
+| `simjig` (elision off, the default) | 298.2 | 296.1, 296.5, 298.2, 299.4, 327.5 |
+| `simjig-elide` (`elide_evals`) | 272.4 | 272.1, 272.1, 272.4, 272.5, 272.9 |
+
+The default costs 25.8 ns per cycle (9.5%): the evals that open each timestep and close
+each delta loop now run (and the walks after them find nothing). The bench keeps both as
+separately labelled flows (`bench.py --flows simjig,simjig_elide`).

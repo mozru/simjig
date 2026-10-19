@@ -18,8 +18,8 @@ the public API, the generated code or simulation semantics.
   field `ModelOptions::elide_evals`, `TestMeta::elide_evals`; the generated `TestMeta` of
   every test gains `elide_evals: false`, snapshots reviewed). Its rustdoc says exactly when
   it is safe. Opting in still evaluates every time for a model with a writable public
-  variable, `--timing` or waves. The cost of the default: about 4% on the benchmark FIFO's
-  async C flow (`docs/notes/perf.md`, "Eval elision off by default"); traces and their
+  variable, `--timing` or waves. The cost of the default: about 9% on the benchmark FIFO's
+  async C flow (298 against 272 ns per cycle) (`docs/notes/perf.md`, "Eval elision off by default"); traces and their
   hashes are unchanged, since a skipped eval was recorded as one.
 - Fix: the waves of a synchronous test (`#[simjig::test(sync)]` with `SIMJIG_WAVES` or
   waves on failure) showed each timestep with the next edge's clock and inputs, half a

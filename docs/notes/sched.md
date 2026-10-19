@@ -179,3 +179,14 @@ dropping records), or an executor that is not the general one (sync mode is that
 the wait table and the ready queue together, a kernel pointer passed through the poll
 (macOS only, new unsafe code), reusing `events_pending` between the last delta and
 `next_time`, and leaner typed reads and writes.
+
+## After the merge with `p1-fix` (int-q)
+The corpus reproduces on the merged tree unchanged: `p1-fix`'s changes (no elision for a
+model with a writable public variable, `eval_changes` true for every Verilator slot) are
+in the Verilator backend, which the corpus's fake backends do not use. The now-dead
+`eval_changes` mechanism (`ModelBackend::eval_changes`, `WaitTable::eval_groups`, the
+clause in `fire_value_changes`) is removed; the corpus still reproduces all 4096 digests
+without a re-bless. That is expected: a fake model's eval never writes an input, so for
+it the skip was sound and changed nothing observable (the digest has no walk count).
+The draw that chose "inputs eval-unchanged" is kept, unused, so each seed still draws
+the simulation and programs it was blessed with.

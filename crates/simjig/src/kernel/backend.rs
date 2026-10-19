@@ -181,14 +181,6 @@ pub(crate) trait ModelBackend {
         self.set_time(time);
         self.eval()
     }
-    /// Whether an `eval` may change `slot`'s value; `false` only for a slot that nothing
-    /// but [`write`](Self::write) changes. `true` (the default) is always safe, and the
-    /// Verilator backend keeps it for every slot, inputs included: a design may write its
-    /// own input once its `ASSIGNIN` lint is waived, which nothing outside the design
-    /// shows.
-    fn eval_changes(&self, _slot: u32) -> bool {
-        true
-    }
     /// Whether an `eval` with no `write` since the previous `eval` is sure to change
     /// nothing and call nothing (no timed events of its own, no per-eval waves sampling, no
     /// logic that runs on every eval whatever was written, such as a Verilator model's

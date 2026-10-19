@@ -161,10 +161,6 @@ pub(crate) struct WaitTable {
     waiters: Slab<Waiter>,
     /// Edge registrations not yet fired or cancelled, in all groups.
     edge_live: usize,
-    /// Per slot: whether an eval may change it.
-    eval_changes: Vec<bool>,
-    /// Primed groups on a slot an eval may change.
-    eval_groups: usize,
     /// Every group made so far, primed or not; see [`Group`].
     groups: Vec<Group>,
     /// `group_of[slot][kind.index()]`: the index in `groups` of that slot's group of that
@@ -257,13 +253,10 @@ fn remove_key(v: &mut Vec<Key>, key: Key) {
 }
 
 impl WaitTable {
-    /// `eval_changes[slot]`: whether an eval may change `slot` ([`Models::eval_changes`]).
-    pub(crate) fn new(sim_gen: u32, eval_changes: Vec<bool>) -> Self {
-        let slots = eval_changes.len();
+    /// A table for simulation `sim_gen` over `slots` flat slots.
+    pub(crate) fn new(sim_gen: u32, slots: usize) -> Self {
         Self {
             sim_gen,
-            eval_changes,
-            eval_groups: 0,
             seq: 0,
             waiters: Slab::default(),
             edge_live: 0,
@@ -359,7 +352,6 @@ impl WaitTable {
             return EdgeKey { group, primed, seq };
         }
         g.primed = Some(seq);
-        self.eval_groups += usize::from(self.eval_changes[slot as usize]);
         if g.words <= 2 {
             g.narrow = [0; 2];
             model.read(slot, &mut g.narrow[..g.words]);
@@ -417,7 +409,6 @@ impl WaitTable {
     fn unprime(&mut self, index: u32) {
         let g = &mut self.groups[index as usize];
         g.primed = None;
-        self.eval_groups -= usize::from(self.eval_changes[g.slot as usize]);
         g.waiters.clear();
         g.live = 0;
         self.stale += 1;
@@ -568,11 +559,6 @@ impl WaitTable {
 
     pub(crate) fn next_timer(&self) -> Option<SimTime> {
         self.wheel.keys().next().copied()
-    }
-
-    /// Whether a primed group watches a slot an eval may change.
-    pub(crate) fn watches_eval_changes(&self) -> bool {
-        self.eval_groups > 0
     }
 
     /// Starts a value-change walk of the groups primed so far: until

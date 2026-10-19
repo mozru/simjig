@@ -2,8 +2,8 @@
 //! what the scheduler did before its fast paths (`docs/notes/sched.md`).
 //!
 //! Each seed builds a random simulation (one or two fake models, kernel clocks with random
-//! periods, phases and duty cycles, and backends that do or do not settle, are held, and
-//! report which slots an eval can change, as a Verilator model does) and random task
+//! periods, phases and duty cycles, and backends that do or do not settle and are held or
+//! not) and random task
 //! programs over it: edges of kernel clocks, of design-driven signals and of inputs,
 //! `cycles`, edges followed by a region, Timers, regions, events, locks, queues, spawns,
 //! cancellations, `first!`, `join!`, `with_timeout`, a combinator with a foreign waker,
@@ -408,14 +408,12 @@ async fn nest(world: &Rc<World>, op: &Op, child: String, children: &mut Vec<Task
 }
 
 /// A [`FakeModel`] that reports what a Verilator model reports: whether an eval with
-/// nothing written since the last one is a no-op (`settles`), which slots an eval cannot
-/// change (inputs), and whether it stays installed for the run (`sync_begin`).
+/// nothing written since the last one is a no-op (`settles`), and whether it stays
+/// installed for the run (`sync_begin`).
 struct Tuned {
     inner: FakeModel,
     settles: bool,
     hold: bool,
-    /// Per slot: whether an eval may change it.
-    eval_changes: Vec<bool>,
 }
 
 impl ModelBackend for Tuned {
@@ -443,9 +441,6 @@ impl ModelBackend for Tuned {
     fn eval(&mut self) -> Result<EvalStatus, ModelError> {
         self.inner.eval()
     }
-    fn eval_changes(&self, slot: u32) -> bool {
-        self.eval_changes[slot as usize]
-    }
     // The fake's logic is a function of its values, so an eval with nothing written since
     // the last one changes nothing, unless a timed event is due.
     fn settles(&self) -> bool {
@@ -462,16 +457,15 @@ impl ModelBackend for Tuned {
     }
 }
 
-fn tuned(rng: &mut Rng, inner: FakeModel, inputs: &[FakeSig]) -> Tuned {
-    let tuned_inputs = rng.one_in(2);
-    let eval_changes = (0..inner.slot_count())
-        .map(|s| !(tuned_inputs && inputs.iter().any(|i| i.slot() == s)))
-        .collect();
+fn tuned(rng: &mut Rng, inner: FakeModel) -> Tuned {
+    // This draw chose whether the backend reported its inputs as unchanged by an eval (the
+    // walk skip removed after the corpus was blessed). It is kept so that every seed draws
+    // the same simulation and programs as when the corpus was blessed.
+    let _inputs_eval_unchanged = rng.one_in(2);
     Tuned {
         inner,
         settles: rng.one_in(2),
         hold: rng.one_in(2),
-        eval_changes,
     }
 }
 
@@ -483,7 +477,8 @@ fn simulation(rng: &mut Rng) -> (Sim, bool) {
         .map(|i| m.signal(&format!("clk{i}"), 1))
         .collect();
     let (a, b, en) = (m.signal("a", 8), m.signal("b", 8), m.signal("en", 8));
-    let wide = m.signal("wide", 70);
+    // Written through its name (`signals`); made here for its place in the slot order.
+    let _wide = m.signal("wide", 70);
     let sum = m.signal("sum", 8);
     let q = m.signal("q", 8);
     let cnt = m.signal("cnt", 8);
@@ -497,16 +492,14 @@ fn simulation(rng: &mut Rng) -> (Sim, bool) {
     if rng.one_in(3) {
         m.at(SimTime(1 + rng.below(50)), move |s| s.set(q, 0x55));
     }
-    let mut inputs = clks.clone();
-    inputs.extend([a, b, en, wide]);
-    let mut backends: Vec<Box<dyn ModelBackend>> = vec![Box::new(tuned(rng, m, &inputs))];
+    let mut backends: Vec<Box<dyn ModelBackend>> = vec![Box::new(tuned(rng, m))];
     let second = rng.one_in(4);
     if second {
         let mut m1 = FakeModel::new(Precision::NS);
         let mclk = m1.signal("m1clk", 1);
         let mq = m1.signal("m1q", 1);
         m1.on_rising(mclk, move |s| s.set(mq, 1 - s.get(mq)));
-        backends.push(Box::new(tuned(rng, m1, &[mclk])));
+        backends.push(Box::new(tuned(rng, m1)));
     }
     let Ok(mut sim) = Sim::from_backends(backends) else {
         unreachable!("one precision")

@@ -286,12 +286,6 @@ impl Models {
         self.written
     }
 
-    /// Whether an eval may change flat slot `flat` ([`ModelBackend::eval_changes`]).
-    pub(crate) fn eval_changes(&self, flat: u32) -> bool {
-        let (backend, slot) = self.owner(flat);
-        backend.eval_changes(slot)
-    }
-
     /// Starts a run ([`ModelBackend::sync_begin`]); only a lone model is held, since a held
     /// model must be the only one evaluated.
     pub(crate) fn sync_begin(&mut self) {

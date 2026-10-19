@@ -33,14 +33,6 @@ const SETTLE_LIMIT: u32 = 100;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FakeSig(u32);
 
-impl FakeSig {
-    /// The model slot it names.
-    #[cfg(test)]
-    pub(crate) const fn slot(self) -> u32 {
-        self.0
-    }
-}
-
 type Logic = Box<dyn FnMut(&mut FakeState)>;
 type TimedLogic = Box<dyn FnOnce(&mut FakeState)>;
 

@@ -235,10 +235,7 @@ impl Kernel {
         Self {
             sim_gen,
             precision: models.precision(),
-            waits: RefCell::new(WaitTable::new(
-                sim_gen,
-                (0..count).map(|s| models.eval_changes(s)).collect(),
-            )),
+            waits: RefCell::new(WaitTable::new(sim_gen, count as usize)),
             log: RefCell::new(WriteLog::new(count as usize)),
             clocks: RefCell::new(Vec::new()),
             names,

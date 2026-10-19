@@ -23,6 +23,10 @@
     reason = "raw reads and writes of a model's narrow signal storage (module docs)"
 )]
 
+use std::any::Any;
+use std::fmt;
+use std::rc::Rc;
+
 /// A pointer to a `CData`, `SData`, `IData` or `QData` member.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Narrow {
@@ -169,6 +173,11 @@ impl DirectTable {
         }
     }
 
+    /// The `Direct` of flat slot `flat`, if it has one (using it is `unsafe`).
+    pub(crate) fn get(&self, flat: u32) -> Option<Direct> {
+        self.slots.get(flat as usize).copied().flatten()
+    }
+
     /// Reads flat slot `flat` into `out` (one or two words) if it has a `Direct`; returns
     /// whether it did.
     #[inline]
@@ -205,6 +214,53 @@ impl DirectTable {
         let high = value.get(1).map_or(0, |&w| u64::from(w));
         // SAFETY: as in `read`, and the slot is writable.
         unsafe { d.write(high << 32 | u64::from(value[0])) };
+        true
+    }
+}
+
+/// A [`Direct`] that keeps its backend alive itself, through `keep` (a share of what owns
+/// the backend): a synchronous run's bound handle reads and writes through it with no
+/// table lookup (`SyncClock::bind`).
+pub(crate) struct KeptDirect {
+    direct: Direct,
+    _keep: Rc<dyn Any>,
+}
+
+impl fmt::Debug for KeptDirect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeptDirect")
+            .field("direct", &self.direct)
+            .finish_non_exhaustive()
+    }
+}
+
+impl KeptDirect {
+    /// # Safety
+    /// `keep` keeps alive the backend that made `direct`, and the holder reads and writes
+    /// only while none of that backend's entry points runs.
+    pub(crate) unsafe fn new(direct: Direct, keep: Rc<dyn Any>) -> Self {
+        Self {
+            direct,
+            _keep: keep,
+        }
+    }
+
+    /// The slot's value.
+    #[inline]
+    pub(crate) fn read(&self) -> u64 {
+        // SAFETY: `new`'s contract.
+        unsafe { self.direct.read() }
+    }
+
+    /// Writes `value`, masked to the slot's width; returns `false`, writing nothing, for a
+    /// slot the testbench may not write.
+    #[inline]
+    pub(crate) fn write(&self, value: u64) -> bool {
+        if !self.direct.writable() {
+            return false;
+        }
+        // SAFETY: `new`'s contract, and the slot is writable.
+        unsafe { self.direct.write(value) };
         true
     }
 }

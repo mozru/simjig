@@ -46,13 +46,12 @@
 use std::any::Any;
 use std::fmt;
 use std::marker::PhantomData;
-use std::rc::Rc;
 
 use simjig_bits::Packed;
 
 use crate::kernel::backend::words;
+use crate::kernel::cell::KeptDirect;
 use crate::kernel::signal::RawSig;
-use crate::kernel::state::Kernel;
 use crate::kernel::trigger::{self, Edge};
 
 pub(crate) mod sealed {
@@ -66,6 +65,23 @@ pub(crate) mod sealed {
         pub(crate) kernel: Rc<Kernel>,
         /// Whether the run may read and write the model's storage directly (held).
         pub(crate) direct: bool,
+    }
+
+    impl BindTo {
+        /// The slot's direct way, kept alive by the kernel, if the run may use one.
+        pub(crate) fn kept(&self, flat: u32) -> Option<crate::kernel::cell::KeptDirect> {
+            if !self.direct {
+                return None;
+            }
+            let direct = self.kernel.direct.get(flat)?;
+            let keep: Rc<dyn std::any::Any> = Rc::clone(&self.kernel) as _;
+            // SAFETY: `keep` is the kernel, which owns the models and so the backend that
+            // made `direct`; and `direct` is set only for a held run, in which no Rust code
+            // runs during an eval (no DPI-C import implemented in Rust, no waves), so a
+            // bound handle is never used while a backend call runs.
+            #[expect(unsafe_code, reason = "a kept Direct under the held run's guarantee")]
+            Some(unsafe { crate::kernel::cell::KeptDirect::new(direct, keep) })
+        }
     }
 
     impl std::fmt::Debug for BindTo {
@@ -512,20 +528,19 @@ pub struct BoundMut<T> {
 /// What a bound handle reads and writes through: the kernel's direct table (kept alive by
 /// the `Rc`), or, for a slot without a direct way, the handle's own path.
 struct BoundSlot {
-    kernel: Rc<Kernel>,
-    flat: u32,
     raw: RawSig,
-    direct: bool,
+    direct: Option<KeptDirect>,
 }
 
 impl BoundSlot {
     #[inline]
     fn read<T: Packed<Raw: RawWords>>(&self) -> T {
-        let mut buf = <T::Raw as sealed::Buffer>::zeroed();
-        if !(self.direct && self.kernel.direct.read(self.flat, buf.as_mut())) {
+        let Some(direct) = &self.direct else {
             return get(self.raw);
-        }
-        T::from_raw(RawWords::from_words(buf.as_ref()))
+        };
+        let value = direct.read();
+        let words = [low_word(value), low_word(value >> 32)];
+        T::from_raw(RawWords::from_words(&words))
     }
 
     #[inline]
@@ -537,8 +552,15 @@ impl BoundSlot {
         let value: T = value.into();
         let mut buf = <T::Raw as sealed::Buffer>::zeroed();
         value.to_raw().to_words(buf.as_mut());
-        if !(self.direct && self.kernel.direct.write(self.flat, buf.as_ref())) {
-            self.raw.write_words(buf.as_ref());
+        let words = buf.as_ref();
+        let value = words
+            .iter()
+            .take(2)
+            .rev()
+            .fold(0u64, |a, &w| a << 32 | u64::from(w));
+        let done = words.len() <= 2 && self.direct.as_ref().is_some_and(|d| d.write(value));
+        if !done {
+            self.raw.write_words(words);
         }
     }
 }
@@ -599,7 +621,6 @@ macro_rules! bind {
             type Bound = $bound<T>;
 
             fn bind_to(self, to: sealed::BindTo) -> Self::Bound {
-                let sealed::BindTo { kernel, direct } = to;
                 let flat = self.raw.with(|k, flat| {
                     let width = k.widths[flat as usize];
                     assert!(
@@ -611,7 +632,7 @@ macro_rules! bind {
                     flat
                 });
                 $bound {
-                    slot: BoundSlot { kernel, flat, raw: self.raw, direct },
+                    slot: BoundSlot { raw: self.raw, direct: to.kept(flat) },
                     value: PhantomData,
                 }
             }

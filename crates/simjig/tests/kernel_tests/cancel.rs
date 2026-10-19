@@ -407,6 +407,9 @@ fn cancelling_most_waiters_of_one_edge_or_deadline_leaves_the_rest_in_order() {
     let clk = d.clk;
     let order: Rc<RefCell<Vec<String>>> = Rc::default();
     let shared = Rc::clone(&order);
+    // Everything is done at t = 10: a survivor that is never woken fails the run at this
+    // limit instead of running the free clock until nextest's timeout.
+    d.sim.set_time_limit(simjig::SimTime(100));
     d.sim
         .run(async move {
             let mut survivors = Vec::new();

@@ -77,12 +77,15 @@ impl SyncClock {
             "SyncClock needs a synchronous test (`#[simjig::test(sync)]`); an async test steps \
              its clocks with `clock(..)` and triggers"
         );
+        // Checked before it is set, so that the failure's header gives the first clock's
+        // cycle.
         assert!(
-            kernel.sync_cycles.replace(Some(0)).is_none(),
+            kernel.sync_cycles.get().is_none(),
             "a second SyncClock in one synchronous test: there is one clock per synchronous \
              test, since each edge advances the run's one time axis by half its period; make \
              one and step it (or make the test async for several clocks)"
         );
+        kernel.sync_cycles.set(Some(0));
         let ticks = period.ticks();
         assert!(
             ticks >= 2 && ticks.is_multiple_of(2),
@@ -295,4 +298,32 @@ fn time_limit(k: &Kernel, next: SimTime, limit: SimTime) -> ! {
 #[cold]
 fn stop() -> ! {
     panic::resume_unwind(Box::new(Stopped));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::fake::FakeModel;
+    use crate::kernel::time::Precision;
+    use crate::{Sim, SimDuration};
+
+    /// A second `SyncClock` is refused without resetting the first one's cycle, which the
+    /// failure's header shows (`harness::report`).
+    #[test]
+    fn a_second_sync_clock_keeps_the_first_clocks_cycle() {
+        let mut m = FakeModel::new(Precision::NS);
+        let _clk = m.signal("clk", 1);
+        let _other = m.signal("other", 1);
+        let mut sim = Sim::from_backend(Box::new(m));
+        let (clk, other) = (sim.signal("clk").unwrap(), sim.signal("other").unwrap());
+        let failure = sim
+            .run_sync(|| {
+                let mut cyc = SyncClock::new(clk, SimDuration::from_ticks(10));
+                cyc.ticks(3);
+                SyncClock::new(other, SimDuration::from_ticks(10));
+            })
+            .unwrap_err();
+        assert!(failure.message.contains("a second SyncClock"), "{failure}");
+        assert_eq!(sim.sync_cycle(), Some(3));
+    }
 }

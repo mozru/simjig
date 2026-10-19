@@ -4,6 +4,9 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Fix: the failure header of a synchronous test that made a second `SyncClock` said
+  `cycle 0`; refusing the second clock reset the first one's count. It now gives the first
+  clock's cycle.
 - The Cargo target directory is found by one rule, in the new crate `simjig-target-dir`,
   for both simjig-build's model cache and simjig's run directories (it was two copies).
   One change for the cache: Cargo's `CACHEDIR.TAG` is looked for at most five levels

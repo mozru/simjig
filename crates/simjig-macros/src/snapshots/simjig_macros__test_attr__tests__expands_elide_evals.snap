@@ -1,0 +1,27 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(elide_evals), quote! { async fn quick(dut: Counter) {} })"
+---
+#[::core::prelude::v1::test]
+fn quick() {
+    #[allow(clippy::unused_async, clippy::result_large_err)]
+    async fn quick(dut: Counter) {}
+    ::simjig::__private::run_test::<
+        Counter,
+        _,
+        _,
+    >(
+        &::simjig::__private::TestMeta {
+            module_path: ::core::module_path!(),
+            name: ::core::stringify!(quick),
+            package: ::core::env!("CARGO_PKG_NAME"),
+            timeout: ::simjig::__private::TimeoutArg::Default,
+            ignored: false,
+            should_panic: false,
+            init: ::core::option::Option::None,
+            trace_hash: true,
+            elide_evals: true,
+        },
+        |_, __simjig_dut| async move { quick(__simjig_dut).await },
+    );
+}

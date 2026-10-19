@@ -20,6 +20,7 @@ fn soak() {
             should_panic: false,
             init: ::core::option::Option::None,
             trace_hash: true,
+            elide_evals: false,
         },
         |_, _| async move { soak().await },
     );

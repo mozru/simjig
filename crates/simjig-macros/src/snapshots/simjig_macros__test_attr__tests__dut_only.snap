@@ -20,6 +20,7 @@ fn a() {
             should_panic: false,
             init: ::core::option::Option::None,
             trace_hash: true,
+            elide_evals: false,
         },
         |_, __simjig_dut| async move { a(__simjig_dut).await },
     );

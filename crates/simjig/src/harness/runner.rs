@@ -55,6 +55,10 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 10;
 
 /// What `#[simjig::test]` knows about the test at compile time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent attribute flags, written by the macro's expansion field by field"
+)]
 pub struct TestMeta {
     /// `module_path!()` at the test.
     pub module_path: &'static str,
@@ -75,6 +79,9 @@ pub struct TestMeta {
     pub init: Option<InitValues>,
     /// Whether the run keeps a trace hash (`true` unless `trace_hash = false`).
     pub trace_hash: bool,
+    /// Whether the models may skip evals with nothing written (`elide_evals`;
+    /// [`ModelOptions::with_elide_evals`]).
+    pub elide_evals: bool,
 }
 
 impl TestMeta {
@@ -343,7 +350,9 @@ fn run_with<D: DutModel>(
         |value| Seed::new(value, SeedSource::Env),
     );
     let init = init_values(meta, env);
-    let mut options = ModelOptions::new(seed).with_init(init);
+    let mut options = ModelOptions::new(seed)
+        .with_init(init)
+        .with_elide_evals(meta.elide_evals);
     if let Some(trace) = &env.trace {
         options = options.with_trace(trace.clone());
     }

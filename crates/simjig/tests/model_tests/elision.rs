@@ -1,10 +1,60 @@
 //! Eval elision (`Models::eval` skips an eval with nothing written since the last one)
-//! against Verilator's scheduling: such an eval is not always a no-op.
+//! against Verilator's scheduling: such an eval is not always a no-op. So it is an opt-in
+//! (`ModelOptions::with_elide_evals`, `#[simjig::test(elide_evals)]`), and even then off
+//! for a model whose build shows a variable C++ may write.
 
-use simjig::{ReadOnly, Timer, ns};
+use simjig::{ModelOptions, ReadOnly, Seed, SeedSource, Sim, Timer, ns};
 
-use super::duts::sim;
-use crate::{rw_meta, rw_time};
+use super::duts::{sim, sim_with};
+use crate::{input_time, rw_meta, rw_time};
+
+fn elided() -> ModelOptions {
+    ModelOptions::new(Seed::new(1, SeedSource::Env)).with_elide_evals(true)
+}
+
+/// `t_out` at 5 ns and at 10 ns, with nothing written at all.
+fn t_out_at_5_and_10<D>(mut sim: Sim, t_out: fn(&D) -> u128, dut: D) -> (u128, u128)
+where
+    D: 'static,
+{
+    sim.run(async move {
+        Timer::new(ns(5)).await;
+        ReadOnly::new().await;
+        let five = t_out(&dut);
+        Timer::new(ns(5)).await;
+        ReadOnly::new().await;
+        (five, t_out(&dut))
+    })
+    .unwrap()
+}
+
+/// By default every eval runs, so logic fed by an input the design writes itself (which no
+/// build output shows) re-reads `$time` on each, as a C++ loop calling `eval()` once per
+/// timestep sees.
+#[test]
+fn by_default_an_eval_with_nothing_written_runs_logic_fed_by_a_self_written_input() {
+    let (sim, dut) = sim::<input_time::Dut>();
+    let seen = t_out_at_5_and_10(sim, |d: &input_time::Dut| d.t_out.get().to_u128(), dut);
+    assert_eq!(seen, (5, 10));
+}
+
+/// The opt-in's documented limit: with elision on, that eval is skipped and `t_out` keeps
+/// the time of the first eval. This is why elision is not the default.
+#[test]
+fn opted_in_elision_skips_the_eval_a_self_written_input_needs() {
+    let (sim, dut) = sim_with::<input_time::Dut>(&elided());
+    let seen = t_out_at_5_and_10(sim, |d: &input_time::Dut| d.t_out.get().to_u128(), dut);
+    assert_eq!(seen, (0, 0));
+}
+
+/// Opting in changes nothing for a model whose build shows a writable public variable: it
+/// evaluates every time.
+#[test]
+fn opted_in_elision_still_evaluates_a_model_with_a_public_rw_variable() {
+    let (sim, dut) = sim_with::<rw_meta::Dut>(&elided());
+    let seen = t_out_at_5_and_10(sim, |d: &rw_meta::Dut| d.t_out.get().to_u128(), dut);
+    assert_eq!(seen, (5, 10));
+}
 
 /// Logic fed by a `public_flat_rw` variable runs on every eval (Verilator's 'ico' region,
 /// 'first iteration' trigger), so an eval at a new time with nothing written re-reads

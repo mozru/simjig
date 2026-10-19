@@ -128,7 +128,7 @@ pub fn instantiate(meta: &'static ModelMeta, options: &ModelOptions) -> Result<S
     reason = "the DutModel signature; called once per test"
 )]
 pub fn load(meta: &'static ModelMeta, options: &ModelOptions) -> Result<LoadedModel, Failure> {
-    let model = VerilatorModel::load(
+    let mut model = VerilatorModel::load(
         meta,
         &options.verilator_args(),
         options.random_init(),
@@ -138,6 +138,9 @@ pub fn load(meta: &'static ModelMeta, options: &ModelOptions) -> Result<LoadedMo
         let precision = Precision::from_exponent(meta.precision_exponent).unwrap_or(Precision::PS);
         load_failure(meta, &e, precision)
     })?;
+    if options.elide_evals {
+        model.elide_evals();
+    }
     Ok(LoadedModel::from_backend(Box::new(model)))
 }
 

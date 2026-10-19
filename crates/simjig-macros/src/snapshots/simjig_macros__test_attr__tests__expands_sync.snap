@@ -27,6 +27,7 @@ fn drive() {
             should_panic: false,
             init: ::core::option::Option::None,
             trace_hash: false,
+            elide_evals: false,
         },
         |__simjig_ctx, __simjig_dut| drive(&__simjig_ctx, __simjig_dut),
     );

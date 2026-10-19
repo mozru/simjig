@@ -35,6 +35,8 @@ simjig::include_dut!(rw_meta);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(writes_input);
 #[cfg(simjig_test_models)]
+simjig::include_dut!(input_time);
+#[cfg(simjig_test_models)]
 simjig::include_dut!(no_reset);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(no_reset_fast);

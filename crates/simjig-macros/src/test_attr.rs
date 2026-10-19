@@ -8,6 +8,8 @@
 //! #[simjig::test(init = random)]                    random initial values (or `zero`)
 //! #[simjig::test(trace_hash = false)]               keep no trace hash (faster)
 //! #[simjig::test(sync)]                             a synchronous test: a plain `fn`
+//! #[simjig::test(elide_evals)]                      opt in to eval elision (see
+//!                                                   `ModelOptions::with_elide_evals`)
 //! #[simjig::test(crate = <path>)]                   simjig under another name
 //! async fn <name>([<ctx>: &<Ctx>,] [<dut>: <Dut>, ...]) [-> <Output>] { ... }
 //!
@@ -63,6 +65,8 @@ struct Args {
     trace_hash: Option<bool>,
     /// `sync`: a synchronous test, a plain `fn` run by `run_sync_test`.
     sync: bool,
+    /// `elide_evals`: the models may skip evals with nothing written.
+    elide_evals: bool,
 }
 
 /// `init` values and their `simjig::InitValues` variants.
@@ -128,11 +132,9 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             args.trace_hash = Some(value.value);
             Ok(())
         } else if meta.path.is_ident("sync") {
-            if args.sync {
-                return Err(meta.error("`sync` is given twice"));
-            }
-            args.sync = true;
-            Ok(())
+            set_flag(&meta, &mut args.sync, "sync")
+        } else if meta.path.is_ident("elide_evals") {
+            set_flag(&meta, &mut args.elide_evals, "elide_evals")
         } else if meta.path.is_ident("crate") {
             if args.krate.is_some() {
                 return Err(meta.error("`crate` is given twice"));
@@ -150,7 +152,7 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
                 "unknown `#[simjig::test]` argument; the arguments are \
                  `timeout = \"<duration>\"` (for example `timeout = \"2ms\"`), \
                  `duts = [<DUT type>, ..]`, `init = zero` or `init = random`, \
-                 `trace_hash = false`, `sync`, and `crate = <path to simjig>`",
+                 `trace_hash = false`, `sync`, `elide_evals`, and `crate = <path to simjig>`",
             ))
         }
     });
@@ -162,6 +164,15 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
         ));
     }
     Ok(args)
+}
+
+/// Sets a flag argument (`sync`, `elide_evals`), which takes no value and may be given once.
+fn set_flag(meta: &syn::meta::ParseNestedMeta<'_>, flag: &mut bool, name: &str) -> syn::Result<()> {
+    if *flag {
+        return Err(meta.error(format!("`{name}` is given twice")));
+    }
+    *flag = true;
+    Ok(())
 }
 
 /// The `simjig::InitValues` variant of `init = <value>`.
@@ -491,6 +502,7 @@ fn run_call(
         }
     };
     let trace_hash = args.trace_hash.unwrap_or(!args.sync);
+    let elide_evals = args.elide_evals;
     let attrs = &test.func.attrs;
     let ignored = attrs.iter().any(|a| a.path().is_ident("ignore"));
     let should_panic = attrs.iter().any(|a| a.path().is_ident("should_panic"));
@@ -517,6 +529,7 @@ fn run_call(
                 should_panic: #should_panic,
                 init: #init,
                 trace_hash: #trace_hash,
+                elide_evals: #elide_evals,
             },
             #body,
         );
@@ -667,6 +680,22 @@ mod tests {
         insta::assert_snapshot!(render(
             quote!(trace_hash = false),
             quote! { async fn fast(dut: Counter) {} }
+        ));
+    }
+
+    #[test]
+    fn expands_elide_evals() {
+        insta::assert_snapshot!(render(
+            quote!(elide_evals),
+            quote! { async fn quick(dut: Counter) {} }
+        ));
+    }
+
+    #[test]
+    fn rejects_elide_evals_twice() {
+        insta::assert_snapshot!(render(
+            quote!(elide_evals, elide_evals),
+            quote! { async fn t(dut: Counter) {} }
         ));
     }
 

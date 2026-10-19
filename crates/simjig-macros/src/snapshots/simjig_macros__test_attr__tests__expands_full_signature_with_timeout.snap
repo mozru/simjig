@@ -28,6 +28,7 @@ fn backpressure() {
             should_panic: false,
             init: ::core::option::Option::None,
             trace_hash: true,
+            elide_evals: false,
         },
         |__simjig_ctx, __simjig_dut| async move {
             backpressure(&__simjig_ctx, __simjig_dut).await

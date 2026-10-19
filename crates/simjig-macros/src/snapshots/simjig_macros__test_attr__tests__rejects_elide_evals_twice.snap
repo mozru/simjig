@@ -1,0 +1,5 @@
+---
+source: crates/simjig-macros/src/test_attr.rs
+expression: "render(quote!(elide_evals, elide_evals), quote!\n{ async fn t(dut: Counter) {} })"
+---
+error: `elide_evals` is given twice

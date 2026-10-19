@@ -101,8 +101,8 @@ fn feature_duts() -> Vec<Dut> {
 }
 
 /// Models whose evals do more than their writes say: logic fed by a `public_flat_rw`
-/// variable, which every eval runs (`tests/model_tests/elision.rs`), and a design that
-/// writes its own input (`tests/model_tests/walks.rs`).
+/// variable, which every eval runs (`tests/model_tests/elision.rs`), and designs that
+/// write their own input (`tests/model_tests/walks.rs`, `elision.rs`).
 fn eval_duts() -> Vec<Dut> {
     vec![
         // A public_flat_rw probe feeding $time-reading comb logic.
@@ -124,6 +124,11 @@ fn eval_duts() -> Vec<Dut> {
         Dut::new("writes_input")
             .sources(["tests/model_tests/writes_input.sv"])
             .top("writes_input")
+            .verilator_args(TIMESCALE),
+        // A design writing its own input, which feeds $time-reading comb logic.
+        Dut::new("input_time")
+            .sources(["tests/model_tests/input_time.sv"])
+            .top("input_time")
             .verilator_args(TIMESCALE),
     ]
 }

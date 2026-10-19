@@ -20,6 +20,7 @@ fn fast() {
             should_panic: false,
             init: ::core::option::Option::None,
             trace_hash: false,
+            elide_evals: false,
         },
         |_, __simjig_dut| async move { fast(__simjig_dut).await },
     );

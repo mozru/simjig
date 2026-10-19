@@ -235,7 +235,8 @@ impl Models {
     /// That is a property of how the model was built, not of the writes alone: a Verilator
     /// model with a variable C++ may write (`public_flat_rw`, `--public-flat-rw`, a
     /// read-write probe) runs the logic that variable feeds on every eval, and so does not
-    /// settle. The kernel still counts and records a skipped eval, so the trace (and its
+    /// settle; nor does any Verilator model unless the test opted in
+    /// (`ModelOptions::with_elide_evals`, which says when that is safe). The kernel still counts and records a skipped eval, so the trace (and its
     /// hash) is the same as if it ran. In a clocked testbench this skips the eval that
     /// opens each timestep and the last one of each delta loop.
     ///

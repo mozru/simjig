@@ -4,6 +4,18 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- **Behaviour change: eval elision is off by default** (correctness over performance).
+  Verilator 5.052 also re-runs, on every `eval()`, logic fed by an input the design writes
+  itself (its `ASSIGNIN` lint waived) or by a `$sampled` value; when that logic reads
+  `$time`, prints, draws `$urandom` or calls DPI-C, a skipped eval differed from a C++
+  loop, and no build output shows it. Every eval now runs unless the test opts in with
+  `#[simjig::test(elide_evals)]` or `ModelOptions::with_elide_evals(true)` (new public
+  field `ModelOptions::elide_evals`, `TestMeta::elide_evals`; the generated `TestMeta` of
+  every test gains `elide_evals: false`, snapshots reviewed). Its rustdoc says exactly when
+  it is safe. Opting in still evaluates every time for a model with a writable public
+  variable, `--timing` or waves. The cost of the default: about 4% on the benchmark FIFO's
+  async C flow (`docs/notes/perf.md`, "Eval elision off by default"); traces and their
+  hashes are unchanged, since a skipped eval was recorded as one.
 - Fix: the waves of a synchronous test (`#[simjig::test(sync)]` with `SIMJIG_WAVES` or
   waves on failure) showed each timestep with the next edge's clock and inputs, half a
   period early: `SyncClock` and `set` write into the model before the next timestep

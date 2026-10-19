@@ -22,6 +22,7 @@ fn meta(name: &'static str) -> TestMeta {
         should_panic: false,
         init: None,
         trace_hash: true,
+        elide_evals: false,
     }
 }
 

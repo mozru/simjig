@@ -58,8 +58,8 @@ pub(crate) struct VerilatorModel {
     now: SimTime,
     /// Held for a synchronous run (`sync_begin`): evals go through `eval_held`.
     held: bool,
-    /// Whether an eval with nothing written since the last one does nothing: see
-    /// `settles_by_build`.
+    /// Whether an eval with nothing written since the last one is skipped: only when the
+    /// user opted in (`elide_evals`) and the build allows it (`settles_by_build`).
     settles: bool,
 }
 
@@ -79,6 +79,14 @@ fn settles_by_build(features: u64, rows: &[super::abi::Decoded]) -> bool {
 }
 
 impl VerilatorModel {
+    /// Turns eval elision on (`ModelOptions::elide_evals`, which says when it is safe),
+    /// unless the build shows an eval with nothing written can do something
+    /// (`settles_by_build`). Off by default: what a skipped eval would have done in logic
+    /// fed by an input the design writes, or by a `$sampled` value, is not visible here.
+    pub(crate) fn elide_evals(&mut self) {
+        self.settles = settles_by_build(self.raw.features(), self.raw.signals());
+    }
+
     /// Creates the model described by `meta`, passing `args` (plusargs such as
     /// `+verilator+seed+N`) to its context and, with `random_init`, drawing its initial
     /// values from that seed; checks it against the generated Rust, and opens the trace
@@ -147,7 +155,6 @@ impl VerilatorModel {
             });
         }
         model.check_table(meta)?;
-        model.settles = settles_by_build(model.raw.features(), model.raw.signals());
         model.raw.take_coverage_runs();
         if let Some(options) = trace {
             model.tracer = Tracer::open(&mut model.raw, meta.prefix, options)?;
@@ -668,12 +675,12 @@ mod tests {
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
     }
 
-    /// Eval elision (`ModelBackend::settles`) only for a model whose eval with nothing
-    /// written runs nothing: not with `--timing`, not when the build found a writable
-    /// variable (`SIMJIG_FEATURE_PUBLIC_RW`), not with a writable row that is not an input
-    /// (a read-write probe), and not with waves.
+    /// Eval elision (`ModelBackend::settles`) only when asked for, and then only for a
+    /// model whose eval with nothing written runs nothing: not with `--timing`, not when
+    /// the build found a writable variable (`SIMJIG_FEATURE_PUBLIC_RW`), not with a
+    /// writable row that is not an input (a read-write probe), and not with waves.
     #[test]
-    fn only_a_model_without_writable_variables_settles() {
+    fn only_an_opted_in_model_without_writable_variables_settles() {
         fn with_features(features: u64) -> Vtable {
             Vtable::leak(ModelVtable {
                 features,
@@ -707,11 +714,14 @@ mod tests {
         let settles = |meta: &ModelMeta, y_access: u8| {
             fake::reset();
             STATE.with_borrow_mut(|s| s.y_access = Some(y_access));
-            VerilatorModel::load(meta, &[], None, None)
-                .unwrap()
-                .settles()
+            let mut model = VerilatorModel::load(meta, &[], None, None).unwrap();
+            model.elide_evals();
+            model.settles()
         };
         let read = super::super::abi::ACCESS_READ;
+        fake::reset();
+        let default = VerilatorModel::load(&FAKE, &[], None, None).unwrap();
+        assert!(!default.settles(), "not without the opt-in");
         assert!(settles(&FAKE, read));
         assert!(
             !settles(&FAKE, read | ACCESS_WRITE),
@@ -724,7 +734,8 @@ mod tests {
         assert!(!settles(&TIMING, read));
         fake::reset();
         let options = TraceOptions::new("w.fst");
-        let model = VerilatorModel::load(&TRACED, &[], None, Some(&options)).unwrap();
+        let mut model = VerilatorModel::load(&TRACED, &[], None, Some(&options)).unwrap();
+        model.elide_evals();
         assert!(!model.settles(), "with waves");
     }
 

@@ -90,6 +90,10 @@ pub struct ModelOptions {
     /// The FST waves a Verilator model records; `None` records none. Models that cannot
     /// trace (a [`FakeModel`]) ignore it.
     pub trace: Option<TraceOptions>,
+    /// Eval elision, an opt-in: whether a Verilator model skips an eval with nothing
+    /// written since its previous one. `false` (the default) evaluates every time, as a
+    /// C++ loop does. See [`with_elide_evals`](Self::with_elide_evals) for when it is safe.
+    pub elide_evals: bool,
 }
 
 impl ModelOptions {
@@ -127,6 +131,7 @@ impl ModelOptions {
             init: InitValues::Zero,
             init_seed: seed.init_seed(0),
             trace: None,
+            elide_evals: false,
         }
     }
 
@@ -147,6 +152,31 @@ impl ModelOptions {
     #[must_use]
     pub fn with_trace(mut self, trace: TraceOptions) -> Self {
         self.trace = Some(trace);
+        self
+    }
+
+    /// These options, with eval elision on or off (`#[simjig::test(elide_evals)]`): a
+    /// Verilator model then skips an eval with nothing written since its previous one,
+    /// which in a clocked testbench is the eval that opens each timestep and the last one
+    /// of each delta loop. The kernel still counts and records a skipped eval, so the
+    /// trace hash is the same either way.
+    ///
+    /// It is safe exactly when such an eval would do nothing. Verilator 5.052 runs some
+    /// logic on every `eval()` whatever was written (the 'ico' region's 'first iteration'
+    /// trigger, `V3Sched.cpp`): logic fed by a variable C++ may write, by a top-level input
+    /// the design writes itself (its `ASSIGNIN` lint waived), or by a `$sampled` value.
+    /// Running pure combinational logic again changes nothing; running logic that reads
+    /// `$time` or `$realtime`, prints (`$display`, `$write`), draws `$random` or
+    /// `$urandom`, or calls a DPI-C import does, and a skipped eval then differs from a C++
+    /// loop. So enable it only for a design where no such impure logic is fed by an input
+    /// the design writes or by a `$sampled` value. simjig cannot check this from the build
+    /// (nothing outside the design shows a write to its own input), so the choice is the
+    /// user's. It never applies where simjig can tell an eval is not a no-op: a model with
+    /// a writable public variable (`public_flat_rw`, `--public-flat-rw`, a read-write
+    /// probe), one built with `--timing`, and one recording waves evaluate every time.
+    #[must_use]
+    pub fn with_elide_evals(mut self, on: bool) -> Self {
+        self.elide_evals = on;
         self
     }
 

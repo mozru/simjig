@@ -168,6 +168,9 @@ public:
 private:
     Runtime& m_rt;
     Runtime* m_previous;
+    // The thread's `$urandom` slot, found (and its epoch synced) on entry: the exit swaps
+    // through it without a second sync, which the next entry does before any model code.
+    VlRNG* m_slot;
 };
 
 // Verilator's thread-local `$urandom` state (VlRNG::vl_thread_rng()) with its reseed epoch

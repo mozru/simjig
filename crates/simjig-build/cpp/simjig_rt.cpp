@@ -114,17 +114,21 @@ VlRNG& thread_rng() noexcept {
     return *t_rng;
 }
 
-Scope::Scope(Runtime& rt) noexcept : m_rt{rt}, m_previous{t_active} {
+Scope::Scope(Runtime& rt) noexcept : m_rt{rt}, m_previous{t_active}, m_slot{nullptr} {
     t_active = &rt;
     // Verilator's hooks and VL_*_MT wrappers use the thread context, not the model's: point it
     // at this model's context so several models on one thread stay separate. It must be set
     // before thread_rng(), whose reseed path reads it.
     Verilated::threadContextp(&rt.context());
-    std::swap(thread_rng(), rt.rng());
+    m_slot = &thread_rng();
+    std::swap(*m_slot, rt.rng());
 }
 
 Scope::~Scope() {
-    std::swap(thread_rng(), m_rt.rng());
+    // No epoch sync here (thread_rng() would only resync and restore the same state): the
+    // slot holds this model's state, which goes back to it unchanged either way, and every
+    // entry syncs before it swaps.
+    std::swap(*m_slot, m_rt.rng());
     t_active = m_previous;
     if (m_previous != nullptr) Verilated::threadContextp(&m_previous->context());
 }

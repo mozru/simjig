@@ -315,3 +315,18 @@ fn readme_counts(dut: counter::Dut) {
         assert_eq!(count.get().to_u128(), i % 256);
     }
 }
+
+/// The README's example of several bound handles and `cycle()`, as written there.
+#[simjig::test(sync)]
+fn counts_bound(dut: counter::Dut) {
+    let mut cyc = SyncClock::new(dut.clk, simjig::ns(10));
+    let (rst, en, count) = (cyc.bind(dut.rst), cyc.bind(dut.en), cyc.bind(dut.count));
+    rst.set(1);
+    cyc.tick();
+    rst.set(0);
+    en.set(1);
+    while cyc.cycle() < 100 {
+        cyc.tick();
+    }
+    assert_eq!(count.get().to_u128(), 99);
+}

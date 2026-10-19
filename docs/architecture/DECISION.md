@@ -122,8 +122,9 @@ simjig-build ───(generated code)──> simjig
 
 ## 5. Corrections to earlier documents
 - Marlin is **MPL-2.0**, not MIT (checked against its LICENSE file). Borrow ideas, not code.
-- The `agentic-rust` skill's §9a ("drive on falling edge, 2 evals per cycle", "no
-  `--timing`") is superseded by the per-timestamp loop and `--timing` support above.
+- The Rust style guide the proposals were given said "drive on falling edge, 2 evals per
+  cycle" and "no `--timing`"; that is superseded by the per-timestamp loop and `--timing`
+  support above.
 
 ## 6. API conventions (decided)
 - **Rust-native signal access:** `sig.set(v)` and `sig.get()`. Plain assignment can't be

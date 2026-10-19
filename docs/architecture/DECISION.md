@@ -1,14 +1,14 @@
-# simjig architecture: consolidated decision (v1)
+# simjig architecture: decision record
 
-> **Scope update:** simjig is the Verilator-Rust interface layer only. Everything about
-> verification methodology is out of scope: `simjig-vip`, scoreboards, choice-stream
-> randomization, shrinking, fuzzing harnesses, covergroups and RAL. Below, those items
-> are kept only as the rationale archive. simjig still *exposes* what such layers need:
-> coverage counters, multiple models per sim, checkpoints and hooks.
+simjig is the Verilator-Rust interface layer: types, build, model access, scheduling,
+time, errors and waves. Verification methodology (bus models, scoreboards, constrained
+random, shrinking, fuzzing harnesses, covergroups, RAL) is out of scope and belongs to
+projects built on top. simjig exposes what such layers need: coverage counters, several
+models per simulation, checkpoints and hooks.
 
-Sources: `proposal-A.md` (systems, TigerStyle), `proposal-B.md` (Rust library) and
-`proposal-C.md` (verification tooling), written independently from `BRIEF.md`. This file
-is the decision; the proposals remain as the rationale archive.
+The design was chosen from three independent proposals: a systems design in the TigerStyle
+manner, a Rust-library design, and a verification-tooling design. This file records what
+was decided and why, and the alternatives that lost. `ARCHITECTURE.md` has the code map.
 
 ## 0. Scheduler semantics: the conformance goldens are normative
 `tests/conformance/README.md` ("Observed semantics") and `golden/*.jsonl` (cocotb 2.1.0 on
@@ -21,9 +21,11 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
   captured by that edge.
 - Within a delta the last write wins. `WriteConflict` applies only to two different tasks
   writing different values.
-- Within one value-change comparison, waiters wake one trigger group (signal, edge kind) at a time, in priming order, running all ready tasks after each group (see the conformance README "Callback order").
+- Within one value-change comparison, waiters wake one trigger group (signal, edge kind) at
+  a time, in priming order, running all ready tasks after each group (see the conformance
+  README, "Callback order").
 
-## 1. Where all three agreed (adopted as-is)
+## 1. Decisions all three proposals shared
 - **Signal handles are `Copy` ids** (model, generation, slot), with the direction in the
   type. They are resolved through the running kernel. No Rust reference to model memory
   ever exists, and a stale handle panics, naming the signal.
@@ -34,99 +36,81 @@ Verilator 5.052) **override** the scheduler description below wherever they diff
   `simjig::kernel::tasks` (`settle_unrun_drops`).
 - **Structured tasks.** Each poll runs under `catch_unwind`, and a panic becomes a
   `TaskPanic` failure carrying the hierarchical task name.
-- **Normative scheduler loop, once per distinct timestamp:**
-  1. apply clock edges due at t;
-  2. eval;
-  3. wake waiters on changed watched signals;
-  4. run tasks;
-  5. repeat until quiet, up to a delta limit;
-  6. ReadOnly, where any write is a failure;
-  7. advance to `min(wheel, nextTimeSlot)`.
-
-  Clocks are kernel data, not tasks. Coincident edges share one eval. Triggers on
-  internal derived clocks are documented as sampled.
-- **One front end: Verilator `--json-only`, with `--timing` iff the DUT is built with it.** It is decoded in exactly one place
-  per Verilator dialect, with widths computed (never trusted), strict about unknown nodes,
-  and backed by a fixture corpus, insta IR snapshots and a nightly canary against
-  Verilator master. **slang is dropped** from M0–M2; it can return later as a second IR
-  producer.
+- **One scheduler loop per distinct timestamp:** apply the clock edges due at t; eval; wake
+  waiters on changed watched signals; run tasks; repeat until quiet, up to a delta limit;
+  then ReadOnly, where any write is a failure; then advance to the earlier of the timer
+  wheel and `nextTimeSlot()`. Clocks are kernel data, not tasks, and coincident edges
+  share one eval. Triggers on internal derived clocks are sampled: they see the clock
+  after the eval that changed it.
+- **One front end: Verilator `--json-only`**, with `--timing` iff the DUT is built with it,
+  decoded in one place per Verilator dialect, with widths computed (never trusted), strict
+  about unknown nodes, and backed by a fixture corpus and IR snapshots. slang is not used;
+  it could return as a second IR producer.
 - **Layout check:** a generated SV module asserts `$bits` and member offsets, and the shim
   `static_assert`s member sizes.
 - **C ABI:** one generated `simjig_vtable_<prefix>()` per model, carrying `abi_version`,
-  `ir_hash` and the Verilator version, all checked when the model loads. A hand-written C++
-  runtime of about 300 lines provides the `VL_USER_*` hooks and the exception barrier.
+  `ir_hash` and the Verilator version, all checked when the model loads. A small
+  hand-written C++ runtime provides the `VL_USER_*` hooks and the exception barrier.
 - **Fatal routing:** record `{file, line, hier, msg, time}` and throw `FatalUnwind`. The
-  eval wrapper catches it, and the model is poisoned (no further eval). **Proven (docs/notes/abi.md):** plain models unwind cleanly. `--timing` models
-  record the fatal and return FATAL after eval, because throwing out of a coroutine
-  aborts. An internal Verilator fatal inside a coroutine still aborts the process, and
-  nextest's process-per-test contains it.
+  eval wrapper catches it, and the model is poisoned (no further eval). Plain models
+  unwind cleanly (`docs/notes/abi.md`). `--timing` models record the fatal and return
+  FATAL after eval, because throwing out of a coroutine aborts. An internal Verilator
+  fatal inside a coroutine still aborts the process, and nextest's process-per-test
+  contains it.
 - **Failures are data** (`Failure { kind, time, precision, task, location, message }`;
-  the harness's report adds the seed, the signature and the repro),
-  with an actionable `Display`, a one-line repro, and waves from a deterministic replay.
-  The replay doubles as the determinism check. Retries are never used.
-- **The framework's own tests** use a pure-Rust fake model behind the same ABI (A) or
-  backend (B, C), under Miri, plus swarm/random kernel programs, the cocotb conformance
-  suite (~30 DUTs), ASan/UBSan on the shim, and snapshots of every failure rendering.
+  the harness's report adds the seed, the signature and the repro), with an actionable
+  `Display`, a one-line repro, and waves from a deterministic replay. The replay doubles
+  as the determinism check. Retries are never used.
+- **The framework's own tests** use a pure-Rust fake model behind the same backend trait,
+  under Miri, plus random kernel programs, the cocotb conformance suite, C++ tests of the
+  runtime, and snapshots of every failure rendering.
 - **`fork()` checkpoints** (Unix, `--threads 1`).
 - **Not built:** `--savable`, VPI, a solver, a `.toml` mapping language, a UVM
   factory/config_db, a multi-threaded executor, a wave viewer, retries.
 
-## 2. Decisions where they disagreed
-| # | Topic | A | B | C | **Decision** | Why |
-|---|---|---|---|---|---|---|
-| 1 | Crate count | 6, one deep runtime | 14 | 12 | **6 now** (A), with **named split points** | Constitution rule 6: flat and deep. Each split happens only when its trigger fires (§3). |
-| 2 | Testbench writes | Immediate `ptr::write` | Write log applied before eval | Buffered deposit | **Write log (B/C)** | Matches cocotb 2.x deposit semantics and gives deterministic conflict detection (`WriteConflict` names both tasks). `Drop` cleanup still works, and every stimulus bit is traceable. |
-| 3 | Randomness, shrinking, fuzzing | One recorded *choice stream* feeds all three | proptest strategies | proptest strategies | **Choice stream (A)** | One mechanism instead of three. libFuzzer bytes and Hypothesis-style shrinking work on the same stream. Named sub-streams derived from `hash(root_seed, component_path)` (B's SeedTree) keep the streams independent. proptest stays a dev-dependency for testing `simjig-bits`. |
-| 4 | Logging | Fixed-size flight recorder, no `tracing` | `tracing` + `events.jsonl` | `tracing` + `events.jsonl` | **Flight recorder is the core** (A). It is dumped to `events.jsonl` (B/C format), and its trace hash is the determinism check. `simjig::log!` writes into it. A `tracing` bridge is optional and feature-gated (M1+) | Deterministic and allocation-free. One event model serves logs, triage and replay. |
-| 5 | Codegen writer | Plain indenting writer | — | `quote` + `prettyplease` | **Plain writer for every emitter** (A), fed by **one lowering** (B) | C++, `.vlt` and SV need a text writer anyway. One mechanism gives byte-stable output and fast build scripts. |
-| 6 | Cross-checks | SV layout module | + header `VL_IN/OUT(msb,lsb)` check on every build | Layout module | **Both** | The header check is cheap and catches drift on every build, not just in CI. |
-| 7 | Enums | Typed enum; invalid value fails the read | Newtype with consts plus fallible `variant()` | — | **B** | SV enums can legally hold non-member values. Reads stay honest, and the test decides what an invalid value means. |
-| 8 | Time unit | Picoseconds; reject finer precision | Ticks of the design's `timeprecision` | Ticks | **Ticks (B/C)** | Supports fs-precision designs. Durations that can't be represented are errors, never rounded. |
-| 9 | Interface-ported tops | Wrapper (parameters unspecified) | `build.rs` `.iface_port(..)` | `.bind_iface(..)`, and if missing, an error that prints the line to add | **C** | The testbench is the real instantiator. The error tells the user exactly what to write. |
-| 10 | libverilated | Per-model `verilator --build`, cached | A `-sys` crate builds it once per workspace via `links` | Per model build | **Built once per (Verilator version, hook defines) in the shared cache**, by `simjig-build` | Gets B's build-time win without a sys crate. |
-| 11 | Tooling CLI | — | `svtypes` CLI | `cargo simjig doctor/triage/waves/regress/new-vip` | **C, reduced to:** `doctor` (M0), `waves` (Stage 2); the methodology commands (`regress`, `new-vip`) are out of scope | Supportability is a stated goal. `doctor` makes setup reproducible. |
-| 12 | `unsafe` location | 3 modules in `simjig` | `-sys` plus one module | One crate | **A:** `simjig::{model::abi, model::raw, kernel::waker}`, plus `fork` when present. Everything else `forbid(unsafe_code)`. | Same safety without an extra crate. |
+## 2. Decisions where the proposals disagreed
+| # | Topic | Decision | Alternatives | Why |
+|---|---|---|---|---|
+| 1 | Crate count | **Few, deep crates**, split only for a named need (`simjig-target-dir`, `cargo-simjig`) | 12 to 14 crates | Constitution rule 6: flat and deep. |
+| 2 | Testbench writes | **A write log applied before each eval** | immediate `ptr::write` into the model | Matches cocotb 2.x deposit semantics and gives deterministic conflict detection (`WriteConflict` names both tasks). `Drop` cleanup still works, and every stimulus bit is traceable. |
+| 3 | Randomness | **Named streams derived from `hash(root_seed, name)`** (`harness::seed`) | one recorded choice stream for randomization, shrinking and fuzzing; proptest strategies | Streams stay independent when a test adds one. Shrinking and fuzzing are methodology, out of scope. proptest stays a dev-dependency for `simjig-bits`. |
+| 4 | Logging | **A fixed-size flight recorder**, dumped to `events.jsonl`; its trace hash is the determinism check. `tb_log!` prints a timed line to stdout | `tracing` with `events.jsonl` | Deterministic and allocation-free. One event model serves triage and replay. |
+| 5 | Codegen writer | **A plain indenting writer for every emitter**, fed by **one lowering** | `quote` + `prettyplease` | C++, `.vlt` and SV need a text writer anyway. One mechanism gives byte-stable output and fast build scripts. |
+| 6 | Cross-checks | **The SV layout module and a header check** (`VL_IN/OUT(msb,lsb)`) on every build | either one alone | The header check is cheap and catches drift on every build, not just in CI. |
+| 7 | Enums | **A newtype with consts plus a fallible `variant()`** | a Rust enum whose read fails on an invalid value | SV enums can legally hold non-member values. Reads stay honest, and the test decides what an invalid value means. |
+| 8 | Time unit | **Ticks of the design's `timeprecision`** | picoseconds, rejecting finer precision | Supports fs-precision designs. Durations that cannot be represented are errors, never rounded. |
+| 9 | Interface-ported tops | **`.bind_iface(..)`**, and if it is missing, an error that prints the line to add | a wrapper with unspecified parameters | The testbench is the real instantiator. The error tells the user exactly what to write. |
+| 10 | libverilated | **Built once per (Verilator version, hook defines) in the shared cache**, by `simjig-build` | per-model `verilator --build`; a `-sys` crate | Gets the build-time win without a sys crate. |
+| 11 | Tooling CLI | **`cargo simjig doctor`, `waves` and `show`** | `triage`, `regress`, `new-vip` | Supportability is a goal; `doctor` makes setup reproducible. Methodology commands are out of scope. |
+| 12 | `unsafe` location | **A few named modules of `simjig`** (`ARCHITECTURE.md`, "Invariants"); the workspace denies `unsafe_code` elsewhere | a `-sys` crate; one unsafe crate | Same safety without an extra crate. |
 
-## 3. Crate layout (v1)
-```
-build time                         run time
-svtypes (serde_json)               simjig-bits
-   ^                                  ^
-simjig-build ───(generated code)──> simjig
-                                      ^
-                                   simjig-macros
-```
-| Crate | Owns |
-|---|---|
-| `svtypes` | IR schema (versioned), Verilator dialect front ends, width calculator, literal parser, Python/cocotb emitter |
-| `simjig-bits` | `Bits<N>`, `WideBits<N, W>`, the `Packed` trait, `sv!`/`cat!`, explicit width changes |
-| `simjig-build` | The lowering and all emitters (Rust, C++ vtable, `.vlt`, wrapper SV, layout check), Verilator invocation, header cross-check, content-hash cache, the hand-written C++ runtime sources |
-| `simjig` | Kernel (`kernel/`: executor, wheel, phases, sync; no FFI imports), model FFI (`model/`), signals, failures and report, recorder, seeded RNG streams, coverage-counter access, multiple models per sim, fork |
-| `simjig-macros` | `#[simjig::test]`, `#[derive(Bundle)]`, `#[derive(Arbitrary)]` |
+## 3. Crates
+`ARCHITECTURE.md` has the crates and what each owns. Split points kept in reserve: `simjig::kernel` becomes its own crate when a properties
+project needs it; the report becomes its own crate when `cargo-simjig` must read run
+directories without linking the simulator.
 
-**Split triggers** (from B/C, deferred until needed):
-- `simjig::kernel` becomes `simjig-exec` when the properties project needs it.
-- `simjig::report` becomes `simjig-report` when `cargo-simjig` must read run directories
-  without linking the simulator.
-- `simjig-verif` splits out when methodology code outgrows the runtime crate.
+## 4. Questions settled by experiment
+Each was open when the design was chosen; `docs/notes/spikes.md` and `docs/notes/abi.md`
+have the experiments.
+1. A C++ exception through Verilator-generated code unwinds cleanly for plain models;
+   `--timing` coroutines record the fatal instead (above).
+2. Looking up a signal through the thread-local kernel on every access had a budget of
+   5 ns or less, with base pointers cached in `Dut` as the fallback (the API stays the
+   same). The measured costs, and the storage pointers that remove most lookups, are in
+   `docs/notes/perf.md`.
+3. `fork()` works inside a nextest test process, with `contextp->threads(1)`, no other
+   active threads, and no inherited trace file.
+4. Verilator's JSON for interfaces, modports and parameter clones on 5.052 is described
+   in `docs/notes/svtypes.md`.
 
-## 4. Open questions for M0 spikes
-1. Does throwing a C++ exception through Verilator-generated code unwind cleanly,
-   including `--timing` coroutines? If not, use the fallback.
-2. The cost of looking up a signal through the thread-local kernel on every access. Budget:
-   5 ns or less; if it's more, cache base pointers in `Dut` (the API stays the same).
-3. Does `fork()` work inside a nextest test process (single thread, `--threads 1`, no open
-   trace files)?
-4. Verilator's JSON fields for interface/modport and parameter clones, on the pinned
-   version (5.052, from conda-forge).
-
-## 5. Corrections to earlier documents
-- Marlin is **MPL-2.0**, not MIT (checked against its LICENSE file). Borrow ideas, not code.
-- The Rust style guide the proposals were given said "drive on falling edge, 2 evals per
-  cycle" and "no `--timing`"; that is superseded by the per-timestamp loop and `--timing`
+## 5. Notes
+- Marlin (Rust, Verilator as a library) is MPL-2.0, not MIT (checked against its LICENSE
+  file). Borrow ideas, not code.
+- Driving on the falling edge with two evals per cycle and no `--timing`, as an earlier
+  Rust style guide advised, is superseded by the per-timestamp loop and `--timing`
   support above.
 
-## 6. API conventions (decided)
+## 6. API conventions
 - **Rust-native signal access:** `sig.set(v)` and `sig.get()`. Plain assignment can't be
   overloaded in Rust, and operator tricks (`<<=`, implicit reads in `==`, macro blocks)
   are rejected because they hide reads and writes of the model.
@@ -134,3 +118,23 @@ simjig-build ───(generated code)──> simjig
   doesn't fit fails at the caller's line (`#[track_caller]`), naming the signal and its
   width.
 - 1-bit signals use `Bit`, which converts from `bool` and from `0`/`1`.
+- Triggers are functions returning named future types (`timer(d)` returns `Timer`), as
+  Tokio's `sleep` returns `Sleep`; cocotb's trigger classes become snake_case functions.
+
+## 7. Verilator facts the design rests on
+- **`--json-only`** is produced after parameter specialisation. It has no `width` field
+  (widths must be computed), member `lsb` is a string omitted when 0, values are Verilog
+  literals, the format changes between releases, and it turns `--timing` on unless
+  `--no-timing` is passed. A top with interface ports cannot be elaborated.
+- **Model access:** ports are members of the model object. Internal signals are reachable
+  only if marked `public_flat_rd`/`public_flat_rw`; writing other internals is undefined
+  behaviour, and public signals cost performance. Upper bits must be masked on writes.
+- **Fatals:** `$fatal`, `$stop` and internal fatals call `std::exit(1)` unless the
+  `VL_USER_FATAL`/`VL_USER_STOP_MAYBE` hooks or `fatalOnError(false)` are used.
+- **Eval and time:** edges are detected against the value at the last eval. `--timing`
+  models expose `eventsPending()` and `nextTimeSlot()`. A pulse on an internal derived or
+  gated clock inside one `eval()` is invisible to the testbench.
+- **`--savable`** is incompatible with `--coverage` and `--timing` and cannot save
+  testbench futures, so checkpoints use `fork()` with `--threads 1`.
+- **Several models in one process** each need their own `--prefix`; DPI symbols are
+  global, and the `$urandom` state is per thread context.

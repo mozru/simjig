@@ -98,7 +98,7 @@ directly, no copies): `edge_read`, `readonly_read`, `write_after_edge`, `timeout
 `clock_cycles`, `value_change`, `first_combine`, `comb_settle` (s1..s3 through
 `PublicRd` with a `.vlt`). All pass unchanged; the kernel's FakeModel replicas were
 faithful. Not replayed: `two_clocks`, `cdc_stream`, `fifo_stream`, `derived_edge`
-(DUTs not in this brief).
+(their DUTs are not among these models).
 
 ## Spike findings (docs/notes/spikes.md), as first found
 Since done: `threads(1)` is set at create (`simjig_rt.cpp`), and `$urandom` and DPI

@@ -162,18 +162,16 @@ The read and write match on `storage` per access, and the branch predicts perfec
 loop. This is the floor under DECISION §4 Q2's 5 ns budget; the kernel lookup comes on top.
 
 ## Contradictions and open issues
-1. **The unsafe location differs from ARCHITECTURE.md.** It says `unsafe` lives in
-   `simjig::model::raw`; this brief put it in `model::abi`. `abi.rs` holds the raw
-   read/write helpers with `// SAFETY:` comments. Either rename it to `raw`, or add `abi`
-   to the invariant.
-2. **The fatal fallback differs from DECISION §1** ("record, `_exit`"). As implemented:
+1. `unsafe` lives in both `model::abi` (the raw read/write helpers, with `// SAFETY:`
+   comments) and `model::raw`; `ARCHITECTURE.md` lists both.
+2. **Fatal routing, as implemented:**
    - throw in plain models;
    - record and return for `$fatal`/`$stop` in `--timing` models;
    - throw (and so abort, after a stderr record) for internal fatals inside coroutines.
 
    `_exit` would not help, because the abort happens inside Verilator's promise.
 3. `$stop` always returns STOP, unlike Verilator (see above).
-4. `destroy` frees poisoned models too, rather than leaking them as proposal C suggested. The
+4. `destroy` frees poisoned models too, rather than leaking them. The
    spike shows no leaks or UB after unwinding. A throw from a model destructor would still
    `terminate` (destructors are `noexcept`).
 5. `--timing` models record `$fatal` and then return, so the generator must set

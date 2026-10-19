@@ -11,7 +11,7 @@
 //! that wrapped around in 16 bits can at worst cause a spurious poll, which every future
 //! must tolerate anyway.
 //!
-//! This is one of the three modules allowed to use `unsafe` (DECISION §2 row 12).
+//! This is one of the few modules allowed to use `unsafe` (DECISION §2 row 12).
 //!
 //! Why not `std::task::Wake` on an `Arc`: it allocates per task and needs an
 //! `Arc<Mutex<_>>` run queue for `Send + Sync`; the packed integer is `Send + Sync`

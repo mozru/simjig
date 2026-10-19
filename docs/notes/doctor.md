@@ -19,8 +19,8 @@
   `VERILATOR_ROOT`, missing FST sources, a C++ compiler that does not run, spaces in
   paths, and no usable tools at all are `FAIL`. `CXX` unset is `WARN` (the `cc` crate falls
   back to `c++`).
-- `SIMJIG_UNTESTED_VERILATOR=1` downgrades an unsupported Verilator to `WARN`, as
-  `proposal-C.md` describes for the strict front end.
+- `SIMJIG_UNTESTED_VERILATOR=1` downgrades an unsupported Verilator to `WARN`, the
+  escape hatch of the strict front end.
 - Why not serde_json for `--json`: the output is one fixed shape of strings and bools;
   escaping strings per RFC 8259 §7 is 15 tested lines. No dependency was added.
 - Why not more crates: the checks live in the `cargo-simjig` library target.
@@ -55,5 +55,5 @@
 - Windows: `is_executable` has a non-unix branch that was never compiled.
 
 ## Open issues
-- The design (`proposal-C.md`) also lists "cache stale" and "fork available" checks; they
-  need `simjig-build` and the runtime, and are not implemented.
+- "cache stale" and "fork available" checks would need `simjig-build` and the runtime;
+  they are not implemented.

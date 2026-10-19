@@ -1,6 +1,6 @@
 //! [`FailureReport`]: the block a failed test prints, and the signature that buckets it.
 //!
-//! Every failed `#[simjig::test]` prints exactly one block (proposal C §7):
+//! Every failed `#[simjig::test]` prints exactly one block (DECISION.md §1, "Failures are data"):
 //! ```text
 //! FAIL <test>  seed=<seed>  [init=random  ]t=<time>  [<Kind> sig=<signature>]
 //!   task:     <hierarchical task name>

@@ -54,7 +54,7 @@ Verilator 5.052 (conda-forge, pinned in `pixi.toml`).
 - **Time precision** is a power-of-ten exponent (`TimeExp(-14)` = `10fs`), taken from the
   netlist's global `timeprecision`.
 
-## Facts about the 5.052 JSON (beyond the brief)
+## Facts about the 5.052 JSON (beyond DECISION.md §7)
 - Ports: any `VAR` with a `direction` other than `NONE`. `inout wire` ports have varType
   `WIRE`, not `PORT` (the header cross-check caught this).
 - Interface ports: `VAR` with varType `IFACEREF` whose `IFACEREFDTYPE.cellName` is empty.
@@ -100,8 +100,8 @@ The temp dir is created with `std::fs::create_dir` (atomic) instead of the `temp
 crate. Errors carry the command line and the last 40 lines of stderr.
 
 ## Dependencies (why not simpler)
-- `serde` + `serde_json`: the IR's serialized form and reading Verilator's JSON. Expected
-  by the brief. `serde_derive` pulls `unicode-ident`, licensed
+- `serde` + `serde_json`: the IR's serialized form and reading Verilator's JSON.
+  `serde_derive` pulls `unicode-ident`, licensed
   `(MIT OR Apache-2.0) AND Unicode-3.0`, so `deny.toml` now allows `Unicode-3.0`.
 - Dev only: `insta` (snapshots, `default-features = false`) and `proptest`
   (`default-features = false, features = ["std"]`).

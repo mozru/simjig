@@ -38,6 +38,7 @@ use super::models::Models;
 use super::slab::{Key, Slab};
 use super::state::{self, Kernel};
 use super::time::{Precision, SimTime};
+use super::waker;
 
 /// Which value changes an edge waiter wants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -666,10 +667,17 @@ impl WaitTable {
 /// change, a Timer, a phase), which does not run under `catch_unwind`, the panic escapes
 /// [`Sim::run`](crate::Sim::run) as a panic, not as a [`Failure`](crate::Failure); woken
 /// from inside a task (an `Event` it sets), it becomes that task's `TaskPanic`.
-fn wake_sorted(wakes: &mut Vec<Wake>) {
+fn wake_sorted(k: &Kernel, wakes: &mut Vec<Wake>) {
     wakes.sort_by_key(|(seq, _)| *seq);
     for (_, waker) in wakes.drain(..) {
-        waker.wake();
+        // A task of this simulation is queued here, which is all its waker's `wake` would
+        // do (`state::wake_task` finds `k` current); any other waker is woken.
+        match waker::own_task(&waker) {
+            Some((sim_gen, index, gen16)) if sim_gen == k.sim_gen => {
+                k.ready.borrow_mut().push(index, gen16);
+            }
+            _ => waker.wake(),
+        }
     }
 }
 
@@ -694,7 +702,7 @@ pub(crate) fn fire_and_wake<R>(
         }
         (r, wakes)
     };
-    wake_sorted(&mut wakes);
+    wake_sorted(k, &mut wakes);
     let mut waits = k.waits.borrow_mut();
     if wakes.capacity() > waits.wakes.capacity() {
         waits.wakes = wakes;

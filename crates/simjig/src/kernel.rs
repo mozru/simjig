@@ -14,7 +14,8 @@
 //! - `state`: the kernel struct and the thread-local current kernel;
 //! - `waker`: the only `unsafe` in the kernel;
 //! - `backend`, `fake`: the model interface and its pure-Rust implementation; `models`:
-//!   the simulation's models behind one flat slot space.
+//!   the simulation's models behind one flat slot space;
+//! - `differential` (tests only): random programs whose traces are pinned to a corpus.
 //!
 //! The kernel imports nothing from `crate::model`, so all of it is tested against
 //! [`FakeModel`](fake::FakeModel).
@@ -23,6 +24,8 @@ pub(crate) mod backend;
 pub(crate) mod cell;
 pub(crate) mod clock;
 pub(crate) mod combinator;
+#[cfg(test)]
+mod differential;
 pub(crate) mod failure;
 pub(crate) mod fake;
 pub(crate) mod models;

@@ -6,7 +6,6 @@
 //! same hash. Records therefore hold only deterministic data (times, slot numbers, task
 //! keys from the deterministic slab), never addresses or the global simulation id.
 
-use std::collections::VecDeque;
 use std::fmt;
 
 use super::time::SimTime;
@@ -98,11 +97,41 @@ impl Default for Fnv {
     }
 }
 
+/// The FNV-1a 64 prime.
+const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// `PRIME_POW[n]` is `PRIME` to the `n`th power (wrapping): `n` zero bytes in a row.
+const PRIME_POW: [u64; 9] = {
+    let mut pow = [1u64; 9];
+    let mut n = 1;
+    while n < 9 {
+        pow[n] = pow[n - 1].wrapping_mul(PRIME);
+        n += 1;
+    }
+    pow
+};
+
 impl Fnv {
     pub(crate) fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
-            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(PRIME);
         }
+    }
+
+    /// The same as `write(&word.to_le_bytes())`, faster for small words.
+    ///
+    /// A zero byte's step is `(h ^ 0) * PRIME = h * PRIME`, so the run of zero bytes at the
+    /// top of a little-endian word is one multiplication by `PRIME_POW[run]`. The trace
+    /// hash's words are mostly small (kinds, slot numbers, deltas, zero values), so most of
+    /// a record's 40 serial multiplications go; every hash value stays the same.
+    #[inline]
+    pub(crate) fn write_u64(&mut self, word: u64) {
+        let bytes = 8 - (word.leading_zeros() / 8) as usize;
+        let mut h = self.0;
+        for i in 0..bytes {
+            h = (h ^ ((word >> (8 * i)) & 0xff)).wrapping_mul(PRIME);
+        }
+        self.0 = h.wrapping_mul(PRIME_POW[8 - bytes]);
     }
 
     pub(crate) const fn finish(self) -> u64 {
@@ -110,17 +139,37 @@ impl Fnv {
     }
 }
 
+/// A fixed ring of [`RECORDER_CAPACITY`] records: record `i` (counting from 0) is at
+/// `ring[i % RECORDER_CAPACITY]`, so a record is one store, with no length bookkeeping.
 #[derive(Debug)]
 pub(crate) struct Recorder {
-    ring: VecDeque<TraceRecord>,
+    ring: Box<[TraceRecord]>,
+    /// Where the next record goes: `count % RECORDER_CAPACITY`.
+    next: usize,
+    /// Whether the ring has wrapped (holds `RECORDER_CAPACITY` records).
+    full: bool,
     hash: Fnv,
     count: u64,
 }
 
+const _: () = assert!(
+    RECORDER_CAPACITY.is_power_of_two(),
+    "the ring index is a mask"
+);
+
 impl Default for Recorder {
     fn default() -> Self {
+        let blank = TraceRecord {
+            time: SimTime(0),
+            kind: TraceKind::Step,
+            task: u64::MAX,
+            arg: 0,
+            value: 0,
+        };
         Self {
-            ring: VecDeque::with_capacity(RECORDER_CAPACITY),
+            ring: vec![blank; RECORDER_CAPACITY].into_boxed_slice(),
+            next: 0,
+            full: false,
             hash: Fnv::default(),
             count: 0,
         }
@@ -129,14 +178,19 @@ impl Default for Recorder {
 
 impl Recorder {
     pub(crate) fn record(&mut self, record: TraceRecord) {
-        let kind = record.kind as u64;
-        for word in [record.time.0, kind, record.task, record.arg, record.value] {
-            self.hash.write(&word.to_le_bytes());
+        // The bytes hashed are the five words' little-endian bytes, in this order.
+        for word in [
+            record.time.0,
+            record.kind as u64,
+            record.task,
+            record.arg,
+            record.value,
+        ] {
+            self.hash.write_u64(word);
         }
-        if self.ring.len() == RECORDER_CAPACITY {
-            self.ring.pop_front();
-        }
-        self.ring.push_back(record);
+        self.ring[self.next] = record;
+        self.next = (self.next + 1) & (RECORDER_CAPACITY - 1);
+        self.full |= self.next == 0;
         self.count += 1;
     }
 
@@ -148,8 +202,12 @@ impl Recorder {
         self.count
     }
 
+    /// The kept records, oldest first.
     pub(crate) fn recent(&self) -> Vec<TraceRecord> {
-        self.ring.iter().copied().collect()
+        if !self.full {
+            return self.ring[..self.next].to_vec();
+        }
+        [&self.ring[self.next..], &self.ring[..self.next]].concat()
     }
 }
 
@@ -178,6 +236,65 @@ mod tests {
         assert_eq!(hash(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(hash(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(hash(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn write_u64_hashes_the_little_endian_bytes() {
+        let mut words = vec![0, 1, 0xff, 0x100, u64::MAX, 1 << 63, 0x00ab_0000_0000_00cd];
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..1000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            words.push(x >> (x % 64)); // every byte length
+        }
+        let (mut fast, mut bytes) = (Fnv::default(), Fnv::default());
+        for w in words {
+            fast.write_u64(w);
+            bytes.write(&w.to_le_bytes());
+            assert_eq!(fast.finish(), bytes.finish(), "after {w:#x}");
+        }
+    }
+
+    /// Byte-at-a-time FNV-1a 64 of the records below, computed independently (Python).
+    const STABLE_HASH: u64 = 0xc203_6e73_c41a_3c0b;
+
+    /// The trace hash of a fixed record sequence, as recorded before `write_u64` and the
+    /// fixed ring: replays and failure signatures compare such values across versions.
+    #[test]
+    fn the_trace_hash_is_stable() {
+        let mut r = Recorder::default();
+        for t in 0..100u64 {
+            r.record(TraceRecord {
+                time: SimTime(t * 5000),
+                kind: if t % 3 == 0 {
+                    TraceKind::Eval
+                } else {
+                    TraceKind::Write
+                },
+                task: if t % 2 == 0 { u64::MAX } else { t << 16 | 1 },
+                arg: t % 7,
+                value: t * 0x0101,
+            });
+        }
+        assert_eq!(r.hash(), STABLE_HASH);
+    }
+
+    #[test]
+    fn the_ring_keeps_the_newest_records_in_order() {
+        let mut r = Recorder::default();
+        for t in 0..3 {
+            r.record(rec(t));
+        }
+        let times = |r: &Recorder| r.recent().iter().map(|x| x.time.0).collect::<Vec<_>>();
+        assert_eq!(times(&r), [0, 1, 2]);
+        for t in 3..(RECORDER_CAPACITY as u64 + 5) {
+            r.record(rec(t));
+        }
+        let kept = times(&r);
+        assert_eq!(kept.len(), RECORDER_CAPACITY);
+        assert_eq!(kept[0], 5);
+        assert!(kept.windows(2).all(|w| w[1] == w[0] + 1));
     }
 
     #[test]

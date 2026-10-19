@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- simjig-build no longer forces frame pointers in the model's C++ when debug info is on
+  (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
+  a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them
+  back (it comes later on the command line).
 - simjig-build compiles a model that Verilator did not split for a parallel build
   (`VM_PARALLEL_BUILDS = 0` in its `_classes.mk`) as one translation unit including every
   generated class (`<prefix>__ALL.cpp`, next to the Verilator output), as `verilated.mk`

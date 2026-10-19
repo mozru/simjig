@@ -468,6 +468,12 @@ fn base_build(i: &Inputs<'_>, runtime: &Runtime) -> Result<(cc::Build, cc::Tool)
         .host(&env.host)
         .opt_level_str(&env.cxx_opt)
         .debug(env.debug)
+        // Frame pointers as the platform has them by default, as verilated.mk builds:
+        // `cc` forces them whenever debug info is on, which gives every small function of
+        // the eval loop a frame of its own (a tenth of a small design's eval). Profilers
+        // still unwind (non-leaf frames keep them on Apple targets; DWARF elsewhere), and
+        // `CXXFLAGS=-fno-omit-frame-pointer` comes later on the command line and wins.
+        .force_frame_pointer(false)
         // simjig-build prints its own `cargo::` lines (see `Built::directives`).
         .cargo_metadata(false)
         // Warnings in generated code are not actionable for the user (`-w`).

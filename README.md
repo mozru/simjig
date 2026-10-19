@@ -715,7 +715,10 @@ the comparison with cocotb). For the fastest runs:
   lto = "thin"
   ```
 - **The model's C++ is always optimised** (`-O2`, even in a debug build), so a dev build
-  of a testbench simulates a fast model; `SIMJIG_CXX_OPT=3` asks for `-O3`. Flags for the
+  of a testbench simulates a fast model; `SIMJIG_CXX_OPT=3` asks for `-O3`. It is compiled
+  as `verilated.mk` compiles it: one translation unit for a model Verilator did not split,
+  and frame pointers only where the platform keeps them (`CXXFLAGS=-fno-omit-frame-pointer`
+  for a profiler that needs them everywhere). Flags for the
   host CPU (`CXXFLAGS=-mcpu=native`, or `-march=native` on x86) are opt-in: they make the
   model unportable, and gained nothing measurable on the benchmark's small design.
 - **Waves cost.** While a model writes waves, every eval is sampled and none is skipped;

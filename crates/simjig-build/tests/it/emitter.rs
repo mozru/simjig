@@ -268,9 +268,9 @@ fn shim_coverage_follows_the_extra_arguments() {
     assert!(shim(&["--coverage", "--no-coverage"]).contains("kCoverage = false;"));
 }
 
-/// s3c7m: the waived wrapper must not change the design's precision, whatever the user's.
+/// The waived wrapper must not change the design's precision, whatever the user's.
 #[test]
-fn s3c7m_the_waived_wrapper_keeps_the_users_precision() {
+fn the_waived_wrapper_keeps_the_users_precision() {
     for (unit, want) in [
         ("  timeunit 1ns; timeprecision 1ns;", "1ns"),
         ("  timeunit 1us; timeprecision 100ps;", "100ps"),

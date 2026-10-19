@@ -521,7 +521,7 @@ impl<F: FnOnce()> Drop for OnDrop<F> {
     }
 }
 
-/// Conformance README, "Known differences" (review cycle 5, scenario `r5_task_operand`):
+/// Conformance README, "Known differences" (scenario `r5_task_operand`):
 /// a `Task` passed **by value** to `with_timeout` or `first!` is cancelled when the
 /// combinator drops it; passed as `&mut task` it keeps running, as a cocotb Task operand
 /// does ("the callee continues to run").

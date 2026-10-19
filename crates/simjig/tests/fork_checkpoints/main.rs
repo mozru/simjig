@@ -20,12 +20,12 @@ simjig::include_dut!(fatal);
 #[cfg(all(unix, simjig_test_models))]
 mod branches;
 #[cfg(all(unix, simjig_test_models))]
+mod combinators;
+#[cfg(all(unix, simjig_test_models))]
 mod cost;
 #[cfg(all(unix, simjig_test_models))]
 mod failures;
 #[cfg(all(unix, simjig_test_models))]
+mod nested_combinators;
+#[cfg(all(unix, simjig_test_models))]
 mod rules;
-#[cfg(all(unix, simjig_test_models))]
-mod s3c4m;
-#[cfg(all(unix, simjig_test_models))]
-mod s3c5m;

@@ -293,9 +293,9 @@ fn an_unshared_cache_warns() {
 /// must not be part of the identity its prefix claim records either, or moving an import
 /// from Rust to C (an edit to the build script) finds the previous build's claim and fails
 /// with "rename the DUT". Another `OUT_DIR` stands in for the next run of the build
-/// script (the per-script name check is per process). From the s3c4 review.
+/// script (the per-script name check is per process).
 #[test]
-fn s3c4m_moving_a_dpi_import_to_c_is_not_a_prefix_collision() {
+fn moving_a_dpi_import_to_c_is_not_a_prefix_collision() {
     let s = Sandbox::new();
     let rtl = s.rtl();
     std::fs::write(rtl.join("imp.sv"), IMPORTS_F).unwrap();

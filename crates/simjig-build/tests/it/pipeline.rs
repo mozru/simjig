@@ -661,7 +661,7 @@ fn a_dut_failing_validation_still_claims_its_name() {
 /// lists often carry `--top-module`, `--trace`, `--cc --exe --build`): it is refused there
 /// too, naming the list's line.
 #[test]
-fn s3c9_a_file_list_cannot_override_the_top() {
+fn a_file_list_cannot_override_the_top() {
     let s = Sandbox::new();
     let rtl = s.path().join("lt");
     std::fs::create_dir_all(&rtl).unwrap();
@@ -701,7 +701,7 @@ fn s3c9_a_file_list_cannot_override_the_top() {
 /// must not hide the list's `--top-module` from the refusal check (it made the whole file
 /// unreadable to the check, which then saw no words).
 #[test]
-fn s3c10_a_non_utf8_file_list_cannot_override_the_top() {
+fn a_non_utf8_file_list_cannot_override_the_top() {
     let s = Sandbox::new();
     let rtl = s.path().join("lt");
     std::fs::create_dir_all(&rtl).unwrap();

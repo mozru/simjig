@@ -5,8 +5,8 @@
 )]
 
 mod inference;
+mod integer_eq;
 mod literals;
 mod reference;
 mod resize;
-mod s3c5m;
 mod vectors;

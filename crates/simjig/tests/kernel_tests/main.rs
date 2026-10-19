@@ -10,12 +10,12 @@ mod failures;
 mod multi;
 mod phases;
 mod regions;
-mod s3c5m;
-mod s3c6r;
-mod s3c7m;
 mod swarm;
 mod sync;
 mod timing;
+mod unrun_after_error;
+mod unrun_main_exemption;
+mod with_timeout_fn;
 
 use simjig::{Clock, FakeModel, Precision, RawSig, Sim, SimDuration};
 

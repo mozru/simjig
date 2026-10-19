@@ -1,5 +1,5 @@
-//! Stage 3 cycle 5 maintainer review: forks nested two combinators deep are refused, and
-//! the process that returns is always the parent.
+//! Forks nested two combinators deep are refused, and the process that returns is always
+//! the parent.
 
 use simjig::fork::{self, ForkError};
 use simjig::{Event, TestCtx, Timer, ns, with_timeout};
@@ -13,7 +13,7 @@ fn assert_in_combinator(result: Result<(), ForkError>) {
 
 /// `first!` around `join!` around the fork: the inner operand is a helper of a helper.
 #[simjig::test(timeout = "100us")]
-async fn s3c5m_a_fork_in_a_join_in_a_first_is_refused(ctx: &TestCtx, dut: counter::Dut) {
+async fn a_fork_in_a_join_in_a_first_is_refused(ctx: &TestCtx, dut: counter::Dut) {
     let seed = ctx.seed();
     let pid = std::process::id();
     let r = simjig::first!(
@@ -38,7 +38,7 @@ async fn s3c5m_a_fork_in_a_join_in_a_first_is_refused(ctx: &TestCtx, dut: counte
 
 /// `with_timeout` around `first!` around the fork, with a sibling that never finishes.
 #[simjig::test(timeout = "100us")]
-async fn s3c5m_a_fork_in_a_first_in_a_with_timeout_is_refused(ctx: &TestCtx) {
+async fn a_fork_in_a_first_in_a_with_timeout_is_refused(ctx: &TestCtx) {
     let seed = ctx.seed();
     let pid = std::process::id();
     let never = Event::new("never");
@@ -59,7 +59,7 @@ async fn s3c5m_a_fork_in_a_first_in_a_with_timeout_is_refused(ctx: &TestCtx) {
 
 /// Inside a `scope` the caller is not the main task.
 #[simjig::test(timeout = "100us")]
-async fn s3c5m_a_fork_in_a_scope_is_refused(ctx: &TestCtx) {
+async fn a_fork_in_a_scope_is_refused(ctx: &TestCtx) {
     let seed = ctx.seed();
     let r = simjig::scope("s", async move {
         fork::run_from_checkpoint(seed, 2, |_| async { Ok(()) })

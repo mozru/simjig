@@ -1,6 +1,5 @@
-//! DPI calls inside fork branches and inside combinator operands (from the s3c4
-//! integration review): each branch has its own implementation, and the parent's is
-//! untouched.
+//! DPI calls inside fork branches and inside combinator operands: each branch has its own
+//! implementation, and the parent's is untouched.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -37,7 +36,7 @@ async fn sum_and_calls(dut: &dpi::Dut, n: u32) -> (u128, u128) {
 }
 
 #[simjig::test(timeout = "100us")]
-async fn s3c4m_dpi_in_fork_branches_and_combinators(ctx: &TestCtx, dut: dpi::Dut) {
+async fn dpi_in_fork_branches_and_combinators(ctx: &TestCtx, dut: dpi::Dut) {
     let ticks = Rc::new(Cell::new(0));
     dut.set_dpi(Adder {
         offset: 0,

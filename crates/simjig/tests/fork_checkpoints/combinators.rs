@@ -1,6 +1,6 @@
-//! Fork checkpoints against stage 2's helper-task combinators and Event/Lock hops (from
-//! the s3c4 integration review): a fork inside a combinator operand is refused, and a
-//! branch child never returns into the harness.
+//! Fork checkpoints against the helper-task combinators and Event/Lock hops: a fork
+//! inside a combinator operand is refused, and a branch child never returns into the
+//! harness.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -76,7 +76,7 @@ async fn seam_body(dut: counter::Dut, extra: u32) -> Vec<String> {
 
 /// Each branch running the body matches the parent running the same body afterwards.
 #[simjig::test(timeout = "100us")]
-async fn s3c4m_combinators_and_hops_in_a_branch_match_the_parent(ctx: &TestCtx, dut: counter::Dut) {
+async fn combinators_and_hops_in_a_branch_match_the_parent(ctx: &TestCtx, dut: counter::Dut) {
     warm_up(dut).await;
     let branches = fork::run_from_checkpoint(ctx.seed(), 3, |b| async move {
         Ok(seam_body(dut, u32::try_from(b.index()).unwrap() + 1).await)
@@ -95,7 +95,7 @@ async fn s3c4m_combinators_and_hops_in_a_branch_match_the_parent(ctx: &TestCtx, 
 
 /// A fork from inside a combinator operand (polled as a helper of `main`) is refused.
 #[simjig::test(timeout = "100us")]
-async fn s3c4m_a_fork_inside_with_timeout_is_refused(ctx: &TestCtx, dut: counter::Dut) {
+async fn a_fork_inside_with_timeout_is_refused(ctx: &TestCtx, dut: counter::Dut) {
     warm_up(dut).await;
     let seed = ctx.seed();
     let result = with_timeout(
@@ -121,7 +121,7 @@ fn assert_refused(result: Result<(), ForkError>) {
 
 /// Right after a `first!` whose loser was cancelled, no helper is left: the fork is quiet.
 #[simjig::test(timeout = "100us")]
-async fn s3c4m_after_a_first_the_checkpoint_is_quiet(ctx: &TestCtx, dut: counter::Dut) {
+async fn after_a_first_the_checkpoint_is_quiet(ctx: &TestCtx, dut: counter::Dut) {
     warm_up(dut).await;
     let ev = Event::new("never");
     let w = simjig::first!(
@@ -147,7 +147,7 @@ async fn s3c4m_after_a_first_the_checkpoint_is_quiet(ctx: &TestCtx, dut: counter
 /// A sibling operand of a `join!` is a helper, not a task: it would keep running inside
 /// the branch next to the body, so the fork is refused.
 #[simjig::test(timeout = "100us")]
-async fn s3c4m_a_fork_beside_a_join_sibling(ctx: &TestCtx, dut: counter::Dut) {
+async fn a_fork_beside_a_join_sibling(ctx: &TestCtx, dut: counter::Dut) {
     warm_up(dut).await;
     let seed = ctx.seed();
     let edges = Rc::new(std::cell::Cell::new(0u32));
@@ -176,7 +176,7 @@ async fn s3c4m_a_fork_beside_a_join_sibling(ctx: &TestCtx, dut: counter::Dut) {
 /// A `first!` sibling timer that would win inside the branch (cancelling the body, and
 /// leaving the child to run the rest of the test as the parent) is ruled out: refused.
 #[simjig::test(timeout = "100us")]
-async fn s3c4m_a_fork_whose_first_sibling_wins_in_the_child(ctx: &TestCtx, dut: counter::Dut) {
+async fn a_fork_whose_first_sibling_wins_in_the_child(ctx: &TestCtx, dut: counter::Dut) {
     warm_up(dut).await;
     let seed = ctx.seed();
     let pid = std::process::id();

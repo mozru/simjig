@@ -203,11 +203,11 @@ fn a_compiler_changed_in_place_reruns_the_build_script() {
     );
 }
 
-/// s3c6r: a script that handles a failed `Dut::build` (an optional model) and exits 0
+/// A script that handles a failed `Dut::build` (an optional model) and exits 0
 /// must still rerun when that DUT's source is fixed. `Dut::build` prints nothing on
 /// `Err`, so only the other DUTs' `rerun-if-changed` lines reach Cargo.
 #[test]
-fn s3c6r_fixing_a_handled_failed_duts_source_reruns_the_script() {
+fn fixing_a_handled_failed_duts_source_reruns_the_script() {
     let (krate, target, _lock) = fixture();
     let envs = [
         (
@@ -243,9 +243,9 @@ fn s3c6r_fixing_a_handled_failed_duts_source_reruns_the_script() {
     );
 }
 
-/// s3c7m: a handled failed DUT whose sources come from a `-f` file list (the usual
+/// A handled failed DUT whose sources come from a `-f` file list (the usual
 /// Verilator flow) or a `-y` library directory must rerun when a listed source is fixed.
-fn s3c7m_failed_dut_reruns_via(args: &str, extra: &dyn Fn(&Path)) {
+fn failed_dut_reruns_via(args: &str, extra: &dyn Fn(&Path)) {
     let (krate, target, _lock) = fixture();
     let envs = [
         (
@@ -283,15 +283,15 @@ fn s3c7m_failed_dut_reruns_via(args: &str, extra: &dyn Fn(&Path)) {
 }
 
 #[test]
-fn s3c7m_a_failed_dut_from_a_file_list_reruns_when_fixed() {
-    s3c7m_failed_dut_reruns_via(r#".verilator_args(["-f", "duts/opt/files.f"])"#, &|opt| {
+fn a_failed_dut_from_a_file_list_reruns_when_fixed() {
+    failed_dut_reruns_via(r#".verilator_args(["-f", "duts/opt/files.f"])"#, &|opt| {
         std::fs::write(opt.join("files.f"), "duts/opt/opt.sv\n").unwrap();
     });
 }
 
 #[test]
-fn s3c7m_a_failed_dut_from_a_library_dir_reruns_when_fixed() {
-    s3c7m_failed_dut_reruns_via(
+fn a_failed_dut_from_a_library_dir_reruns_when_fixed() {
+    failed_dut_reruns_via(
         r#".sources(["duts/opt/top_stub.sv"]).verilator_args(["-y", "duts/opt"])"#,
         &|opt| {
             std::fs::write(opt.join("top_stub.sv"), "module stub; endmodule\n").unwrap();
@@ -332,12 +332,12 @@ fn a_failed_dut_tracking_the_package_dir_settles() {
     assert!(!build(&krate, &target, &envs), "no change: no rerun");
 }
 
-/// s3c9 repro: a *successful* DUT whose C++ recipe names the package directory as an
+/// A *successful* DUT whose C++ recipe names the package directory as an
 /// include directory (`include_dirs: [\".\"]`, a header next to `build.rs`) with Cargo's
 /// default `target/` inside the package: the success path tracks the directory whole, so
 /// every build reruns the script.
 #[test]
-fn s3c9_a_built_dut_with_the_package_as_a_cpp_include_dir_settles() {
+fn a_built_dut_with_the_package_as_a_cpp_include_dir_settles() {
     let (krate, _, _lock) = fixture();
     let target = krate.join("target");
     let envs = [

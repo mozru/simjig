@@ -54,4 +54,4 @@ pub(crate) async fn cycles(clk: simjig::__private::In<simjig_bits::Bit>, n: u32)
     }
 }
 #[cfg(all(unix, simjig_test_models))]
-mod s3c4m;
+mod fork_and_combinators;

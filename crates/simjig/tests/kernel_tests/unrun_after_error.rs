@@ -1,7 +1,6 @@
-//! Stage 3 cycle 5 maintainer review: the dropped-unrun-`Task` check against early
-//! returns. A task left unrun because its spawner returned an error in the same delta is
-//! a consequence of that error, not `let _ = spawn(..)`; the returned error must reach the
-//! caller.
+//! The dropped-unrun-`Task` check against early returns. A task left unrun because its
+//! spawner returned an error in the same delta is a consequence of that error, not `let _ =
+//! spawn(..)`; the returned error must reach the caller.
 
 use simjig::fork::{self, ForkError};
 use simjig::{Failure, FailureKind, Precision, Timer, now, spawn};
@@ -29,7 +28,7 @@ fn scoreboard_error() -> Failure {
     clippy::result_large_err,
     reason = "simjig::Result is the type tests return"
 )]
-fn s3c5m_an_early_error_return_is_not_masked_by_the_unrun_monitor() {
+fn an_early_error_return_is_not_masked_by_the_unrun_monitor() {
     let mut d = dut();
     let check = || -> simjig::Result { Err(scoreboard_error()) };
     let result = d.sim.run(async move {
@@ -47,7 +46,7 @@ fn s3c5m_an_early_error_return_is_not_masked_by_the_unrun_monitor() {
 /// The fork seam: a background task makes the checkpoint refuse (`OtherTasks`), and the
 /// refusal propagated with `?` is replaced by a `Setup` failure about `let _ = spawn(..)`.
 #[test]
-fn s3c5m_a_fork_refusal_is_not_masked_by_the_unrun_task_it_names() {
+fn a_fork_refusal_is_not_masked_by_the_unrun_task_it_names() {
     let mut d = dut();
     let result = d.sim.run(async move {
         let monitor = spawn("monitor", Timer::new(ticks(100)));

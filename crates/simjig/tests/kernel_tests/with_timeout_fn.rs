@@ -1,4 +1,4 @@
-//! Stage 3 cycle 7 maintainer review: `with_timeout` as a plain `#[track_caller]` fn.
+//! `with_timeout` as a plain `#[track_caller]` fn.
 
 use std::pin::pin;
 
@@ -9,7 +9,7 @@ use super::{dut, ticks};
 /// `&mut fut` (pinned) still works, the future can be retried after a timeout, and a
 /// `with_timeout` future built outside the async block keeps its caller's location.
 #[test]
-fn s3c7m_with_timeout_over_a_borrowed_pinned_future_resumes_it() {
+fn with_timeout_over_a_borrowed_pinned_future_resumes_it() {
     let mut d = dut();
     let out = d.sim.run(async move {
         let mut slow = pin!(async {
@@ -25,7 +25,7 @@ fn s3c7m_with_timeout_over_a_borrowed_pinned_future_resumes_it() {
 
 /// `?` on an `Elapsed` from a stored future: the failure points at the `?`.
 #[test]
-fn s3c7m_timeout_failure_location_with_a_stored_future() {
+fn timeout_failure_location_with_a_stored_future() {
     let mut d = dut();
     let line = line!() + 5;
     let f = d
@@ -42,7 +42,7 @@ fn s3c7m_timeout_failure_location_with_a_stored_future() {
 
 /// README: `&mut task` for a Task that must keep running past the timeout.
 #[test]
-fn s3c7m_with_timeout_over_mut_task_keeps_it_running() {
+fn with_timeout_over_mut_task_keeps_it_running() {
     let mut d = dut();
     let out = d.sim.run(async move {
         let mut t = simjig::spawn("slow", async {

@@ -133,6 +133,10 @@ const NO_GROUP: u32 = u32::MAX;
 pub(crate) struct WaitTable {
     seq: u64,
     waiters: Slab<Waiter>,
+    /// Per slot: whether an eval may change it.
+    eval_changes: Vec<bool>,
+    /// Primed groups on a slot an eval may change.
+    eval_groups: usize,
     /// Every group made so far, primed or not; see [`Group`].
     groups: Vec<Group>,
     /// `group_of[slot][kind.index()]`: the index in `groups` of that slot's group of that
@@ -220,8 +224,12 @@ fn remove_key(v: &mut Vec<Key>, key: Key) {
 }
 
 impl WaitTable {
-    pub(crate) fn new(slots: usize) -> Self {
+    /// `eval_changes[slot]`: whether an eval may change `slot` ([`Models::eval_changes`]).
+    pub(crate) fn new(eval_changes: Vec<bool>) -> Self {
+        let slots = eval_changes.len();
         Self {
+            eval_changes,
+            eval_groups: 0,
             seq: 0,
             waiters: Slab::default(),
             groups: Vec::new(),
@@ -301,6 +309,7 @@ impl WaitTable {
             return;
         }
         g.primed = Some(self.seq);
+        self.eval_groups += usize::from(self.eval_changes[slot as usize]);
         if g.words <= 2 {
             g.narrow = [0; 2];
             model.read(slot, &mut g.narrow[..g.words]);
@@ -316,6 +325,7 @@ impl WaitTable {
     fn unprime(&mut self, index: u32) {
         let g = &mut self.groups[index as usize];
         g.primed = None;
+        self.eval_groups -= usize::from(self.eval_changes[g.slot as usize]);
         g.waiters.keys.clear();
         g.waiters.live = 0;
         self.stale += 1;
@@ -463,6 +473,11 @@ impl WaitTable {
 
     pub(crate) fn next_timer(&self) -> Option<SimTime> {
         self.wheel.keys().next().copied()
+    }
+
+    /// Whether a primed group watches a slot an eval may change.
+    pub(crate) fn watches_eval_changes(&self) -> bool {
+        self.eval_groups > 0
     }
 
     /// The `seq` of the newest registration: groups primed after a walk starts have a

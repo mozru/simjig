@@ -102,8 +102,9 @@ pub(crate) struct Kernel {
     has_failed: Cell<bool>,
     pub(crate) recorder: RefCell<Recorder>,
     pub(crate) counters: Cell<KernelStats>,
-    /// [`Models::version`] when the last value-change walk began (`sched`).
-    pub(crate) walked: Cell<Option<u64>>,
+    /// [`Models::version`] and [`Models::written`] when the last value-change walk began
+    /// (`sched`).
+    pub(crate) walked: Cell<Option<(u64, u64)>>,
 }
 
 static NEXT_SIM_GEN: AtomicU32 = AtomicU32::new(1);
@@ -184,7 +185,9 @@ impl Kernel {
         Self {
             sim_gen,
             precision: models.precision(),
-            waits: RefCell::new(WaitTable::new(count as usize)),
+            waits: RefCell::new(WaitTable::new(
+                (0..count).map(|s| models.eval_changes(s)).collect(),
+            )),
             log: RefCell::new(WriteLog::new(count as usize)),
             clocks: RefCell::new(Vec::new()),
             names,

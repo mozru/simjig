@@ -148,6 +148,11 @@ pub(crate) trait ModelBackend {
     fn direct(&self, _slot: u32) -> Option<Direct> {
         None
     }
+    /// Whether an `eval` may change `slot`'s value; `false` only for a slot that nothing
+    /// but [`write`](Self::write) changes. `true` (the default) is always safe.
+    fn eval_changes(&self, _slot: u32) -> bool {
+        true
+    }
     /// Whether an `eval` with no `write` since the previous `eval` is sure to change
     /// nothing and call nothing (no timed events of its own, no per-eval waves sampling):
     /// the eval loop has already settled every value. [`Models`](super::models::Models)

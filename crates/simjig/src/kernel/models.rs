@@ -90,6 +90,8 @@ pub(crate) struct Models {
     settled: Vec<bool>,
     /// Bumped whenever any model's state may have changed (a write, an eval that ran).
     version: u64,
+    /// Bumped by every write.
+    written: u64,
 }
 
 impl Models {
@@ -125,6 +127,7 @@ impl Models {
             direct,
             settled,
             version: 0,
+            written: 0,
         })
     }
 
@@ -204,6 +207,7 @@ impl Models {
         let (model, slot) = self.owner[flat as usize];
         self.settled[model] = false;
         self.version += 1;
+        self.written += 1;
         if let Some(Some(d)) = self.direct.get(flat as usize)
             && d.writable()
             && value.len() <= 2
@@ -260,6 +264,17 @@ impl Models {
     /// mean nothing was written and nothing evaluated in between.
     pub(crate) fn version(&self) -> u64 {
         self.version
+    }
+
+    /// A number that changes with every write (not with evals).
+    pub(crate) fn written(&self) -> u64 {
+        self.written
+    }
+
+    /// Whether an eval may change flat slot `flat` ([`ModelBackend::eval_changes`]).
+    pub(crate) fn eval_changes(&self, flat: u32) -> bool {
+        let (backend, slot) = self.owner(flat);
+        backend.eval_changes(slot)
     }
 
     /// The earliest pending model event and the first model that has it, asking only

@@ -37,8 +37,8 @@ use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
 use super::abi::{
-    self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Handle, ModelVtable, Msg,
-    Narrow, OwnedMsg, Signal,
+    self, ACCESS_READ, ACCESS_WRITE, AbiError, Cell, CreateOpts, Decoded, Dir, Handle, ModelVtable,
+    Msg, Narrow, OwnedMsg, Signal,
 };
 use super::meta::{Vtable, row_problem};
 use crate::kernel::cell::Direct;
@@ -348,6 +348,12 @@ impl RawModel {
                 return;
             }
         }
+    }
+
+    /// Whether slot `slot` is a top-level input: the design never changes it, since
+    /// Verilator rejects an assignment to an input (`ASSIGNIN`).
+    pub(crate) fn is_input(&self, slot: usize) -> bool {
+        self.signals[slot].dir == Dir::In
     }
 
     /// The direct way to slot `slot` ([`Direct`]), if it is a readable narrow row.

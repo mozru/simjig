@@ -365,10 +365,18 @@ fn apply_and_compare(k: &Kernel) -> bool {
 /// A walk when no model changed since the previous walk began is skipped: every group
 /// primed before that walk took the value then, every group primed since took it when
 /// primed, and values change only in an eval or when the log is applied, never during a
-/// walk; so no group could differ from its snapshot.
+/// walk; so no group could differ from its snapshot. So is a walk after evals alone when
+/// every primed group watches a slot no eval changes (an input): only a write changes it.
 fn fire_value_changes(k: &Kernel) {
-    let version = k.models.borrow().version();
-    if k.walked.replace(Some(version)) == Some(version) {
+    let now = {
+        let models = k.models.borrow();
+        (models.version(), models.written())
+    };
+    let last = k.walked.replace(Some(now));
+    if last == Some(now)
+        || last.is_some_and(|(_, written)| written == now.1)
+            && !k.waits.borrow().watches_eval_changes()
+    {
         return;
     }
     let until = k.waits.borrow().last_seq();

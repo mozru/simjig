@@ -227,32 +227,29 @@ mod tests {
         assert!(lax.is_empty(), "unsafe_code not denied in {lax:?}");
     }
 
-    /// The top README's "Project layout" shows the quickstart: each code block, after its
-    /// first line (`// <path>` or `# <path> ...`), is in that file of
-    /// `examples/quickstart`, line for line (indentation aside), so CI builds and runs it.
+    /// The top README's Rust blocks headed `// <path>` show `examples/quickstart`: each
+    /// block, after that line, is in that file of the quickstart, line for line
+    /// (indentation aside), so CI builds and runs what the README shows.
     #[test]
-    fn the_readme_project_layout_is_the_quickstart() {
+    fn the_readme_tests_are_the_quickstart() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let read = |p: &Path| std::fs::read_to_string(p).unwrap();
         let readme = read(&root.join("README.md"));
-        let (_, section) = readme.split_once("\n## Project layout\n").unwrap();
-        let section = section.split("\n## ").next().unwrap();
+        let quickstart = root.join("examples/quickstart");
         let flat = |text: &str| -> String {
             let lines: Vec<&str> = text.lines().map(str::trim).collect();
             lines.join("\n")
         };
         let mut files = Vec::new();
-        for block in section.split("\n```").skip(1).step_by(2) {
-            let (lang, body) = block.split_once('\n').unwrap();
-            let (first, code) = body.split_once('\n').unwrap();
-            let marker = if lang == "toml" { "# " } else { "// " };
-            let path = first
-                .strip_prefix(marker)
-                .unwrap()
-                .split(' ')
-                .next()
-                .unwrap();
-            let file = read(&root.join("examples/quickstart").join(path));
+        for block in readme.split("\n```rust\n").skip(1) {
+            let block = block.split("```").next().unwrap();
+            let (first, code) = block.split_once('\n').unwrap();
+            let Some(path) = first.strip_prefix("// ") else {
+                continue;
+            };
+            let Ok(file) = std::fs::read_to_string(quickstart.join(path)) else {
+                continue;
+            };
             assert!(
                 flat(&file).contains(&flat(code)),
                 "README block not in examples/quickstart/{path}:\n{code}"
@@ -261,15 +258,13 @@ mod tests {
         }
         assert_eq!(
             files,
-            // The minimal `Cargo.toml`, then its optional lint table.
             [
-                "Cargo.toml",
-                "Cargo.toml",
+                "tests/flop.rs",
                 "build.rs",
                 "src/lib.rs",
-                "tests/flop.rs"
-            ],
-            "{section}"
+                "tests/scoreboard.rs",
+                "tests/flop_sync.rs"
+            ]
         );
     }
 

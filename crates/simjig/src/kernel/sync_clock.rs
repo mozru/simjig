@@ -7,7 +7,7 @@
 //! the model; [`SyncClock::fall`] does the same with 0; [`SyncClock::tick`] is both, so a cycle is
 //! exactly two evals.
 //!
-//! Semantics (README, "Synchronous testbenches"):
+//! Semantics (`docs/guide.md`, "Synchronous tests"):
 //! - A write (`set`) goes into the model at once. The model never runs while the testbench
 //!   does, so a value is never torn; the next eval takes it, together with that eval's
 //!   clock edge, as a C++ loop's `top->in = x; top->clk = 1; top->eval();` does.

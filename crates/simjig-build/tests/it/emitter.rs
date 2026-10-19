@@ -103,7 +103,7 @@ fn an_interface_ported_dut_is_built_through_the_generated_wrapper() {
     assert!(exports_vtable(&env.cache_dir(), &built));
 }
 
-/// Every unit declaring a `timeunit`, as the README recommends, needs no `--timescale`:
+/// Every unit declaring a `timeunit`, as `docs/guide.md` recommends, needs no `--timescale`:
 /// the generated tops declare none, and Verilator 5.052 would stop on `TIMESCALEMOD` for
 /// them (IEEE 1800-2023 §3.14.2.3) unless they waive it and inherit the design's unit.
 #[test]

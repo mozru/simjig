@@ -595,7 +595,7 @@ async fn registered_read_waits_for_a_pop<D: Ports>(dut: D) {
 }
 
 /// `count` climbs by one per push to `DEPTH`, where `full` rises: one body for every
-/// configuration of the sweep (the top README's "A parameter sweep").
+/// configuration of the sweep (`docs/guide.md`, "Parameter sweeps").
 #[simjig::test(init = random, timeout = "2us", duts = [fifo_8x4::Dut, fifo_32x16::Dut])]
 async fn count_climbs_to_the_depth<D: Ports>(dut: D) {
     clock(dut.clk(), ns(10)).start();
@@ -702,29 +702,32 @@ fn parameters_are_checked_at_elaboration() {
     assert_param_checks("sync_fifo", src, &[], bad_width, "WIDTH must be at least 1");
 }
 
-/// The top README's "A parameter sweep" shows this crate's code: each of its Rust blocks
-/// is, line for line (indentation aside), in `build.rs`, this file or
-/// `tests/hop_stage.rs`, so CI compiles and runs what the README shows (its `text` block
-/// is the code a fields trait replaced, which no longer compiles).
+/// The sweep sections of the top README and of `docs/guide.md` show this crate's code:
+/// each of their Rust blocks is, line for line (indentation aside), in `build.rs`, this
+/// file or `tests/hop_stage.rs`, so CI compiles and runs what they show.
 #[test]
-fn the_readme_sweep_is_this_crate_code() {
+fn the_documented_sweep_is_this_crate_code() {
     let root = env!("CARGO_MANIFEST_DIR");
     let read = |p: &str| std::fs::read_to_string(format!("{root}/{p}")).unwrap();
-    let readme = read("../../README.md");
-    let (_, section) = readme.split_once("### A parameter sweep\n").unwrap();
-    let section = section.split("\n### ").next().unwrap();
+    let section = |file: &str, heading: &str| {
+        let text = read(file);
+        let (_, rest) = text.split_once(heading).unwrap();
+        rest.split("\n## ").next().unwrap().to_owned()
+    };
+    let sections = section("../../README.md", "## Parameter sweeps and random init\n")
+        + &section("../../docs/guide.md", "## Parameter sweeps\n");
     let flat = |text: &str| -> String {
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
         lines.join("\n")
     };
     let code =
         flat(&(read("build.rs") + &read("tests/sync_fifo.rs") + &read("tests/hop_stage.rs")));
-    let blocks: Vec<&str> = section
+    let blocks: Vec<&str> = sections
         .split("```rust\n")
         .skip(1)
         .map(|b| b.split("```").next().unwrap())
         .collect();
-    assert_eq!(blocks.len(), 3, "{section}");
+    assert_eq!(blocks.len(), 4, "{sections}");
     for block in blocks {
         assert!(code.contains(&flat(block)), "not in the crate:\n{block}");
     }

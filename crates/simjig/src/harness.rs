@@ -67,8 +67,8 @@ pub type Result<T = (), E = crate::Failure> = core::result::Result<T, E>;
 ///
 /// # Reading the generated module
 /// `cargo simjig show <name>` prints the file (`--path`: only its path), so the generated
-/// names (`Status::EMPTY`, `StatusVariant`, `r#in`) can be looked up; the README's
-/// "Generated names" section gives the rules.
+/// names (`Status::EMPTY`, `StatusVariant`, `r#in`) can be looked up; `docs/guide.md`,
+/// "Generated names", gives the rules.
 #[macro_export]
 macro_rules! include_dut {
     ($name:ident) => {

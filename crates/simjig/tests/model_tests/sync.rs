@@ -314,8 +314,7 @@ fn bound_handles_of_two_models_take_the_handle_path() {
     assert_eq!(seen, (3, 0));
 }
 
-/// The README's synchronous test ("Synchronous testbenches"), as written there but for the
-/// unused context.
+/// A synchronous counter: a bound handle read every cycle.
 #[simjig::test(sync, timeout = "1ms")]
 fn readme_counts(dut: counter::Dut) {
     let mut cyc = SyncClock::new(dut.clk, simjig::ns(10));
@@ -330,7 +329,8 @@ fn readme_counts(dut: counter::Dut) {
     }
 }
 
-/// The README's example of several bound handles and `cycle()`, as written there.
+/// The example of several bound handles and `cycle()` in `docs/guide.md`, "Synchronous
+/// tests", as written there.
 #[simjig::test(sync)]
 fn counts_bound(dut: counter::Dut) {
     let mut cyc = SyncClock::new(dut.clk, simjig::ns(10));

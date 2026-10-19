@@ -40,7 +40,7 @@ fn timeout_failure_location_with_a_stored_future() {
     assert!(f.location.is_some_and(|l| l.line() == line), "{f:?}");
 }
 
-/// README: `&mut task` for a Task that must keep running past the timeout.
+/// README, "Coming from cocotb": `&mut task` for a Task that must keep running past the timeout.
 #[test]
 fn with_timeout_over_mut_task_keeps_it_running() {
     let mut d = dut();

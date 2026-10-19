@@ -75,7 +75,7 @@ listed here with what keeps the copies equal.
 | The time grammar of a waves window (`<t0>..<t1>`) | `simjig::harness::waves::parse_window` (`SIMJIG_WAVES=window:`, whole numbers of a unit). `cargo-simjig`'s `waves::parse_window` is a deliberate second copy, since `cargo-simjig` may not depend on `simjig`: it also takes decimals (`1.5us`) and turns them into the harness's form, so it accepts a superset and emits only what the harness parses |
 | Scheduler semantics | `tests/conformance/README.md` (normative, DECISION §0); the scheduler's observable behaviour on random programs is pinned by `kernel::differential` (`corpus.txt`: seeds 0-4095 blessed on int-p 667e341, seeds 4096-8191, which also re-poll edges under another waker, on int-q; `docs/notes/sched.md`) |
 | What a testbench glob-imports | `simjig::prelude`; a sweep module re-exports the same `Value`, `Vector` and `Packed` items (`codegen::lower_sweep`), so both globs coexist (`examples/lib/tests/prelude.rs`) |
-| The recommended project layout | `examples/quickstart` (lib target with `pub use simjig::prelude::*;` and the `include_dut!`s); the README's "Project layout" quotes it, checked by `xtask`'s `the_readme_project_layout_is_the_quickstart`; the examples' lint tables mirror the workspace's (`example_lints_mirror_the_workspace`) |
+| The recommended project layout | `examples/quickstart` (lib target with `pub use simjig::prelude::*;` and the `include_dut!`s); the README's Rust blocks headed `// <path>` quote it, checked by `xtask`'s `the_readme_tests_are_the_quickstart`; the examples' lint tables mirror the workspace's (`example_lints_mirror_the_workspace`) |
 
 ### Probe validation
 A probe is checked in three layers, each against what only it can see:

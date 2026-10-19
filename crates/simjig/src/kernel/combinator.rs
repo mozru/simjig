@@ -290,7 +290,7 @@ impl<const N: usize> Run<N> {
 }
 
 /// Cancels `op`, marking the drop as the combinator's: a `Task` passed by value that lost
-/// is cancelled by design (README, "Known differences from cocotb"), not dropped by
+/// is cancelled by design (`docs/guide.md`, "Differences from cocotb"), not dropped by
 /// mistake, even if it never ran.
 fn cancel_operand(k: &Kernel, op: &mut dyn Operand) {
     struct Restore<'k>(&'k Kernel, bool);

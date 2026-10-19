@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(named_candidates("pkg::_t"), ["T", "PkgT"]);
     }
 
-    /// The examples of the README's "Generated names" section, so it cannot drift from the
+    /// The examples of `docs/guide.md`'s "Generated names" section, so it cannot drift from the
     /// code generator.
     #[test]
     fn the_readme_naming_examples_hold() {

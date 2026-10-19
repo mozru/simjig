@@ -109,8 +109,8 @@ A full FIFO takes a push only in a cycle that also pops; an empty FIFO ignores a
 (`item.kind`, `item.tag`, `item.data`) and the enum `Kind` instead of raw bits.
 
 `build.rs` builds the sweep `sync_fifo` of two raw FIFOs with a registered read
-(`fifo_8x4`: 8 bits, 4 deep; `fifo_32x16`: 32 bits, 16 deep; see the top README's "A
-parameter sweep"), and `item_fifo` (`Item`, 4 deep, FWFT). The raw FIFO's tests are
+(`fifo_8x4`: 8 bits, 4 deep; `fifo_32x16`: 32 bits, 16 deep; see `docs/guide.md`,
+"Parameter sweeps"), and `item_fifo` (`Item`, 4 deep, FWFT). The raw FIFO's tests are
 written once over `sync_fifo::Ports` and run on both configurations
 (`#[simjig::test(duts = [..])]`, so `random_traffic_matches_the_model::fifo_32x16`).
 `tests/sync_fifo.rs` copies any model's handles into one `Fifo<T, C>` struct, so one
@@ -131,14 +131,14 @@ While `empty`, an FWFT `rd_data` is stale and means nothing; a registered `rd_da
 |---|---|
 | `random_traffic_matches_the_model`, `random_items_match_the_model` | 2000 cycles of bursty pushes and pops against the model (`count`, `full`, `empty`, `rd` every edge); then a drain; every corner reached (full, empty, a dropped push, push with pop while full) |
 | `fills_to_full_and_drains_to_empty` | `count` and `full` while filling, the dropped `DEPTH + 1`th push, order, a pop of an empty FIFO |
-| `count_climbs_to_the_depth` | `count` and `full` push by push, in the top README's sweep example |
+| `count_climbs_to_the_depth` | `count` and `full` push by push, in the sweep example of `docs/guide.md` |
 | `push_and_pop_in_one_cycle` | when empty, in between, and when full (`fifo_8x4` only) |
 | `registered_read_waits_for_a_pop`, `first_word_falls_through` | the two read modes |
 | `a_reset_during_traffic_empties_the_fifo`, `a_reset_during_item_traffic_empties_the_fifo` | `rst` for one edge mid-traffic, with entries inside and both pointers away from zero: right after it `count` is 0, `empty` set, `full` clear, a registered `rd` zero; the model restarts empty and traffic goes on, checked as before |
 | `a_reset_beats_push_and_pop`, `a_reset_beats_item_push_and_pop` | directed: two entries inside, both pointers away from zero, `push` and `pop` held high across the reset edge: after it `count` 0, `empty` set, `full` clear, a registered `rd` zero (not the entry the pop would have read); then one push and pop work |
 | `random_continuations_from_full` | fills once, then `fork::run_from_checkpoint` runs four random branches from that full state, each with its own seed (under nextest; multi-threaded `cargo test` skips it, saying so) |
 | `parameters_are_checked_at_elaboration` | runs `verilator --lint-only -Wall` on other parameter sets, and on a DEPTH or WIDTH it must refuse (`$fatal`) |
-| `the_readme_sweep_is_this_crate_code` | the top README's sweep example is this crate's `build.rs` and test code |
+| `the_documented_sweep_is_this_crate_code` | the sweep examples of the README and `docs/guide.md` are this crate's `build.rs` and test code |
 
 Every test of the raw FIFO but `push_and_pop_in_one_cycle` runs once per configuration.
 
@@ -156,7 +156,7 @@ during it); `rtl/skid_buffer.sv` says why.
 A Verilator top cannot have interface ports, so `build.rs` binds each port to an
 interface instance in the generated wrapper. `stream_if` has its own `WIDTH` parameter;
 `.param("WIDTH", ..)` reaches it too, as the default of every binding that leaves it
-unset (a value the binding sets wins; the tie is by name only, see the top README's
+unset (a value the binding sets wins; the tie is by name only, see `docs/guide.md`,
 "Interface parameters"):
 
 ```rust
@@ -277,7 +277,7 @@ sweep `hop_stage` of `hop_8x2` (`WIDTH = 8`, `TAG_W = 2`) and `hop_32x4` (32 and
   different Rust struct in each configuration. The test is written once over
   `hop_stage::Ports`: `D::Beat` is the type of both `up.beat` and `down.beat`, built with
   `D::Beat::new(tag, data)` and read with `beat.tag()` through the generated
-  `hop_stage::BeatFields` (the top README's "A parameter sweep").
+  `hop_stage::BeatFields` (`docs/guide.md`, "Parameter sweeps").
 
 | Test | Checks |
 |---|---|

@@ -9,11 +9,8 @@ async fn q_follows_d(dut: flop::Dut) {
     reset(&dut).await;
     for d in [true, false, true] {
         dut.d.set(d);
-        // At the edge itself the flop has not updated yet; in the ReadWrite region of that
-        // timestep it has, and writes are still allowed (the next `d`).
+        // After `.read_write()` the flop shows what the edge captured.
         dut.clk.rising().read_write().await;
-        assert_eq!(dut.q.get(), Bit::from(d));
+        assert_eq!(dut.q.get(), d);
     }
-    // The falling-edge convention instead: `dut.clk.falling().await` before each `set`,
-    // and plain `dut.clk.rising().await` to sample what the edge acts on.
 }

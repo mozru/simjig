@@ -11,7 +11,7 @@ use simjig_examples_lib::*;
 use hop_stage::*; // the sweep: Ports, BeatFields, hop_8x2, hop_32x4
 
 /// A beat crosses the stage in one cycle with its hop count incremented, wrapping at the
-/// tag's width, in both configurations (the top README's "A parameter sweep").
+/// tag's width, in both configurations (`docs/guide.md`, "Parameter sweeps").
 #[simjig::test(init = random, timeout = "1us", duts = [hop_8x2::Dut, hop_32x4::Dut])]
 async fn a_beat_hops_with_its_tag_incremented<D: Ports>(dut: D) {
     clock(dut.clk(), ns(10)).start();

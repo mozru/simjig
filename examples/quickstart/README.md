@@ -10,6 +10,8 @@ The smallest simjig project. Copy this directory to start your own.
 | `tests/inv.rs` | a combinational test: `set`, `timer`, `get` |
 | `tests/flop.rs` | a clocked test: `clock`, and `rising().read_write()` to check what an edge produced |
 | `tests/inv_flop.rs` | two DUTs in one test, the inverter feeding the flop |
+| `tests/scoreboard.rs` | a driver and a monitor as tasks, a seeded stream and a `Queue` scoreboard |
+| `tests/flop_sync.rs` | a synchronous test (`#[simjig::test(sync)]`, `SyncClock`) |
 | `.config/nextest.toml` | a wall-clock timeout for hung tests (`slow-timeout`, `terminate-after`) |
 
 This is the recommended layout: the DUTs and helpers live in the library, and each test
@@ -121,6 +123,6 @@ without `.trace_fst(true)`, like the inverter here, has none, and the line says 
 
 ## More
 
-The repository's `README.md` shows the rest with examples: `.timing(true)` and
-`.coverage(true)`, DPI-C imports implemented in Rust (`dut.set_dpi(..)`), several DUTs
-with `Lockstep` and `Mirror`, and `fork` checkpoints.
+`docs/guide.md` in the repository covers the rest: `.timing(true)` and `.coverage(true)`,
+DPI-C imports implemented in Rust (`dut.set_dpi(..)`), several DUTs with `Lockstep` and
+`Mirror`, and `fork` checkpoints.

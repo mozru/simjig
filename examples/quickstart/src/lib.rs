@@ -3,14 +3,10 @@
 //! DUT modules (`inv::Dut`, `flop::Dut`) and [`reset`].
 
 pub use simjig::prelude::*;
-
-// The bindings `build.rs` generated: a module per design, with `Dut`, one typed handle per
-// port.
-simjig::include_dut!(inv);
+simjig::include_dut!(inv); // the module `build.rs` generated: `inv::Dut`, one handle per port
 simjig::include_dut!(flop);
 
-/// Holds the flop in reset for one rising edge of its clock, and releases it right after
-/// that edge.
+/// Holds the flop in reset for one rising edge, and releases it right after that edge.
 pub async fn reset(dut: &flop::Dut) {
     dut.rst.set(1);
     dut.clk.rising().read_write().await;

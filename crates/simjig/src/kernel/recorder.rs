@@ -111,6 +111,32 @@ const PRIME_POW: [u64; 9] = {
     pow
 };
 
+/// Hashing the eight bytes `0xff` (an all-ones word: a record with no task) from state `h`
+/// gives `h * PRIME^8 + ALL_ONES[h & 0xff]` (wrapping).
+///
+/// Why: write `h = q + l` with `l = h & 0xff`. A byte `b` changes only the low byte, so
+/// `(h ^ b) * PRIME = h * PRIME + ((l ^ b) - l) * PRIME`, and the next low byte is
+/// `((l ^ b) * PRIME) & 0xff`, which depends on `l` alone. Over a fixed byte string, the
+/// sum of those corrections is therefore a function of the first low byte: one table
+/// lookup and one multiplication instead of eight dependent steps.
+const ALL_ONES: [u64; 256] = {
+    let mut table = [0u64; 256];
+    let mut l0 = 0;
+    while l0 < 256 {
+        let (mut l, mut sum) = (l0 as u64, 0u64);
+        let mut i = 0;
+        while i < 8 {
+            let d = (l ^ 0xff).wrapping_sub(l);
+            sum = sum.wrapping_add(d.wrapping_mul(PRIME_POW[8 - i]));
+            l = ((l ^ 0xff).wrapping_mul(PRIME)) & 0xff;
+            i += 1;
+        }
+        table[l0] = sum;
+        l0 += 1;
+    }
+    table
+};
+
 impl Fnv {
     pub(crate) fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
@@ -118,7 +144,7 @@ impl Fnv {
         }
     }
 
-    /// The same as `write(&word.to_le_bytes())`, faster for small words.
+    /// The same as `write(&word.to_le_bytes())`, faster for small words and all-ones.
     ///
     /// A zero byte's step is `(h ^ 0) * PRIME = h * PRIME`, so the run of zero bytes at the
     /// top of a little-endian word is one multiplication by `PRIME_POW[run]`. The trace
@@ -126,6 +152,13 @@ impl Fnv {
     /// a record's 40 serial multiplications go; every hash value stays the same.
     #[inline]
     pub(crate) fn write_u64(&mut self, word: u64) {
+        if word == u64::MAX {
+            let h = self.0;
+            self.0 = h
+                .wrapping_mul(PRIME_POW[8])
+                .wrapping_add(ALL_ONES[(h & 0xff) as usize]);
+            return;
+        }
         let bytes = 8 - (word.leading_zeros() / 8) as usize;
         let mut h = self.0;
         for i in 0..bytes {
@@ -241,6 +274,7 @@ mod tests {
     #[test]
     fn write_u64_hashes_the_little_endian_bytes() {
         let mut words = vec![0, 1, 0xff, 0x100, u64::MAX, 1 << 63, 0x00ab_0000_0000_00cd];
+        words.extend([u64::MAX; 300]); // from many states, so every low byte is seen
         let mut x = 0x9e37_79b9_7f4a_7c15u64;
         for _ in 0..1000 {
             x ^= x << 13;
@@ -253,6 +287,17 @@ mod tests {
             fast.write_u64(w);
             bytes.write(&w.to_le_bytes());
             assert_eq!(fast.finish(), bytes.finish(), "after {w:#x}");
+        }
+    }
+
+    #[test]
+    fn the_all_ones_table_holds_for_every_low_byte() {
+        for l in 0..256u64 {
+            let start = 0x0123_4567_89ab_cd00 | l;
+            let (mut fast, mut bytes) = (Fnv(start), Fnv(start));
+            fast.write_u64(u64::MAX);
+            bytes.write(&[0xff; 8]);
+            assert_eq!(fast.finish(), bytes.finish(), "low byte {l:#x}");
         }
     }
 

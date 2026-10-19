@@ -140,6 +140,13 @@ pub(crate) trait ModelBackend {
     /// Evaluates the model until it is stable at the current time. Switches the thread's
     /// Verilator context to this model first (see the module docs).
     fn eval(&mut self) -> Result<EvalStatus, ModelError>;
+    /// Whether an `eval` with no `write` since the previous `eval` is sure to change
+    /// nothing and call nothing (no timed events of its own, no per-eval waves sampling):
+    /// the eval loop has already settled every value. [`Models`](super::models::Models)
+    /// then skips such an eval; `false` (the default) evaluates every time.
+    fn settles(&self) -> bool {
+        false
+    }
     /// Whether the model has scheduled events of its own (`--timing` delays).
     fn events_pending(&self) -> bool;
     /// The time of the model's next scheduled event; only valid if `events_pending()`.

@@ -420,6 +420,7 @@ fn blocked_tasks(k: &Kernel) -> Vec<BlockedTask> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::OrInvariant;
     use super::super::backend::{ModelBackend, ModelError};
     use super::super::failure::FailureKind;
     use super::super::sim::Sim;
@@ -458,6 +459,76 @@ mod tests {
         fn next_time_slot(&self) -> SimTime {
             SimTime::ZERO
         }
+    }
+
+    /// A one-bit model (`clk`) that settles, counting the evals it really runs.
+    struct Settles {
+        clk: u32,
+        evals: std::rc::Rc<std::cell::Cell<u32>>,
+    }
+
+    impl ModelBackend for Settles {
+        fn precision(&self) -> Precision {
+            Precision::NS
+        }
+        fn slot_count(&self) -> u32 {
+            1
+        }
+        fn slot_name(&self, _slot: u32) -> &'static str {
+            "clk"
+        }
+        fn slot_width(&self, _slot: u32) -> u32 {
+            1
+        }
+        fn read(&self, _slot: u32, out: &mut [u32]) {
+            out[0] = self.clk;
+        }
+        fn write(&mut self, _slot: u32, value: &[u32]) {
+            self.clk = value[0];
+        }
+        fn set_time(&mut self, _time: SimTime) {}
+        fn eval(&mut self) -> Result<EvalStatus, ModelError> {
+            self.evals.set(self.evals.get() + 1);
+            Ok(EvalStatus::Running)
+        }
+        fn settles(&self) -> bool {
+            true
+        }
+        fn events_pending(&self) -> bool {
+            false
+        }
+        fn next_time_slot(&self) -> SimTime {
+            SimTime::ZERO
+        }
+    }
+
+    /// The eval that opens a timestep and the one that ends its delta loop find nothing
+    /// written since the previous eval: a model that settles is not evaluated then, but
+    /// the kernel still counts (and records) every eval.
+    #[test]
+    fn a_settled_model_is_evaluated_only_after_a_write() {
+        let evals = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut sim = Sim::from_backend(Box::new(Settles {
+            clk: 0,
+            evals: std::rc::Rc::clone(&evals),
+        }));
+        let clk = sim.signal("clk").or_invariant("the slot exists");
+        sim.add_clock(super::super::clock::Clock::new(
+            clk,
+            SimDuration::from_ticks(10),
+        ))
+        .or_invariant("a clock");
+        // Edges at 0, 5, .., 95, and the Timer's own timestep at 99.
+        let edges = 20;
+        sim.run(Timer::new(SimDuration::from_ticks(99)))
+            .or_invariant("the run passes");
+        let stats = sim.stats();
+        assert_eq!(stats.steps, edges + 1);
+        // Counted: per edge, the eval that opens the timestep and the one after the edge
+        // is applied; none at t=99, where the Timer ends the run before the deltas.
+        assert_eq!(stats.evals, 2 * edges);
+        // Run: the one after each edge, and the run's very first eval (t=0).
+        assert_eq!(u64::from(evals.get()), edges + 1);
     }
 
     #[test]

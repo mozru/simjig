@@ -68,6 +68,9 @@ pub(crate) struct Models {
     first: Vec<u32>,
     /// Per flat slot: `(model, the model's own slot)`.
     owner: Vec<(usize, u32)>,
+    /// Per model: evaluated, with nothing written since. An eval of such a model that
+    /// [`settles`](ModelBackend::settles) would change nothing, so it is skipped.
+    settled: Vec<bool>,
 }
 
 impl Models {
@@ -91,10 +94,12 @@ impl Models {
             first.push(end);
             owner.extend((0..count).map(|slot| (model, slot)));
         }
+        let settled = vec![false; backends.len()];
         Ok(Self {
             backends,
             first,
             owner,
+            settled,
         })
     }
 
@@ -156,6 +161,7 @@ impl Models {
 
     pub(crate) fn write(&mut self, flat: u32, value: &[u32]) {
         let (model, slot) = self.owner[flat as usize];
+        self.settled[model] = false;
         self.backends[model].write(slot, value);
     }
 
@@ -171,8 +177,16 @@ impl Models {
     /// A panic inside a model's eval (a [`FakeModel`](super::fake::FakeModel) closure) is
     /// a fatal error of that model, naming the panic and its line: the model is left
     /// mid-eval, so the run must stop as it does for `$fatal`.
+    ///
+    /// A model that settles and was written nothing since its last eval is not evaluated:
+    /// its eval would be a no-op. The kernel still counts and records it as an eval, so
+    /// the trace (and its hash) is the same as if it ran. In a clocked testbench this
+    /// skips the eval that opens each timestep and the last one of each delta loop.
     pub(crate) fn eval(&mut self) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
         for (model, backend) in self.backends.iter_mut().enumerate() {
+            if self.settled[model] && backend.settles() {
+                continue;
+            }
             panics::forget();
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval()));
             let status = outcome.unwrap_or_else(|payload| {
@@ -183,7 +197,7 @@ impl Models {
                 )))
             });
             match status {
-                Ok(EvalStatus::Running) => {}
+                Ok(EvalStatus::Running) => self.settled[model] = true,
                 other => return Err((model, other)),
             }
         }

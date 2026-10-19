@@ -29,8 +29,8 @@ use std::ffi::CString;
 use std::path::Path;
 
 use super::abi::{
-    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_RANDOM_INIT, FEATURE_TRACE_FST, MsgKind, OwnedMsg,
-    Status,
+    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_RANDOM_INIT, FEATURE_TIMING, FEATURE_TRACE_FST,
+    MsgKind, OwnedMsg, Status,
 };
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
@@ -312,8 +312,19 @@ impl ModelBackend for VerilatorModel {
         }
     }
 
+    // Without `--timing`, an eval runs only what a deposit since the last one triggers,
+    // and Verilator's eval loop returns settled; with waves on, every eval is sampled.
+    fn settles(&self) -> bool {
+        self.raw.features() & FEATURE_TIMING == 0
+            && self.tracer.is_none()
+            && self.poisoned.is_none()
+    }
+
     fn events_pending(&self) -> bool {
-        self.poisoned.is_none() && self.raw.events_pending()
+        // Only a `--timing` model has events of its own; skip the call into C++.
+        self.raw.features() & FEATURE_TIMING != 0
+            && self.poisoned.is_none()
+            && self.raw.events_pending()
     }
 
     fn next_time_slot(&self) -> SimTime {

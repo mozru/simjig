@@ -56,7 +56,7 @@ The clock-only variant (A) has the same shape, with the allocator at about 18%.
    skipped when nothing was queued.
 
 Not verified: the size of any gain. These are profile readings, not experiments; none
-of them was changed in this branch.
+of them has been changed.
 
 ## Surprises
 - cocotb's runner cannot run a test from a fresh `Runner` (`_vhdl_sources` missing)

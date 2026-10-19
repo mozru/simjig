@@ -125,7 +125,7 @@ fn panic_in_dpi_is_caught_on_the_rust_side() {
         .unwrap_or_default();
     assert!(msg.contains("caught panic in dpi_add"), "{msg}");
     // eval() completed with the dummy return value: the model's state is now wrong,
-    // which is why Stage 3 must poison the model after a DPI panic.
+    // which is why simjig poisons the model after a DPI panic.
     assert_eq!(m.peek(SUM), 0);
 
     MODE.set(PanicMode::Off);

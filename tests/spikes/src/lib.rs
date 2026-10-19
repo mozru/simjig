@@ -1,4 +1,4 @@
-//! Plumbing shared by the Stage 3 spikes (findings: `docs/notes/spikes.md`).
+//! Plumbing shared by the spikes (findings: `docs/notes/spikes.md`).
 //!
 //! Reference material, not production code. It shows the minimum a Rust testbench needs
 //! to own a Verilator model:

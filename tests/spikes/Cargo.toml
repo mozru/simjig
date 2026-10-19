@@ -1,4 +1,4 @@
-# Stage 3 de-risking spikes (see docs/notes/spikes.md). A standalone workspace on purpose:
+# De-risking spikes (see docs/notes/spikes.md). A standalone workspace on purpose:
 # it builds nine Verilator models in build.rs, so it stays out of the root workspace and
 # out of `cargo xtask ci`. Run it with `pixi run spikes`.
 [package]

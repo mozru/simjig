@@ -24,6 +24,8 @@ replay and fork, and the trace hash. The profile this started from is
   returns after the raw call), no eval at all (A only, as C then fails its checks), no
   C++ `Scope`.
 
+# Buffers, the recorder and skipped work
+
 ## Before and after
 ns per cycle, median of 5 interleaved runs; each row was measured against the row above
 in one session, so the "before" of a row can differ from the row above by the noise
@@ -138,17 +140,17 @@ changes above.
   byte to the next. That turned 8 dependent steps into one lookup, value for value.
 - Without `codegen-units = 1`, the kernel's hot path stays split across codegen units and
   does not inline; that is a tenth of the time.
-- The bench's committed results (`bench/README.md`, `bench/results/`) predate all of this
-  and the profile change; they were not rerun (that needs cocotb too).
+- The bench's committed results (`bench/README.md`, `bench/results/`) were measured with
+  all of this, and the profile change, in place.
 
-# Phase 2: storage pointers, fewer lookups, an opt-in mode without the trace hash
+# Storage pointers, fewer lookups, an opt-in mode without the trace hash
 
 Same method. ns per cycle, each row measured against the row above; instructions per
 simulated cycle of C in brackets.
 
 | Commit | A | B | C | C instr. |
 |---|---:|---:|---:|---:|
-| end of phase 1 | 200.2 | 225.1 | 408.9 | 14051 |
+| after "Buffers, the recorder and skipped work" | 200.2 | 225.1 | 408.9 | 14051 |
 | `kernel::cell`: the narrow storage pointer moves to the kernel (refactor) | | | | |
 | read and write narrow slots through the model's storage pointer | 197.9 | 218.7 | 395.3 | 13701 |
 | release a fired registration in the poll that sees it fire | 196.3 | 217.9 | 392.0 | 13636 |
@@ -159,12 +161,12 @@ simulated cycle of C in brackets.
 | leave a C++ `Scope` without a second `$urandom` epoch sync | 189.9 | 205.9 | 367.6 | 12205 |
 | **`trace_hash = false`** (opt-in) | 156.0 | 173.1 | 308.7 | 10816 |
 
-Main at bd73904 against the end of phase 2, one session: A 621.8 -> 188.2 (3.3x), B 644.4
+Main at bd73904 against the last row, one session: A 621.8 -> 188.2 (3.3x), B 644.4
 -> 205.6 (3.1x), C 1019.5 -> 368.3 (2.8x); with `trace_hash = false` A 156.0 (4.0x), B
 173.1 (3.7x), C 308.7 (3.3x). The ceiling (a hand-written Verilator loop, Marlin) is 35
 to 40 ns for C: simjig is 9x off by default, 8x without the hash.
 
-## What phase 2 did with the open list
+## What these changes did with the open list
 1. **Pointer-based signal access: done for the last hop.** A Verilator backend hands the
    kernel each readable narrow slot's storage pointer (`kernel::cell::Direct`, made from a
    validated signal-table row; width and writability checked when the table is decoded).
@@ -185,13 +187,13 @@ to 40 ns for C: simjig is 9x off by default, 8x without the hash.
    instead of the old one, which is what cocotb shows and the goldens pin. Deferring the
    write's eval to the next timestep instead does not save an eval (it still runs, later)
    and runs the design code the write triggers at the wrong `$time` (displays, DPI-C calls,
-   assertions). The skipped evals of phase 1 (nothing written since the last eval) are
+   assertions). The skipped evals of "Buffers, the recorder and skipped work" (nothing written since the last eval) are
    no-ops for a model without a variable C++ may write; they stay recorded and counted.
    (Corrected later: "provably no-ops" was wrong for a model with a
    `public_flat_rw` variable, whose logic runs on every eval; see "Corrections" below.)
-3. **A fast path for quiet timesteps: done** as far as it is provable (phase 1: empty
-   ReadWrite round, empty regions, skipped walks; phase 2: a walk after evals alone when
-   only inputs are watched). (Corrected later: the phase 2 skip assumed Verilator
+3. **A fast path for quiet timesteps: done** as far as it is provable (empty
+   ReadWrite rounds, empty regions, skipped walks, and a walk after evals alone when only
+   inputs are watched). (Corrected later: that walk skip assumed Verilator
    rejects an assignment to an input, but `ASSIGNIN` is a lint a design may waive, and
    then an eval changes an input; the skip was removed. See "Corrections" below.)
 4. **Wakers and polling: done where it did not change behaviour.** Wakers were already
@@ -246,10 +248,10 @@ own design decision (rule 5).
   instructions per access (400 per cycle of C), but needs a liveness and thread check per
   access to stay sound, which is most of the saving.
 
-# Phase 3: synchronous tests, and the async executor again
+# Synchronous tests, and the async executor
 
 ## The table (1M cycles, 5 interleaved runs, median ns per cycle)
-Measured in one session, idle-gated; the C++ loop and Marlin are bench2's binaries
+Measured in one session, idle-gated; the C++ loop and Marlin are the bench's binaries
 (`bench/cpp/main.cpp`, `bench/marlin`), run on this machine with the same gate. Every flow
 reported the same pushes, pops and hashes (C: 402910, 402901, 3888034673).
 
@@ -293,7 +295,7 @@ none is removable without giving up a check.
 
 ## What I did not do, and why
 - **Lazy eval in async** (merge an edge's eval with the writes made at it): changes what
-  edge-triggered logic samples (phase 2 notes). Not done.
+  edge-triggered logic samples ("Storage pointers, fewer lookups" above). Not done.
 - **A compiled per-edge schedule for async.** From the breakdown (C, 10726 instructions):
   three evals are fixed by the semantics (about 1400 of Verilator's), the trace records
   about 1500 (hashed by default), and the scheduling, walks, wakes and accesses the rest.
@@ -311,11 +313,11 @@ none is removable without giving up a check.
   serial chain further; the whole hash now costs 30 ns of async C (304.8 against 274.6
   without it), so this would recover perhaps 15 ns, with architecture-specific code.
 
-# Corrections (phases 1 to 3)
+# Corrections
 
 Two of the "provable" skips were not, and are now gone where they cannot be proven.
 
-- **Eval elision** (phase 1: an eval with nothing written since the last one is skipped).
+- **Eval elision** (an eval with nothing written since the last one is skipped).
   Verilator 5.052 schedules logic fed by a variable C++ may write (`VLVF_PUB_RW`:
   `public_flat_rw`, `public` or `public_flat` on a variable, `--public-flat-rw`,
   `--public-depth`, `--public-params`, a read-write probe) under the 'ico' region's
@@ -327,15 +329,13 @@ Two of the "provable" skips were not, and are now gone where they cannot be prov
   the shim reports as `SIMJIG_FEATURE_PUBLIC_RW`; the backend then never settles. Checked
   on 5.052's output: `--public` alone and `--vpi` alone make no variable writable and put
   nothing under that trigger, so they keep elision.
-- **The walk after evals alone when only inputs are watched** (phase 2). It assumed
+- **The walk after evals alone when only inputs are watched.** It assumed
   Verilator rejects an assignment to an input; `ASSIGNIN` is a lint a design may waive,
   and then an eval changes an input and a waiter on it woke half a period late
   (`model_tests::walks`). Nothing outside the design shows such a write (`--json-only`
   marks the written submodule port, not the top's input), so the skip is removed: the
   Verilator backend keeps `eval_changes` true for every slot. The kernel mechanism
-  (`WaitTable::eval_groups`, the clause in `sched::fire_value_changes`) is left in place,
-  now unused by any shipped backend, to keep this change out of `kernel/sched.rs` while
-  the scheduler is rebuilt on `sched`.
+  that served it (`WaitTable::eval_groups`) is removed too (`docs/notes/sched.md`).
 - **Not fixed, a known gap.** The same 'first iteration' trigger also runs logic fed by an
   input the design writes (`ASSIGNIN` waived) and by a `$sampled` variable. For pure
   combinational logic that is a no-op, so elision is still right; for such logic that
@@ -343,7 +343,7 @@ Two of the "provable" skips were not, and are now gone where they cannot be prov
   detectable from the build's inputs (see above).
 
 ## Cost (bench C, 1M cycles, 5 interleaved rounds, idle-gated by `bench.py`'s gate)
-Median ns per cycle; int-p @ 667e341 against this branch; every run reported the same
+Median ns per cycle; 667e341 against the fix; every run reported the same
 pushes, pops and hash (402910, 402901, 3888034673).
 
 | Model | before | after | |
@@ -352,16 +352,16 @@ pushes, pops and hash (402910, 402901, 3888034673).
 | `fifo_pub` (`--public-flat-rw`) | 305.2 | 346.8 | +13.6% |
 | `fifo` sync (`c_full_sync`) | 42.0 | 42.4 | noise |
 
-A second session with a third build (this branch with the walk skip put back) attributes
+A second session with a third build (the fix with the walk skip put back) attributes
 all of `fifo`'s cost to the walk: 303.2 before, 314.3 after, 302.5 with the skip. So
 `fifo_pub` pays about 11 ns for the walk and 30 ns for evaluating every eval, as a C++
 loop does. Correctness over performance (constitution); a provable form of the walk skip
 would need Verilator to say which inputs a design writes.
 
-# Eval elision off by default (int-q)
+# Eval elision off by default
 
 ## Decision
-`p1-fix` left a known gap: Verilator 5.052 re-runs, on every `eval()`, the logic under the
+The corrections above left a known gap: Verilator 5.052 re-runs, on every `eval()`, the logic under the
 'ico' region's 'first iteration' trigger, which includes logic fed by an input the design
 writes itself (`ASSIGNIN` waived) and by a `$sampled` value. If that logic is impure
 (`$time`/`$realtime`, `$display`/`$write`, `$random`/`$urandom`, a DPI-C import), a skipped
@@ -380,7 +380,7 @@ evaluates every time).
 
 ## Cost (bench C on `fifo`, 1M cycles, 5 interleaved rounds, idle-gated)
 Gate: 1-minute load < 2.5 and no cargo, rustc, clang, verilator or nextest process before
-each run (loads 2.34 to 2.46). int-q after the merges of `p1-fix` and `sched`. Both
+each run (loads 2.34 to 2.46). Measured with the corrections and the faster executor (`docs/notes/sched.md`) in place. Both
 reported the same pushes, pops and hash (402910, 402901, 3888034673).
 
 | Flow | median ns/cycle | runs |

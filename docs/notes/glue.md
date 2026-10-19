@@ -31,7 +31,6 @@ models (`abi_counter`, `abi_ticker`).
   seed=0x.. t=10000 ps [ModelFatal sig=..]`, message `$fatal in TOP.fatal at
   <path>/fatal.sv:31: fatal: kind=0 $fatal`, and a `repro:` line; rerunning with the
   printed `SIMJIG_SEED` gives the same seed and signature.
-- `pixi run cargo xtask ci`: all steps pass (506 nextest tests).
 
 ## API friction found writing the tests as a user
 1. **(Fixed since: `compile.rs` also emits every library as `rustc-link-arg`, so a

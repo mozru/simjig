@@ -14,8 +14,8 @@ pub trait DutModel: Sized + 'static {
 #[non_exhaustive] pub struct ModelOptions { pub seed: Seed, pub verilator_seed: u32 }
 impl ModelOptions { pub fn verilator_args(&self) -> Vec<String> } // ["+verilator+seed+<n>"]
 ```
-`()` implements it (an empty `FakeModel` at 1 ps) for tests without a DUT. The brief's
-`create(sim: &mut Sim)` is kept as is; `instantiate` was added because a `Sim` is built
+`()` implements it (an empty `FakeModel` at 1 ps) for tests without a DUT. `create(sim:
+&mut Sim)` binds the handles; `instantiate` exists because a `Sim` is built
 *from* a backend, so something must build the backend first, and only the DUT type knows
 which model it needs. The generated `Dut` implements both (through `dut_model!`).
 
@@ -116,9 +116,8 @@ digit). Not included: time, seed, task path (they vary per seed).
 - New dependencies: `syn` 3, `quote`, `proc-macro2` (macro); `prettyplease`, `insta`
   (macro snapshots); `trybuild`, `serde_json`, `insta` (simjig dev-deps).
 
-## Verified
-- `pixi run cargo xtask ci`: all steps pass (330 nextest tests, doc tests, deny, typos,
-  machete).
+## How it is checked
+- `cargo xtask ci` runs the harness tests (`tests/harness_tests`, `tests/harness_ui`).
 - Mutation: making `RunEnv::from_process` ignore `SIMJIG_SEED` fails
   `repro::simjig_seed_reproduces_a_seeded_failure`.
 - Type errors for a wrong context type, a non-`DutModel` DUT and a bad output type point

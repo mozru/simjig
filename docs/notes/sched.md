@@ -2,8 +2,8 @@
 
 Goal: async testbenches as fast as possible, with bit-identical observable behaviour: the
 33 goldens, the wake order, the trace hash, replay and fork, failure reports. Starting
-point: int-p @ 667e341 (`docs/notes/perf.md`, phase 3: async C on the FIFO at about
-305 ns/cycle, the C++ loop at about 35).
+point: 667e341 (`docs/notes/perf.md`, "Synchronous tests, and the async executor": async
+C on the FIFO at about 305 ns/cycle, the C++ loop at about 35).
 
 ## What was built
 Nine commits; each is behaviour-preserving and was checked against the corpus below and
@@ -47,8 +47,8 @@ the kernel tests before it was committed (the full gates ran on the last).
 
 Eval elision (`Models::eval`'s skip of a settled model) and the walk skip
 (`fire_value_changes`' early return when nothing was written and only eval-unchanged slots
-are watched) are untouched: a fix on `p1-fix` narrows both, and nothing here relies on
-them or extends them.
+are watched) are untouched: nothing here relies on them or extends them (`perf.md`,
+"Corrections", narrows both).
 
 ## Why not simpler (rule 5)
 The executor's semantics are not changed: no new region, no new ordering rule, no new
@@ -58,8 +58,8 @@ a slab remove per await, for nothing the slab gives an edge wait: a group alread
 its waiters and fires them all at once. Timer, region and list waits stay in the slab,
 where a registration can fire alone (one Timer, one waiter of a list).
 
-**The old path is not kept selectable.** The brief asked for the old scheduler to stay
-selectable (under `cfg(test)` or an env var) for the differential test. That would keep a
+**The old path is not kept selectable.** Keeping the old scheduler selectable (under
+`cfg(test)` or an env var) for the differential test would keep a
 second wait table and a second walk in the crate, two homes for one concept (rule 6), for
 testing only. Instead the old scheduler's behaviour is recorded: the corpus was blessed on
 667e341 before any change, and every later commit reproduces it. The trade-off: new random
@@ -81,7 +81,7 @@ its waiters in order, fired by draining, its own tasks queued without their wake
 **Not done, each because it would change behaviour or a guarantee:**
 - *Comparing only written slots after a write* (a per-slot dirty filter in the walk): a
   group's slot can also change in an eval, and which slots an eval can change is the
-  assumption `p1-fix` is narrowing. Not done.
+  assumption `perf.md`'s "Corrections" narrows. Not done.
 - *Fewer evals, a faster hash*: changes when writes take effect, or every recorded hash.
 - *No thread-local per await* (a kernel pointer carried by the poll's waker): needs a new
   unsafe surface (a waker pointing into the kernel, valid only during the poll) for about
@@ -129,7 +129,7 @@ Measured in one session (2026-10-19, loads 1.20 to 1.58), interleaved:
 
 | Commit | fifo A | fifo B | fifo C | mid C | fifo_pub C | fifo C instr. |
 |---|---:|---:|---:|---:|---:|---:|
-| int-p @ 667e341 | 150.7 | 162.6 | 306.6 | 1526.8 | 311.5 | 10728 |
+| 667e341 | 150.7 | 162.6 | 306.6 | 1526.8 | 311.5 | 10728 |
 | edge registrations in their groups | 145.9 | 159.6 | 298.0 | 1515.8 | 302.5 | 10392 |
 | empty ready queue inline | 139.2 | 151.2 | 287.6 | 1500.2 | 292.8 | 9916 |
 | walk keeps its place, queues its own tasks | 137.5 | 149.4 | 282.9 | 1496.6 | 288.2 | 9743 |
@@ -146,13 +146,13 @@ other in time; their instruction counts are the measure that decided them.
 `fifo` against `fifo_pub` (the model built with `--public-flat-rw`): the gain is the same
 (C: 36.7 ns on `fifo`, 35.6 ns on `fifo_pub`; 1623 and 1621 instructions per cycle). Every
 change is in the kernel and none in eval elision or the walk skip, which are what
-`--public-flat-rw` changes, so the narrowing on `p1-fix` should leave these gains as they
-are and add its own cost on `fifo_pub` (more evals and walks), not take these back.
+`--public-flat-rw` changes, so the narrowing in `perf.md`'s "Corrections" leaves these gains as they
+are and adds its own cost on `fifo_pub` (more evals and walks).
 
 ## The floor, and what limits it
 Async C on the FIFO is now 270 ns per cycle (9105 instructions), from 307: 12% faster;
 A 14%, B 14%; mid C 3% (its 1.3 us eval dominates). It is 7.7x the C++ loop (35 ns), not
-the 100 ns the brief hoped for. A single-stepped cycle of C now:
+the 100 ns first hoped for. A single-stepped cycle of C now:
 
 | Part | Instructions |
 |---|---:|
@@ -180,8 +180,8 @@ the wait table and the ready queue together, a kernel pointer passed through the
 (macOS only, new unsafe code), reusing `events_pending` between the last delta and
 `next_time`, and leaner typed reads and writes.
 
-## After the merge with `p1-fix` (int-q)
-The corpus reproduces on the merged tree unchanged: `p1-fix`'s changes (no elision for a
+## With the corrections of `perf.md`
+The corpus reproduces with `perf.md`'s "Corrections" unchanged: their changes (no elision for a
 model with a writable public variable, `eval_changes` true for every Verilator slot) are
 in the Verilator backend, which the corpus's fake backends do not use. The now-dead
 `eval_changes` mechanism (`ModelBackend::eval_changes`, `WaitTable::eval_groups`, the
@@ -191,14 +191,14 @@ it the skip was sound and changed nothing observable (the digest has no walk cou
 The draw that chose "inputs eval-unchanged" is kept, unused, so each seed still draws
 the simulation and programs it was blessed with.
 
-## Corpus seeds 4096-8191: an edge re-polled under another waker (int-q)
+## Corpus seeds 4096-8191: an edge re-polled under another waker
 
 `EdgeRegistration::take_fired` refreshes the stored waker when a registered edge is
 polled under another one; no seed reached it (mutant m5, which skips the refresh,
 survived). A new operation, `Op::Repolled` (a rising edge polled once under
 `Waker::noop()`, then awaited), is appended to the draw for seeds 4096 and up only, so seeds
 0-4095 draw exactly the programs they did and their 4096 digests are unchanged (the bless
-added lines only). Seeds 4096-8191 were blessed on int-q. With m5 applied, 1129 of the 8192
+added lines only). Seeds 4096-8191 were blessed after the corrections. With m5 applied, 1129 of the 8192
 seeds differ, all of them new ones, and `cancel::an_edge_repolled_with_another_waker_wakes_the_newest`
 fails.
 

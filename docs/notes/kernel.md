@@ -79,23 +79,19 @@ show the model's initial values.
 - **One `RefCell` per piece of state** (tasks, ready queue, waits, write log, model,
   recorder, failure) so no borrow is held while user code (polls, drops, wakers) runs.
 
-## Verified
-- `pixi run cargo xtask ci`: all steps pass (59 nextest tests, 3 doctests).
-- Miri: `MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test -p simjig` — all 14
-  unit, 45 integration (swarm reduced to 8 seeds) and 3 doctests pass. Installed for this:
-  `rustup toolchain install nightly --profile minimal --component miri,rust-src`
-  (nightly 2026-10-16).
+## How it is checked
+- `cargo xtask ci` runs the kernel tests (`tests/kernel_tests`, against `FakeModel`) and
+  the unit tests; `cargo xtask miri` runs both under Miri (`CONTRIBUTING.md`, "Miri").
 - Mutation check: making `Registration::drop` skip deregistration fails the swarm and the
   cancellation tests.
 
 ## Not verified / open
-- No real Verilator backend yet: `ModelBackend` is untested against Verilator, and the
-  5 ns per-access budget (DECISION §4 Q2) is not measured.
-- Panic *location* of a `TaskPanic` is not captured (the default hook prints it on
-  stderr); `location` is set for kernel-detected failures (writes) only.
-- No `events.jsonl` dump, `simjig::log!`, or repro line yet; the recorder keeps the last
-  4096 records and hashes all of them.
-- No CHANGELOG entry or API snapshot (constitution rule 4); there is no CHANGELOG file yet.
+- Whether a signal access is under the 5 ns budget (DECISION §4 Q2) on an idle machine.
+  `kernel_tests/bench.rs` and `model_tests/bench.rs` measure it (ignored by default); the
+  last numbers, from a loaded machine, are under "Write-path cost" below.
+- The recorder keeps the last 4096 records (`RECORDER_CAPACITY`), which `events.jsonl`
+  dumps, and hashes all of them: an older event is only in the trace hash.
+- Behaviour gaps are under "Known limitations" at the end.
 
 # Clocks, `--timing`, panic locations, several models
 
@@ -206,9 +202,8 @@ whether both are under 5 ns on an idle machine is **not verified**. The remainin
 the shared handle resolution (thread-local + `RefCell` borrow, about 1.9 ns), which needs
 `unsafe` or a different current-kernel scheme to shrink.
 
-## Verified
-`pixi run cargo xtask ci` (see the final report). Mutation: removing the `#0` re-eval fails
-both zero-delay tests; without the panic hook `Failure.location` is `None` and the location
+## How it is checked
+Mutation: removing the `#0` re-eval fails both zero-delay tests; without the panic hook `Failure.location` is `None` and the location
 tests fail.
 
 # Design decisions

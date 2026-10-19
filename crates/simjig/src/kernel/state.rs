@@ -97,6 +97,8 @@ pub(crate) struct Kernel {
     pub(crate) failure: RefCell<Option<Failure>>,
     pub(crate) recorder: RefCell<Recorder>,
     pub(crate) counters: Cell<KernelStats>,
+    /// [`Models::version`] when the last value-change walk began (`sched`).
+    pub(crate) walked: Cell<Option<u64>>,
 }
 
 static NEXT_SIM_GEN: AtomicU32 = AtomicU32::new(1);
@@ -198,6 +200,7 @@ impl Kernel {
             failure: RefCell::new(None),
             recorder: RefCell::new(Recorder::default()),
             counters: Cell::new(KernelStats::default()),
+            walked: Cell::new(None),
         }
     }
 

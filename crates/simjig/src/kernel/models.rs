@@ -71,6 +71,8 @@ pub(crate) struct Models {
     /// Per model: evaluated, with nothing written since. An eval of such a model that
     /// [`settles`](ModelBackend::settles) would change nothing, so it is skipped.
     settled: Vec<bool>,
+    /// Bumped whenever any model's state may have changed (a write, an eval that ran).
+    version: u64,
 }
 
 impl Models {
@@ -100,6 +102,7 @@ impl Models {
             first,
             owner,
             settled,
+            version: 0,
         })
     }
 
@@ -162,6 +165,7 @@ impl Models {
     pub(crate) fn write(&mut self, flat: u32, value: &[u32]) {
         let (model, slot) = self.owner[flat as usize];
         self.settled[model] = false;
+        self.version += 1;
         self.backends[model].write(slot, value);
     }
 
@@ -187,6 +191,7 @@ impl Models {
             if self.settled[model] && backend.settles() {
                 continue;
             }
+            self.version += 1;
             panics::forget();
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval()));
             let status = outcome.unwrap_or_else(|payload| {
@@ -202,6 +207,12 @@ impl Models {
             }
         }
         Ok(())
+    }
+
+    /// A number that changes whenever any model's values may have changed: equal numbers
+    /// mean nothing was written and nothing evaluated in between.
+    pub(crate) fn version(&self) -> u64 {
+        self.version
     }
 
     /// The earliest pending model event and the first model that has it, asking only

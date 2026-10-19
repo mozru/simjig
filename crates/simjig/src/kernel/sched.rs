@@ -335,7 +335,16 @@ fn apply_and_compare(k: &Kernel) -> bool {
 /// value-change callback at a time (`callValueCbs`, in registration order) and its whole
 /// event loop inside each. A task woken by one group that waits on a younger group not yet
 /// reached in this walk joins it; groups primed during the walk wait for the next change.
+///
+/// A walk when no model changed since the previous walk began is skipped: every group
+/// primed before that walk took the value then, every group primed since took it when
+/// primed, and values change only in an eval or when the log is applied, never during a
+/// walk; so no group could differ from its snapshot.
 fn fire_value_changes(k: &Kernel) {
+    let version = k.models.borrow().version();
+    if k.walked.replace(Some(version)) == Some(version) {
+        return;
+    }
     let until = k.waits.borrow().last_seq();
     let mut after = 0;
     while !stopped(k) {

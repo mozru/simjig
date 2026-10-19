@@ -1,8 +1,21 @@
-/target
+# Cargo build outputs, at the root and in the standalone workspaces (bench/simjig,
+# bench/marlin, tests/spikes, examples). bench/run.sh and the cocotb runners build under
+# the root target/ too.
+target/
 junit.xml
+# insta's pending snapshots
+*.snap.new
+*.pending-snap
+# waves
 *.fst
 *.vcd
+# cocotb and Python
+__pycache__/
+*.pyc
+results.xml
+sim_build/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
-.pixi/
+# macOS
+.DS_Store

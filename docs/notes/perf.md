@@ -241,3 +241,68 @@ own design decision (rule 5) and review cycles.
 - **Handles holding storage pointers** (no kernel lookup per access): would save about 40
   instructions per access (400 per cycle of C), but needs a liveness and thread check per
   access to stay sound, which is most of the saving.
+
+# Phase 3: synchronous tests, and the async executor again
+
+## The table (1M cycles, 5 interleaved runs, median ns per cycle)
+Measured in one session, idle-gated; the C++ loop and Marlin are bench2's binaries
+(`bench/cpp/main.cpp`, `bench/marlin`), run on this machine with the same gate. Every flow
+reported the same pushes, pops and hashes (C: 402910, 402901, 3888034673).
+
+| Flow | A | B | C | C instr./cycle |
+|---|---:|---:|---:|---:|
+| C++ Verilator loop (the ceiling) | 27.8 | 28.1 | 35.5 | 1073 |
+| Marlin | 33.7 | 33.4 | 39.7 | |
+| **simjig sync** (`#[simjig::test(sync)]`, bound handles) | 33.2 | 34.5 | 43.0 | 1382 |
+| simjig async, `trace_hash = false` | 135.8 | 147.5 | 274.6 | 9629 |
+| simjig async (default) | 150.3 | 161.7 | 304.8 | 10726 |
+| main at bd73904 (async) | 622.6 | 652.2 | 1026.2 | 24250 |
+
+Sync is within 1.2x of the C++ loop (A 1.19x, B 1.23x, C 1.21x) and within 1.1x of
+Marlin on C. Async is 3.4x faster than at the start (C), and 8.6x the ceiling.
+
+## Steps (each measured against the one before, in its commit message)
+| Commit | sync C | async C |
+|---|---:|---:|
+| sync tests: `#[simjig::test(sync)]`, `Sim::run_sync`, `SyncClock` | 102.8 | 368 |
+| shim: `hold`/`release`/`eval_held` (C ABI, appended) | 86.4 | |
+| one `DirectTable` for `Models` and the kernel's handles | 76.1 | 374 |
+| `SyncClock::bind`: bound handles | 55.7 | |
+| model C++ as one translation unit (`VM_PARALLEL_BUILDS = 0`) | 52.7 | 358.9 |
+| no panic barrier around a held model's eval | 51.7 | |
+| frame pointers as the platform has them | 47.8 | 364.4 |
+| a bound handle keeps its `Direct` | 45.7 | |
+| the clock calls the held eval directly (`HeldEval`) | 41.5 | |
+| hold a lone model for an async run too | | 320.5 |
+| a timestep's fixed record tails hashed with one lookup | | 303.7 |
+
+## What a sync cycle costs now (C, 1382 instructions)
+Verilator's own two evals are about 910 (the C++ loop's whole cycle is 1073, its evals
+about 950: simjig's model build now matches `verilated.mk`'s). The rest: the testbench
+body with its ten bound accesses (about 300, against about 100 in C++, where an access is
+one load and the value conversions are free), each edge's clock write, time and checks
+(about 75), and the call into the held eval with its C++ barrier (about 45 per eval). What
+limits it: the value conversions of the typed API (`Bit`, `Bits<N>` from raw words), the
+phase and failure check on each edge (a stopped or ended run must not evaluate), and the
+exception barrier around each eval (`try`, the outcome flags). Each is a few instructions;
+none is removable without giving up a check.
+
+## What I did not do, and why
+- **Lazy eval in async** (merge an edge's eval with the writes made at it): changes what
+  edge-triggered logic samples (phase 2 notes). Not done.
+- **A compiled per-edge schedule for async.** From the breakdown (C, 10726 instructions):
+  three evals are fixed by the semantics (about 1400 of Verilator's), the trace records
+  about 1500 (hashed by default), and the scheduling, walks, wakes and accesses the rest.
+  A per-edge schedule that keeps the semantics (three evals, every record, the walk after
+  each application of the log, the region sequence) would still spend about 1400 + 1000 +
+  1000 = 3400 instructions per cycle: about 100 ns, 3x the ceiling, not 2x. Within 2x
+  needs fewer evals (a semantic change) and no hash; sync mode is that design. Not built.
+- **Edge-wait fast path, cheaper walks, cached handle pointers in async**: each is a few
+  percent of the async cycle (the profile is flat: no function above 15%), and the larger
+  of them change the wait table's structure under the wake-order guarantees. Measured
+  candidates that gained nothing were dropped (a prefix table for `Write` records: 302.4
+  -> 300.2 ns, within noise).
+- **A per-timestep table for the time word of the trace hash** (NEON can build the
+  low-byte chain for all 256 states in about 100 cycles): would shorten each record's
+  serial chain further; the whole hash now costs 30 ns of async C (304.8 against 274.6
+  without it), so this would recover perhaps 15 ns, with architecture-specific code.

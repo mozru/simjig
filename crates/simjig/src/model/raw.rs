@@ -547,6 +547,8 @@ pub(crate) mod fake {
         pub(crate) init: Option<(u32, u32)>,
         /// The width the next create gives `a` (4 when unset).
         pub(crate) a_width: Option<u32>,
+        /// The access bits the next create gives `y` (read-only when unset).
+        pub(crate) y_access: Option<u8>,
         /// Every `trace_dump` of the traced vtable: its time and the value of `a` then.
         pub(crate) dumps: Vec<(u64, u8)>,
         rows: Vec<Signal>,
@@ -578,7 +580,8 @@ pub(crate) mod fake {
             let base = s.members.as_mut_ptr();
             let width = s.a_width.unwrap_or(4);
             let mut a = row(0, width, Dir::In, ACCESS_READ | ACCESS_WRITE, c"fake.a");
-            let mut y = row(1, 8, Dir::Out, ACCESS_READ, c"fake.y");
+            let y_access = s.y_access.unwrap_or(ACCESS_READ);
+            let mut y = row(1, 8, Dir::Out, y_access, c"fake.y");
             a.ptr = base.cast::<c_void>();
             // SAFETY: `members` has two bytes; offset 1 stays inside it.
             y.ptr = unsafe { base.add(1) }.cast::<c_void>();

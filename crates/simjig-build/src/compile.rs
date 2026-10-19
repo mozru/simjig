@@ -214,6 +214,9 @@ pub(crate) struct Inputs<'a> {
     pub(crate) recipe: &'a CppRecipe,
     /// Generated sources compiled with the model (the emitted shim).
     pub(crate) model_sources: &'a [PathBuf],
+    /// The model has a writable variable (`syms::writable_public`): its translation units
+    /// get `SIMJIG_PUBLIC_RW=1`, which the shim reports as `SIMJIG_FEATURE_PUBLIC_RW`.
+    pub(crate) public_rw: bool,
 }
 
 /// The shim and the link were set up for [`DutConfig::features`]; Verilator's own
@@ -273,7 +276,13 @@ pub(crate) fn compile(i: &Inputs<'_>) -> Result<Vec<String>, Error> {
 
     let mut model_defines = mk.defines();
     model_defines.extend(i.recipe.defines.iter().cloned());
-    let model = model_archive(&tc, &mk, &model_defines)?;
+    let model = if i.public_rw {
+        let mut defines = model_defines.clone();
+        defines.push(("SIMJIG_PUBLIC_RW".to_owned(), Some("1".to_owned())));
+        model_archive(&tc, &mk, &defines)?
+    } else {
+        model_archive(&tc, &mk, &model_defines)?
+    };
 
     let natives = native_libs(i.env, &mk);
     let mut extras = Vec::new();

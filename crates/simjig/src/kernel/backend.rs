@@ -187,8 +187,10 @@ pub(crate) trait ModelBackend {
         true
     }
     /// Whether an `eval` with no `write` since the previous `eval` is sure to change
-    /// nothing and call nothing (no timed events of its own, no per-eval waves sampling):
-    /// the eval loop has already settled every value. [`Models`](super::models::Models)
+    /// nothing and call nothing (no timed events of its own, no per-eval waves sampling, no
+    /// logic that runs on every eval whatever was written, such as a Verilator model's
+    /// logic fed by a `public_flat_rw` variable): the eval loop has already settled every
+    /// value. [`Models`](super::models::Models)
     /// then skips such an eval; `false` (the default) evaluates every time.
     fn settles(&self) -> bool {
         false

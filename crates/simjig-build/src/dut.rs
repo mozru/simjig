@@ -1174,6 +1174,7 @@ impl Dut {
             obj_dir: &model.obj_dir,
             recipe: &self.recipe,
             model_sources: &placed.model_sources,
+            public_rw: crate::syms::writable_public(&model.obj_dir, prefix)?,
         })?;
         directives.extend(rerun_directives(
             verilator,

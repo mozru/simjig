@@ -185,8 +185,10 @@ to 40 ns for C: simjig is 9x off by default, 8x without the hash.
    instead of the old one, which is what cocotb shows and the goldens pin. Deferring the
    write's eval to the next timestep instead does not save an eval (it still runs, later)
    and runs the design code the write triggers at the wrong `$time` (displays, DPI-C calls,
-   assertions). The skipped evals of phase 1 (nothing written since the last eval) are the
-   ones that are provably no-ops; they stay recorded and counted.
+   assertions). The skipped evals of phase 1 (nothing written since the last eval) are
+   no-ops for a model without a variable C++ may write; they stay recorded and counted.
+   (Corrected after review: "provably no-ops" was wrong for a model with a
+   `public_flat_rw` variable, whose logic runs on every eval; see "Corrections" below.)
 3. **A fast path for quiet timesteps: done** as far as it is provable (phase 1: empty
    ReadWrite round, empty regions, skipped walks; phase 2: a walk after evals alone when
    only inputs are watched, since Verilator rejects an assignment to an input).

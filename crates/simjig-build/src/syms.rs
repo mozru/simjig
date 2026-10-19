@@ -11,6 +11,10 @@
 //!   `string`: its `VLVT_*` type), or whose storage is not the one its width has;
 //! - a writable probe of a parameter, or of a variable that is not `public_flat_rw`.
 //!
+//! The same table answers [`writable_public`]: whether the model has any variable C++ may
+//! write, which makes an eval with nothing written run logic all the same (the shim's
+//! `SIMJIG_FEATURE_PUBLIC_RW`).
+//!
 //! Path, instance and module mistakes are caught earlier, by the lowering against the IR
 //! (`codegen::lower`), which knows every instance and variable; this table only lists
 //! what is public. The create-time check stays as the backstop.
@@ -277,6 +281,21 @@ pub(crate) fn check_probes(
     Ok(())
 }
 
+/// Whether the model `prefix` in `obj_dir` has a variable C++ may write (`VLVF_PUB_RW`:
+/// `public_flat_rw`, `public` or `public_flat` on a variable, in the source or a `.vlt`,
+/// `--public-flat-rw`, `--public-depth`, `--public-params`, a read-write probe).
+///
+/// Verilator 5.052 schedules the logic such a variable feeds under the 'ico' region's
+/// 'first iteration' trigger (`V3Sched.cpp`, `createInputCombLoop`), which every `eval()`
+/// sets: that logic runs on each eval, written or not, so it re-reads `$time` and repeats
+/// its `$display`s and DPI-C calls. Checked on 5.052's output: `--public` alone and `--vpi`
+/// alone make no variable writable (no `VLVF_PUB_RW` row) and schedule nothing under it.
+/// Parameters count too: whether one feeds such logic is not visible here.
+pub(crate) fn writable_public(obj_dir: &Path, prefix: &str) -> Result<bool, Error> {
+    let scopes = read(obj_dir, prefix)?;
+    Ok(scopes.0.values().flatten().any(|v| v.writable))
+}
+
 fn check(scopes: &Scopes, p: &ProbeSite) -> Result<(), String> {
     // One diagnosis per case, the same as `simjig::find_probe`'s at create: a probe inside
     // a hierarchical block (`hier_block`, a model of its own) finds its scope, which the
@@ -429,6 +448,32 @@ extern const VlScopeTableEntry Vx__Syms__VpiScopeTable[] = {
         );
         assert_eq!(names("x.u"), ["s"]);
         assert!(!s.0.contains_key(""), "every call found its scope");
+    }
+
+    /// A writable variable anywhere, a parameter's included, makes the model's evals
+    /// all run; read-only ones do not.
+    #[test]
+    fn any_writable_row_counts_as_writable_public() {
+        let dir = tempfile::tempdir().unwrap();
+        let only_read = SYMS
+            .lines()
+            .filter(|l| !l.contains("VLVF_PUB_RW"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("Vx__Syms__Slow.cpp"), &only_read).unwrap();
+        assert!(!writable_public(dir.path(), "Vx").unwrap());
+        let param_only = format!(
+            "{only_read}\n{}",
+            SYMS.lines()
+                .find(|l| l.contains("varInsert(\"LP\""))
+                .unwrap()
+        );
+        std::fs::write(dir.path().join("Vx__Syms__Slow.cpp"), param_only).unwrap();
+        assert!(writable_public(dir.path(), "Vx").unwrap());
+        std::fs::write(dir.path().join("Vx__Syms__Slow.cpp"), SYMS).unwrap();
+        assert!(writable_public(dir.path(), "Vx").unwrap());
+        // Another model's table in the same directory is not this model's.
+        assert!(!writable_public(dir.path(), "Vy").unwrap());
     }
 
     #[test]

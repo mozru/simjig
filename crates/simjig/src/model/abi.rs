@@ -46,6 +46,9 @@ pub(crate) const FEATURE_COVERAGE: u64 = 4;
 /// `SIMJIG_FEATURE_RANDOM_INIT`: verilated with `--x-initial unique` by a shim that reads
 /// [`CreateOpts::init`], so [`INIT_RANDOM`] randomizes the initial values.
 pub(crate) const FEATURE_RANDOM_INIT: u64 = 8;
+/// `SIMJIG_FEATURE_PUBLIC_RW`: the model has a variable C++ may write, so every eval runs
+/// the logic it feeds (Verilator's 'ico' region, 'first iteration' trigger), written or not.
+pub(crate) const FEATURE_PUBLIC_RW: u64 = 16;
 
 /// `SIMJIG_INIT_ZERO`: the initial values the plusargs ask for (zeros: simjig passes no
 /// `+verilator+rand+reset+`).

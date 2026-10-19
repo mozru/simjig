@@ -9,6 +9,16 @@ the public API, the generated code or simulation semantics.
   period early: `SyncClock` and `set` write into the model before the next timestep
   starts, which is when a timestep was dumped. Each timestep of a synchronous run is now
   dumped right after its eval. Async runs are unchanged.
+- Fix: eval elision (an eval with nothing written since the last one is skipped) no longer
+  applies to a model with a variable C++ may write: `public_flat_rw` (or `public`,
+  `public_flat`) on a variable in the source or a `.vlt`, `--public-flat-rw`,
+  `--public-depth`, `--public-params`, or a read-write probe. Verilator 5.052 runs the
+  logic such a variable feeds on every `eval()`, written or not, so skipping the eval
+  changed what that logic saw (`$time`) and did (`$display`, DPI-C calls); such a model is
+  now evaluated every time, as a C++ loop does. simjig-build finds these variables in the
+  model's scope table and compiles the shim with `SIMJIG_PUBLIC_RW=1`; the C ABI gains the
+  feature bit `SIMJIG_FEATURE_PUBLIC_RW` (16). Models without such a variable are
+  unchanged.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

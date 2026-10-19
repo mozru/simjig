@@ -100,6 +100,29 @@ fn feature_duts() -> Vec<Dut> {
     ]
 }
 
+/// Models whose evals do more than their writes say: logic fed by a `public_flat_rw`
+/// variable, which every eval runs (`tests/model_tests/elision.rs`).
+fn eval_duts() -> Vec<Dut> {
+    vec![
+        // A public_flat_rw probe feeding $time-reading comb logic.
+        Dut::new("rw_time")
+            .sources(["tests/model_tests/rw_time.sv"])
+            .top("rw_time")
+            .verilator_args(TIMESCALE)
+            .probe(
+                "rw_time.knob",
+                "rw_time",
+                ProbeType::Bits { width: 8 },
+                ProbeAccess::ReadWrite,
+            ),
+        // The same with the variable public_flat_rw by a metacomment, unprobed.
+        Dut::new("rw_meta")
+            .sources(["tests/model_tests/rw_meta.sv"])
+            .top("rw_meta")
+            .verilator_args(TIMESCALE),
+    ]
+}
+
 fn duts() -> Vec<Dut> {
     let async_fifo = shared("async_fifo", &["async_fifo.sv"])
         .param("WIDTH", 8)
@@ -176,6 +199,7 @@ fn duts() -> Vec<Dut> {
     ]
     .into_iter()
     .chain(feature_duts())
+    .chain(eval_duts())
     .collect()
 }
 

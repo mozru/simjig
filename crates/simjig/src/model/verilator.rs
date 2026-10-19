@@ -29,8 +29,8 @@ use std::ffi::CString;
 use std::path::Path;
 
 use super::abi::{
-    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_RANDOM_INIT, FEATURE_TIMING, FEATURE_TRACE_FST,
-    MSGS_PENDING, MsgKind, OwnedMsg, Status,
+    ACCESS_WRITE, Dir, FEATURE_COVERAGE, FEATURE_PUBLIC_RW, FEATURE_RANDOM_INIT, FEATURE_TIMING,
+    FEATURE_TRACE_FST, MSGS_PENDING, MsgKind, OwnedMsg, Status,
 };
 use super::meta::{Access, LoadError, ModelMeta, Storage};
 use super::raw::{CreateError, RawModel, check_vtable};
@@ -58,6 +58,24 @@ pub(crate) struct VerilatorModel {
     now: SimTime,
     /// Held for a synchronous run (`sync_begin`): evals go through `eval_held`.
     held: bool,
+    /// Whether an eval with nothing written since the last one does nothing: see
+    /// `settles_by_build`.
+    settles: bool,
+}
+
+/// Whether a model built with `features` and the signal table `rows` runs nothing in an
+/// eval with nothing written since the previous one, as Verilator 5.052 schedules it: no
+/// `--timing` (timed events of its own), and no variable C++ may write. Such a variable
+/// (`public_flat_rw`; a read-write probe is one, and so a writable row that is not an
+/// input) feeds its logic under the 'ico' region's 'first iteration' trigger, which every
+/// `eval()` sets, so that logic runs again on each eval: it re-reads `$time` and repeats its
+/// `$display`s and DPI-C calls. `SIMJIG_FEATURE_PUBLIC_RW` says the build found one in the
+/// model's scope table; the row check also covers a shim built without simjig-build.
+fn settles_by_build(features: u64, rows: &[super::abi::Decoded]) -> bool {
+    features & (FEATURE_TIMING | FEATURE_PUBLIC_RW) == 0
+        && !rows
+            .iter()
+            .any(|r| r.access & ACCESS_WRITE != 0 && r.dir != Dir::In)
 }
 
 impl VerilatorModel {
@@ -118,6 +136,7 @@ impl VerilatorModel {
             tracer: None,
             now: SimTime::ZERO,
             held: false,
+            settles: false,
         };
         if let Err(e) = model.outcome(status) {
             // A model that failed to construct runs no final blocks when dropped.
@@ -128,6 +147,7 @@ impl VerilatorModel {
             });
         }
         model.check_table(meta)?;
+        model.settles = settles_by_build(model.raw.features(), model.raw.signals());
         model.raw.take_coverage_runs();
         if let Some(options) = trace {
             model.tracer = Tracer::open(&mut model.raw, meta.prefix, options)?;
@@ -371,12 +391,10 @@ impl ModelBackend for VerilatorModel {
         }
     }
 
-    // Without `--timing`, an eval runs only what a deposit since the last one triggers,
-    // and Verilator's eval loop returns settled; with waves on, every eval is sampled.
+    // Built so that an eval runs only what a deposit since the last one triggers
+    // (`settles_by_build`); with waves on, every eval is sampled.
     fn settles(&self) -> bool {
-        self.raw.features() & FEATURE_TIMING == 0
-            && self.tracer.is_none()
-            && self.poisoned.is_none()
+        self.settles && self.tracer.is_none() && self.poisoned.is_none()
     }
 
     fn events_pending(&self) -> bool {
@@ -652,6 +670,66 @@ mod tests {
         STATE.with_borrow_mut(|s| s.pending.push_back((MsgKind::Error as u32, c"bad")));
         assert!(model.eval().is_err());
         assert_eq!(model.eval(), Ok(EvalStatus::Running));
+    }
+
+    /// Eval elision (`ModelBackend::settles`) only for a model whose eval with nothing
+    /// written runs nothing: not with `--timing`, not when the build found a writable
+    /// variable (`SIMJIG_FEATURE_PUBLIC_RW`), not with a writable row that is not an input
+    /// (a read-write probe), and not with waves.
+    #[test]
+    fn only_a_model_without_writable_variables_settles() {
+        fn with_features(features: u64) -> Vtable {
+            Vtable::leak(ModelVtable {
+                features,
+                ..fake::vtable()
+            })
+        }
+        fn public_rw() -> Vtable {
+            thread_local! {
+                static VT: Vtable = with_features(FEATURE_PUBLIC_RW);
+            }
+            VT.with(|vt| *vt)
+        }
+        fn timing() -> Vtable {
+            thread_local! {
+                static VT: Vtable = with_features(FEATURE_TIMING);
+            }
+            VT.with(|vt| *vt)
+        }
+        static PUBLIC_RW: ModelMeta = ModelMeta {
+            vtable: public_rw,
+            ..FAKE
+        };
+        static TIMING: ModelMeta = ModelMeta {
+            vtable: timing,
+            ..FAKE
+        };
+        static TRACED: ModelMeta = ModelMeta {
+            vtable: traced_vtable,
+            ..FAKE
+        };
+        let settles = |meta: &ModelMeta, y_access: u8| {
+            fake::reset();
+            STATE.with_borrow_mut(|s| s.y_access = Some(y_access));
+            VerilatorModel::load(meta, &[], None, None)
+                .unwrap()
+                .settles()
+        };
+        let read = super::super::abi::ACCESS_READ;
+        assert!(settles(&FAKE, read));
+        assert!(
+            !settles(&FAKE, read | ACCESS_WRITE),
+            "a writable output row"
+        );
+        assert!(
+            !settles(&PUBLIC_RW, read),
+            "the build found a writable variable"
+        );
+        assert!(!settles(&TIMING, read));
+        fake::reset();
+        let options = TraceOptions::new("w.fst");
+        let model = VerilatorModel::load(&TRACED, &[], None, Some(&options)).unwrap();
+        assert!(!model.settles(), "with waves");
     }
 
     /// A table from an older header is rejected on its size before any other field (here

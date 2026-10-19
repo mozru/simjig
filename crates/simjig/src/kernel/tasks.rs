@@ -250,6 +250,10 @@ impl ReadyQueue {
         true
     }
 
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     fn pop(&mut self) -> Option<(u32, u16)> {
         let (index, g) = self.queue.pop_front()?;
         if self.queued[index as usize] == Some(g) {
@@ -640,6 +644,9 @@ fn dropped_unpolled(k: &Kernel, key: Key, spawned_at: &'static Location<'static>
 /// cancellation mechanism (DECISION §1): [`Task::cancel`] drops the future the same way,
 /// and says it is deliberate. The trace record keeps every event in run directories.
 pub(crate) fn settle_unrun_drops(k: &Kernel, key: Option<Key>) {
+    if k.unrun_drops.borrow().is_empty() {
+        return;
+    }
     let drops = std::mem::take(&mut *k.unrun_drops.borrow_mut());
     let Some(first) = drops.first() else { return };
     if key.is_some() && k.main.get() == key && k.main_done.get() {
@@ -876,7 +883,19 @@ fn finish_poll(k: &Kernel, key: Key, future: BoxFuture, outcome: std::thread::Re
 
 /// Polls ready tasks in FIFO order until none is ready, a failure is recorded, or the
 /// main task completes.
+#[inline]
 pub(crate) fn run_ready(k: &Kernel) {
+    // The scheduler asks after every region and every group it fires, mostly finding the
+    // queue empty: answered here, without the poll loop's frame.
+    if k.ready.borrow().is_empty() {
+        return;
+    }
+    run_queued(k);
+}
+
+/// [`run_ready`] once something is queued.
+#[inline(never)]
+fn run_queued(k: &Kernel) {
     while !k.failed() && !k.main_done.get() {
         let Some((index, g)) = k.ready.borrow_mut().pop() else {
             return;

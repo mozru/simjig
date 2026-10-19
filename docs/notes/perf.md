@@ -140,3 +140,104 @@ changes above.
   does not inline; that is a tenth of the time.
 - The bench's committed results (`bench/README.md`, `bench/results/`) predate all of this
   and the profile change; they were not rerun (that needs cocotb too).
+
+# Phase 2: storage pointers, fewer lookups, an opt-in mode without the trace hash
+
+Same method. ns per cycle, each row measured against the row above; instructions per
+simulated cycle of C in brackets.
+
+| Commit | A | B | C | C instr. |
+|---|---:|---:|---:|---:|
+| end of phase 1 | 200.2 | 225.1 | 408.9 | 14051 |
+| `kernel::cell`: the narrow storage pointer moves to the kernel (refactor) | | | | |
+| read and write narrow slots through the model's storage pointer | 197.9 | 218.7 | 395.3 | 13701 |
+| release a fired registration in the poll that sees it fire | 196.3 | 217.9 | 392.0 | 13636 |
+| queue our own tasks without calling their wakers | 196.7 | 218.3 | 391.2 | 13530 |
+| skip a walk after evals alone when only inputs are watched | 196.8 | 217.3 | 388.7 | 13209 |
+| find the current kernel through one plain thread-local | 191.1 | 209.4 | 372.6 | 12656 |
+| the recorder's state in `Cell`s | 187.3 | 204.8 | 365.0 | 12367 |
+| leave a C++ `Scope` without a second `$urandom` epoch sync | 189.9 | 205.9 | 367.6 | 12205 |
+| **`trace_hash = false`** (opt-in) | 156.0 | 173.1 | 308.7 | 10816 |
+
+Main at bd73904 against the end of phase 2, one session: A 621.8 -> 188.2 (3.3x), B 644.4
+-> 205.6 (3.1x), C 1019.5 -> 368.3 (2.8x); with `trace_hash = false` A 156.0 (4.0x), B
+173.1 (3.7x), C 308.7 (3.3x). The ceiling (a hand-written Verilator loop, Marlin) is 35
+to 40 ns for C: simjig is 9x off by default, 8x without the hash.
+
+## What phase 2 did with the director's list
+1. **Pointer-based signal access: done for the last hop.** A Verilator backend hands the
+   kernel each readable narrow slot's storage pointer (`kernel::cell::Direct`, made from a
+   validated signal-table row; width and writability checked when the table is decoded).
+   `Models` reads and writes through it: typed `get`, every value-change comparison and
+   snapshot, and the write log's application. Writes still go through the log and are
+   applied at the same points. The unsafe surface: `kernel::cell` (the two raw accessors,
+   moved there from `model::abi`, which re-exports them, and `Direct`), two blocks in
+   `kernel::models`; Miri runs `kernel::cell`'s test over every storage class; every
+   Verilator-model test, the goldens and the C++ UBSan spike exercise it. Not done:
+   handles carrying the pointer themselves, with no kernel lookup at all. A handle is
+   `Copy` and `Send`; reading model memory through it without the kernel would need a
+   liveness and thread check of its own, which costs about what the lookup now costs
+   (the next point).
+2. **Lazy eval: not done; it conflicts with the semantics.** The only eval that could be
+   saved is one of the two at the falling edge (the edge's own, and the one that applies
+   the writes made at it). Evaluating them as one changes what the design sees: logic
+   triggered by the edge (`always @(negedge clk) q <= push`) would sample the new input
+   instead of the old one, which is what cocotb shows and the goldens pin. Deferring the
+   write's eval to the next timestep instead does not save an eval (it still runs, later)
+   and runs the design code the write triggers at the wrong `$time` (displays, DPI-C calls,
+   assertions). The skipped evals of phase 1 (nothing written since the last eval) are the
+   ones that are provably no-ops; they stay recorded and counted.
+3. **A fast path for quiet timesteps: done** as far as it is provable (phase 1: empty
+   ReadWrite round, empty regions, skipped walks; phase 2: a walk after evals alone when
+   only inputs are watched, since Verilator rejects an assignment to an input).
+4. **Wakers and polling: done where it did not change behaviour.** Wakers were already
+   static (no allocation). The current kernel is now found through one plain thread-local
+   holding its address (`kernel::state::with_entry`, one unsafe block) instead of a
+   `RefCell<Option<Rc>>` and a second thread-local for the DPI-C flag; a fired trigger's
+   registration is released in the poll that sees it; a wake of one of our tasks queues it
+   directly. Not done: removing the lookup when a trigger is made (it validates the handle
+   at the call; deferring that moves a misuse panic from `rising()` to its first poll).
+5. **The opt-in mode: `#[simjig::test(trace_hash = false)]`.** It drops exactly one
+   guarantee: the run keeps no trace hash. Events are still recorded, counted and kept in
+   the recent-events window; the outcome, the report and `summary.json` carry a null hash,
+   so two runs cannot be compared by it, and a waves replay checks only that it ended the
+   same way, not that it took the same path. 16% faster on C. The default is unchanged.
+
+## The floor, and what limits it
+Instructions per cycle of C now: 12.2k by default, 10.8k without the hash; the machine
+retires them at an IPC of about 7, so time follows instructions, except that the trace
+hash adds a serial chain of dependent multiplications (one per byte of every event) that
+the no-hash mode removes. No single part dominates any more; a single-stepped cycle of C:
+
+| Part | Instructions |
+|---|---:|
+| Verilator's own `eval`, 3 times (its loop, `deleteAll` with its mutex, the message queue flush, `eval_ico`/`act`/`nba`) | about 1400 |
+| The shim around each eval (C++ `guard`/`Scope`, `$urandom` slot, Rust `outcome`, the message count) | about 900 |
+| Trace records, 17 (default mode; the hash is about 60 of each 100) | about 1700 |
+| Value-change walks, 5 (fire-and-wake, the walk, firing the waiters) | about 1000 |
+| Awaits, 3 (trigger made, registered, fired, woken, polled, released) | about 2400 |
+| Signal access: 7 reads and 3 writes through the typed handles and the log | about 1300 |
+| The scheduler loop (regions, clock edges, next time) | about 800 |
+| The testbench itself | about 400 |
+
+Three of these are fixed by the semantics: 3 evals (not 2) per cycle, the region
+sequence, and one walk per application of the log. The rest is the price of a general
+executor (any number of tasks, waits of every kind, combinators, cancellation, misuse
+checks) paid on every await and access. The raw loop retires about 1300 instructions per
+cycle; reaching 2x of it would need everything but Verilator's own 1400 to fit in about
+1500 instructions, a quarter of what this design spends. I see no way to that by trimming:
+it needs a different executor for the common case (for example, tasks that only await
+edges of kernel clocks compiled into a per-edge schedule with the waits resolved once,
+signals read through pointers held by the schedule, and evals merged where the design is
+known to have no logic on the edge), which changes the executor's semantics and needs its
+own design decision (rule 5) and review cycles.
+
+## Also measured, not done
+- **A faster hash of the time word** (the largest part of each record's chain): FNV-1a
+  over a fixed word is `h * P^n + C(h & 0xff)`, so a per-timestep table of the time
+  word's low-byte chain (NEON can build it in about 100 cycles) would shorten each record's
+  chain from about 45 to about 20 cycles while keeping every value. Estimated 15 to 25 ns
+  on C in default mode; arch-specific code for less than the no-hash mode gives.
+- **Handles holding storage pointers** (no kernel lookup per access): would save about 40
+  instructions per access (400 per cycle of C), but needs a liveness and thread check per
+  access to stay sound, which is most of the saving.

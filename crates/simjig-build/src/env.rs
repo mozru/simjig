@@ -65,7 +65,8 @@ pub struct BuildEnv {
     pub cxx: Option<OsString>,
     /// `CXXSTDLIB`: the C++ standard library to link; empty means none.
     pub cxxstdlib: Option<OsString>,
-    /// `CARGO_TARGET_DIR`, used for the shared cache when it is an absolute path.
+    /// `CARGO_TARGET_DIR`, used for the shared cache when it is an absolute path holding
+    /// `OUT_DIR`.
     pub cargo_target_dir: Option<PathBuf>,
     /// `CONDA_PREFIX` (set by `pixi run`): its `lib/` is searched for the FST tracing
     /// libraries (lz4, zlib).
@@ -149,11 +150,12 @@ impl BuildEnv {
         dirs
     }
 
-    /// The shared cache directory, in this order: `SIMJIG_CACHE_DIR`;
-    /// `$CARGO_TARGET_DIR/simjig-cache` when that is absolute; `simjig-cache` in the target
-    /// directory above `OUT_DIR` (`simjig_target_dir`: the nearest ancestor holding Cargo's
-    /// `CACHEDIR.TAG`, else the one Cargo's `OUT_DIR` layout names); and as a last resort
-    /// `OUT_DIR/simjig-cache`, which is correct but not shared (the build warns).
+    /// The shared cache directory, in this order: `SIMJIG_CACHE_DIR`; `simjig-cache` in the
+    /// target directory holding `OUT_DIR` (`simjig_target_dir`: the deeper of the nearest
+    /// ancestor holding Cargo's `CACHEDIR.TAG` and an absolute `CARGO_TARGET_DIR` holding
+    /// `OUT_DIR`, else the one Cargo's `OUT_DIR` layout names), the rule simjig's run
+    /// directories use; and as a last resort `OUT_DIR/simjig-cache`, which is correct but
+    /// not shared (the build warns).
     pub fn cache_dir(&self) -> PathBuf {
         self.shared_cache_dir()
             .unwrap_or_else(|| self.out_dir.join("simjig-cache"))
@@ -175,11 +177,13 @@ impl BuildEnv {
         if let Some(dir) = &self.simjig_cache_dir {
             return Some(dir.clone());
         }
-        if let Some(dir) = self.cargo_target_dir.as_ref().filter(|d| d.is_absolute()) {
-            return Some(dir.join("simjig-cache"));
-        }
-        simjig_target_dir::target_dir_of(&self.out_dir, Made::OutDir, &self.target, None)
-            .map(|d| d.join("simjig-cache"))
+        simjig_target_dir::target_dir_of(
+            &self.out_dir,
+            Made::OutDir,
+            &self.target,
+            self.cargo_target_dir.as_deref(),
+        )
+        .map(|d| d.join("simjig-cache"))
     }
 
     /// Finds an executable named `name` on `PATH`.
@@ -298,8 +302,18 @@ mod tests {
 
         e.cargo_target_dir = Some(PathBuf::from("relative/is/ignored"));
         assert_eq!(e.cache_dir(), target.join("simjig-cache"));
+        // An absolute `CARGO_TARGET_DIR` counts only when it holds `OUT_DIR` (another
+        // invocation's variable, with `--target-dir`, does not); below the tag, it wins.
         e.cargo_target_dir = Some(t.path().join("ct"));
-        assert_eq!(e.cache_dir(), t.path().join("ct/simjig-cache"));
+        assert_eq!(e.cache_dir(), target.join("simjig-cache"), "not holding it");
+        let ci = target.join("ci");
+        e.out_dir = ci.join("debug/build/foo-1/out");
+        e.cargo_target_dir = Some(ci.clone());
+        assert_eq!(
+            e.cache_dir(),
+            ci.join("simjig-cache"),
+            "untagged, below the tag"
+        );
         e.simjig_cache_dir = Some(t.path().join("explicit"));
         assert_eq!(e.cache_dir(), t.path().join("explicit"));
     }

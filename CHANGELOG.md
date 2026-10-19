@@ -8,7 +8,11 @@ the public API, the generated code or simulation semantics.
   for both simjig-build's model cache and simjig's run directories (it was two copies).
   One change for the cache: Cargo's `CACHEDIR.TAG` is looked for at most five levels
   above `OUT_DIR`, as far as Cargo's layout reaches, so a tag on some directory above an
-  untagged target directory no longer moves the cache there.
+  untagged target directory no longer moves the cache there. And one for both: an absolute
+  `CARGO_TARGET_DIR` counts only when it holds the path, and the deeper of it and the
+  tagged ancestor wins. The cache no longer goes in a `CARGO_TARGET_DIR` that does not hold
+  `OUT_DIR` (`--target-dir` overrode it), and run directories go in an untagged
+  `CARGO_TARGET_DIR` inside a tagged `target/` (the cache already did).
 - **Behaviour change: eval elision is off by default** (correctness over performance).
   Verilator 5.052 also re-runs, on every `eval()`, logic fed by an input the design writes
   itself (its `ASSIGNIN` lint waived) or by a `$sampled` value; when that logic reads

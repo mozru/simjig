@@ -3,13 +3,17 @@
 //! (simjig's run directories go in `<target>/simjig/runs`). One place for how simjig
 //! recognises a target directory, so the two cannot drift apart.
 //!
-//! The rule, in order:
-//! 1. the nearest ancestor (at most [`MAX_LEVELS`] up) holding the `CACHEDIR.TAG` Cargo
-//!    writes at the root of a target directory it creates;
-//! 2. an absolute `CARGO_TARGET_DIR` that holds the path (the variable may come from
-//!    another invocation than the one that built the path, so it must hold it);
-//! 3. the directory Cargo's layout names ([`Made`]), with the `<triple>/` level when its
-//!    name is the triple built for.
+//! The rule:
+//! 1. the deeper of two candidates, when either exists: the nearest ancestor (at most
+//!    [`MAX_LEVELS`] up) holding the `CACHEDIR.TAG` Cargo writes at the root of a target
+//!    directory it creates, and an absolute `CARGO_TARGET_DIR` that holds the path (the
+//!    variable may come from another invocation than the one that built the path, so it
+//!    must hold it). Both are ancestors of the path, so the deeper is the one nearer it:
+//!    a tagged `target/rust-analyzer` inside `CARGO_TARGET_DIR=target`, or an untagged
+//!    `CARGO_TARGET_DIR=target/ci` (made by `mkdir -p` before Cargo ran) inside a tagged
+//!    `target/`;
+//! 2. else the directory Cargo's layout names ([`Made`]), with the `<triple>/` level when
+//!    its name is the triple built for.
 //!
 //! The tag alone is not enough: Cargo writes it only when it creates the directory, so a
 //! `target/` another tool made first (`--target-dir target/rust-analyzer` creates it on its
@@ -45,21 +49,23 @@ pub fn target_dir_of(
     triple: &str,
     cargo_target_dir: Option<&Path>,
 ) -> Option<PathBuf> {
-    if let Some(tagged) = path
+    let tagged = path
         .ancestors()
         .skip(1)
         .take(MAX_LEVELS)
-        .find(|dir| dir.join("CACHEDIR.TAG").is_file())
-    {
-        return Some(tagged.to_path_buf());
-    }
-    if let Some(dir) = cargo_target_dir.filter(|d| d.is_absolute() && path.starts_with(d)) {
-        return Some(dir.to_path_buf());
-    }
-    by_layout(path, made, triple).map(Path::to_path_buf)
+        .find(|dir| dir.join("CACHEDIR.TAG").is_file());
+    let named = cargo_target_dir.filter(|d| d.is_absolute() && path.starts_with(d));
+    let deepest = match (tagged, named) {
+        // Both hold `path`, so one holds the other.
+        (Some(t), Some(n)) => Some(if n.starts_with(t) { n } else { t }),
+        (t, n) => t.or(n),
+    };
+    deepest
+        .or_else(|| by_layout(path, made, triple))
+        .map(Path::to_path_buf)
 }
 
-/// Rule 3: the target directory Cargo's layout names for `path`.
+/// Rule 2: the target directory Cargo's layout names for `path`.
 fn by_layout<'a>(path: &'a Path, made: Made, triple: &str) -> Option<&'a Path> {
     let named = |p: &Path, want: &dyn Fn(&str) -> bool| {
         p.file_name().and_then(|n| n.to_str()).is_some_and(want)
@@ -149,10 +155,10 @@ mod tests {
         }
     }
 
-    /// `CARGO_TARGET_DIR` counts only when absolute and holding the path; a tag wins over
-    /// it (a nested target directory, `target/rust-analyzer`).
+    /// `CARGO_TARGET_DIR` counts only when absolute and holding the path; a tag below it
+    /// wins (a nested target directory, `target/rust-analyzer`).
     #[test]
-    fn a_tag_wins_then_a_cargo_target_dir_holding_the_path() {
+    fn a_tag_below_wins_then_a_cargo_target_dir_holding_the_path() {
         let s = Scratch::new("tag");
         let target = s.0.join("target");
         let plain = target.join("debug/deps/t-0123");
@@ -169,6 +175,21 @@ mod tests {
         let out = nested.join("debug/build/foo-1/out");
         let found = target_dir_of(&out, Made::OutDir, TRIPLE, Some(&target));
         assert_eq!(found, Some(nested));
+    }
+
+    /// An absolute `CARGO_TARGET_DIR` made before Cargo ran (`mkdir -p`, so untagged) is
+    /// the target directory even with a tagged one above it, for simjig-build's cache and
+    /// simjig's run directories alike.
+    #[test]
+    fn an_untagged_cargo_target_dir_beats_a_tag_above_it() {
+        let s = Scratch::new("above");
+        let outer = s.0.join("target");
+        tag(&outer);
+        let inner = outer.join("ci");
+        let exe = inner.join("debug/deps/t-0123");
+        fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        let found = target_dir_of(&exe, Made::Binary, TRIPLE, Some(&inner));
+        assert_eq!(found, Some(inner));
     }
 
     /// The tag is looked for no further than the deepest layout reaches.

@@ -67,6 +67,10 @@ git clean -q -fdx -e target -e .pixi
 
 pixi install --locked
 pixi run cargo xtask setup
+# `cargo xtask miri` runs on nightly, which rust-toolchain.toml does not install.
+case "$*" in
+  *miri*) rustup component add --toolchain nightly miri rust-src ;;
+esac
 echo "==> guest: $*" >&2
 "$@"
 GUEST

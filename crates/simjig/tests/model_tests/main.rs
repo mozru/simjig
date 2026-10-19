@@ -33,6 +33,8 @@ simjig::include_dut!(rw_time);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(rw_meta);
 #[cfg(simjig_test_models)]
+simjig::include_dut!(writes_input);
+#[cfg(simjig_test_models)]
 simjig::include_dut!(no_reset);
 #[cfg(simjig_test_models)]
 simjig::include_dut!(no_reset_fast);
@@ -53,6 +55,8 @@ mod init;
 mod messages;
 #[cfg(simjig_test_models)]
 mod sync;
+#[cfg(simjig_test_models)]
+mod walks;
 
 #[cfg(simjig_test_models)]
 use simjig::{Clock, Precision, RawSig, Sim, SimDuration, TimeUnit};

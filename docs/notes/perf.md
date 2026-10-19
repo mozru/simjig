@@ -191,7 +191,9 @@ to 40 ns for C: simjig is 9x off by default, 8x without the hash.
    `public_flat_rw` variable, whose logic runs on every eval; see "Corrections" below.)
 3. **A fast path for quiet timesteps: done** as far as it is provable (phase 1: empty
    ReadWrite round, empty regions, skipped walks; phase 2: a walk after evals alone when
-   only inputs are watched, since Verilator rejects an assignment to an input).
+   only inputs are watched). (Corrected after review: the phase 2 skip assumed Verilator
+   rejects an assignment to an input, but `ASSIGNIN` is a lint a design may waive, and
+   then an eval changes an input; the skip was removed. See "Corrections" below.)
 4. **Wakers and polling: done where it did not change behaviour.** Wakers were already
    static (no allocation). The current kernel is now found through one plain thread-local
    holding its address (`kernel::state::with_entry`, one unsafe block) instead of a

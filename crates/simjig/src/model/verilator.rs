@@ -338,10 +338,6 @@ impl ModelBackend for VerilatorModel {
         self.outcome(status & !MSGS_PENDING)
     }
 
-    fn eval_changes(&self, slot: u32) -> bool {
-        !self.raw.is_input(slot as usize)
-    }
-
     fn direct(&self, slot: u32) -> Option<Direct> {
         self.raw.direct(slot as usize)
     }

@@ -19,6 +19,10 @@ the public API, the generated code or simulation semantics.
   model's scope table and compiles the shim with `SIMJIG_PUBLIC_RW=1`; the C ABI gains the
   feature bit `SIMJIG_FEATURE_PUBLIC_RW` (16). Models without such a variable are
   unchanged.
+- Fix: a trigger on a Verilator model's input (`changed()`, `rising()`, `falling()`) fired
+  half a period late, at the next write, when the design itself changed that input in an
+  eval (possible once its `ASSIGNIN` lint is waived): the value-change walk after an eval
+  was skipped when only inputs were watched. That walk now always runs.
 - simjig-build no longer forces frame pointers in the model's C++ when debug info is on
   (the `cc` crate's default): the platform's default, as `verilated.mk` builds. Each eval of
   a small design is about a tenth cheaper; `CXXFLAGS=-fno-omit-frame-pointer` brings them

@@ -4,7 +4,27 @@ Rust testbenches that drive Verilator models. The testbench owns the loop and si
 time; the model is a library. Types and a typed `Dut` are generated from the
 SystemVerilog, so ports, packed structs, enums and interface bundles are Rust types.
 
-See `ARCHITECTURE.md` for the code map and `docs/architecture/DECISION.md` for the design.
+**Why.** cocotb made testbenches pleasant to write, but it drives the simulator from
+Python through VPI, one callback at a time. simjig keeps cocotb's model (async tasks,
+edge and timer triggers, `ReadOnly`/`ReadWrite` regions, fork/join) and runs it in Rust,
+in the same process as the Verilator model, with no VPI: tests are `cargo test`s,
+deterministic and seeded, and a failure prints a one-line repro.
+
+- **Same semantics as cocotb on Verilator.** The scheduler is checked against recorded
+  cocotb 2.1 runs (`tests/conformance/README.md`, which also lists the known
+  differences); "Coming from cocotb" below maps the API.
+- **Fast.** On the benchmark's FIFO testbench (`bench/README.md`; variant C, 1M cycles,
+  Apple M6), simjig runs a cycle in 298 ns against cocotb's 8 166 ns (27x); a synchronous
+  simjig test (`#[simjig::test(sync)]`) in 42 ns, within 1.2x of a hand-written C++
+  Verilator loop. On a mid-size design, where Verilator's eval dominates, simjig is 7.4x
+  faster than cocotb and 1.2x the C++ loop.
+- **Also:** waves on failure, DPI-C imports in Rust, several DUTs per test with lockstep
+  comparison, `fork()` checkpoints, parameter sweeps, coverage counters, random initial
+  state.
+
+Status: pre-release, not on crates.io; macOS arm64 and Linux aarch64 are tested in CI.
+See `ARCHITECTURE.md` for the code map, `docs/architecture/DECISION.md` for the design and
+`CONTRIBUTING.md` to work on simjig.
 
 ## Quick start
 
@@ -776,7 +796,7 @@ Use one for the inner loop of a block-level test, a long soak with a reference m
 anything that is "drive, tick, check"; use an async test for concurrent drivers and
 monitors, handshakes waited on as events, several clocks, timeouts and regions. On the
 benchmark's FIFO testbench (`bench/`), a synchronous test runs at about 1.2x a hand-written
-C++ Verilator loop (a held model, bound handles); an async one at about 10x.
+C++ Verilator loop (a held model, bound handles); an async one at about 9x.
 
 ## Performance
 simjig's own cost per timestep is small but not zero; most of a simple testbench's time is

@@ -4,6 +4,8 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- Generated code: the `@generated` header of an interface DUT's flat-port wrapper no longer
+  cites an internal design note (snapshots reviewed).
 - **Breaking: triggers are functions.** `Timer::new(d)`, `ReadOnly::new()`,
   `ReadWrite::new()` and `NextTimeStep::new()` are now `timer(d)`, `read_only()`,
   `read_write()` and `next_time_step()`, each `#[track_caller]` and returning the named

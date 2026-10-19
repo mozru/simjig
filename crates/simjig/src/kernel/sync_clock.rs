@@ -144,12 +144,8 @@ impl SyncClock {
 
     fn edge(&mut self, level: u32) {
         let k = &*self.kernel;
-        assert!(
-            k.phase.get() == Phase::Sync,
-            "SyncClock used after its synchronous test ended"
-        );
-        if k.failed() {
-            stop();
+        if k.phase.get() != Phase::Sync || k.failed() {
+            ended(k);
         }
         let t = k
             .now
@@ -175,6 +171,17 @@ impl SyncClock {
             stop();
         }
     }
+}
+
+/// The run ended (a use after it) or failed (a use after the failure was caught).
+#[cold]
+#[track_caller]
+fn ended(k: &Kernel) -> ! {
+    assert!(
+        k.phase.get() == Phase::Sync,
+        "SyncClock used after its synchronous test ended"
+    );
+    stop();
 }
 
 /// Evaluates the model at the start of a synchronous run (t = 0), as an async run's first

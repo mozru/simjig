@@ -298,6 +298,14 @@ impl Models {
         time: SimTime,
     ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
         self.version += 1;
+        if self.held {
+            // A held model runs no Rust code in its eval (no DPI-C import implemented in
+            // Rust, no waves), so nothing can panic there to catch.
+            return match self.backends[0].eval_at(time) {
+                Ok(EvalStatus::Running) => Ok(()),
+                other => Err((0, other)),
+            };
+        }
         for (model, backend) in self.backends.iter_mut().enumerate() {
             panics::forget();
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| backend.eval_at(time)));

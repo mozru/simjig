@@ -318,6 +318,13 @@ impl RawModel {
 
     /// Moves every pending message into `out`, oldest first.
     pub(crate) fn drain(&mut self, out: &mut Vec<OwnedMsg>) {
+        // Nearly every eval prints nothing: ask first (`cap == 0` only counts), which spares
+        // filling the record buffer below on every eval.
+        // SAFETY: `handle` is live; with `cap == 0` the call writes nothing.
+        let pending = unsafe { (self.vt.drain_msgs)(self.handle.as_ptr(), ptr::null_mut(), 0) };
+        if pending == 0 {
+            return;
+        }
         let empty = Msg {
             kind: 0,
             line: 0,
@@ -598,6 +605,9 @@ pub(crate) mod fake {
 
     extern "C" fn drain(_h: *mut Handle, out: *mut Msg, cap: usize) -> usize {
         STATE.with_borrow_mut(|s| {
+            if cap == 0 {
+                return s.pending.len(); // the ABI's count-only call
+            }
             let mut n = 0;
             while n < cap {
                 let Some((kind, text)) = s.pending.pop_front() else {

@@ -467,7 +467,7 @@ simjig_status Runtime::outcome() {
 
 size_t Runtime::drain(simjig_msg* out, size_t cap) noexcept {
     const size_t pending = m_ring.size() + (m_dropped > 0 ? 1 : 0);
-    if (out == nullptr || cap == 0) return pending;
+    if (out == nullptr || cap == 0 || pending == 0) return pending;
     m_drained.clear();
     try {
         m_drained.reserve(std::min(cap, pending));

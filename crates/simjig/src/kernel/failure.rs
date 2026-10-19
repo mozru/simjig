@@ -138,7 +138,7 @@ pub enum FailureKind {
         /// Signals written in the last delta.
         signals: Vec<String>,
     },
-    /// Tasks kept writing and awaiting [`ReadWrite`](crate::ReadWrite), so the timestep
+    /// Tasks kept writing and awaiting [`read_write`](crate::read_write), so the timestep
     /// looped back from the `ReadWrite` region more than the limit allows.
     ReadWriteLimit {
         /// The limit on `ReadWrite` loop-backs in one timestep.
@@ -237,25 +237,25 @@ impl FailureKind {
             Self::TaskPanic { .. } => "the panic message and the stderr backtrace show the cause",
             Self::DeltaLimit { .. } => {
                 "a task re-writes a signal every delta (often in reaction to its own write); \
-                 await an edge or a Timer between writes"
+                 await an edge or a timer() between writes"
             }
             Self::ReadWriteLimit { .. } => {
-                "a listed task writes and awaits ReadWrite in a loop that never settles; stop \
-                 the loop once the value is right, or await an edge, a Timer or NextTimeStep \
-                 between iterations"
+                "a listed task writes and awaits read_write() in a loop that never settles; \
+                 stop the loop once the value is right, or await an edge, a timer() or \
+                 next_time_step() between iterations"
             }
             Self::WriteConflict { .. } => {
                 "only one task may drive a signal per delta; give the signal a single owner \
                  task or serialize the writers with a Lock"
             }
             Self::WriteInReadOnly { .. } => {
-                "ReadOnly and `.read_only()` are for sampling final values; to write right after \
-                 a trigger use `.read_write()` instead, or await a Timer, an edge or \
-                 NextTimeStep before writing"
+                "`read_only()` and `.read_only()` are for sampling final values; to write right \
+                 after a trigger use `.read_write()` instead, or await a timer(), an edge or \
+                 next_time_step() before writing"
             }
             Self::Starved { .. } => {
-                "start a clock; for a combinational design, await a Timer after each set \
-                 (`Timer::new(ns(1)).await`); or check that the awaited signal is driven"
+                "start a clock; for a combinational design, await a timer() after each set \
+                 (`timer(ns(1)).await`); or check that the awaited signal is driven"
             }
             Self::Deadlock { .. } => {
                 "each listed task waits on another; check lock order and that events are set"

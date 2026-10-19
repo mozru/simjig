@@ -292,10 +292,10 @@ Each with the reason; all are deliberate:
   combinator drops it (a timeout, or losing a `first!`), because dropping a `Task` cancels
   it. cocotb keeps a Task operand running ("the callee continues to run"). To keep it
   running, pass `&mut task`, which matches cocotb byte for byte (scenario `r5_task_operand`; `cancel::a_task_operand_by_value_is_cancelled_and_by_reference_keeps_running`).
-- **`Timer` of zero ticks** is rejected when it is first **awaited** (a `TaskPanic` naming
-  the line that built it); cocotb raises `ValueError` when `Timer(0)` is **built**.
-  `Timer::new` is a `const fn`, which can neither report a run failure nor put the call
-  site in the message, and a `Timer` may be built before the run starts
+- **A timer of zero ticks** is rejected when it is first **awaited** (a `TaskPanic` naming
+  the line that made it); cocotb raises `ValueError` when `Timer(0)` is **built**.
+  `timer` is a `const fn`, which can neither report a run failure nor put the call
+  site in the message, and a timer may be made before the run starts
   (`phases::trigger_misuse_points_at_the_line_that_made_the_trigger`).
 - **Cancellation cleanup runs when the operand is cancelled.** simjig cancels by dropping
   the operand's future, at the moment cocotb deregisters a waiting helper; its `Drop`

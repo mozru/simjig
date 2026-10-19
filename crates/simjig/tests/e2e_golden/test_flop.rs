@@ -1,6 +1,6 @@
 //! `tests/conformance/tb/test_flop.py`.
 
-use simjig::{ReadOnly, ReadWrite, Timer, ns, with_timeout};
+use simjig::{ns, read_only, read_write, timer, with_timeout};
 
 use crate::conflog::{Log, Probe};
 use crate::flop::Dut;
@@ -48,7 +48,7 @@ async fn readonly_read(dut: Dut) {
         p.write(&dut.d, v);
         p.wait(dut.clk.rising(), "RisingEdge(clk)").await;
         p.read(&[&dut.d, &dut.q]);
-        p.wait(ReadOnly::new(), "ReadOnly").await;
+        p.wait(read_only(), "ReadOnly").await;
         p.read(&[&dut.clk, &dut.d, &dut.q]);
         p.wait(dut.clk.falling(), "FallingEdge(clk)").await;
     }
@@ -66,17 +66,17 @@ async fn write_after_edge(dut: Dut) {
     p.read(&[&d, &q]);
     p.write(&d, 1);
     p.read(&[&d, &q]);
-    p.wait(ReadWrite::new(), "ReadWrite").await;
+    p.wait(read_write(), "ReadWrite").await;
     p.read(&[&d, &q]);
-    p.wait(ReadOnly::new(), "ReadOnly").await;
+    p.wait(read_only(), "ReadOnly").await;
     p.read(&[&d, &q]);
-    p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+    p.wait(timer(ns(1)), "Timer(1ns)").await;
     p.read(&[&d, &q]);
     p.wait(dut.clk.rising(), "RisingEdge(clk)").await;
     p.read(&[&d, &q]);
     p.write(&d, 0);
     p.write(&d, 1);
-    p.wait(ReadOnly::new(), "ReadOnly").await;
+    p.wait(read_only(), "ReadOnly").await;
     p.read(&[&d, &q]);
     p.wait(dut.clk.rising(), "RisingEdge(clk)").await;
     p.read(&[&d, &q]);

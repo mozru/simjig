@@ -3,8 +3,8 @@
 //! cannot share a simulation.
 
 use simjig::{
-    DutModel, Failure, FakeModel, LoadedModel, Lockstep, ModelOptions, Precision, RawSig, ReadOnly,
-    Seed, SeedSource, Sim, Timer, ns,
+    DutModel, Failure, FakeModel, LoadedModel, Lockstep, ModelOptions, Precision, RawSig, Seed,
+    SeedSource, Sim, ns, read_only, timer,
 };
 use simjig_bits::Bit;
 
@@ -65,9 +65,9 @@ async fn a_rust_model_runs_in_lockstep_with_the_rtl(rtl: inv::Dut, model: RefInv
     for a in [false, true, true, false] {
         rtl.a.set(a);
         model.a.write_u64(u64::from(a));
-        ReadOnly::new().await;
+        read_only().await;
         lockstep.step();
-        Timer::new(ns(1)).await;
+        timer(ns(1)).await;
     }
     assert_eq!(lockstep.cycle(), 4);
 }

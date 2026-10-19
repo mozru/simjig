@@ -1,7 +1,7 @@
 //! `struct_pipe`: the generated packed struct `Beat` and enum `Op`, typed comparisons, and
 //! the field-by-field diff a mismatch reports.
 
-use simjig::{ReadOnly, clock, ns};
+use simjig::{clock, ns, read_only};
 use simjig_bits::{Bit, Bits};
 
 use crate::struct_pipe::{Beat, Dut, Op, OpVariant};
@@ -40,7 +40,7 @@ async fn run(dut: Dut, operand: u128, beats: &[Beat]) -> Vec<Beat> {
             dut.in_valid.set(0);
         }
         dut.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         if dut.out_valid.get() == Bit::ONE {
             out.push(dut.out_beat.get());
         }

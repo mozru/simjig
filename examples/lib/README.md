@@ -33,7 +33,7 @@ Every testbench here has the same parts:
   runs in every test, directed or random, so each is checked the same way; the test reads
   the model (an `Rc<RefCell<..>>`) at the end for its coverage counts. The test body and
   the monitor wake on the same edge in either order, so a body that reads the monitor's
-  log right after its own last `drive(..).await` awaits `ReadOnly::new()` first, or it
+  log right after its own last `drive(..).await` awaits `read_only()` first, or it
   misses that edge's sample.
 - **Seeded random stimulus.** Each driver draws from its own stream
   (`ctx.rng("producer")`), so a failure replays from the report's seed, and changing one

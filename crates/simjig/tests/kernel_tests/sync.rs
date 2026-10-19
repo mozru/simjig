@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simjig::{Event, Lock, Queue, Timer, first, now, spawn};
+use simjig::{Event, Lock, Queue, first, now, spawn, timer};
 
 use super::{assert_clean, dut, ticks};
 
@@ -25,7 +25,7 @@ fn event_wakes_all_waiters_in_wait_order_and_a_set_event_resumes_after_the_ready
                     t.borrow_mut().push(format!("{name} at {}", now().ticks()));
                 }));
             }
-            Timer::new(ticks(4)).await;
+            timer(ticks(4)).await;
             e.set();
             e.clear(); // woken waiters still resume
             for w in waiters {
@@ -64,10 +64,10 @@ fn lock_is_granted_in_arrival_order_and_passed_on_by_a_cancelled_waiter() {
                 tasks.push(spawn(name, async move {
                     let _g = lock.lock().await;
                     t.borrow_mut().push(format!("{name} at {}", now().ticks()));
-                    Timer::new(ticks(2)).await;
+                    timer(ticks(2)).await;
                 }));
             }
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             assert!(lock.try_lock().is_none());
             // Release and cancel `a` (the next in line) in the same delta: `a` is granted
             // the lock but never resumes, so it must hand it to `b`.
@@ -124,7 +124,7 @@ fn queue_applies_back_pressure_and_keeps_fifo_order() {
                 }
             });
             for _ in 0..5 {
-                Timer::new(ticks(10)).await;
+                timer(ticks(10)).await;
                 let v = q.get().await;
                 t.borrow_mut().push(format!("got {v} at {}", now().ticks()));
             }
@@ -157,7 +157,7 @@ fn a_get_that_loses_a_race_loses_no_item() {
         let q = Queue::new("q", 1);
         let qp = q.clone();
         let _producer = spawn("producer", async move {
-            Timer::new(ticks(5)).await;
+            timer(ticks(5)).await;
             qp.put(7).await;
         });
         // The timeout wins at 5 (timers run first), dropping the pending get.
@@ -167,11 +167,11 @@ fn a_get_that_loses_a_race_loses_no_item() {
                 Some(v)
             },
             async {
-                Timer::new(ticks(5)).await;
+                timer(ticks(5)).await;
                 None
             },
         );
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         (first_try, q.try_get())
     });
     assert_eq!(out.unwrap(), (None, Some(7)));
@@ -196,11 +196,11 @@ fn a_get_that_finds_an_item_takes_it_ahead_of_a_woken_getter() {
                     t.borrow_mut().push(format!("{name} got {v}"));
                 }));
             }
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             q.try_put(1).unwrap(); // wakes ga
             let v = q.get().await; // runs before ga
             t.borrow_mut().push(format!("main got {v}"));
-            Timer::new(ticks(1)).await; // ga found the queue empty and waits behind gc
+            timer(ticks(1)).await; // ga found the queue empty and waits behind gc
             q.try_put(2).unwrap();
             q.try_put(3).unwrap();
             for g in getters {
@@ -227,11 +227,11 @@ fn a_put_that_finds_room_fills_it_ahead_of_a_woken_putter() {
                 let q = q.clone();
                 putters.push(spawn(name, async move { q.put(v).await }));
             }
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             let mut got = vec![q.try_get().unwrap()]; // wakes pa
             q.put(13).await; // runs before pa
             for _ in 0..3 {
-                Timer::new(ticks(1)).await;
+                timer(ticks(1)).await;
                 got.push(q.try_get().unwrap());
             }
             t.borrow_mut().extend(got.iter().map(ToString::to_string));
@@ -280,11 +280,11 @@ fn a_queue_wake_of_a_cancelled_first_loser_goes_to_the_next_getter() {
         let (ev, q) = (Event::new("ev"), Queue::new("q", 1));
         let (qn, qp, set) = (q.clone(), q.clone(), ev.clone());
         let next = spawn("next", async move {
-            Timer::new(ticks(1)).await; // waits behind the loser
+            timer(ticks(1)).await; // waits behind the loser
             qn.get().await
         });
         let _x = spawn("x", async move {
-            Timer::new(ticks(2)).await;
+            timer(ticks(2)).await;
             set.set(); // wakes the deciding operand first
             qp.try_put(7).unwrap(); // then the getter that will lose
         });

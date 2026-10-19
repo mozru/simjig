@@ -6,6 +6,6 @@ FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [DeltaLimit sig=544
   message:  the timestep did not settle within 64 evals
   limit:    64 evals in one timestep
   signals:  top.a, top.b
-  help:     a task re-writes a signal every delta (often in reaction to its own write); await an edge or a Timer between writes
+  help:     a task re-writes a signal every delta (often in reaction to its own write); await an edge or a timer() between writes
   repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'
   waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'

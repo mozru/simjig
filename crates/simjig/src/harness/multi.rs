@@ -194,7 +194,7 @@ type Check = Box<dyn Fn() -> Option<FieldDiff>>;
 ///     en.set(1);
 ///     for _ in 0..100 {
 ///         old.clk.rising().await;
-///         ReadOnly::new().await;
+///         read_only().await;
 ///         lockstep.step(); // panics at the first divergent cycle
 ///     }
 /// }

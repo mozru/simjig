@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use simjig::fork::{self, ForkHook};
 use simjig::{
-    DutModel, ModelOptions, ReadOnly, Seed, SeedSource, SimTime, TraceKind, TraceOptions, clock,
-    now, ns,
+    DutModel, ModelOptions, Seed, SeedSource, SimTime, TraceKind, TraceOptions, clock, now, ns,
+    read_only,
 };
 
 use crate::fst;
@@ -72,7 +72,7 @@ fn a_traced_model_forked_into_two_branches_writes_one_fst_per_process() {
                 for _ in 0..3 + 5 * branch.index() {
                     dut.clk.rising().await;
                 }
-                ReadOnly::new().await;
+                read_only().await;
                 Ok(now())
             })
             .await

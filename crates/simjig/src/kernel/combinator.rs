@@ -318,11 +318,11 @@ fn poll_as(k: &Kernel, h: Key, op: &mut dyn Operand) -> bool {
 /// after the tasks already ready then (see the module docs of `kernel::combinator`).
 ///
 /// ```
-/// # use simjig::{FakeModel, Precision, Sim, SimDuration, Timer, join};
+/// # use simjig::{FakeModel, Precision, Sim, SimDuration, join, timer};
 /// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
 /// let out = sim.run(async {
 ///     join!(
-///         async { Timer::new(SimDuration::from_ticks(2)).await; 'a' },
+///         async { timer(SimDuration::from_ticks(2)).await; 'a' },
 ///         async { 7 },
 ///     )
 /// });
@@ -347,12 +347,12 @@ macro_rules! join {
 /// `kernel::combinator`).
 ///
 /// ```
-/// # use simjig::{FakeModel, Precision, Sim, SimDuration, Timer, first};
+/// # use simjig::{FakeModel, Precision, Sim, SimDuration, first, timer};
 /// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
 /// let out = sim.run(async {
 ///     first!(
-///         async { Timer::new(SimDuration::from_ticks(5)).await; "slow" },
-///         async { Timer::new(SimDuration::from_ticks(2)).await; "fast" },
+///         async { timer(SimDuration::from_ticks(5)).await; "slow" },
+///         async { timer(SimDuration::from_ticks(2)).await; "fast" },
 ///     )
 /// });
 /// assert_eq!(out.unwrap(), "fast");
@@ -363,7 +363,7 @@ macro_rules! join {
 /// variant of a small enum of your own and `match` on the result:
 ///
 /// ```
-/// # use simjig::{FakeModel, Precision, Sim, SimDuration, Timer, first};
+/// # use simjig::{FakeModel, Precision, Sim, SimDuration, first, timer};
 /// enum Won {
 ///     Done(u32),
 ///     TimedOut,
@@ -371,8 +371,8 @@ macro_rules! join {
 /// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
 /// let out = sim.run(async {
 ///     match first!(
-///         async { Timer::new(SimDuration::from_ticks(2)).await; Won::Done(7) },
-///         async { Timer::new(SimDuration::from_ticks(500)).await; Won::TimedOut },
+///         async { timer(SimDuration::from_ticks(2)).await; Won::Done(7) },
+///         async { timer(SimDuration::from_ticks(500)).await; Won::TimedOut },
 ///     ) {
 ///         Won::Done(n) => n,
 ///         Won::TimedOut => panic!("done within 500 ns"),

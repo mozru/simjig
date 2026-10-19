@@ -259,7 +259,7 @@ async fn cycle<T: Value, C: Vector>(fifo: Fifo<T, C>, push: Option<T>, pop: bool
     }
     fifo.pop.set(pop);
     fifo.clk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
     fifo.sample()
 }
 
@@ -310,7 +310,7 @@ async fn drain<T: Value, C: Vector>(fifo: Fifo<T, C>) {
     }
     fifo.pop.set(0);
     fifo.clk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
 }
 
 /// Producer and consumer for `cycles` cycles, then a drain (at most 1 us).
@@ -405,7 +405,7 @@ async fn reset_when_busy<T: Value, C: Vector>(
         .expect("the FIFO holds entries with both pointers moved within 5 us");
     fifo.rst.set(1);
     fifo.clk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
     let after = fifo.sample();
     fifo.clk.falling().await;
     fifo.rst.set(0);
@@ -432,7 +432,7 @@ async fn reset_beats_push_and_pop<T: Value, C: Vector>(fifo: Fifo<T, C>, entries
     fifo.wr.set(d);
     fifo.pop.set(1);
     fifo.clk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
     let after = fifo.sample();
     assert_eq!(
         (after.count, after.empty, after.full),

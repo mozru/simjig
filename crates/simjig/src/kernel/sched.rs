@@ -486,7 +486,7 @@ mod tests {
     use super::super::failure::FailureKind;
     use super::super::sim::Sim;
     use super::super::time::{Precision, SimDuration};
-    use super::super::trigger::Timer;
+    use super::super::trigger::timer;
     use super::*;
 
     /// A model with no signals whose first eval reports a panicking DPI-C import.
@@ -581,7 +581,7 @@ mod tests {
         .or_invariant("a clock");
         // Edges at 0, 5, .., 95, and the Timer's own timestep at 99.
         let edges = 20;
-        sim.run(Timer::new(SimDuration::from_ticks(99)))
+        sim.run(timer(SimDuration::from_ticks(99)))
             .or_invariant("the run passes");
         let stats = sim.stats();
         assert_eq!(stats.steps, edges + 1);
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn a_dpi_panic_is_its_own_failure_kind() {
         let mut sim = Sim::from_backend(Box::new(DpiPanics));
-        let f = sim.run(Timer::new(SimDuration::from_ticks(1))).unwrap_err();
+        let f = sim.run(timer(SimDuration::from_ticks(1))).unwrap_err();
         assert_eq!(
             f.kind,
             FailureKind::DpiPanic {

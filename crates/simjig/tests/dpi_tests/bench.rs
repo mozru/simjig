@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use simjig::Timer;
+use simjig::timer;
 
 use super::{TICK, dpi, sim};
 
@@ -41,11 +41,11 @@ fn measure_dpi_call_cost() {
             for _ in 0..N {
                 let t = Instant::now();
                 dut.clk.set(true);
-                Timer::new(TICK).await;
+                timer(TICK).await;
                 rise += t.elapsed().as_secs_f64();
                 let t = Instant::now();
                 dut.clk.set(false);
-                Timer::new(TICK).await;
+                timer(TICK).await;
                 fall += t.elapsed().as_secs_f64();
             }
             (rise, fall)

@@ -9,7 +9,7 @@ async fn the_flop_captures_the_inverted_input(inv: inv::Dut, flop: flop::Dut) {
     reset(&flop).await;
     for a in [false, true, false] {
         inv.a.set(a);
-        Timer::new(ns(1)).await;
+        timer(ns(1)).await;
         flop.d.set(inv.y.get());
         flop.clk.rising().read_write().await;
         assert_eq!(flop.q.get(), Bit::from(!a));

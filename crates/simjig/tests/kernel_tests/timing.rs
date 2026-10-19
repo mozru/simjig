@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use simjig::{
-    Clock, DELTA_MAX, FailureKind, FakeModel, FakeSig, FakeState, Precision, ReadOnly, Sim,
-    SimTime, Timer, TraceKind, changed, now, rising,
+    Clock, DELTA_MAX, FailureKind, FakeModel, FakeSig, FakeState, Precision, Sim, SimTime,
+    TraceKind, changed, now, read_only, rising, timer,
 };
 
 use super::ticks;
@@ -51,9 +51,9 @@ fn a_timer_resumes_before_the_designs_event_at_the_same_time() {
     let mut sim = Sim::from_fake(m);
     let x = sim.signal("x").unwrap();
     let seen = sim.run(async move {
-        Timer::new(ticks(10)).await;
+        timer(ticks(10)).await;
         let at_timer = x.read_u64();
-        ReadOnly::new().await;
+        read_only().await;
         (at_timer, x.read_u64())
     });
     assert_eq!(seen.unwrap(), (0, 1));
@@ -68,8 +68,8 @@ fn design_slots_kernel_clock_and_timers_interleave_without_a_missed_slot() {
     sim.add_clock(Clock::new(clk, ticks(14))).unwrap();
     let seen = sim
         .run(async move {
-            Timer::new(ticks(33)).await;
-            Timer::new(ticks(67)).await; // 100
+            timer(ticks(33)).await;
+            timer(ticks(67)).await; // 100
             (now(), counted.read_u64())
         })
         .unwrap();
@@ -95,7 +95,7 @@ fn two_timed_models_and_a_kernel_clock_share_one_timeline() {
     sim.add_clock(Clock::new(clk, ticks(8))).unwrap();
     let seen = sim
         .run(async move {
-            Timer::new(ticks(31)).await;
+            timer(ticks(31)).await;
             (n0.read_u64(), n1.read_u64())
         })
         .unwrap();
@@ -165,7 +165,7 @@ fn a_zero_delay_loop_hits_the_delta_limit() {
     let x = m.signal("x", 1);
     m.at(SimTime(4), move |s| again(x, s));
     let mut sim = Sim::from_fake(m);
-    let f = sim.run(Timer::new(ticks(10))).unwrap_err();
+    let f = sim.run(timer(ticks(10))).unwrap_err();
     assert_eq!(f.time, SimTime(4));
     assert!(
         matches!(f.kind, FailureKind::DeltaLimit { limit, .. } if limit == DELTA_MAX),
@@ -181,7 +181,7 @@ fn an_event_scheduled_in_the_past_is_a_model_failure() {
         s.schedule(SimTime(2), move |s| s.set(x, 1));
     });
     let mut sim = Sim::from_fake(m);
-    let f = sim.run(Timer::new(ticks(10))).unwrap_err();
+    let f = sim.run(timer(ticks(10))).unwrap_err();
     assert_eq!(f.time, SimTime(5));
     let FailureKind::ModelFatal { message } = &f.kind else {
         panic!("{f}")
@@ -200,8 +200,8 @@ fn log_prefix_names_the_time_in_units_and_the_task() {
     let (shown, prefix, main_prefix) = sim
         .run(async {
             let task = simjig::spawn("monitor", async {
-                Timer::new(simjig::ns(1)).await;
-                Timer::new(simjig::SimDuration::from_ticks(250)).await;
+                timer(simjig::ns(1)).await;
+                timer(simjig::SimDuration::from_ticks(250)).await;
                 simjig::tb_log!("from the task");
                 (
                     simjig::now_display().to_string(),

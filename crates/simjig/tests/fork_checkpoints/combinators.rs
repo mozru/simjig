@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use simjig::fork::{self, ForkError};
-use simjig::{Event, Lock, ReadOnly, TestCtx, Timer, clock, now, ns, spawn, with_timeout};
+use simjig::{Event, Lock, TestCtx, clock, now, ns, read_only, spawn, timer, with_timeout};
 
 use crate::counter;
 
@@ -36,7 +36,7 @@ async fn seam_body(dut: counter::Dut, extra: u32) -> Vec<String> {
             1u32
         },
         async {
-            Timer::new(ns(1)).await;
+            timer(ns(1)).await;
             2u32
         }
     );
@@ -58,7 +58,7 @@ async fn seam_body(dut: counter::Dut, extra: u32) -> Vec<String> {
                 for _ in 0..extra {
                     dut.clk.rising().await;
                 }
-                ReadOnly::new().await;
+                read_only().await;
                 dut.count.get().to_u128()
             },
             async {
@@ -182,13 +182,13 @@ async fn a_fork_whose_first_sibling_wins_in_the_child(ctx: &TestCtx, dut: counte
     let pid = std::process::id();
     let r = simjig::first!(
         async {
-            Timer::new(ns(10)).await;
+            timer(ns(10)).await;
             None
         },
         async {
             Some(
                 fork::run_from_checkpoint(seed, 1, |_| async move {
-                    Timer::new(ns(50)).await;
+                    timer(ns(50)).await;
                     Ok(())
                 })
                 .await,
@@ -208,7 +208,7 @@ async fn a_branch_whose_fork_future_is_dropped_ends_the_child(ctx: &TestCtx, dut
     warm_up(dut).await;
     let pid = std::process::id();
     let mut fork = Box::pin(fork::run_from_checkpoint(ctx.seed(), 1, |_| async move {
-        Timer::new(ns(50)).await;
+        timer(ns(50)).await;
         Ok(())
     }));
     // The parent's first poll returns the outcomes; the child's is pending on the timer.

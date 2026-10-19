@@ -48,9 +48,9 @@ pub(crate) const TICK: simjig::SimDuration = simjig::SimDuration::from_ticks(1);
 pub(crate) async fn cycles(clk: simjig::__private::In<simjig_bits::Bit>, n: u32) {
     for _ in 0..n {
         clk.set(true);
-        simjig::Timer::new(TICK).await;
+        simjig::timer(TICK).await;
         clk.set(false);
-        simjig::Timer::new(TICK).await;
+        simjig::timer(TICK).await;
     }
 }
 #[cfg(all(unix, simjig_test_models))]

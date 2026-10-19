@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use simjig::{ReadOnly, clock, ns};
+use simjig::{clock, ns, read_only};
 
 use crate::counter_fst::Dut;
 use crate::fst;
@@ -22,7 +22,7 @@ async fn the_counter_misses_its_target(dut: Dut) {
     for _ in 0..40 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.count.get().to_u128(), 41, "off by one");
 }
 

@@ -7,7 +7,7 @@ The smallest simjig project. Copy this directory to start your own.
 | `rtl/inv.sv`, `rtl/flop.sv` | the designs |
 | `build.rs` | one `simjig_build::Dut` per design: verilate, generate bindings, link; the flop with `.trace_fst(true)` for waves |
 | `src/lib.rs` | the testbench library: `pub use simjig::prelude::*;`, one `simjig::include_dut!` per design, and the shared `reset` helper |
-| `tests/inv.rs` | a combinational test: `set`, `Timer`, `get` |
+| `tests/inv.rs` | a combinational test: `set`, `timer`, `get` |
 | `tests/flop.rs` | a clocked test: `clock`, and `rising().read_write()` to check what an edge produced |
 | `tests/inv_flop.rs` | two DUTs in one test, the inverter feeding the flop |
 | `.config/nextest.toml` | a wall-clock timeout for hung tests (`slow-timeout`, `terminate-after`) |

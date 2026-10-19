@@ -9,8 +9,8 @@
 //! suite against the real Verilator models.
 
 use simjig::{
-    Clock, FakeModel, Precision, RawSig, ReadOnly, ReadWrite, Sim, SimDuration, TimeUnit, Timer,
-    changed, cycles, falling, first, join, ns, rising, spawn, with_timeout,
+    Clock, FakeModel, Precision, RawSig, Sim, SimDuration, TimeUnit, changed, cycles, falling,
+    first, join, ns, read_only, read_write, rising, spawn, with_timeout,
 };
 
 use super::conflog::Log;
@@ -140,7 +140,7 @@ fn readonly_read() {
                 p.write(d, v);
                 p.wait(rising(clk), "RisingEdge(clk)").await;
                 p.read(&[d, q]);
-                p.wait(ReadOnly::new(), "ReadOnly").await;
+                p.wait(read_only(), "ReadOnly").await;
                 p.read(&[clk, d, q]);
                 p.wait(falling(clk), "FallingEdge(clk)").await;
             }
@@ -162,17 +162,17 @@ fn write_after_edge() {
         p.read(&[d, q]);
         p.write(d, 1);
         p.read(&[d, q]);
-        p.wait(ReadWrite::new(), "ReadWrite").await;
+        p.wait(read_write(), "ReadWrite").await;
         p.read(&[d, q]);
-        p.wait(ReadOnly::new(), "ReadOnly").await;
+        p.wait(read_only(), "ReadOnly").await;
         p.read(&[d, q]);
-        p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+        p.wait(simjig::timer(ns(1)), "Timer(1ns)").await;
         p.read(&[d, q]);
         p.wait(rising(clk), "RisingEdge(clk)").await;
         p.read(&[d, q]);
         p.write(d, 0);
         p.write(d, 1);
-        p.wait(ReadOnly::new(), "ReadOnly").await;
+        p.wait(read_only(), "ReadOnly").await;
         p.read(&[d, q]);
         p.wait(rising(clk), "RisingEdge(clk)").await;
         p.read(&[d, q]);
@@ -234,13 +234,13 @@ fn timer() {
         async move {
             counter_start(&mut p, sigs).await;
             for delay in [3, 2, 7, 3, 10, 10] {
-                p.wait(Timer::new(ns(delay)), &format!("Timer({delay}ns)"))
+                p.wait(simjig::timer(ns(delay)), &format!("Timer({delay}ns)"))
                     .await;
                 p.read(&[clk, count]);
-                p.wait(ReadOnly::new(), "ReadOnly").await;
+                p.wait(read_only(), "ReadOnly").await;
                 p.read(&[clk, count]);
             }
-            p.wait(Timer::new(SimDuration::from_ticks(1)), "Timer(1step)")
+            p.wait(simjig::timer(SimDuration::from_ticks(1)), "Timer(1step)")
                 .await;
             p.read(&[clk, count]);
         },
@@ -304,7 +304,7 @@ fn value_change() {
             }
             p.wait(falling(clk), "FallingEdge(clk)").await;
             p.write(en, 0);
-            p.wait(Timer::new(ns(20)), "Timer(20ns)").await;
+            p.wait(simjig::timer(ns(20)), "Timer(20ns)").await;
             p.write(en, 1);
             p.wait(changed(count), "ValueChange(count)").await;
             p.read(&[clk, count]);
@@ -333,7 +333,7 @@ fn first_combine() {
                         "RisingEdge(clk)".to_owned()
                     },
                     async move {
-                        Timer::new(ns(t)).await;
+                        simjig::timer(ns(t)).await;
                         format!("Timer({t}ns)")
                     },
                 );
@@ -342,11 +342,14 @@ fn first_combine() {
                 p.read(&[clk, count]);
             }
             let label = "Combine(ClockCycles(clk,2),Timer(13ns))";
-            p.wait(async { join!(cycles(clk, 2), Timer::new(ns(13))) }, label)
-                .await;
+            p.wait(
+                async { join!(cycles(clk, 2), simjig::timer(ns(13))) },
+                label,
+            )
+            .await;
             p.read(&[clk, count]);
             let label = "Combine(RisingEdge(clk),Timer(1ns))";
-            p.wait(async { join!(rising(clk), Timer::new(ns(1))) }, label)
+            p.wait(async { join!(rising(clk), simjig::timer(ns(1))) }, label)
                 .await;
             p.read(&[clk, count]);
         },
@@ -386,7 +389,7 @@ fn comb_settle() {
         async move {
             p.write(a, 0);
             p.write(b, 0);
-            p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+            p.wait(simjig::timer(ns(1)), "Timer(1ns)").await;
             p.read(&[a, b, y, y_eq]);
             let watcher = spawn("y_watch", async move {
                 for _ in 0..3 {
@@ -398,17 +401,17 @@ fn comb_settle() {
                 p.write(a, va);
                 p.write(b, vb);
                 p.read(&[a, y]);
-                p.wait(ReadWrite::new(), "ReadWrite").await;
+                p.wait(read_write(), "ReadWrite").await;
                 p.read(&[a, y]);
-                p.wait(ReadOnly::new(), "ReadOnly").await;
+                p.wait(read_only(), "ReadOnly").await;
                 p.read(&[a, b, y, y_eq, s1, s2, s3]);
-                p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+                p.wait(simjig::timer(ns(1)), "Timer(1ns)").await;
                 p.read(&[a, y]);
             }
-            p.wait(ReadWrite::new(), "ReadWrite").await;
+            p.wait(read_write(), "ReadWrite").await;
             p.write(a, 0x01);
             p.read(&[a, y]);
-            p.wait(ReadOnly::new(), "ReadOnly").await;
+            p.wait(read_only(), "ReadOnly").await;
             p.read(&[a, y]);
             watcher.await;
         },
@@ -463,7 +466,7 @@ fn derived_edge() {
             for _ in 0..3 {
                 p.wait(rising(div), "RisingEdge(div_clk)").await;
                 p.read(&[clk, div, fast, slow]);
-                p.wait(ReadOnly::new(), "ReadOnly").await;
+                p.wait(read_only(), "ReadOnly").await;
                 p.read(&[div, fast, slow]);
             }
             t.await;

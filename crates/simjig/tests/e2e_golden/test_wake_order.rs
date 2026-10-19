@@ -1,7 +1,7 @@
 //! `tests/conformance/tb/test_wake_order.py`: the order in which one timestep's value
 //! changes wake tasks, and when `first!`, `join!` and `with_timeout` resume their caller.
 
-use simjig::{Event, In, RawSig, Timer, changed, cycles, first, join, ns, spawn, with_timeout};
+use simjig::{Event, In, RawSig, changed, cycles, first, join, ns, spawn, timer, with_timeout};
 use simjig_bits::Bit;
 
 use crate::conflog::{Log, Probe};
@@ -35,7 +35,7 @@ async fn coincident_join(dut: crate::async_fifo::Dut) {
         seen(&pr);
         pr.wait(dut.wclk.rising(), "RisingEdge(wclk)").await; // 55 ns
         seen(&pr);
-        pr.wait(Timer::new(ns(11)), "Timer(11ns)").await; // 66 ns
+        pr.wait(timer(ns(11)), "Timer(11ns)").await; // 66 ns
         seen(&pr);
         pr.wait(dut.rclk.rising(), "RisingEdge(rclk)").await; // 75 ns
         seen(&pr);
@@ -59,10 +59,10 @@ async fn coincident_join(dut: crate::async_fifo::Dut) {
         }
     };
     let tr = spawn("r_task", r_task);
-    p.wait(Timer::new(ns(10)), "Timer(10ns)").await;
+    p.wait(timer(ns(10)), "Timer(10ns)").await;
     let tw = spawn("w_task", w_task);
     let tz = spawn("z_task", z_task);
-    p.wait(Timer::new(ns(50)), "Timer(50ns)").await;
+    p.wait(timer(ns(50)), "Timer(50ns)").await;
     let tq = spawn("q_task", q_task);
     tr.await;
     tw.await;
@@ -88,7 +88,7 @@ async fn join_on(
     let seen = move |probe: &Probe| probe.read(&[&dut.a, &dut.b, &dut.y, &dut.y_eq]);
     p.write(&dut.a, 0);
     p.write(&dut.b, 0);
-    p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+    p.wait(timer(ns(1)), "Timer(1ns)").await;
 
     let set = ev.clone();
     let a_task = async move {
@@ -113,8 +113,7 @@ async fn join_on(
     let tz = spawn("z_task", z_task);
     for (i, (a, b)) in steps.into_iter().enumerate() {
         let delay = if i == 0 { 1 } else { 2 };
-        p.wait(Timer::new(ns(delay)), &format!("Timer({delay}ns)"))
-            .await;
+        p.wait(timer(ns(delay)), &format!("Timer({delay}ns)")).await;
         p.write(&dut.a, a);
         if let Some(b) = b {
             p.write(&dut.b, b);
@@ -214,7 +213,7 @@ async fn edge_kinds(dut: crate::counter::Dut) {
     let tv = spawn("vc_task", vc_task);
     let te = spawn("edge_task", edge_task);
     let tz = spawn("z_task", z_task);
-    p.wait(Timer::new(ns(31)), "Timer(31ns)").await; // 41 ns
+    p.wait(timer(ns(31)), "Timer(31ns)").await; // 41 ns
     let tc = spawn("cycles_task", cycles_task);
     tv.await;
     te.await;
@@ -229,12 +228,12 @@ const TIMEOUT: &str = "with_timeout(RisingEdge(clk),100ns)";
 
 /// `First(RisingEdge(clk), Timer(100, "ns"))`.
 async fn first_edge(clk: In<Bit>) {
-    first!(clk.rising(), Timer::new(ns(100)));
+    first!(clk.rising(), timer(ns(100)));
 }
 
 /// `Combine(RisingEdge(clk), Timer(1, "ns"))`.
 async fn combine_edge(clk: In<Bit>) {
-    join!(clk.rising(), Timer::new(ns(1)));
+    join!(clk.rising(), timer(ns(1)));
 }
 
 /// `with_timeout(RisingEdge(clk), 100, "ns")`.

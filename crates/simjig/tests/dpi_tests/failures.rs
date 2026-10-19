@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use simjig::{Failure, FailureKind, Timer};
+use simjig::{Failure, FailureKind, timer};
 
 use super::{TICK, cycles, dpi, sim};
 
@@ -47,9 +47,9 @@ fn a_panic_fails_the_run_and_poisons_the_model() {
     let failure = sim
         .run(async move {
             dut.a.set(1);
-            Timer::new(TICK).await;
+            timer(TICK).await;
             dut.a.set(7);
-            Timer::new(TICK).await;
+            timer(TICK).await;
             cycles(dut.clk, 3).await;
         })
         .unwrap_err();
@@ -85,7 +85,7 @@ async fn a_panic_in_a_harness_test_is_the_failure_report(dut: dpi::Dut) {
         calls: Rc::new(Cell::new(0)),
     });
     dut.a.set(7);
-    Timer::new(TICK).await;
+    timer(TICK).await;
     panic!("not reached: the run fails at the eval");
 }
 
@@ -168,7 +168,7 @@ fn awaiting_a_timer_inside_a_dpi_call_fails_with_the_rule() {
     let message = misuse(|_| {
         Box::new(|| {
             // What an `.await` does first: poll the timer once.
-            let mut timer = std::pin::pin!(Timer::new(TICK));
+            let mut timer = std::pin::pin!(timer(TICK));
             let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
             let _poll = timer.as_mut().poll(&mut cx);
         })
@@ -208,7 +208,7 @@ pub(crate) fn mask_prefixes(text: &str) -> String {
 #[test]
 fn a_missing_implementation_is_a_setup_failure_that_says_how_to_register_one() {
     let (mut sim, _dut) = sim::<dpi::Dut>();
-    let failure = sim.run(async move { Timer::new(TICK).await }).unwrap_err();
+    let failure = sim.run(async move { timer(TICK).await }).unwrap_err();
     assert_eq!(failure.kind.name(), "Setup");
     assert!(failure.message.contains("DUT `dpi`"), "{failure}");
     assert!(
@@ -224,7 +224,7 @@ fn two_instances_of_one_dpi_build_fail_with_the_workaround() {
     a.set_dpi(Picky {
         calls: Rc::new(Cell::new(0)),
     });
-    let failure = sim.run(async move { Timer::new(TICK).await }).unwrap_err();
+    let failure = sim.run(async move { timer(TICK).await }).unwrap_err();
     assert_eq!(failure.kind.name(), "Setup");
     insta::assert_snapshot!(mask_prefixes(&failure.to_string()));
 }

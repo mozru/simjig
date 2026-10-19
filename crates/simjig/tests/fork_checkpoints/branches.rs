@@ -2,7 +2,7 @@
 
 use simjig::fork::{self, BranchError};
 use simjig::{
-    DutModel, ModelOptions, ReadOnly, Seed, SeedSource, SimTime, TestCtx, clock, now, ns,
+    DutModel, ModelOptions, Seed, SeedSource, SimTime, TestCtx, clock, now, ns, read_only,
 };
 use simjig_bits::Bits;
 
@@ -29,7 +29,7 @@ async fn count(dut: counter::Dut, cycles: u32) {
     for _ in 0..cycles {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
 }
 
 #[simjig::test(timeout = "100us")]

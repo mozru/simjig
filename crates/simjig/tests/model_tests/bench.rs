@@ -7,7 +7,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use simjig::Timer;
+use simjig::timer;
 use simjig_bits::Bits;
 
 use super::duts::{counter, sim, wide};
@@ -40,7 +40,7 @@ fn measure_typed_access() {
         let en = dut.en.raw();
         let raw_write = per_op(|i| black_box(en).write_words(&[i & 1]));
         // Let the write log drain once, so the next run starts clean.
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         (read, write, raw_write, black_box(acc))
     });
     let wide = wsim.run(async move {
@@ -49,7 +49,7 @@ fn measure_typed_access() {
         let mut acc200 = 0u32;
         let read200 = per_op(|_| acc200 ^= black_box(wdut.o200).get().to_words()[3]);
         let write64 = per_op(|i| black_box(wdut.i64).set(Bits::new(u128::from(i))));
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         (read8, read200, write64, black_box(acc), black_box(acc200))
     });
     let (read, write, raw_write, _) = narrow.unwrap();

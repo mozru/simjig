@@ -3,7 +3,7 @@
 
 use std::future::Future;
 
-use simjig::{Event, Lock, Queue, Task, Timer, cycles, first, join, ns, spawn, with_timeout};
+use simjig::{Event, Lock, Queue, Task, cycles, first, join, ns, spawn, timer, with_timeout};
 
 use crate::conflog::{Log, Probe};
 use crate::start_clock;
@@ -57,7 +57,7 @@ async fn loser_scheduled(dut: Dut) {
             s(&pt);
             set.set();
         });
-        p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+        p.wait(timer(ns(1)), "Timer(1ns)").await;
         let (tz, tf) = observers(dut, &log);
         let res = if rnd == 0 {
             p.wait(
@@ -111,7 +111,7 @@ async fn nested_combinators(dut: Dut) {
     let clk = dut.clk;
     counter_start(&mut p, dut).await;
     for rnd in 0..3 {
-        p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+        p.wait(timer(ns(1)), "Timer(1ns)").await;
         let (tz, tf) = observers(dut, &log);
         let label = format!("nested{rnd}");
         match rnd {
@@ -122,7 +122,7 @@ async fn nested_combinators(dut: Dut) {
                             async {
                                 join!(clk.rising(), clk.changed());
                             },
-                            Timer::new(ns(100))
+                            timer(ns(100))
                         );
                     },
                     &label,
@@ -132,10 +132,7 @@ async fn nested_combinators(dut: Dut) {
             1 => {
                 p.wait(
                     async {
-                        join!(
-                            async { first!(clk.rising(), Timer::new(ns(100))) },
-                            Timer::new(ns(1))
-                        );
+                        join!(async { first!(clk.rising(), timer(ns(100))) }, timer(ns(1)));
                     },
                     &label,
                 )
@@ -145,8 +142,8 @@ async fn nested_combinators(dut: Dut) {
                 p.wait(
                     async {
                         first!(
-                            async { first!(clk.rising(), Timer::new(ns(100))) },
-                            Timer::new(ns(200))
+                            async { first!(clk.rising(), timer(ns(100))) },
+                            timer(ns(200))
                         );
                     },
                     &label,
@@ -169,12 +166,12 @@ async fn timeout_combinators(dut: Dut) {
     let clk = dut.clk;
     counter_start(&mut p, dut).await;
     for rnd in 0..2 {
-        p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+        p.wait(timer(ns(1)), "Timer(1ns)").await;
         let (tz, tf) = observers(dut, &log);
         let label = format!("with_timeout{rnd}");
         if rnd == 0 {
             p.wait(
-                with_timeout(ns(200), async { first!(clk.rising(), Timer::new(ns(100))) }),
+                with_timeout(ns(200), async { first!(clk.rising(), timer(ns(100))) }),
                 &label,
             )
             .await
@@ -411,7 +408,7 @@ async fn spawned_combinators(dut: Dut) {
             e1.set();
         }),
         spawn("a_first", async move {
-            pa.wait(async { first!(e2.wait(), Timer::new(ns(100))) }, "First")
+            pa.wait(async { first!(e2.wait(), timer(ns(100))) }, "First")
                 .await;
             s(&pa);
         }),
@@ -441,7 +438,7 @@ async fn spawned_combinators(dut: Dut) {
             s(&pe);
         }),
     ];
-    p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+    p.wait(timer(ns(1)), "Timer(1ns)").await;
     let (tz, tf) = observers(dut, &log);
     ts.push(tz);
     ts.push(tf);
@@ -481,7 +478,7 @@ async fn sync_losers(dut: Dut) {
     let held = lock.clone();
     let th = spawn("holder", async move {
         let guard = held.lock().await; // 10 ns
-        ph.wait(Timer::new(ns(17)), "Timer(17ns)").await; // 27 ns
+        ph.wait(timer(ns(17)), "Timer(17ns)").await; // 27 ns
         s(&ph);
         drop(guard);
     });
@@ -543,7 +540,7 @@ async fn queue_round(
         .await;
     p.note("first", won);
     s(p);
-    p.wait(Timer::new(ns(2)), "Timer(2ns)").await; // 37 ns
+    p.wait(timer(ns(2)), "Timer(2ns)").await; // 37 ns
     q.try_put(7).unwrap();
     tg.await;
 }
@@ -572,12 +569,12 @@ async fn cancelled_nest(dut: Dut) {
             next.set();
         }));
     }
-    p.wait(Timer::new(ns(1)), "Timer(1ns)").await; // 11 ns
+    p.wait(timer(ns(1)), "Timer(1ns)").await; // 11 ns
     p.wait(
         async {
             first!(
                 async {
-                    join!(count.changed(), Timer::new(ns(100)));
+                    join!(count.changed(), timer(ns(100)));
                 },
                 clk.rising()
             );

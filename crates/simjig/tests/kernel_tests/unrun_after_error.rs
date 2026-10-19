@@ -3,7 +3,7 @@
 //! spawn(..)`; the returned error must reach the caller.
 
 use simjig::fork::{self, ForkError};
-use simjig::{Failure, FailureKind, Precision, Timer, now, spawn};
+use simjig::{Failure, FailureKind, Precision, now, spawn, timer};
 
 use super::{assert_clean, dut, ticks};
 
@@ -32,7 +32,7 @@ fn an_early_error_return_is_not_masked_by_the_unrun_monitor() {
     let mut d = dut();
     let check = || -> simjig::Result { Err(scoreboard_error()) };
     let result = d.sim.run(async move {
-        let monitor = spawn("monitor", Timer::new(ticks(100)));
+        let monitor = spawn("monitor", timer(ticks(100)));
         check()?;
         monitor.await;
         simjig::Result::Ok(())
@@ -49,7 +49,7 @@ fn an_early_error_return_is_not_masked_by_the_unrun_monitor() {
 fn a_fork_refusal_is_not_masked_by_the_unrun_task_it_names() {
     let mut d = dut();
     let result = d.sim.run(async move {
-        let monitor = spawn("monitor", Timer::new(ticks(100)));
+        let monitor = spawn("monitor", timer(ticks(100)));
         let seed = simjig::Seed::new(1, simjig::SeedSource::Env);
         fork::run_from_checkpoint(seed, 2, |_| async { Ok(()) }).await?;
         monitor.await;

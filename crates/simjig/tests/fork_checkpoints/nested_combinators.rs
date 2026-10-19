@@ -2,7 +2,7 @@
 //! the parent.
 
 use simjig::fork::{self, ForkError};
-use simjig::{Event, TestCtx, Timer, ns, with_timeout};
+use simjig::{Event, TestCtx, ns, timer, with_timeout};
 
 use crate::counter;
 
@@ -18,7 +18,7 @@ async fn a_fork_in_a_join_in_a_first_is_refused(ctx: &TestCtx, dut: counter::Dut
     let pid = std::process::id();
     let r = simjig::first!(
         async {
-            Timer::new(ns(10)).await;
+            timer(ns(10)).await;
             None
         },
         async {

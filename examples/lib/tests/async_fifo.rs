@@ -282,7 +282,7 @@ async fn reset_when_busy(dut: Dut, scoreboard: Queue<Word>, coverage: Rc<Coverag
     while scoreboard.try_get().is_some() {
         bump(&coverage.flushed);
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(
         (dut.rempty.get(), dut.wfull.get()),
         (Bit::ONE, Bit::ZERO),
@@ -304,7 +304,7 @@ async fn reset_when_busy(dut: Dut, scoreboard: Queue<Word>, coverage: Rc<Coverag
 async fn assert_flag_holds(clk: In<Bit>, flag: Out<Bit>, value: Bit) {
     for edge in 1..=2 {
         clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(
             flag.get(),
             value,
@@ -433,10 +433,10 @@ async fn resets_clear_both_flags_without_a_clock_edge(dut: Dut) {
     // `wclk` edges fall on whole or half ns, `rclk` edges 0.3 ns off them (see
     // [`directed_clocks`]); the next `wclk` edge is 2.5 ns away.
     dut.wclk.falling().await;
-    Timer::new(ns(1)).await;
+    timer(ns(1)).await;
     dut.wrst_n.set(0);
     dut.rrst_n.set(0);
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(
         (dut.wfull.get(), dut.rempty.get()),
         (Bit::ZERO, Bit::ONE),
@@ -503,7 +503,7 @@ async fn full_after_depth_writes(dut: Dut) {
         }
     }
     assert_eq!(accepted, DEPTH, "writes accepted before wfull");
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(
         dut.wfull.get(),
         Bit::ONE,
@@ -535,7 +535,7 @@ async fn flags_see_the_other_side_three_edges_later(dut: Dut) {
     dut.wclk.falling().await;
     dut.winc.set(0);
     dut.wclk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.wfull.get(), Bit::ONE, "full after DEPTH writes");
     dut.rclk.falling().await;
     dut.rinc.set(1);
@@ -548,7 +548,7 @@ async fn flags_see_the_other_side_three_edges_later(dut: Dut) {
 async fn edges_until_low(clk: In<Bit>, flag: Out<Bit>) -> u32 {
     for edges in 1..=8 {
         clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         if !flag.get().to_bool() {
             return edges;
         }

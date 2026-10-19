@@ -2,7 +2,7 @@
 //! and the other branches carry on.
 
 use simjig::fork::{self, BranchError, ChildExit};
-use simjig::{ReadOnly, TestCtx, clock, ns};
+use simjig::{TestCtx, clock, ns, read_only};
 use simjig_bits::Bits;
 
 use crate::fatal;
@@ -42,7 +42,7 @@ async fn five_endings(ctx: &TestCtx, dut: fatal::Dut) -> fork::Branches<u8> {
                 for _ in 0..4 {
                     dut.clk.rising().await;
                 }
-                ReadOnly::new().await;
+                read_only().await;
             }
         }
         Ok(u8::try_from(dut.alive.get().to_u128()).unwrap())

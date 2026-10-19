@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use simjig::fork;
 use simjig::{
-    DutModel, Failure, FakeModel, ModelOptions, Precision, RawSig, ReadOnly, Sim, TestCtx, Timer,
-    clock, ns,
+    DutModel, Failure, FakeModel, ModelOptions, Precision, RawSig, Sim, TestCtx, clock, ns,
+    read_only, timer,
 };
 
 use crate::fst;
@@ -27,7 +27,7 @@ async fn counter_overflows(dut: counter_fst::Dut) {
     for _ in 0..300 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     let count = dut.count.get().to_u128();
     assert_eq!(count, 0, "the counter kept counting");
 }
@@ -77,7 +77,7 @@ async fn two_duts_overflow(counter: counter_fst::Dut, fifo: fifo_fst::Dut) {
     for _ in 0..300 {
         counter.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(
         counter.count.get().to_u128(),
         0,
@@ -102,7 +102,7 @@ async fn a_branch_overflows(ctx: &TestCtx, dut: counter_fst::Dut) {
         for _ in 0..5 + 45 * branch.index() {
             dut.clk.rising().await;
         }
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(branch.index(), 0, "branch 1 fails");
         Ok(())
     })
@@ -140,9 +140,9 @@ impl DutModel for WallClock {
 #[simjig::test]
 #[ignore = "non-deterministic on purpose; run by the tests below in a child process"]
 async fn depends_on_the_wall_clock(dut: WallClock) {
-    ReadOnly::new().await;
+    read_only().await;
     let limit = dut.limit.read_u64();
-    Timer::new(ns(limit)).await;
+    timer(ns(limit)).await;
     panic!("waited {limit} ns");
 }
 

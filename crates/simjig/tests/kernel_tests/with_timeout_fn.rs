@@ -2,7 +2,7 @@
 
 use std::pin::pin;
 
-use simjig::{Failure, Timer, with_timeout};
+use simjig::{Failure, timer, with_timeout};
 
 use super::{dut, ticks};
 
@@ -13,7 +13,7 @@ fn with_timeout_over_a_borrowed_pinned_future_resumes_it() {
     let mut d = dut();
     let out = d.sim.run(async move {
         let mut slow = pin!(async {
-            Timer::new(ticks(10)).await;
+            timer(ticks(10)).await;
             7
         });
         assert!(with_timeout(ticks(3), &mut slow).await.is_err());
@@ -31,7 +31,7 @@ fn timeout_failure_location_with_a_stored_future() {
     let f = d
         .sim
         .run(async move {
-            let fut = with_timeout(ticks(1), Timer::new(ticks(5)));
+            let fut = with_timeout(ticks(1), timer(ticks(5)));
             fut.await?;
             Ok::<(), Failure>(())
         })
@@ -46,7 +46,7 @@ fn with_timeout_over_mut_task_keeps_it_running() {
     let mut d = dut();
     let out = d.sim.run(async move {
         let mut t = simjig::spawn("slow", async {
-            Timer::new(ticks(10)).await;
+            timer(ticks(10)).await;
             9
         });
         assert!(with_timeout(ticks(3), &mut t).await.is_err());
@@ -62,10 +62,8 @@ fn elapsed_debug_prints_physical_units() {
     let shown = d
         .sim
         .run(async move {
-            Timer::new(ticks(2)).await;
-            let e = with_timeout(ticks(3), Timer::new(ticks(10)))
-                .await
-                .unwrap_err();
+            timer(ticks(2)).await;
+            let e = with_timeout(ticks(3), timer(ticks(10))).await.unwrap_err();
             format!("{e:?}")
         })
         .unwrap();

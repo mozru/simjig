@@ -4,6 +4,19 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- **Breaking: triggers are functions.** `Timer::new(d)`, `ReadOnly::new()`,
+  `ReadWrite::new()` and `NextTimeStep::new()` are now `timer(d)`, `read_only()`,
+  `read_write()` and `next_time_step()`, each `#[track_caller]` and returning the named
+  future type (`Timer`, `ReadOnly`, `ReadWrite`, `NextTimeStep`), as Tokio's `sleep`
+  returns `Sleep`. The types stay public; their `new` and `Default` are gone. The prelude
+  exports the four functions instead of the types. `.read_write()` and `.read_only()` on
+  edges, `cycles` and timers are unchanged. Messages that named the old forms now name the
+  functions: the zero-tick timer panic, the `ReadOnly`-phase misuse panic, the sync-mode
+  refusal, and the `DeltaLimit`, `ReadWriteLimit`, `WriteInReadOnly` and `Starved` help
+  lines (report snapshots reviewed). Scheduling is unchanged: the goldens and the
+  differential corpus are identical (the corpus digest maps the new wording back to the
+  blessed one, `kernel::differential::BLESSED_WORDING`). Migrate with
+  `Timer::new(` to `timer(` and `X::new()` to the snake_case function.
 - A synchronous test (`#[simjig::test(sync)]`) also denies clippy's `let_underscore_future`,
   so `let _ = reset(dut);` of an async helper is an error under `cargo clippy` (rustc
   ignores the lint). Generated code: the `#[deny(..)]` on the test function gains it,

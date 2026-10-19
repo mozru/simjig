@@ -282,7 +282,7 @@ impl ReadyQueue {
 /// purpose, call [`Task::cancel`].
 ///
 /// ```
-/// use simjig::{FakeModel, Precision, Sim, Timer, SimDuration, spawn};
+/// use simjig::{FakeModel, Precision, Sim, SimDuration, spawn, timer};
 ///
 /// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
 /// let ticks = sim.run(async {
@@ -290,12 +290,12 @@ impl ReadyQueue {
 ///     let seen = std::rc::Rc::clone(&count);
 ///     spawn("monitor", async move {
 ///         loop {
-///             Timer::new(SimDuration::from_ticks(1)).await;
+///             timer(SimDuration::from_ticks(1)).await;
 ///             seen.set(seen.get() + 1);
 ///         }
 ///     })
 ///     .detach(); // runs until main returns
-///     Timer::new(SimDuration::from_ticks(5)).await;
+///     timer(SimDuration::from_ticks(5)).await;
 ///     count.get()
 /// });
 /// assert_eq!(ticks.unwrap(), 4);

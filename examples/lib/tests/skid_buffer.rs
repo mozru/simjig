@@ -164,7 +164,7 @@ async fn sink(dut: Dut, mut rng: Rng) {
 async fn received(dut: Dut, board: &RefCell<Board>, count: usize) {
     while board.borrow().received.len() < count {
         dut.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
     }
 }
 
@@ -216,7 +216,7 @@ async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: D
     }
     // Both registers full, read from the ports: the output register shows the first beat
     // (`down.valid`), and the skid holds the second (`up.ready` low).
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(
         (
             dut.down.valid.get(),
@@ -232,7 +232,7 @@ async fn a_reset_with_the_skid_full_empties_both_registers(ctx: &TestCtx, dut: D
     dut.rst.set(1);
     dut.down.ready.set(1);
     dut.clk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.down.valid.get(), Bit::ZERO, "down.valid after reset");
     assert_eq!(dut.up.ready.get(), Bit::ONE, "up.ready after reset");
     dut.clk.falling().await;
@@ -289,7 +289,7 @@ async fn toggle_inputs_mid_cycle(dut: Dut) {
             dut.down.data.get(),
         )
     };
-    ReadOnly::new().await;
+    read_only().await;
     let before = outputs();
     let steps = [
         (dut.down.ready, 1, "down.ready rose"),
@@ -298,10 +298,10 @@ async fn toggle_inputs_mid_cycle(dut: Dut) {
         (dut.up.valid, 0, "up.valid fell"),
     ];
     for (input, value, what) in steps {
-        Timer::new(ns(1)).await;
+        timer(ns(1)).await;
         input.set(value);
         dut.up.data.set(0xeeee);
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(outputs(), before, "outputs changed when {what} mid-cycle");
     }
 }

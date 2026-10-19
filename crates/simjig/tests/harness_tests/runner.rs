@@ -140,7 +140,7 @@ fn a_timeout_finer_than_the_precision_is_rejected() {
 /// fails on its own assertion rather than hanging until nextest kills it.
 async fn tick_20ms() {
     for _ in 0..20 {
-        simjig::Timer::new(simjig::ms(1)).await;
+        simjig::timer(simjig::ms(1)).await;
     }
 }
 
@@ -182,7 +182,7 @@ impl<const EXP: i8> DutModel for AtPrecision<EXP> {
 /// Waits one tick at a time, for 20 ticks: longer than any default timeout below.
 async fn twenty_ticks() {
     for _ in 0..20 {
-        simjig::Timer::new(SimDuration::from_ticks(1)).await;
+        simjig::timer(SimDuration::from_ticks(1)).await;
     }
 }
 
@@ -204,7 +204,7 @@ fn the_default_timeout_is_10ms_rounded_up_to_whole_ticks() {
 }
 
 async fn run_20ms() {
-    simjig::Timer::new(simjig::ms(20)).await;
+    simjig::timer(simjig::ms(20)).await;
 }
 
 #[test]

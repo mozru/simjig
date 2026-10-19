@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use simjig::bits::{Bit, Bits};
-use simjig::{Chandle, ReadOnly, Timer, clock, ns};
+use simjig::{Chandle, clock, ns, read_only, timer};
 
 use crate::{dpi_c, dpi_types};
 
@@ -86,8 +86,8 @@ async fn the_design_calls_rust_and_gets_its_results(dut: dpi_types::Dut) {
     });
     dut.a.set(0x0102_0381);
     dut.b.set(0x10);
-    Timer::new(ns(1)).await;
-    ReadOnly::new().await;
+    timer(ns(1)).await;
+    read_only().await;
     assert_eq!(
         dut.ints_ret.get(),
         Bits::new(u128::from(0x0102_0381u32.wrapping_neg()))
@@ -110,12 +110,12 @@ async fn the_design_calls_rust_and_gets_its_results(dut: dpi_types::Dut) {
     assert_eq!(dut.aliased.get(), Bits::new(0x0102_0381 ^ 0x5555_5555));
 
     // The context task and the chandle run once per posedge.
-    Timer::new(ns(1)).await;
+    timer(ns(1)).await;
     clock(dut.clk, ns(10)).start();
     for _ in 0..3 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.handle_ok.get(), Bit::ONE);
     assert_eq!(*tasks.borrow(), [0x0102_0381; 3]);
 }
@@ -129,13 +129,13 @@ async fn imports_left_to_c_run_the_c_implementation(dut: dpi_c::Dut) {
     for _ in 0..4 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.sum.get(), Bits::new(42));
     // dpi_tick returns its call count, starting at 1; `calls` registers it.
     assert_eq!(dut.calls.get(), Bits::new(4));
-    Timer::new(ns(1)).await;
+    timer(ns(1)).await;
     dut.a.set(u128::from(u32::MAX));
-    Timer::new(ns(1)).await;
-    ReadOnly::new().await;
+    timer(ns(1)).await;
+    read_only().await;
     assert_eq!(dut.sum.get(), Bits::new(1), "C's wrapping add");
 }

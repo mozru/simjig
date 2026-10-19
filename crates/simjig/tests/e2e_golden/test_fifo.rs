@@ -1,6 +1,6 @@
 //! `tests/conformance/tb/test_fifo.py` (`DEPTH=4`): a valid/ready stream with back-pressure.
 
-use simjig::{ReadOnly, spawn};
+use simjig::{read_only, spawn};
 use simjig_bits::Bit;
 
 use crate::conflog::Log;
@@ -31,7 +31,7 @@ async fn fifo_stream(dut: Dut) {
         while i < DATA.len() {
             drv.write(&dut.in_valid, 1);
             drv.write(&dut.in_data, DATA[i]);
-            drv.wait(ReadOnly::new(), "ReadOnly").await;
+            drv.wait(read_only(), "ReadOnly").await;
             drv.read(&[&dut.in_ready]);
             let moved = dut.in_ready.get() == Bit::ONE;
             drv.wait(dut.clk.falling(), "FallingEdge(clk)").await;
@@ -43,7 +43,7 @@ async fn fifo_stream(dut: Dut) {
         for ready in READY {
             snk.wait(dut.clk.falling(), "FallingEdge(clk)").await;
             snk.write(&dut.out_ready, ready);
-            snk.wait(ReadOnly::new(), "ReadOnly").await;
+            snk.wait(read_only(), "ReadOnly").await;
             if ready == 1 && dut.out_valid.get() == Bit::ONE {
                 snk.read(&[&dut.out_data]);
             }

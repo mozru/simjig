@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use simjig::{
-    DutModel, Failure, ModelOptions, ReadOnly, Seed, SeedSource, Sim, SimTime, TraceKind,
-    TraceOptions, clock, ns,
+    DutModel, Failure, ModelOptions, Seed, SeedSource, Sim, SimTime, TraceKind, TraceOptions,
+    clock, ns, read_only,
 };
 use simjig_bits::Bit;
 
@@ -53,7 +53,7 @@ fn run_counter(
         for _ in 0..cycles {
             dut.clk.rising().await;
         }
-        ReadOnly::new().await;
+        read_only().await;
         assert!(!fail, "count reached {}", dut.count.get().to_u128());
     });
     let steps = timesteps(&sim);
@@ -185,7 +185,7 @@ fn a_fifo_stream_is_traced_too() {
             dut.clk.falling().await;
         }
         dut.in_valid.set(0);
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(dut.in_ready.get(), Bit::ZERO, "4 deep, so full");
     })
     .expect("passes");

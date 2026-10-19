@@ -4,8 +4,8 @@
 use std::future::Future;
 
 use simjig::{
-    Clock, FailureKind, FakeModel, NextTimeStep, Precision, RawSig, ReadOnly, Sim, SimTime, Timer,
-    TraceKind, clock, cycles, falling, now, rising, with_timeout,
+    Clock, FailureKind, FakeModel, Precision, RawSig, Sim, SimTime, TraceKind, clock, cycles,
+    falling, next_time_step, now, read_only, rising, timer, with_timeout,
 };
 
 use super::{assert_clean, clocked, dut, ticks};
@@ -67,7 +67,7 @@ fn start_mid_run_schedules_from_now_with_phase_and_high_time() {
     let (rises, fall) = d
         .sim
         .run(async move {
-            Timer::new(ticks(7)).await;
+            timer(ticks(7)).await;
             clock(clk, ticks(10))
                 .phase(ticks(2))
                 .high_for(ticks(3))
@@ -96,7 +96,7 @@ fn stop_freezes_the_level_and_start_resumes_from_the_restart_time() {
             // The falling edge due at 15 is cancelled: nothing changes for 30 ticks.
             let quiet = with_timeout(ticks(30), simjig::changed(clk)).await.is_err();
             let held = clk.read_u64();
-            Timer::new(ticks(3)).await; // now 43
+            timer(ticks(3)).await; // now 43
             c.start();
             assert!(c.is_running());
             // Started high-phase while already high: the next change is the fall at 48.
@@ -141,13 +141,13 @@ fn coincident_edges_of_started_and_added_clocks_share_one_eval_in_declaration_or
         // Declared c3 then c1; c2 was added before the run.
         let k3 = clock(c3, ticks(20)).start();
         let k1 = clock(c1, ticks(10)).start();
-        Timer::new(ticks(25)).await;
+        timer(ticks(25)).await;
         // c3 stops before its fall at 30, so at 30 only the period-10 clocks have edges.
         k3.stop();
-        NextTimeStep::new().await; // 30
-        Timer::new(ticks(10)).await; // 40, timed region: the restart joins the first delta
+        next_time_step().await; // 30
+        timer(ticks(10)).await; // 40, timed region: the restart joins the first delta
         k3.start();
-        Timer::new(ticks(20)).await; // 60
+        timer(ticks(20)).await; // 60
         k1.stop();
     })
     .unwrap();
@@ -218,7 +218,7 @@ fn misuse_panics_at_the_call() {
         (
             |clk, _| {
                 Box::new(async move {
-                    ReadOnly::new().await;
+                    read_only().await;
                     clock(clk, ticks(10)).start();
                 })
             },

@@ -3,7 +3,7 @@
 
 use std::future::Future;
 
-use simjig::{Event, In, Lock, Queue, Task, Timer, first, ns, spawn};
+use simjig::{Event, In, Lock, Queue, Task, first, ns, spawn, timer};
 use simjig_bits::Bit;
 
 use crate::conflog::{Log, Probe};
@@ -90,7 +90,7 @@ async fn event_ready(dut: Dut) {
                                 "ev"
                             },
                             async {
-                                Timer::new(ns(1)).await;
+                                timer(ns(1)).await;
                                 "timer"
                             }
                         )
@@ -123,7 +123,7 @@ async fn lock_ready(dut: Dut) {
         on_edge(&log, clk, "a", move |mut pa| async move {
             let guard = pa.wait(la.lock(), "Lock.acquire()").await;
             s(&pa);
-            pa.wait(Timer::new(ns(2)), "Timer(2ns)").await;
+            pa.wait(timer(ns(2)), "Timer(2ns)").await;
             drop(guard);
             pa.note("locked", locked(&la));
         }),
@@ -205,7 +205,7 @@ async fn queue_get_ready(dut: Dut) {
         tga,
         tgc,
     ];
-    p.wait(Timer::new(ns(12)), "Timer(12ns)").await; // 27 ns
+    p.wait(timer(ns(12)), "Timer(12ns)").await; // 27 ns
     q.try_put(2).unwrap();
     q.try_put(3).unwrap();
     join_all(ts).await;
@@ -231,7 +231,7 @@ async fn queue_put_ready(dut: Dut) {
         }),
         on_edge(&log, clk, "b", move |pb| async move { s(&pb) }),
     ];
-    p.wait(Timer::new(ns(6)), "Timer(6ns)").await; // 16 ns
+    p.wait(timer(ns(6)), "Timer(6ns)").await; // 16 ns
     p.note("item", &q.try_get().unwrap().to_string());
     join_all(ts).await;
 
@@ -264,10 +264,10 @@ async fn queue_put_ready(dut: Dut) {
         tpa,
         tpc,
     ];
-    p.wait(Timer::new(ns(11)), "Timer(11ns)").await; // 27 ns
+    p.wait(timer(ns(11)), "Timer(11ns)").await; // 27 ns
     for _ in 0..3 {
         p.note("item", &q.try_get().unwrap().to_string());
-        p.wait(Timer::new(ns(2)), "Timer(2ns)").await;
+        p.wait(timer(ns(2)), "Timer(2ns)").await;
     }
     join_all(ts).await;
     log.check("queue_put_ready");

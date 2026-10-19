@@ -6,7 +6,7 @@ use std::hint::black_box;
 use std::rc::Rc;
 use std::time::Instant;
 
-use simjig::{FakeModel, Precision, RawSig, Sim, Timer};
+use simjig::{FakeModel, Precision, RawSig, Sim, timer};
 
 use super::ticks;
 
@@ -45,7 +45,7 @@ fn per_op(op: fn(RawSig, u64)) -> (f64, f64, f64) {
                 op(sig, step + i as u64);
             }
             record.borrow_mut().push(t0.elapsed().as_nanos());
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
         }
     })
     .unwrap();

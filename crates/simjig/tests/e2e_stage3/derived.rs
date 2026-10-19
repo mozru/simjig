@@ -3,7 +3,7 @@
 //! Every rising, falling and change of `div_clk` wakes the testbench exactly once, at the
 //! `clk` edge that made it, and the slow domain has counted that edge by then.
 
-use simjig::{ReadOnly, SimTime, clock, now, ns};
+use simjig::{SimTime, clock, now, ns, read_only};
 use simjig_bits::{Bit, Bits};
 
 use crate::derived_clk::Dut;
@@ -28,7 +28,7 @@ async fn rising_edges_of_the_divided_clock_wake_once_each(dut: Dut) {
             assert_eq!(t.ticks() - last.ticks(), ns(20).ticks(), "edge {edge}");
         }
         last = Some(t);
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(dut.div_clk.get(), Bit::ONE);
         assert_eq!(dut.slow_count.get(), Bits::new(u128::from(edge)));
         assert_eq!(
@@ -48,6 +48,6 @@ async fn falling_and_changed_follow_the_divided_clock(dut: Dut) {
     assert_eq!(now().ticks() - rose.ticks(), ns(10).ticks());
     dut.div_clk.changed().await;
     assert_eq!(now().ticks() - rose.ticks(), ns(20).ticks());
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.div_clk.get(), Bit::ONE);
 }

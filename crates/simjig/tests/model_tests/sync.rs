@@ -249,6 +249,20 @@ fn async_features_are_refused_by_name() {
         let mut cx = Context::from_waker(Waker::noop());
         assert!(matches!(edge.as_mut().poll(&mut cx), Poll::Pending));
     });
+    // A trigger function is refused under its own name.
+    let (mut sim, _dut) = sim::<counter::Dut>();
+    let failure = sim
+        .run_sync(|| {
+            let mut timer = pin!(simjig::timer(SimDuration::from_ticks(1)));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(timer.as_mut().poll(&mut cx).is_pending());
+        })
+        .unwrap_err();
+    let text = message(&failure);
+    assert!(
+        text.contains("timer() awaited in a synchronous test"),
+        "{text}"
+    );
 }
 
 /// A bound handle reads and writes what the handle does, without its lookups.

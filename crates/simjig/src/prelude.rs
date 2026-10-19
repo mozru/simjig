@@ -5,7 +5,7 @@
 //! | [`clock`], [`cycles`], [`ns`], [`us`], [`ps`], [`ms`] | clocks and durations |
 //! | [`SyncClock`] | the clock of a synchronous test (`#[simjig::test(sync)]`) |
 //! | [`spawn`], [`first!`], [`join!`], [`with_timeout`] | concurrency |
-//! | [`Timer`], [`ReadWrite`], [`ReadOnly`], [`TriggerExt`] | time and regions (`.read_write()`, `.read_only()`) |
+//! | [`timer`], [`next_time_step`], [`read_write`], [`read_only`], [`TriggerExt`] | time and regions (`.read_write()`, `.read_only()`) |
 //! | [`Queue`], [`Event`] | task communication |
 //! | [`TestCtx`], [`Rng`], [`tb_log!`] | the test's context, seeded streams, logging |
 //! | [`Bit`], [`Bits`], [`Value`], [`Vector`], [`Packed`] | signal values and the bounds generic tests use |
@@ -48,6 +48,8 @@ pub use crate::kernel::sync::{Event, Queue};
 pub use crate::kernel::sync_clock::SyncClock;
 pub use crate::kernel::tasks::spawn;
 pub use crate::kernel::time::{ms, ns, ps, us};
-pub use crate::kernel::trigger::{ReadOnly, ReadWrite, Timer, TriggerExt, cycles, with_timeout};
+pub use crate::kernel::trigger::{
+    TriggerExt, cycles, next_time_step, read_only, read_write, timer, with_timeout,
+};
 pub use crate::signal::{Value, Vector};
 pub use crate::{first, join, tb_log};

@@ -283,10 +283,10 @@ Not reparenting on free: finding a freed task's children would need a scan or a 
 list per task. Stale keys of finished ancestors are caught by the slab's generations.
 
 ## Trigger misuse names the user's line
-Trigger constructors are `#[track_caller]` and keep the location; `panics::panic_at`
+Trigger functions (`timer`, `read_write`, ...) are `#[track_caller]` and keep the location; `panics::panic_at`
 blames it, so the failure names the line that built the trigger. The default panic hook
 still prints `trigger.rs`, so the message also names the user's line.
-`Timer::new` stays `const`: a `Timer` built inside a DPI-C call is inert data, and
+`timer` stays `const`: a `Timer` made inside a DPI-C call is inert data, and
 awaiting it is refused there like every other kernel entry point.
 
 ## `TriggerExt` and `ThenRegion`

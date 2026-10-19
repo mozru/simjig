@@ -1,7 +1,7 @@
 //! (c) Two models in one test: two different designs share one simulation and one clock,
 //! and two revisions of one design run in lockstep until they diverge.
 
-use simjig::{Lockstep, Mirror, ReadOnly, clock, ns};
+use simjig::{Lockstep, Mirror, clock, ns, read_only};
 use simjig_bits::Bits;
 
 use crate::{counter, counter_rev2, derived_clk};
@@ -20,7 +20,7 @@ async fn two_designs_share_one_simulation(count: counter::Dut, div: derived_clk:
     div.rst.set(0);
     for cycle in 1..=40u32 {
         div.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         // Both count the same edges of their own clock; the divided clock half of them.
         assert_eq!(count.count.get(), div.fast_count.get(), "cycle {cycle}");
         assert_eq!(
@@ -48,7 +48,7 @@ async fn a_revision_diverges_from_the_reference_in_lockstep(
     let mut divergence = None;
     for _ in 0..20 {
         old.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         if let Err(d) = lockstep.check() {
             divergence = Some(d);
             break;

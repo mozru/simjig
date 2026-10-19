@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use simjig::{Event, FailureKind, Timer, first, scope, spawn, with_timeout};
+use simjig::{Event, FailureKind, first, scope, spawn, timer, with_timeout};
 
 use super::{dut, ticks};
 
@@ -16,7 +16,7 @@ fn let_underscore_as_mains_last_statement_passes() {
     let ran = Rc::new(Cell::new(false));
     let flag = Rc::clone(&ran);
     let out = d.sim.run(async move {
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         #[expect(clippy::let_underscore_future, reason = "the mistake under test")]
         let _ = spawn("check", async move { flag.set(true) });
     });
@@ -34,7 +34,7 @@ fn let_underscore_inside_with_timeout_around_main_fails() {
             with_timeout(ticks(100), async {
                 #[expect(clippy::let_underscore_future, reason = "the mistake under test")]
                 let _ = spawn("drv", async {});
-                Timer::new(ticks(5)).await;
+                timer(ticks(5)).await;
             })
             .await
             .unwrap();
@@ -117,7 +117,7 @@ fn a_detached_child_unrun_drop_names_the_child() {
                 let _ = spawn("lost", async {});
             })
             .detach();
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
         })
         .unwrap_err();
     assert!(matches!(f.kind, FailureKind::Setup { .. }), "{f}");

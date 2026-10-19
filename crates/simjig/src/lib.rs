@@ -4,7 +4,7 @@
 //! it advances.
 //!
 //! The entry point is [`Sim::run`], which runs an async main task against a model. Inside
-//! it, tasks ([`spawn`], [`scope`]) await triggers ([`rising`], [`Timer`], [`ReadOnly`],
+//! it, tasks ([`spawn`], [`scope`]) await triggers ([`rising`], [`timer`], [`read_only`],
 //! ...) and read and write signals through typed handles ([`In`], [`Out`], ...) or untyped
 //! [`RawSig`]s. The scheduler's semantics match cocotb 2.x on Verilator; see the
 //! `kernel::sched` module docs for the loop.
@@ -42,7 +42,7 @@
 //!       dut.set_dpi(Adder);
 //!       dut.a.set(2);
 //!       dut.b.set(3);
-//!       Timer::new(ns(1)).await;
+//!       timer(ns(1)).await;
 //!       assert_eq!(dut.sum.get().to_u128(), 5);
 //!   }
 //!   ```
@@ -99,7 +99,8 @@ pub use kernel::time::{
 };
 pub use kernel::trigger::{
     Cycles, Edge, Elapsed, NextTimeStep, ReadOnly, ReadWrite, ThenRegion, Timer, TriggerExt,
-    YieldNow, changed, cycles, falling, now, now_display, rising, with_timeout, yield_now,
+    YieldNow, changed, cycles, falling, next_time_step, now, now_display, read_only, read_write,
+    rising, timer, with_timeout, yield_now,
 };
 pub use model::meta::LoadError;
 pub use model::trace::TraceOptions;

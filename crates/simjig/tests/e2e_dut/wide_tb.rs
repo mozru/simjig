@@ -1,6 +1,6 @@
 //! `wide`: a 200-bit port through `WideBits`, combinational and registered.
 
-use simjig::{ReadOnly, Timer, clock, ns};
+use simjig::{clock, ns, read_only, timer};
 use simjig_bits::WideBits;
 
 use crate::wide;
@@ -20,7 +20,7 @@ async fn wide_values_round_trip_and_invert(dut: wide::Dut) {
     for seed in 1..4 {
         let v = pattern(seed);
         dut.i200.set(v);
-        Timer::new(ns(1)).await;
+        timer(ns(1)).await;
         assert_eq!(dut.i200.get(), v);
         assert_eq!(dut.o200.get(), !v);
     }
@@ -34,7 +34,7 @@ async fn the_wide_register_captures_on_the_clock(dut: wide::Dut) {
         dut.clk.falling().await;
         dut.i200.set(v);
         dut.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(dut.q200.get(), v);
     }
 }

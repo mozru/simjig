@@ -3,7 +3,7 @@
 //! testbench drives the `dst` side's inputs and reads its `ready`; on the `src` side it is
 //! the reverse.
 
-use simjig::{In, Out, ReadOnly, clock, ns};
+use simjig::{In, Out, clock, ns, read_only};
 use simjig_bits::{Bit, Bits};
 
 use crate::iface_top::{Dut, Kind};
@@ -22,7 +22,7 @@ async fn a_beat_crosses_the_slice_incremented(dut: Dut) {
     dut.in_bus.data.set(0x41);
     dut.in_bus.kind.set(Kind::DATA);
     dut.clk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.in_bus.ready.get(), Bit::ONE);
     assert_eq!(dut.out_bus.valid.get(), Bit::ONE);
     assert_eq!(dut.out_bus.data.get(), Bits::new(0x42));

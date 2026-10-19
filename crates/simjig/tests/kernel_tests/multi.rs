@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use simjig::{
-    Clock, FailureKind, FakeModel, ModelSetError, Precision, ReadOnly, Sim, SimTime, Timer,
-    TraceKind, changed, cycles, now, rising, spawn, yield_now,
+    Clock, FailureKind, FakeModel, ModelSetError, Precision, Sim, SimTime, TraceKind, changed,
+    cycles, now, read_only, rising, spawn, timer, yield_now,
 };
 
 use super::{assert_clean, ticks};
@@ -35,7 +35,7 @@ fn same_named_signals_of_two_models_are_distinct() {
     sim.add_clock(Clock::new(clk1, ticks(4))).unwrap();
     let counts = sim
         .run(async move {
-            Timer::new(ticks(41)).await;
+            timer(ticks(41)).await;
             (n0.read_u64(), n1.read_u64(), clk1.name())
         })
         .unwrap();
@@ -60,8 +60,8 @@ fn every_delta_evaluates_all_models_in_declaration_order() {
         // Two evals at t=0 (the write to b's input is applied after the first, so a
         // second runs), then one at t=1.
         xb.write_u64(1);
-        Timer::new(ticks(1)).await;
-        ReadOnly::new().await;
+        timer(ticks(1)).await;
+        read_only().await;
     })
     .unwrap();
     let evals = sim
@@ -121,7 +121,7 @@ fn time_advances_to_the_earliest_event_of_any_model() {
         .run(async move {
             changed(x1).await; // 12
             let at_12 = (now(), x1.read_u64());
-            Timer::new(ticks(13)).await; // 25
+            timer(ticks(13)).await; // 25
             changed(x1).await; // 30
             changed(x1).await; // 33
             (at_12, now(), x1.read_u64())
@@ -156,7 +156,7 @@ fn model_failures_name_the_model() {
         let f = sim
             .run(async move {
                 go.write_u64(1);
-                Timer::new(ticks(5)).await;
+                timer(ticks(5)).await;
             })
             .unwrap_err();
         if finish {

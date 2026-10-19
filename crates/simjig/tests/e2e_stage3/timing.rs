@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use simjig::{
-    DutModel, ModelOptions, ReadOnly, Seed, SeedSource, SimTime, Timer, TraceKind, clock, now, ns,
-    spawn,
+    DutModel, ModelOptions, Seed, SeedSource, SimTime, TraceKind, clock, now, ns, read_only, spawn,
+    timer,
 };
 use simjig_bits::Bit;
 
@@ -41,18 +41,18 @@ fn timers_a_kernel_clock_and_design_delays_interleave_without_skipping_a_timeste
     let seen = Rc::clone(&samples);
     sim.run(async move {
         dut.start.set(0);
-        Timer::new(ns(2)).await;
+        timer(ns(2)).await;
         clock(dut.start, ns(60)).start();
         spawn("sampler", async move {
             loop {
-                Timer::new(ns(7)).await;
-                ReadOnly::new().await;
+                timer(ns(7)).await;
+                read_only().await;
                 seen.borrow_mut()
                     .push((now().ticks(), dut.ticks.get().to_u128(), dut.done.get()));
             }
         })
         .detach();
-        Timer::new(ns(298)).await;
+        timer(ns(298)).await;
     })
     .unwrap();
 

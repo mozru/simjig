@@ -220,7 +220,7 @@ So a monitor of what the edge captures samples at `rising()`. To check an edge's
 guarantees that nothing changes later in that timestep, and forbids writes. A test that
 drives next uses `.read_write()`; a pure checker or monitor uses `.read_only()`.
 `.read_write()` and `.read_only()` also follow `falling()`, `changed()`,
-`cycles(..)` and `Timer::new(..)`, and always land in the timestep their trigger fired
+`cycles(..)` and `timer(..)`, and always land in the timestep their trigger fired
 in. An edge of a signal the design drives fires after the eval that made it, so plain
 `rising()` already shows post-edge values there.
 
@@ -275,8 +275,8 @@ simjig's scheduler follows cocotb 2.1 on Verilator, checked against recorded coc
 | `await RisingEdge(dut.clk)`, `FallingEdge`, `ValueChange` | `dut.clk.rising().await`, `.falling()`, `.changed()` |
 | `await RisingEdge(dut.clk); await ReadWrite()` | `dut.clk.rising().read_write().await` (`.read_only()` for `ReadOnly()`; "The three moments at a clock edge") |
 | `await ClockCycles(dut.clk, 3)` | `cycles(dut.clk, 3).await` |
-| `await Timer(10, "ns")` | `Timer::new(ns(10)).await` |
-| `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `ReadOnly::new().await`, `ReadWrite::new()`, `simjig::NextTimeStep::new()` |
+| `await Timer(10, "ns")` | `timer(ns(10)).await` |
+| `await ReadOnly()`, `ReadWrite()`, `NextTimeStep()` | `read_only().await`, `read_write()`, `next_time_step()` |
 | `cocotb.start_soon(coro)` | `spawn("name", fut).detach()` |
 | `task = cocotb.start_soon(coro)`; `await task` | `let task = spawn("name", fut);` `task.await` |
 | `task.cancel()` | `task.cancel()` (or drop a `Task` that has run) |
@@ -320,7 +320,7 @@ What to keep in mind:
   `.read_only()`. A write in `ReadOnly` fails the run (`WriteInReadOnly`; cocotb raises
   `RuntimeError`). Edges of design-driven signals see post-eval values.
 - **A combinational design advances with a `Timer` per vector**: `set` the inputs, then
-  `Timer::new(ns(1)).await` and `get` the outputs (the quickstart's `tests/inv.rs`).
+  `timer(ns(1)).await` and `get` the outputs (the quickstart's `tests/inv.rs`).
   `ReadOnly` is read-only: a `set` after it in the same timestep fails the run
   (`WriteInReadOnly`), so the next vector needs the `Timer` anyway.
 - **A `Timer` due at an edge resumes first**, before the edge is applied: it sees the
@@ -663,7 +663,7 @@ async fn sums(dut: dpi::Dut) {
     dut.set_dpi(Adder); // first thing in the test, before any await
     dut.a.set(2);
     dut.b.set(3);
-    Timer::new(ns(1)).await;
+    timer(ns(1)).await;
     assert_eq!(dut.sum.get().to_u128(), 5);
 }
 ```

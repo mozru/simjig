@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-use simjig::{Failure, FailureKind, ReadOnly, Sim, SimTime};
+use simjig::{Failure, FailureKind, Sim, SimTime, read_only};
 use simjig_bits::Bits;
 
 use super::duts::{fatal, hello, sim};
@@ -25,7 +25,7 @@ fn fire(kind: u8) -> (Result<u8, Failure>, Sim) {
         for _ in 0..3 {
             dut.clk.rising().await;
         }
-        ReadOnly::new().await;
+        read_only().await;
         u8::try_from(dut.alive.get().to_u128()).unwrap()
     });
     (result, sim)
@@ -88,7 +88,7 @@ fn the_process_survives_a_fatal_and_runs_another_model() {
         for _ in 0..4 {
             dut.clk.rising().await;
         }
-        ReadOnly::new().await;
+        read_only().await;
         dut.alive.get()
     });
     assert_eq!(alive.unwrap(), Bits::new(4));
@@ -104,7 +104,7 @@ fn hello_child() {
         for _ in 0..3 {
             dut.clk.rising().await;
         }
-        ReadOnly::new().await;
+        read_only().await;
         dut.n.get()
     });
     assert_eq!(n.unwrap(), Bits::new(3));

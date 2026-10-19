@@ -1,6 +1,6 @@
 //! `tests/conformance/tb/test_derived_clk.py`: triggers on a design-driven divided clock.
 
-use simjig::{ReadOnly, cycles, spawn};
+use simjig::{cycles, read_only, spawn};
 
 use crate::conflog::Log;
 use crate::derived_clk::Dut;
@@ -28,7 +28,7 @@ async fn derived_edge(dut: Dut) {
     for _ in 0..3 {
         p.wait(dut.div_clk.rising(), "RisingEdge(div_clk)").await;
         p.read(&[&dut.clk, &dut.div_clk, &dut.fast_count, &dut.slow_count]);
-        p.wait(ReadOnly::new(), "ReadOnly").await;
+        p.wait(read_only(), "ReadOnly").await;
         p.read(&[&dut.div_clk, &dut.fast_count, &dut.slow_count]);
     }
     t.await;

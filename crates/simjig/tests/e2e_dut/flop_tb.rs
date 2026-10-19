@@ -1,6 +1,6 @@
 //! `flop`: a kernel clock, `rising`, and `ReadOnly` for post-edge values.
 
-use simjig::{ReadOnly, clock, ns};
+use simjig::{clock, ns, read_only};
 use simjig_bits::Bit;
 
 use crate::flop;
@@ -11,7 +11,7 @@ async fn q_takes_d_at_each_rising_edge(dut: flop::Dut) {
     dut.rst.set(1);
     dut.d.set(0);
     dut.clk.rising().await;
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(dut.q.get(), Bit::ZERO, "reset");
 
     let mut q = Bit::ZERO;
@@ -22,7 +22,7 @@ async fn q_takes_d_at_each_rising_edge(dut: flop::Dut) {
         dut.clk.rising().await;
         // A testbench-driven edge resumes before the eval that clocks the flop.
         assert_eq!(dut.q.get(), q, "pre-edge value at the rising edge");
-        ReadOnly::new().await;
+        read_only().await;
         q = Bit::from(d);
         assert_eq!(dut.q.get(), q, "post-edge value in ReadOnly");
         dut.clk.falling().await;

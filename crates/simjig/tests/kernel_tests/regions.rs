@@ -2,7 +2,7 @@
 //! region of the same timestep.
 
 use simjig::{
-    FailureKind, ReadOnly, Timer, TriggerExt, cycles, falling, first, now, rising, with_timeout,
+    FailureKind, TriggerExt, cycles, falling, first, now, read_only, rising, timer, with_timeout,
 };
 
 use super::{assert_clean, clocked, ticks};
@@ -12,7 +12,7 @@ fn after_rising_read_write_a_flop_shows_its_new_value_and_writes_are_allowed() {
     let mut d = clocked();
     let (clk, a, b, q, sum) = (d.clk, d.a, d.b, d.q, d.sum);
     let seen = d.sim.run(async move {
-        Timer::new(ticks(5)).await;
+        timer(ticks(5)).await;
         a.write_u64(7);
         rising(clk).await;
         let before = (now().ticks(), q.read_u64()); // the edge at 10 has not acted yet
@@ -20,7 +20,7 @@ fn after_rising_read_write_a_flop_shows_its_new_value_and_writes_are_allowed() {
         rising(clk).read_write().await;
         let after = (now().ticks(), q.read_u64()); // the edge at 20 sampled a = 9
         b.write_u64(1); // allowed: this is the ReadWrite region
-        ReadOnly::new().await;
+        read_only().await;
         (before, after, now().ticks(), sum.read_u64())
     });
     assert_eq!(seen.unwrap(), ((10, 0), (20, 9), 20, 10));
@@ -34,7 +34,7 @@ fn after_read_only_a_write_fails_and_the_help_names_read_only() {
     let failure = d
         .sim
         .run(async move {
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             falling(clk).read_only().await;
             a.write_u64(1);
         })
@@ -52,7 +52,7 @@ fn cycles_read_write_lands_in_the_timestep_of_the_nth_edge() {
     let mut d = clocked();
     let (clk, a, q) = (d.clk, d.a, d.q);
     let seen = d.sim.run(async move {
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         a.write_u64(4);
         cycles(clk, 3).read_write().await; // edges at 10, 20, 30
         (now().ticks(), q.read_u64())
@@ -66,13 +66,13 @@ fn timer_read_write_and_read_only_stay_in_timestep_now_plus_t() {
     let mut d = clocked();
     let (a, b, sum) = (d.a, d.b, d.sum);
     let seen = d.sim.run(async move {
-        Timer::new(ticks(2)).await;
+        timer(ticks(2)).await;
         a.write_u64(2);
         b.write_u64(3);
-        Timer::new(ticks(7)).read_write().await;
+        timer(ticks(7)).read_write().await;
         let rw = (now().ticks(), sum.read_u64());
         b.write_u64(4);
-        Timer::new(ticks(3)).read_only().await;
+        timer(ticks(3)).read_only().await;
         (rw, now().ticks(), sum.read_u64())
     });
     assert_eq!(seen.unwrap(), ((9, 5), 12, 6));
@@ -86,24 +86,24 @@ fn a_dropped_region_suffix_leaves_nothing_registered() {
     let mut d = clocked();
     let clk = d.clk;
     let seen = d.sim.run(async move {
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         let on_edge = first!(
             async {
                 rising(clk).read_write().await;
                 "edge"
             },
             async {
-                Timer::new(ticks(3)).await;
+                timer(ticks(3)).await;
                 "timer"
             }
         );
         let on_region = first!(
             async {
-                Timer::new(ticks(21)).read_only().await;
+                timer(ticks(21)).read_only().await;
                 "read_only"
             },
             async {
-                Timer::new(ticks(21)).read_write().await;
+                timer(ticks(21)).read_write().await;
                 "read_write"
             }
         );

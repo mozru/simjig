@@ -6,6 +6,6 @@ FAIL fifo::backpressure  seed=0x9e3779b97f4a7c15  t=1250 ns  [Starved sig=8027a4
   message:  nothing is scheduled, and 2 tasks are blocked
   blocked:  `main` awaits rising(clk)
   blocked:  `main.sink` awaits a future the kernel cannot see
-  help:     start a clock; for a combinational design, await a Timer after each set (`Timer::new(ns(1)).await`); or check that the awaited signal is driven
+  help:     start a clock; for a combinational design, await a timer() after each set (`timer(ns(1)).await`); or check that the awaited signal is driven
   repro:    SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'
   waves:    SIMJIG_WAVES=1 SIMJIG_SEED=0x9e3779b97f4a7c15 cargo nextest run -p fifo_tb -E 'test(=fifo::backpressure)'

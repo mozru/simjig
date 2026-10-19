@@ -1,6 +1,6 @@
 //! Two different designs, and one design twice, sharing one simulation.
 
-use simjig::{DutModel, FailureKind, ModelOptions, ReadOnly, Seed, SeedSource, clock, ns, spawn};
+use simjig::{DutModel, FailureKind, ModelOptions, Seed, SeedSource, clock, ns, read_only, spawn};
 use simjig_bits::{Bit, Bits};
 
 use crate::{counter, fatal, flop, inv};
@@ -21,10 +21,10 @@ async fn two_different_designs_share_one_delta_loop(i: inv::Dut, f: flop::Dut) {
     for a in [false, true, true, false, true] {
         f.clk.falling().await;
         i.a.set(a);
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(f.d.get(), Bit::from(!a), "inv.y reached flop.d");
         f.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         assert_eq!(f.q.get(), Bit::from(!a), "flop captured ~a");
     }
 }
@@ -48,7 +48,7 @@ async fn the_same_design_twice_keeps_separate_state(a: counter::Dut, b: counter:
     for _ in 0..5 {
         a.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(a.count.get(), Bits::<8>::new(5));
     assert_eq!(b.count.get(), Bits::<8>::new(0));
     assert_eq!(a.count.name(), b.count.name(), "both are `counter.count`");
@@ -95,7 +95,7 @@ fn handles_resolve_to_their_own_model() {
     let y = sim
         .run(async move {
             i.a.set(0);
-            ReadOnly::new().await;
+            read_only().await;
             i.y.get()
         })
         .unwrap();

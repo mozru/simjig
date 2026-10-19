@@ -1,6 +1,6 @@
 //! `tests/conformance/tb/test_counter.py`.
 
-use simjig::{ReadOnly, SimDuration, Timer, cycles, first, join, ns, spawn};
+use simjig::{SimDuration, cycles, first, join, ns, read_only, spawn};
 
 use crate::conflog::{Log, Probe};
 use crate::counter::Dut;
@@ -23,13 +23,13 @@ async fn timer(dut: Dut) {
     let mut p = log.probe("main");
     start(&mut p, dut).await;
     for delay in [3, 2, 7, 3, 10, 10] {
-        p.wait(Timer::new(ns(delay)), &format!("Timer({delay}ns)"))
+        p.wait(simjig::timer(ns(delay)), &format!("Timer({delay}ns)"))
             .await;
         p.read(&[&dut.clk, &dut.count]);
-        p.wait(ReadOnly::new(), "ReadOnly").await;
+        p.wait(read_only(), "ReadOnly").await;
         p.read(&[&dut.clk, &dut.count]);
     }
-    p.wait(Timer::new(SimDuration::from_ticks(1)), "Timer(1step)")
+    p.wait(simjig::timer(SimDuration::from_ticks(1)), "Timer(1step)")
         .await;
     p.read(&[&dut.clk, &dut.count]);
     log.check("timer");
@@ -74,7 +74,7 @@ async fn value_change(dut: Dut) {
     }
     p.wait(clk.falling(), "FallingEdge(clk)").await;
     p.write(&en, 0);
-    p.wait(Timer::new(ns(20)), "Timer(20ns)").await;
+    p.wait(simjig::timer(ns(20)), "Timer(20ns)").await;
     p.write(&en, 1);
     p.wait(count.changed(), "ValueChange(count)").await;
     p.read(&[&clk, &count]);
@@ -95,7 +95,7 @@ async fn first_combine(dut: Dut) {
                 "RisingEdge(clk)".to_owned()
             },
             async move {
-                Timer::new(ns(t)).await;
+                simjig::timer(ns(t)).await;
                 format!("Timer({t}ns)")
             },
         );
@@ -105,13 +105,13 @@ async fn first_combine(dut: Dut) {
     }
     let label = "Combine(ClockCycles(clk,2),Timer(13ns))";
     p.wait(
-        async { join!(cycles(clk.raw(), 2), Timer::new(ns(13))) },
+        async { join!(cycles(clk.raw(), 2), simjig::timer(ns(13))) },
         label,
     )
     .await;
     p.read(&[&clk, &count]);
     let label = "Combine(RisingEdge(clk),Timer(1ns))";
-    p.wait(async { join!(clk.rising(), Timer::new(ns(1))) }, label)
+    p.wait(async { join!(clk.rising(), simjig::timer(ns(1))) }, label)
         .await;
     p.read(&[&clk, &count]);
     log.check("first_combine");

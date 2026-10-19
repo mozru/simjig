@@ -1,13 +1,13 @@
 //! `#[simjig::test]` end to end: the expansion runs the body against the DUT, applies the
 //! timeout, and fails the test with the report.
 
-use simjig::{Failure, FailureKind, Precision, ReadOnly, TestCtx, Timer, now, ns, rising};
+use simjig::{Failure, FailureKind, Precision, TestCtx, now, ns, read_only, rising, timer};
 
 use crate::counter;
 
 #[simjig::test]
 async fn runs_a_body_without_parameters() {
-    Timer::new(ns(5)).await;
+    timer(ns(5)).await;
     assert_eq!(
         now().ticks(),
         5000,
@@ -22,7 +22,7 @@ async fn drives_the_dut(dut: counter::Dut) -> simjig::Result {
     for _ in 0..4 {
         rising(dut.clk).await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     let acc = dut.acc.read_u64();
     assert!(acc >= 9 && acc.is_multiple_of(3), "acc = {acc}");
     Ok(())
@@ -30,7 +30,7 @@ async fn drives_the_dut(dut: counter::Dut) -> simjig::Result {
 
 #[simjig::test]
 async fn context_gives_the_precision_to_print_times(ctx: &TestCtx) {
-    Timer::new(ns(1250)).await;
+    timer(ns(1250)).await;
     assert_eq!(ctx.precision(), Precision::PS, "no DUT: 1 ps");
     assert_eq!(now().display(ctx.precision()).to_string(), "1250 ns");
 }
@@ -56,7 +56,7 @@ async fn timeout_fails_the_test(dut: counter::Dut) {
 #[simjig::test]
 #[should_panic(expected = "message:  the scoreboard saw 2 extra items")]
 async fn a_returned_failure_fails_the_test() -> simjig::Result {
-    Timer::new(ns(1)).await;
+    timer(ns(1)).await;
     let message = "the scoreboard saw 2 extra items".to_owned();
     Err(Failure {
         kind: FailureKind::ModelFatal {
@@ -78,7 +78,7 @@ async fn a_panic_reports_its_location() {
 
 #[simjig::test(timeout = "none")]
 async fn timeout_none_runs_past_the_default() {
-    Timer::new(simjig::ms(20)).await;
+    timer(simjig::ms(20)).await;
 }
 
 // The body ends after 20 ms: if the 10 ms default did not fire, the test fails because it
@@ -87,7 +87,7 @@ async fn timeout_none_runs_past_the_default() {
 #[should_panic(expected = "(the default for #[simjig::test]")]
 async fn the_default_timeout_fails_a_long_test() {
     for _ in 0..20 {
-        Timer::new(simjig::ms(1)).await;
+        timer(simjig::ms(1)).await;
     }
 }
 

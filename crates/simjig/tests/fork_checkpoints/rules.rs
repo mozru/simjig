@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
 use simjig::fork::{self, BranchError, ForkError, ForkHook};
-use simjig::{Seed, SeedSource, TestCtx, Timer, clock, ns, spawn};
+use simjig::{Seed, SeedSource, TestCtx, clock, ns, spawn, timer};
 
 use crate::counter;
 
@@ -74,7 +74,7 @@ async fn another_running_task_refuses_the_fork(dut: counter::Dut) {
     driver.cancel();
     // A finished task does not count.
     let done = spawn("done", async {});
-    Timer::new(ns(1)).await;
+    timer(ns(1)).await;
     assert!(done.is_finished());
     let branches = fork::run_from_checkpoint(seed(), 1, |_| async { Ok(()) })
         .await

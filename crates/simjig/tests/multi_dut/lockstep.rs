@@ -1,7 +1,7 @@
 //! Lockstep: the old `counter` RTL against a second instance of itself (agrees) and against
 //! `counter_rev2` (diverges at the first cycle where rev2 skips 6).
 
-use simjig::{Divergence, Lockstep, Mirror, ReadOnly, clock, ns};
+use simjig::{Divergence, Lockstep, Mirror, clock, ns, read_only};
 use simjig_bits::Bits;
 
 use crate::{counter, counter_rev2};
@@ -31,7 +31,7 @@ async fn count_in_lockstep(
     reset_then_count(old, new).await;
     for _ in 0..cycles {
         old.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         lockstep.check()?;
     }
     Ok(lockstep)
@@ -83,7 +83,7 @@ async fn two_instances_of_one_build_agree(a: counter::Dut, b: counter::Dut) {
     for cycle in 0..300u32 {
         en.set(cycle % 3 != 0);
         a.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         lockstep.step();
         a.clk.falling().await;
     }
@@ -98,7 +98,7 @@ async fn step_fails_the_test_with_the_divergence(old: counter::Dut, new: counter
     reset_then_count(old, new).await;
     for _ in 0..20 {
         old.clk.rising().await;
-        ReadOnly::new().await;
+        read_only().await;
         lockstep.step();
     }
 }

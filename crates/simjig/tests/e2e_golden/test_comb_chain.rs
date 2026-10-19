@@ -1,7 +1,7 @@
 //! `tests/conformance/tb/test_comb_chain.py`. `s1`..`s3` are internal nets, read through
 //! the read-only probes `build.rs` declares.
 
-use simjig::{ReadOnly, ReadWrite, Timer, ns, spawn};
+use simjig::{ns, read_only, read_write, spawn, timer};
 
 use crate::comb_chain::Dut;
 use crate::conflog::Log;
@@ -22,7 +22,7 @@ async fn comb_settle(dut: Dut) {
     let mut w = log.probe("y_watch");
     p.write(&a, 0);
     p.write(&b, 0);
-    p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+    p.wait(timer(ns(1)), "Timer(1ns)").await;
     p.read(&[&a, &b, &y, &y_eq]);
     let watcher = spawn("y_watch", async move {
         for _ in 0..3 {
@@ -34,17 +34,17 @@ async fn comb_settle(dut: Dut) {
         p.write(&a, va);
         p.write(&b, vb);
         p.read(&[&a, &y]);
-        p.wait(ReadWrite::new(), "ReadWrite").await;
+        p.wait(read_write(), "ReadWrite").await;
         p.read(&[&a, &y]);
-        p.wait(ReadOnly::new(), "ReadOnly").await;
+        p.wait(read_only(), "ReadOnly").await;
         p.read(&[&a, &b, &y, &y_eq, &s1, &s2, &s3]);
-        p.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+        p.wait(timer(ns(1)), "Timer(1ns)").await;
         p.read(&[&a, &y]);
     }
-    p.wait(ReadWrite::new(), "ReadWrite").await;
+    p.wait(read_write(), "ReadWrite").await;
     p.write(&a, 0x01);
     p.read(&[&a, &y]);
-    p.wait(ReadOnly::new(), "ReadOnly").await;
+    p.wait(read_only(), "ReadOnly").await;
     p.read(&[&a, &y]);
     watcher.await;
     log.check("comb_settle");

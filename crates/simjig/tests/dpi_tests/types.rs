@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::rc::Rc;
 
-use simjig::{Chandle, ReadOnly, Timer};
+use simjig::{Chandle, read_only, timer};
 use simjig_bits::{Bit, Bits};
 
 use super::{TICK, cycles, dpi_types, sim};
@@ -144,9 +144,9 @@ fn run() -> (Ports, Seen, Chandle) {
         .run(async move {
             dut.a.set(u128::from(A));
             dut.b.set(u128::from(B));
-            Timer::new(TICK).await;
+            timer(TICK).await;
             cycles(dut.clk, 2).await;
-            ReadOnly::new().await;
+            read_only().await;
             Ports {
                 ints_ret: dut.ints_ret.get(),
                 ints_sum: dut.ints_sum.get(),

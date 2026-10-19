@@ -3,7 +3,7 @@
 //! (`ModelOptions::with_elide_evals`, `#[simjig::test(elide_evals)]`), and even then off
 //! for a model whose build shows a variable C++ may write.
 
-use simjig::{ModelOptions, ReadOnly, Seed, SeedSource, Sim, Timer, ns};
+use simjig::{ModelOptions, Seed, SeedSource, Sim, ns, read_only, timer};
 
 use super::duts::{sim, sim_with};
 use crate::{input_time, rw_meta, rw_time};
@@ -18,11 +18,11 @@ where
     D: 'static,
 {
     sim.run(async move {
-        Timer::new(ns(5)).await;
-        ReadOnly::new().await;
+        timer(ns(5)).await;
+        read_only().await;
         let five = t_out(&dut);
-        Timer::new(ns(5)).await;
-        ReadOnly::new().await;
+        timer(ns(5)).await;
+        read_only().await;
         (five, t_out(&dut))
     })
     .unwrap()
@@ -65,12 +65,12 @@ fn an_eval_with_nothing_written_still_runs_logic_fed_by_a_public_rw_variable() {
     let (mut sim, dut) = sim::<rw_time::Dut>();
     let seen = sim
         .run(async move {
-            Timer::new(ns(5)).await;
+            timer(ns(5)).await;
             dut.knob.set(1);
-            ReadOnly::new().await;
+            read_only().await;
             let at_write = dut.t_out.get().to_u128();
-            Timer::new(ns(5)).await;
-            ReadOnly::new().await;
+            timer(ns(5)).await;
+            read_only().await;
             (at_write, dut.t_out.get().to_u128())
         })
         .unwrap();
@@ -85,11 +85,11 @@ fn an_unwritten_public_rw_variable_still_runs_its_logic_on_each_eval() {
     let (mut sim, dut) = sim::<rw_meta::Dut>();
     let seen = sim
         .run(async move {
-            Timer::new(ns(5)).await;
-            ReadOnly::new().await;
+            timer(ns(5)).await;
+            read_only().await;
             let five = dut.t_out.get().to_u128();
-            Timer::new(ns(5)).await;
-            ReadOnly::new().await;
+            timer(ns(5)).await;
+            read_only().await;
             (five, dut.t_out.get().to_u128())
         })
         .unwrap();

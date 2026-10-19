@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use simjig::{
-    FailureKind, NextTimeStep, Timer, TraceKind, first, now, rising, scope, spawn, with_timeout,
+    FailureKind, TraceKind, first, next_time_step, now, rising, scope, spawn, timer, with_timeout,
 };
 
 use super::{assert_clean, clocked, dut, ticks};
@@ -46,10 +46,10 @@ fn dropping_a_task_handle_cancels_it_and_runs_drop_cleanup() {
                 rising(clk).await;
             }
         });
-        Timer::new(ticks(12)).await;
+        timer(ticks(12)).await;
         let during = a.read_u64();
         drop(driver);
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         (during, a.read_u64())
     });
     assert_eq!(
@@ -76,10 +76,10 @@ fn detached_children_die_with_their_parent() {
                     }
                 })
                 .detach();
-                Timer::new(ticks(25)).await; // edges at 0, 10, 20
+                timer(ticks(25)).await; // edges at 0, 10, 20
             });
             parent.await;
-            Timer::new(ticks(100)).await; // the ticker must be gone by now
+            timer(ticks(100)).await; // the ticker must be gone by now
         })
         .unwrap();
     assert_eq!(*ticks_seen.borrow(), 3);
@@ -101,11 +101,11 @@ fn a_timed_out_scope_cancels_its_whole_subtree() {
                     }
                 })
                 .detach();
-                Timer::new(ticks(1000)).await;
+                timer(ticks(1000)).await;
             }),
         )
         .await;
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         (result.is_err(), a.read_u64(), now().ticks())
     });
     assert_eq!(out.unwrap(), (true, 0, 16));
@@ -138,7 +138,7 @@ fn a_task_detached_after_its_spawner_finished_dies_with_the_scope() {
                 })
                 .await;
                 c.detach();
-                Timer::new(ticks(1000)).await;
+                timer(ticks(1000)).await;
             }),
         )
         .await;
@@ -154,10 +154,10 @@ fn awaiting_a_task_returns_its_result_even_if_already_done() {
     let out = d.sim.run(async {
         let quick = spawn("quick", async { 40 });
         let slow = spawn("slow", async {
-            Timer::new(ticks(3)).await;
+            timer(ticks(3)).await;
             2
         });
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         assert!(quick.is_finished());
         assert_eq!(quick.name(), "main.quick");
         quick.await + slow.await
@@ -182,7 +182,7 @@ fn tasks_left_running_are_cancelled_when_main_returns() {
                 }
             })
             .detach();
-            Timer::new(ticks(30)).await;
+            timer(ticks(30)).await;
         })
         .unwrap();
     assert!(*cleaned.borrow());
@@ -203,11 +203,11 @@ fn a_panic_in_drop_cleanup_is_a_task_panic() {
         .run(async {
             let t = spawn("fragile", async {
                 let _p = PanicOnDrop;
-                Timer::new(ticks(100)).await;
+                timer(ticks(100)).await;
             });
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             drop(t);
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
         })
         .unwrap_err();
     assert_eq!(f.task.as_deref(), Some("main.fragile"));
@@ -229,9 +229,9 @@ fn a_cleanup_panic_while_unwinding_does_not_mask_the_first_panic() {
         .run(async {
             let _b = spawn("b", async {
                 let _p = PanicOnDrop;
-                Timer::new(ticks(100)).await;
+                timer(ticks(100)).await;
             });
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             // Unwinding out of `main` drops `_b`, whose cleanup panics in turn.
             panic!("main failed");
         })
@@ -256,7 +256,7 @@ fn a_handle_dropped_before_its_task_ever_ran_fails_the_run_at_the_spawn() {
             // driver never runs and the test would pass without it.
             #[expect(clippy::let_underscore_future, reason = "the mistake under test")]
             let _ = spawn("lost", async move { *flag.borrow_mut() = true });
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
         })
         .unwrap_err();
     let spawn_line = line!() - 4;
@@ -301,7 +301,7 @@ fn handles_dropped_unrun_together_are_all_named_in_one_failure() {
         .sim
         .run(async move {
             assert!(setup().await.is_err());
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
         })
         .unwrap_err();
     let FailureKind::Setup { message, help } = &f.kind else {
@@ -329,8 +329,8 @@ fn an_early_return_from_main_drops_an_unrun_handle_without_failing() {
     let mut d = dut();
     let needed = false;
     let out = d.sim.run(async move {
-        Timer::new(ticks(1)).await;
-        let monitor = spawn("monitor", Timer::new(ticks(10)));
+        timer(ticks(1)).await;
+        let monitor = spawn("monitor", timer(ticks(10)));
         if !needed {
             return 7;
         }
@@ -356,7 +356,7 @@ fn a_child_that_returns_after_dropping_an_unrun_handle_fails() {
                 let _ = spawn("lost", async move { *flag.borrow_mut() = true });
             })
             .await;
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
         })
         .unwrap_err();
     assert!(!*ran.borrow());
@@ -374,8 +374,8 @@ fn deliberate_and_cascading_drops_of_a_task_that_never_ran_pass() {
             // An explicit cancel is deliberate.
             spawn("cancelled", async {}).cancel();
             // A handle dropped after its task ran.
-            let ran = spawn("ran", Timer::new(ticks(5)));
-            Timer::new(ticks(1)).await;
+            let ran = spawn("ran", timer(ticks(5)));
+            timer(ticks(1)).await;
             drop(ran);
             // A Task passed by value to `first!` loses before it ever runs: the combinator
             // cancels it.
@@ -386,9 +386,9 @@ fn deliberate_and_cascading_drops_of_a_task_that_never_ran_pass() {
             // A task cancelled while it holds the handle of a child that never ran.
             let parent = spawn("parent", async {
                 let _child = spawn("child", async {});
-                Timer::new(ticks(10)).await;
+                timer(ticks(10)).await;
             });
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             parent.cancel();
         })
         .unwrap();
@@ -418,9 +418,9 @@ fn cancelling_most_waiters_of_one_edge_or_deadline_leaves_the_rest_in_order() {
                 let log = Rc::clone(&shared);
                 let task = spawn("w", async move {
                     if i % 2 == 0 {
-                        Timer::new(ticks(5)).await;
+                        timer(ticks(5)).await;
                     } else {
-                        Timer::new(ticks(2)).await; // past the edge at 0
+                        timer(ticks(2)).await; // past the edge at 0
                         rising(clk).await;
                     }
                     log.borrow_mut().push(format!("{i}@{}", now().ticks()));
@@ -432,13 +432,13 @@ fn cancelling_most_waiters_of_one_edge_or_deadline_leaves_the_rest_in_order() {
                 }
             }
             let doomed: Vec<_> = (0..20)
-                .map(|_| spawn("x", async { Timer::new(ticks(7)).await }))
+                .map(|_| spawn("x", async { timer(ticks(7)).await }))
                 .collect();
-            Timer::new(ticks(3)).await;
+            timer(ticks(3)).await;
             drop(cancelled);
             drop(doomed);
-            Timer::new(ticks(3)).await; // t = 6
-            NextTimeStep::new().await;
+            timer(ticks(3)).await; // t = 6
+            next_time_step().await;
             shared.borrow_mut().push(format!("next@{}", now().ticks()));
             for task in survivors {
                 task.await;
@@ -479,18 +479,18 @@ fn a_cancelled_losers_drop_cleanup_runs_when_it_is_cancelled() {
             let (log_x, log_y, log_z) = (log("x"), log("y"), log("z"));
             let tasks = [
                 spawn("x", async move {
-                    Timer::new(ticks(5)).await;
+                    timer(ticks(5)).await;
                     rising(clk).await; // 10
                     set.set();
                     log_x();
                 }),
                 spawn("y", async move {
-                    Timer::new(ticks(5)).await;
+                    timer(ticks(5)).await;
                     rising(clk).await;
                     log_y();
                 }),
                 spawn("z", async move {
-                    Timer::new(ticks(1)).await; // waits on `ev` after the operand
+                    timer(ticks(1)).await; // waits on `ev` after the operand
                     wait.wait().await;
                     log_z();
                 }),
@@ -498,7 +498,7 @@ fn a_cancelled_losers_drop_cleanup_runs_when_it_is_cancelled() {
             let cleanup = log("cleanup");
             simjig::first!(ev.wait(), async move {
                 let _guard = OnDrop(Some(cleanup));
-                Timer::new(ticks(100)).await;
+                timer(ticks(100)).await;
             });
             log("main")();
             for task in tasks {
@@ -554,7 +554,7 @@ fn a_task_operand_by_value_is_cancelled_and_by_reference_keeps_running() {
         let (first_value, seen_first_value) = counter("first_by_value");
         simjig::first!(
             async {
-                Timer::new(ticks(25)).await;
+                timer(ticks(25)).await;
                 0
             },
             first_value
@@ -564,13 +564,13 @@ fn a_task_operand_by_value_is_cancelled_and_by_reference_keeps_running() {
         let (mut first_ref, seen_first_ref) = counter("first_by_ref");
         simjig::first!(
             async {
-                Timer::new(ticks(25)).await;
+                timer(ticks(25)).await;
                 0
             },
             &mut first_ref
         );
 
-        Timer::new(ticks(400)).await;
+        timer(ticks(400)).await;
         let after = (
             *seen_value.borrow() - at_timeout,
             *seen_first_value.borrow() - at_first,
@@ -618,7 +618,7 @@ fn an_edge_repolled_with_another_waker_wakes_the_newest() {
     let mut d = clocked();
     let clk = d.clk;
     let at = d.sim.run(async move {
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         let woken = RepolledWithAnotherWaker(Box::pin(rising(clk)), false);
         (with_timeout(ticks(100), woken).await.is_ok(), now())
     });

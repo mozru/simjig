@@ -3,7 +3,7 @@
 
 use simjig::fork;
 use simjig::{
-    DutModel, FailureKind, InitValues, ModelOptions, ReadOnly, Seed, SeedSource, TestCtx,
+    DutModel, FailureKind, InitValues, ModelOptions, Seed, SeedSource, TestCtx, read_only,
 };
 use simjig_bits::Bits;
 
@@ -20,7 +20,7 @@ fn start(options: &ModelOptions) -> Start {
     let mut sim = no_reset::Dut::instantiate(options).unwrap();
     let dut = no_reset::Dut::create(&mut sim).unwrap();
     sim.run(async move {
-        ReadOnly::new().await;
+        read_only().await;
         (dut.q.get(), dut.r.get(), dut.u.get())
     })
     .unwrap()
@@ -86,7 +86,7 @@ fn the_models_of_one_design_start_alike() {
         let mut sim = Pair::instantiate(&options(5, init)).unwrap();
         let (a, b) = Pair::create(&mut sim).unwrap();
         sim.run(async move {
-            ReadOnly::new().await;
+            read_only().await;
             let diverged = simjig::Lockstep::new()
                 .output(a.q, b.q)
                 .output(a.r, b.r)
@@ -113,7 +113,7 @@ fn the_models_of_one_design_start_alike() {
 /// rather than drawing again.
 #[simjig::test(init = random, timeout = "1us")]
 async fn the_attribute_randomizes_and_branches_inherit_it(ctx: &TestCtx, dut: no_reset::Dut) {
-    ReadOnly::new().await;
+    read_only().await;
     let q = dut.q.get();
     assert_ne!(q, Bits::new(0));
     let branches = fork::run_from_checkpoint(ctx.seed(), 2, |_| async move { Ok(dut.q.get()) })

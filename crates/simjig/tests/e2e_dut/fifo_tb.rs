@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simjig::{ReadOnly, TestCtx, clock, ns, spawn};
+use simjig::{TestCtx, clock, ns, read_only, spawn};
 use simjig_bits::Bit;
 
 use crate::fifo;
@@ -33,7 +33,7 @@ async fn every_beat_arrives_in_order_under_back_pressure(ctx: &TestCtx, dut: fif
             let valid = gaps.below(4) != 0;
             dut.in_valid.set(valid);
             dut.in_data.set(u128::from(next));
-            ReadOnly::new().await;
+            read_only().await;
             if valid && dut.in_ready.get() == Bit::ONE {
                 log.borrow_mut().push(next);
                 next += 1;
@@ -49,7 +49,7 @@ async fn every_beat_arrives_in_order_under_back_pressure(ctx: &TestCtx, dut: fif
         while got.len() < BEATS as usize {
             let ready = stalls.below(3) == 0;
             dut.out_ready.set(ready);
-            ReadOnly::new().await;
+            read_only().await;
             full_seen |= dut.in_ready.get() == Bit::ZERO;
             if ready && dut.out_valid.get() == Bit::ONE {
                 got.push(u32::try_from(dut.out_data.get().to_u128()).unwrap());

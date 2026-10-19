@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use simjig::{ReadOnly, Timer};
+use simjig::{read_only, timer};
 use simjig_bits::Bits;
 
 use super::{TICK, cycles, dpi, sim};
@@ -42,11 +42,11 @@ impl dpi::Dpi for Adder {
 async fn drive(dut: &dpi::Dut, a: u32, b: u32, n: u32) -> (Bits<32>, Bits<32>) {
     dut.a.set(u128::from(a));
     dut.b.set(u128::from(b));
-    Timer::new(TICK).await;
+    timer(TICK).await;
     cycles(dut.clk, n).await;
-    ReadOnly::new().await;
+    read_only().await;
     let seen = (dut.sum.get(), dut.calls.get());
-    Timer::new(TICK).await;
+    timer(TICK).await;
     seen
 }
 

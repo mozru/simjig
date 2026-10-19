@@ -1,7 +1,7 @@
 //! `tests/conformance/tb/test_async_fifo.py` (`DEPTH=8`): two clocks whose rising edges
 //! coincide. `wbin`, `rgray_w2`, `rbin` and `wgray_r2` are internal, read through probes.
 
-use simjig::{ReadOnly, Timer, cycles, join, ns, spawn};
+use simjig::{cycles, join, ns, read_only, spawn, timer};
 use simjig_bits::Bit;
 
 use crate::async_fifo::Dut;
@@ -89,10 +89,10 @@ async fn cdc_stream(dut: Dut) {
         let mut i = 0;
         while i < data.len() {
             pw.wait(dut.wclk.falling(), "FallingEdge(wclk)").await;
-            pw.wait(ReadOnly::new(), "ReadOnly").await;
+            pw.wait(read_only(), "ReadOnly").await;
             pw.read(&[&dut.wfull]);
             let full = dut.wfull.get() == Bit::ONE;
-            pw.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+            pw.wait(timer(ns(1)), "Timer(1ns)").await;
             pw.write(&dut.winc, u128::from(!full));
             pw.write(&dut.wdata, data[i]);
             i += usize::from(!full);
@@ -104,10 +104,10 @@ async fn cdc_stream(dut: Dut) {
         let mut got = 0;
         while got < 8 {
             pr.wait(dut.rclk.falling(), "FallingEdge(rclk)").await;
-            pr.wait(ReadOnly::new(), "ReadOnly").await;
+            pr.wait(read_only(), "ReadOnly").await;
             pr.read(&[&dut.rempty, &dut.rdata]);
             let empty = dut.rempty.get() == Bit::ONE;
-            pr.wait(Timer::new(ns(1)), "Timer(1ns)").await;
+            pr.wait(timer(ns(1)), "Timer(1ns)").await;
             pr.write(&dut.rinc, u128::from(!empty));
             got += usize::from(!empty);
         }

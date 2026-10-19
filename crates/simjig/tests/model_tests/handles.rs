@@ -5,7 +5,7 @@
 
 use simjig::__private::{Access, Binder, ModelMeta, SignalMeta, Storage, create, instantiate};
 use simjig::{
-    Clock, FailureKind, ModelOptions, ReadOnly, Seed, SeedSource, SimTime, TimeUnit, Timer, ns,
+    Clock, FailureKind, ModelOptions, Seed, SeedSource, SimTime, TimeUnit, ns, read_only, timer,
 };
 use simjig_bits::{Bit, Bits, WideBits};
 
@@ -30,7 +30,7 @@ fn output_follows_input_after_the_next_eval() {
         dut.a.set(1);
         // A deposit is not visible before it is applied.
         let before = dut.a.get();
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         (at_start, before, (dut.a.get(), dut.y.get()))
     });
     let (at_start, before, after) = seen.unwrap();
@@ -52,7 +52,7 @@ fn every_width_class_round_trips() {
         dut.i65.set(0x1_0123_4567_89ab_cdef);
         dut.i200.set(wide);
         // Deposits are applied after the next eval: read back after the timestep.
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         (
             (dut.i1.get(), dut.o1.get()),
             (dut.i8.get(), dut.o8.get()),
@@ -79,10 +79,10 @@ fn wide_flop_captures_on_the_clock() {
     let q = sim.run(async move {
         dut.clk.set(0);
         dut.i200.set(pattern());
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         let before = dut.q200.get();
         dut.clk.set(1);
-        ReadOnly::new().await;
+        read_only().await;
         (before, dut.q200.get())
     });
     assert_eq!(q.unwrap(), (WideBits::from(0), pattern()));
@@ -108,7 +108,7 @@ fn write_location_is_the_callers_line() {
     let (mut sim, dut) = sim::<inv::Dut>();
     let line = line!() + 3;
     let failure = sim.run(async move {
-        ReadOnly::new().await;
+        read_only().await;
         dut.a.set(1);
     });
     let failure = failure.expect_err("a write in ReadOnly fails the run");
@@ -125,7 +125,7 @@ fn outputs_reject_raw_writes() {
         // The panic unwinds out of the kernel's write-log application, so run never returns.
         drop(sim.run(async move {
             y.write_u64(1);
-            Timer::new(ns(1)).await;
+            timer(ns(1)).await;
         }));
     }));
     let message = outcome.expect_err("writing an output must panic");
@@ -142,10 +142,10 @@ fn model_events_advance_time() {
         let mut seen = Vec::new();
         for _ in 0..3 {
             dut.iclk_out.rising().await;
-            ReadOnly::new().await;
+            read_only().await;
             seen.push((simjig::now().ticks(), dut.ticks.get().to_u128()));
         }
-        Timer::new(ns(1)).await;
+        timer(ns(1)).await;
         dut.start.set(1);
         dut.done.falling().await;
         let fell = simjig::now().ticks();
@@ -320,7 +320,7 @@ fn a_clock_edge_at_time_zero_is_captured() {
         dut.en.set(1);
         dut.clk.rising().await;
         let at_edge = simjig::now();
-        ReadOnly::new().await;
+        read_only().await;
         (at_edge, dut.count.get())
     });
     assert_eq!(count.unwrap(), (SimTime::ZERO, Bits::new(1)));

@@ -4,8 +4,8 @@ use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 
 use simjig::{
-    BlockedTask, DELTA_MAX, Event, FailureKind, FakeModel, Lock, Precision, READ_WRITE_MAX,
-    ReadOnly, ReadWrite, Sim, SimTime, Timer, changed, rising, spawn,
+    BlockedTask, DELTA_MAX, Event, FailureKind, FakeModel, Lock, Precision, READ_WRITE_MAX, Sim,
+    SimTime, changed, read_only, read_write, rising, spawn, timer,
 };
 
 use super::{assert_clean, clocked, dut, ticks};
@@ -18,7 +18,7 @@ fn write_conflict_names_both_tasks_only_when_values_differ() {
         let out = d.sim.run(async move {
             a.write_u64(5);
             spawn("other", async move { a.write_u64(second) }).await;
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             a.read_u64()
         });
         if conflict {
@@ -47,7 +47,7 @@ fn one_task_rewriting_a_signal_keeps_the_last_value() {
     let out = d.sim.run(async move {
         a.write_u64(1);
         a.write_u64(2);
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         a.read_u64()
     });
     assert_eq!(out.unwrap(), 2);
@@ -68,7 +68,7 @@ fn a_task_woken_from_read_only_runs_there_and_cannot_write() {
                 e.wait().await;
                 a.write_u64(1);
             });
-            ReadOnly::new().await;
+            read_only().await;
             event.set();
             writer.await;
         })
@@ -88,7 +88,7 @@ fn write_in_read_only_fails_at_the_writing_line() {
     let f = d
         .sim
         .run(async move {
-            ReadOnly::new().await;
+            read_only().await;
             a.write_u64(1);
         })
         .unwrap_err();
@@ -131,7 +131,7 @@ fn read_write_loop_backs_have_their_own_higher_limit() {
     let out = d.sim.run(async move {
         for i in 0..100 {
             a.write_u64(i);
-            ReadWrite::new().await;
+            read_write().await;
             assert_eq!(sum.read_u64(), i, "the fan-out settled before ReadWrite");
         }
         simjig::now()
@@ -149,7 +149,7 @@ fn read_write_limit_names_the_task_and_line_that_keep_looping_back() {
         .run(async move {
             loop {
                 a.write_u64(a.read_u64() ^ 1);
-                ReadWrite::new().await; // loops back forever
+                read_write().await; // loops back forever
             }
         })
         .unwrap_err();
@@ -217,11 +217,11 @@ fn deadlock_on_crossed_locks() {
             let (x2, y2) = (x.clone(), y.clone());
             let other = spawn("other", async move {
                 let _gy = y2.lock().await;
-                Timer::new(ticks(1)).await;
+                timer(ticks(1)).await;
                 let _gx = x2.lock().await;
             });
             let _gx = x.lock().await;
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             let _gy = y.lock().await;
             other.await;
         })
@@ -313,9 +313,9 @@ fn a_panic_in_cleanup_is_located_too() {
         .run(async move {
             let task = spawn("loud", async move {
                 let _guard = Loud;
-                Timer::new(ticks(5)).await;
+                timer(ticks(5)).await;
             });
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             task.cancel();
         })
         .unwrap_err();
@@ -346,7 +346,7 @@ fn model_fatal_and_finish_stop_the_run() {
         let f = sim
             .run(async move {
                 go.write_u64(1);
-                Timer::new(ticks(5)).await;
+                timer(ticks(5)).await;
             })
             .unwrap_err();
         let expect = if finish {
@@ -431,7 +431,7 @@ fn a_panicking_fake_model_closure_is_a_model_fatal() {
     let f = sim
         .run(async move {
             a.write_u64(3);
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
         })
         .unwrap_err();
     let FailureKind::ModelFatal { message } = &f.kind else {
@@ -457,7 +457,7 @@ fn a_run_nested_inside_a_combinator_operand_is_refused_by_name() {
                     let mut inner = Sim::from_fake(FakeModel::new(Precision::NS));
                     drop(inner.run(async {}));
                 },
-                Timer::new(ticks(5))
+                timer(ticks(5))
             );
         })
         .unwrap_err();
@@ -477,7 +477,7 @@ fn an_elapsed_timeout_converts_into_a_failure_of_the_awaiting_task() {
     let out = d
         .sim
         .run(async {
-            Timer::new(ticks(5)).await;
+            timer(ticks(5)).await;
             simjig::scope("waiter", async {
                 let never = Event::new("never");
                 simjig::with_timeout(ticks(400_000), never.wait()).await?;

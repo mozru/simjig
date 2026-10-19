@@ -5,11 +5,14 @@
 //! |---|---|
 //! | [`rising`], [`falling`], [`changed`] | when the comparison after a write-log application sees that change |
 //! | [`cycles`] | after `n` rising edges |
-//! | [`Timer`] | in the timed region of timestep `now + d`, *before* its clock edges |
-//! | [`NextTimeStep`] | at the start of the next timestep, before its `Timer`s |
-//! | [`ReadWrite`] | in the `ReadWrite` region of this timestep, once the deltas settled |
-//! | [`ReadOnly`] | in the `ReadOnly` region of this timestep; writes are failures there |
+//! | [`timer`] | in the timed region of timestep `now + d`, *before* its clock edges |
+//! | [`next_time_step`] | at the start of the next timestep, before its timers |
+//! | [`read_write`] | in the `ReadWrite` region of this timestep, once the deltas settled |
+//! | [`read_only`] | in the `ReadOnly` region of this timestep; writes are failures there |
 //! | [`yield_now`] | after the other ready tasks |
+//!
+//! Each is a function returning a named future type (`timer` returns [`Timer`]), as
+//! Tokio's `sleep` returns `Sleep`: cocotb's trigger classes become `snake_case` functions.
 //!
 //! [`TriggerExt`] adds `.read_write()` and `.read_only()` to the edge, cycle and timer
 //! triggers: the trigger, then that region of the same timestep, in one expression.
@@ -237,9 +240,30 @@ impl Future for Cycles {
     }
 }
 
-/// Resumes `d` ticks after it is first awaited, in the timed region of that timestep:
-/// before that timestep's clock edges are applied, so it sees pre-edge values and wins a
-/// tie against an edge in [`first!`](crate::first) or [`with_timeout`].
+/// Resumes `duration` ticks after it is first awaited, in the timed region of that
+/// timestep: before that timestep's clock edges are applied, so it sees pre-edge values and
+/// wins a tie against an edge in [`first!`](crate::first) or [`with_timeout`]. cocotb spells
+/// it `Timer(...)`.
+///
+/// # Panics
+/// When awaited, if `duration` is zero ticks or the deadline overflows the tick counter;
+/// the panic points at this call.
+///
+/// cocotb 2.1 rejects `Timer(0)` when it is built (`ValueError`). This function stays
+/// `const` (usable in `const` items) and only records the call site; the check runs on the
+/// first poll, inside the run, so it fails the run as a `TaskPanic` whose message names
+/// this call, even for a timer made before [`Sim::run`](crate::Sim::run). A zero timer that
+/// is never awaited is inert.
+#[track_caller]
+pub const fn timer(duration: SimDuration) -> Timer {
+    Timer {
+        duration,
+        at: Location::caller(),
+        reg: None,
+    }
+}
+
+/// Waits for a duration; made by [`timer`].
 #[derive(Debug)]
 #[must_use = "triggers do nothing unless awaited"]
 pub struct Timer {
@@ -248,54 +272,42 @@ pub struct Timer {
     reg: Option<Registration>,
 }
 
-impl Timer {
-    /// A timer for `duration`, counted from its first poll.
-    ///
-    /// # Panics
-    /// When awaited, if `duration` is zero ticks or the deadline overflows the tick
-    /// counter; the panic points at this call.
-    ///
-    /// cocotb 2.1 rejects `Timer(0)` when it is built (`ValueError`). This constructor
-    /// stays `const` (usable in `const` items) and only records the call site; the check
-    /// runs on the first poll, inside the run, so it fails the run as a `TaskPanic` whose
-    /// message names this call, even for a `Timer` built before
-    /// [`Sim::run`](crate::Sim::run). A zero `Timer` that is never awaited is inert.
-    #[track_caller]
-    pub const fn new(duration: SimDuration) -> Self {
-        Self {
-            duration,
-            at: Location::caller(),
-            reg: None,
-        }
-    }
-}
-
 impl Future for Timer {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let (duration, at) = (self.duration, self.at);
-        poll_waiting(&mut self.reg, cx, "Timer", at, |k| {
+        poll_waiting(&mut self.reg, cx, "timer()", at, |k| {
             if duration.ticks() == 0 {
                 return Err(
-                    "Timer of zero ticks; use yield_now() or ReadWrite to stay in this \
-                            timestep"
+                    "timer() of zero ticks; use yield_now() or read_write() to stay in \
+                            this timestep"
                         .to_owned(),
                 );
             }
-            let deadline = k
-                .now
-                .get()
-                .checked_add(duration)
-                .ok_or_else(|| "Timer deadline overflows the 64-bit tick counter".to_owned())?;
+            let deadline =
+                k.now.get().checked_add(duration).ok_or_else(|| {
+                    "timer() deadline overflows the 64-bit tick counter".to_owned()
+                })?;
             Ok(WaitOn::Time(deadline))
         })
     }
 }
 
 macro_rules! phase_trigger {
-    ($(#[$doc:meta])* $name:ident, $on:expr, $check:expr) => {
+    ($(#[$doc:meta])* $fn:ident -> $name:ident, $on:expr, $check:expr) => {
         $(#[$doc])*
+        ///
+        /// Registered when first awaited; misuse panics point at this call.
+        #[track_caller]
+        pub const fn $fn() -> $name {
+            $name {
+                at: Location::caller(),
+                reg: None,
+            }
+        }
+
+        #[doc = concat!("Waits for a region; made by [`", stringify!($fn), "`].")]
         #[derive(Debug)]
         #[must_use = "triggers do nothing unless awaited"]
         pub struct $name {
@@ -303,30 +315,12 @@ macro_rules! phase_trigger {
             reg: Option<Registration>,
         }
 
-        impl $name {
-            /// The trigger, registered when first awaited; misuse panics point at this call.
-            #[track_caller]
-            pub const fn new() -> Self {
-                Self {
-                    at: Location::caller(),
-                    reg: None,
-                }
-            }
-        }
-
-        impl Default for $name {
-            #[track_caller]
-            fn default() -> Self {
-                Self::new()
-            }
-        }
-
         impl Future for $name {
             type Output = ();
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
                 let at = self.at;
-                poll_waiting(&mut self.reg, cx, stringify!($name), at, |k| {
+                poll_waiting(&mut self.reg, cx, concat!(stringify!($fn), "()"), at, |k| {
                     let check: fn(&Kernel) -> Result<(), String> = $check;
                     check(k)?;
                     Ok($on)
@@ -340,7 +334,7 @@ fn not_in_read_only(k: &Kernel, what: &str) -> Result<(), String> {
     if k.phase.get() == Phase::ReadOnly {
         return Err(format!(
             "{what} awaited in the ReadOnly phase, which is already past it; await \
-             NextTimeStep, a Timer or an edge first"
+             next_time_step(), a timer() or an edge first"
         ));
     }
     Ok(())
@@ -351,27 +345,32 @@ phase_trigger!(
     /// settled: writes logged before awaiting are applied and their fan-out evaluated.
     /// Awaited from inside the `ReadWrite` region, it resumes in the next one.
     ///
+    /// cocotb spells it `ReadWrite()`.
+    ///
     /// # Panics
     /// When awaited in the `ReadOnly` phase.
-    ReadWrite,
+    read_write -> ReadWrite,
     WaitOn::ReadWrite,
-    |k| not_in_read_only(k, "ReadWrite")
+    |k| not_in_read_only(k, "read_write()")
 );
 
 phase_trigger!(
     /// Resumes in the `ReadOnly` phase of the current timestep, once no more writes are
     /// pending; values are final for this timestep and any write is a failure.
     ///
+    /// cocotb spells it `ReadOnly()`.
+    ///
     /// # Panics
     /// When awaited in the `ReadOnly` phase.
-    ReadOnly,
+    read_only -> ReadOnly,
     WaitOn::ReadOnly,
-    |k| not_in_read_only(k, "ReadOnly")
+    |k| not_in_read_only(k, "read_only()")
 );
 
 phase_trigger!(
     /// Resumes at the start of the next timestep, whenever something else schedules one.
-    NextTimeStep,
+    /// cocotb spells it `NextTimeStep()`.
+    next_time_step -> NextTimeStep,
     WaitOn::NextTimeStep,
     |_| Ok(())
 );
@@ -385,11 +384,11 @@ mod sealed {
 }
 
 /// `.read_write()` and `.read_only()` on [`rising`], [`falling`], [`changed`] (functions
-/// and handle methods), [`cycles`] and [`Timer`]: await the trigger, then the
-/// [`ReadWrite`] (respectively [`ReadOnly`]) region of the same timestep.
+/// and handle methods), [`cycles`] and [`timer`]: await the trigger, then the
+/// [`read_write`] (respectively [`read_only`]) region of the same timestep.
 ///
 /// `dut.clk.rising().read_write().await` is `dut.clk.rising().await;
-/// ReadWrite::new().await;` in one expression: flops clocked by that edge show their new
+/// read_write().await;` in one expression: flops clocked by that edge show their new
 /// values and writes are still allowed, though a later write in the timestep may change
 /// combinational values again. After `.read_only()` values are final for the timestep and
 /// any write fails the run (`WriteInReadOnly`). cocotb spells these `await RisingEdge(clk);
@@ -399,7 +398,7 @@ mod sealed {
 /// resume a task in any region, where "the region of the same timestep" may already be
 /// past.
 pub trait TriggerExt: sealed::Sealed + Future<Output = ()> + Unpin + Sized {
-    /// Awaits this trigger, then the [`ReadWrite`] region of the timestep it fired in.
+    /// Awaits this trigger, then the `ReadWrite` region of the timestep it fired in.
     ///
     /// # Panics
     /// When awaited, if this trigger completes in the `ReadOnly` phase (only `cycles(.., 0)`
@@ -408,11 +407,11 @@ pub trait TriggerExt: sealed::Sealed + Future<Output = ()> + Unpin + Sized {
     fn read_write(self) -> ThenRegion<Self, ReadWrite> {
         ThenRegion {
             trigger: Some(self),
-            region: ReadWrite::new(),
+            region: read_write(),
         }
     }
 
-    /// Awaits this trigger, then the [`ReadOnly`] region of the timestep it fired in.
+    /// Awaits this trigger, then the `ReadOnly` region of the timestep it fired in.
     ///
     /// # Panics
     /// As [`read_write`](Self::read_write).
@@ -420,7 +419,7 @@ pub trait TriggerExt: sealed::Sealed + Future<Output = ()> + Unpin + Sized {
     fn read_only(self) -> ThenRegion<Self, ReadOnly> {
         ThenRegion {
             trigger: Some(self),
-            region: ReadOnly::new(),
+            region: read_only(),
         }
     }
 }
@@ -535,11 +534,11 @@ pub fn log_prefix() -> String {
 /// `println!` (shown for a failing test, or with `--nocapture`).
 ///
 /// ```
-/// # use simjig::{FakeModel, Precision, Sim, SimDuration, Timer, spawn};
+/// # use simjig::{FakeModel, Precision, Sim, SimDuration, spawn, timer};
 /// let mut sim = Sim::from_fake(FakeModel::new(Precision::NS));
 /// sim.run(async {
 ///     spawn("monitor", async {
-///         Timer::new(SimDuration::from_ticks(1250)).await;
+///         timer(SimDuration::from_ticks(1250)).await;
 ///         simjig::tb_log!("hdr len={}", 3); // [1250 ns monitor] hdr len=3
 ///     })
 ///     .await;

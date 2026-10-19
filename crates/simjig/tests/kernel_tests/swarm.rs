@@ -14,9 +14,9 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use simjig::{
-    Clock, Event, FailureKind, FakeModel, Lock, NextTimeStep, Precision, Queue, RawSig, ReadOnly,
-    ReadWrite, Sim, SimDuration, SimTime, Task, Timer, TraceKind, changed, falling, first, join,
-    rising, spawn, with_timeout, yield_now,
+    Clock, Event, FailureKind, FakeModel, Lock, Precision, Queue, RawSig, Sim, SimDuration,
+    SimTime, Task, TraceKind, changed, falling, first, join, next_time_step, read_only, read_write,
+    rising, spawn, timer, with_timeout, yield_now,
 };
 
 /// xorshift64*: tiny, deterministic, good enough to pick operations.
@@ -135,16 +135,16 @@ fn interpret(world: Rc<World>, ops: Rc<[Op]>, name: String) -> Boxed {
                 Op::Rising => rising(world.clk).await,
                 Op::Falling => falling(world.clk).await,
                 Op::Changed(s) => changed(world.watched[*s]).await,
-                Op::Timer(t) => Timer::new(SimDuration::from_ticks(*t)).await,
-                Op::ReadWrite => ReadWrite::new().await,
-                Op::ReadOnly => ReadOnly::new().await,
-                Op::NextTimeStep => NextTimeStep::new().await,
+                Op::Timer(t) => timer(SimDuration::from_ticks(*t)).await,
+                Op::ReadWrite => read_write().await,
+                Op::ReadOnly => read_only().await,
+                Op::NextTimeStep => next_time_step().await,
                 Op::Yield => yield_now().await,
                 Op::SetEvent(e) => world.events[*e].set(),
                 Op::WaitEvent(e) => world.events[*e].wait().await,
                 Op::Locked(l, t) => {
                     let _g = world.locks[*l].lock().await;
-                    Timer::new(SimDuration::from_ticks(*t)).await;
+                    timer(SimDuration::from_ticks(*t)).await;
                 }
                 Op::Put(v) => world.queue.put(*v).await,
                 Op::Get => {

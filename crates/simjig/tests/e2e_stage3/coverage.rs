@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use simjig::{
-    CoverageError, DutModel, ModelOptions, ReadOnly, Seed, SeedSource, Sim, TestCtx, clock, ns,
+    CoverageError, DutModel, ModelOptions, Seed, SeedSource, Sim, TestCtx, clock, ns, read_only,
 };
 
 use crate::{counter, counter_cov};
@@ -27,7 +27,7 @@ fn count(sim: &mut Sim, dut: counter_cov::Dut, cycles: u32) {
         for _ in 0..cycles {
             dut.clk.rising().await;
         }
-        ReadOnly::new().await;
+        read_only().await;
     })
     .unwrap();
 }
@@ -93,14 +93,14 @@ async fn counters_can_be_zeroed_and_written_with_their_names(ctx: &TestCtx, dut:
     for _ in 0..10 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert!(ctx.coverage(0).unwrap().contains(&10));
     ctx.zero_coverage(0).unwrap();
     assert!(ctx.coverage(0).unwrap().iter().all(|&c| c == 0));
     for _ in 0..25 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-stage3-coverage.dat");
     std::fs::remove_file(&path).ok();
     ctx.write_coverage(0, &path).unwrap();
@@ -179,7 +179,7 @@ async fn each_fork_branch_counts_its_own_coverage(ctx: &TestCtx, dut: counter_co
     for _ in 0..10 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     let at_checkpoint = ctx.coverage(0).unwrap();
     // The `else if (en)` branch's counter: one per rising edge after reset.
     let en = at_checkpoint
@@ -193,7 +193,7 @@ async fn each_fork_branch_counts_its_own_coverage(ctx: &TestCtx, dut: counter_co
         for _ in 0..5 * (b.index() + 1) {
             dut.clk.rising().await;
         }
-        ReadOnly::new().await;
+        read_only().await;
         Ok(ctx.coverage(0).unwrap())
     })
     .await
@@ -208,6 +208,6 @@ async fn each_fork_branch_counts_its_own_coverage(ctx: &TestCtx, dut: counter_co
     for _ in 0..3 {
         dut.clk.rising().await;
     }
-    ReadOnly::new().await;
+    read_only().await;
     assert_eq!(ctx.coverage(0).unwrap()[en], 13);
 }

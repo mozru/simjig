@@ -2,7 +2,7 @@
 
 use std::future::Future;
 
-use simjig::{SimDuration, Timer, cycles, ns, ps, spawn, with_timeout};
+use simjig::{SimDuration, cycles, ns, ps, spawn, timer, with_timeout};
 
 use crate::conflog::{Log, Probe};
 use crate::flop::Dut;
@@ -10,7 +10,7 @@ use crate::start_clock;
 
 /// `wait_5ns()`.
 async fn wait_5ns() {
-    Timer::new(ns(5)).await;
+    timer(ns(5)).await;
 }
 
 /// `outcome()`: awaits `with_timeout(timeout, future)` and logs its outcome and the state.
@@ -43,7 +43,7 @@ async fn timeout_ties(dut: Dut) {
     p.wait(dut.clk.falling(), "FallingEdge(clk)").await;
     p.write(&dut.rst, 0);
     let label = "with_timeout(Timer(5ns),5ns)";
-    outcome(&mut p, dut, label, Timer::new(ns(5)), ns(5)).await;
+    outcome(&mut p, dut, label, timer(ns(5)), ns(5)).await;
     let label = "with_timeout(wait_5ns(),5ns)";
     outcome(&mut p, dut, label, wait_5ns(), ns(5)).await;
     let task = spawn("task", wait_5ns());
@@ -55,9 +55,9 @@ async fn timeout_ties(dut: Dut) {
     let label = "with_timeout(ClockCycles(clk,2),10ns)";
     outcome(&mut p, dut, label, cycles(dut.clk, 2), ns(10)).await;
     let label = "with_timeout(Timer(4999ps),5ns)";
-    outcome(&mut p, dut, label, Timer::new(ps(4999)), ns(5)).await;
+    outcome(&mut p, dut, label, timer(ps(4999)), ns(5)).await;
     let task = spawn("task", wait_5ns());
-    p.wait(Timer::new(ps(1)), "Timer(1step)").await;
+    p.wait(timer(ps(1)), "Timer(1step)").await;
     let label = "with_timeout(Task(wait_5ns()),4999ps)";
     outcome(&mut p, dut, label, task, ps(4999)).await;
     log.check("timeout_ties");

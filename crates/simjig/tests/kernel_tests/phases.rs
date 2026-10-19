@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use simjig::{
-    Clock, Event, FailureKind, FakeModel, NextTimeStep, Precision, RawSig, ReadOnly, ReadWrite,
-    Sim, SimTime, Timer, changed, falling, first, join, now, rising, spawn, with_timeout,
+    Clock, Event, FailureKind, FakeModel, Precision, RawSig, Sim, SimTime, changed, falling, first,
+    join, next_time_step, now, read_only, read_write, rising, spawn, timer, with_timeout,
     yield_now,
 };
 
@@ -28,7 +28,7 @@ fn writes_are_deposits_visible_only_after_application() {
         a.write_u64(3);
         b.write_u64(4);
         let before = (a.read_u64(), sum.read_u64());
-        ReadWrite::new().await;
+        read_write().await;
         (before, a.read_u64(), sum.read_u64())
     });
     assert_eq!(seen.unwrap(), ((0, 0), 3, 7));
@@ -50,7 +50,7 @@ fn edge_waiters_wake_in_priming_order_across_signals() {
     let trace: Trace = Rc::default();
     let t = Rc::clone(&trace);
     sim.run(async move {
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         let t2 = Rc::clone(&t);
         let on_c2 = spawn("on_c2", async move {
             rising(c2).await;
@@ -111,10 +111,10 @@ fn a_task_woken_by_one_value_change_joins_a_younger_group_not_yet_fired() {
             ev.wait().await;
             push(&t3, format!("z at {}", now().ticks()));
         });
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         x.write_u64(1);
         y.write_u64(1);
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         x.write_u64(0);
         y.write_u64(0);
         task_a.await;
@@ -155,7 +155,7 @@ fn changed_and_rising_on_one_signal_are_separate_groups() {
             push(&t2, format!("b rising at {}", now().ticks()));
         });
         for level in [1, 0, 1, 0, 1] {
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             x.write_u64(level);
         }
         task_a.await;
@@ -178,15 +178,15 @@ fn read_write_inside_read_write_waits_for_the_next_region() {
     let mut d = clocked();
     let a = d.a;
     let times = d.sim.run(async move {
-        Timer::new(ticks(3)).await;
-        ReadWrite::new().await;
+        timer(ticks(3)).await;
+        read_write().await;
         let first = now();
         // Nothing written: this region ends, and the next ReadWrite region is at the
         // next timestep (the falling clock edge at 5).
-        ReadWrite::new().await;
+        read_write().await;
         let second = now();
         a.write_u64(1);
-        ReadWrite::new().await; // the write makes the loop go round: same timestep
+        read_write().await; // the write makes the loop go round: same timestep
         (first, second, now())
     });
     assert_eq!(times.unwrap(), (SimTime(3), SimTime(5), SimTime(5)));
@@ -201,10 +201,10 @@ fn next_time_step_resumes_at_the_next_scheduled_time_before_timers() {
         .run(async move {
             let t2 = Rc::clone(&t);
             let timer = spawn("timer", async move {
-                Timer::new(ticks(7)).await;
+                timer(ticks(7)).await;
                 push(&t2, format!("timer {}", now().ticks()));
             });
-            NextTimeStep::new().await;
+            next_time_step().await;
             push(&t, format!("next {}", now().ticks()));
             timer.await;
         })
@@ -231,13 +231,13 @@ fn each_timer_runs_what_it_wakes_before_the_next_timer_due_then() {
             });
             let e = Rc::clone(&event);
             let old = spawn("old", async move {
-                Timer::new(ticks(5)).await;
+                timer(ticks(5)).await;
                 push(&t2, "old");
                 e.set();
             });
             yield_now().await; // `woken` and `old` register first
             let young = spawn("young", async move {
-                Timer::new(ticks(5)).await;
+                timer(ticks(5)).await;
                 push(&t3, "young");
             });
             simjig::join!(woken, old, young);
@@ -289,9 +289,9 @@ fn a_value_that_changes_and_changes_back_in_one_timestep_fires_changed_twice() {
             changed(a).await;
             (first, (now(), a.read_u64()))
         });
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         a.write_u64(5);
-        ReadWrite::new().await;
+        read_write().await;
         a.write_u64(0);
         watcher.await
     });
@@ -321,18 +321,18 @@ fn combinators_resume_their_caller_after_the_tasks_the_same_edge_woke() {
                 set.set();
             });
             let writer = spawn("w", async move {
-                Timer::new(ticks(1)).await;
+                timer(ticks(1)).await;
                 x.write_u64(1);
-                Timer::new(ticks(1)).await;
+                timer(ticks(1)).await;
                 x.write_u64(0);
             });
             let label = match round {
                 0 => {
-                    first!(rising(x), Timer::new(ticks(100)));
+                    first!(rising(x), timer(ticks(100)));
                     "first! caller"
                 }
                 1 => {
-                    join!(rising(x), Timer::new(ticks(1)));
+                    join!(rising(x), timer(ticks(1)));
                     "join! caller"
                 }
                 _ => {
@@ -375,7 +375,7 @@ fn first_goes_to_the_helper_that_finishes_first_not_the_leftmost_operand() {
             set.set();
         });
         let writer = spawn("w", async move {
-            Timer::new(ticks(1)).await;
+            timer(ticks(1)).await;
             x.write_u64(1);
         });
         yield_now().await; // t registers first
@@ -422,13 +422,13 @@ fn a_cancelled_nested_combinator_finishes_its_helpers_before_the_caller_resumes(
             }));
         }
         tasks.push(spawn("w", async move {
-            Timer::new(ticks(2)).await;
+            timer(ticks(2)).await;
             x.write_u64(1);
         }));
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         first!(
             async {
-                join!(changed(y), Timer::new(ticks(100)));
+                join!(changed(y), timer(ticks(100)));
             },
             rising(x)
         );
@@ -477,7 +477,7 @@ fn first_of_coincident_edges_goes_to_the_trigger_primed_first() {
     sim.add_clock(Clock::new(c1, ticks(10))).unwrap();
     sim.add_clock(Clock::new(c2, ticks(10))).unwrap();
     let won = sim.run(async move {
-        Timer::new(ticks(1)).await;
+        timer(ticks(1)).await;
         let a = simjig::first!(
             async {
                 rising(c2).await;
@@ -526,7 +526,7 @@ fn time_is_monotonic_and_steps_are_distinct() {
         .run(async move {
             for _ in 0..5 {
                 rising(clk).await;
-                Timer::new(ticks(3)).await;
+                timer(ticks(3)).await;
             }
         })
         .unwrap();
@@ -554,7 +554,7 @@ fn same_program_gives_same_trace_hash() {
                         a.write_u64(i);
                     }
                 });
-                Timer::new(ticks(delay)).await;
+                timer(ticks(delay)).await;
                 child.await;
             })
             .unwrap();
@@ -623,20 +623,21 @@ fn read_only_rejects_reentry_and_timer_zero_is_rejected() {
             .sim
             .run(async move {
                 if case == 0 {
-                    ReadOnly::new().await;
-                    ReadOnly::new().await;
+                    read_only().await;
+                    read_only().await;
                 } else {
-                    Timer::new(ticks(0)).await;
+                    timer(ticks(0)).await;
                 }
             })
             .unwrap_err();
         let FailureKind::TaskPanic { message } = &failure.kind else {
             panic!("{failure}")
         };
+        // The messages name the trigger functions the user calls.
         let expect = if case == 0 {
-            "ReadOnly phase"
+            "read_only() awaited in the ReadOnly phase"
         } else {
-            "zero ticks"
+            "timer() of zero ticks"
         };
         assert!(message.contains(expect), "{message}");
         assert_clean(&d.sim);
@@ -660,14 +661,14 @@ fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
         (
             || {
                 Box::pin(async {
-                    ReadOnly::new().await;
-                    ReadOnly::new().await; // misuse: read-only twice
+                    read_only().await;
+                    read_only().await; // misuse: read-only twice
                 })
             },
             "misuse: read-only twice",
         ),
         (
-            || Box::pin(Timer::new(ticks(0))), // misuse: zero timer
+            || Box::pin(timer(ticks(0))), // misuse: zero timer
             "misuse: zero timer",
         ),
         (
@@ -681,8 +682,8 @@ fn trigger_misuse_points_at_the_line_that_made_the_trigger() {
         (
             || {
                 Box::pin(async {
-                    ReadOnly::new().await;
-                    ReadWrite::default().await; // misuse: read-write after read-only
+                    read_only().await;
+                    read_write().await; // misuse: read-write after read-only
                 })
             },
             "misuse: read-write after read-only",
@@ -722,7 +723,7 @@ fn a_hop_ends_in_its_own_run_not_in_a_combinator_helper_run_of_its_task() {
             let other = spawn("other", async move { push(&t2, "other") });
             let mut hop = std::pin::pin!(yield_now());
             let mut fork = std::pin::pin!(async {
-                first!(Timer::new(ticks(5)), Timer::new(ticks(5)));
+                first!(timer(ticks(5)), timer(ticks(5)));
             });
             let mut hopped = false;
             std::future::poll_fn(|cx| {

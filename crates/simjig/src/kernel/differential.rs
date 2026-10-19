@@ -12,7 +12,8 @@
 //! step and every signal's value.
 //!
 //! A seed's digest covers its outcome (the failure report, with source lines blanked so
-//! that editing this file does not move them), the trace hash (every eval, write, poll,
+//! that editing this file does not move them, in the wording it was blessed with:
+//! [`BLESSED_WORDING`]), the trace hash (every eval, write, poll,
 //! spawn and completion, in order), the kernel's counters and the resumption log. The
 //! digests in `corpus.txt` were produced by the scheduler before the fast paths
 //! (`SIMJIG_CORPUS_BLESS=1`); every later scheduler must reproduce them. Bless again only
@@ -41,8 +42,8 @@ use super::sync::{Event, Lock, Queue};
 use super::tasks::{Task, spawn};
 use super::time::{Precision, SimDuration, SimTime};
 use super::trigger::{
-    NextTimeStep, ReadOnly, ReadWrite, Timer, TriggerExt, changed, cycles, falling, now, rising,
-    with_timeout, yield_now,
+    TriggerExt, changed, cycles, falling, next_time_step, now, read_only, read_write, rising,
+    timer, with_timeout, yield_now,
 };
 use crate::{first, join};
 
@@ -356,17 +357,17 @@ async fn leaf(world: &World, op: &Op) -> bool {
         Op::Cycles(c, n) => cycles(world.clocks[*c], *n).await,
         Op::RisingThenReadWrite(c) => rising(world.clocks[*c]).read_write().await,
         Op::FallingThenReadOnly(c) => falling(world.clocks[*c]).read_only().await,
-        Op::TimerThenReadWrite(t) => Timer::new(SimDuration::from_ticks(*t)).read_write().await,
-        Op::Timer(t) => Timer::new(SimDuration::from_ticks(*t)).await,
-        Op::ReadWrite => ReadWrite::new().await,
-        Op::ReadOnly => ReadOnly::new().await,
-        Op::NextTimeStep => NextTimeStep::new().await,
+        Op::TimerThenReadWrite(t) => timer(SimDuration::from_ticks(*t)).read_write().await,
+        Op::Timer(t) => timer(SimDuration::from_ticks(*t)).await,
+        Op::ReadWrite => read_write().await,
+        Op::ReadOnly => read_only().await,
+        Op::NextTimeStep => next_time_step().await,
         Op::Yield => yield_now().await,
         Op::SetEvent(e) => world.events[*e].set(),
         Op::WaitEvent(e) => world.events[*e].wait().await,
         Op::Locked(l, t) => {
             let _g = world.locks[*l].lock().await;
-            Timer::new(SimDuration::from_ticks(*t)).await;
+            timer(SimDuration::from_ticks(*t)).await;
         }
         Op::Put(v) => world.queue.put(*v).await,
         Op::Get => {
@@ -624,6 +625,33 @@ fn without_lines(text: &str) -> String {
     out
 }
 
+/// Today's wording in the failures a program can cause, and the wording the corpus was
+/// blessed with, when the triggers were types built with `::new` rather than functions.
+/// Renaming a trigger in a message or help line is not a change of semantics, so the
+/// digest maps it back instead of blessing again. Applied in order.
+const BLESSED_WORDING: [(&str, &str); 7] = [
+    (
+        "`read_only()` and `.read_only()`",
+        "ReadOnly and `.read_only()`",
+    ),
+    ("(`timer(ns(1)).await`)", "(`Timer::new(ns(1)).await`)"),
+    ("a timer()", "a Timer"),
+    ("next_time_step()", "NextTimeStep"),
+    ("awaits read_write()", "awaits ReadWrite"),
+    ("read_write() awaited in", "ReadWrite awaited in"),
+    ("read_only() awaited in", "ReadOnly awaited in"),
+];
+
+/// A failure's text as the corpus was blessed: source lines blanked, and today's trigger
+/// names mapped back ([`BLESSED_WORDING`]).
+fn as_blessed(text: &str) -> String {
+    BLESSED_WORDING
+        .iter()
+        .fold(without_lines(text), |text, (now, then)| {
+            text.replace(now, then)
+        })
+}
+
 /// Whether a failure is one a program can legitimately cause.
 fn legitimate(kind: &FailureKind) -> bool {
     match kind {
@@ -735,7 +763,7 @@ fn run_seed(seed: u64) -> (u64, String) {
         Ok(()) => "ok".to_owned(),
         Err(f) => {
             assert!(legitimate(&f.kind), "seed {seed}: unexpected failure: {f}");
-            without_lines(&f.to_string())
+            as_blessed(&f.to_string())
         }
     };
     let stats = sim.stats();

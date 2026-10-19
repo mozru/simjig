@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use simjig::{ReadOnly, TestCtx, Timer, ns, with_timeout};
+use simjig::{TestCtx, ns, read_only, timer, with_timeout};
 
 use super::{TICK, cycles, dpi};
 
@@ -26,12 +26,12 @@ impl dpi::Dpi for Adder {
 async fn sum_and_calls(dut: &dpi::Dut, n: u32) -> (u128, u128) {
     dut.a.set(2u128);
     dut.b.set(3u128);
-    Timer::new(TICK).await;
+    timer(TICK).await;
     // DPI calls (dpi_tick on each posedge) while the cycles run inside a combinator helper.
     with_timeout(ns(1000), cycles(dut.clk, n)).await.unwrap();
-    ReadOnly::new().await;
+    read_only().await;
     let r = (dut.sum.get().to_u128(), dut.calls.get().to_u128());
-    Timer::new(TICK).await;
+    timer(TICK).await;
     r
 }
 

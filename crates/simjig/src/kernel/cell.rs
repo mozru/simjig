@@ -188,6 +188,19 @@ impl DirectTable {
         self.slots.get(flat as usize).copied().flatten()
     }
 
+    /// The value of flat slot `flat`, if it has a `Direct` and is `width` bits wide (its
+    /// mask is that width's: the masks of widths up to 64 differ). A typed read's one
+    /// lookup: the width it checks and the way to the value are in the same entry.
+    #[inline]
+    pub(crate) fn read_if_width(&self, flat: u32, width: u32) -> Option<u64> {
+        let d = self.slots.get(flat as usize)?.as_ref()?;
+        if width > 64 || d.mask != mask(width) {
+            return None;
+        }
+        // SAFETY: the table's contract (`new`): the backend is alive and idle.
+        Some(unsafe { d.read() })
+    }
+
     /// The value of flat slot `flat`, if it has a `Direct`.
     #[inline]
     pub(crate) fn read_u64(&self, flat: u32) -> Option<u64> {

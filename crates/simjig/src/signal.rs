@@ -261,6 +261,18 @@ pub(crate) trait FromRaw {
 fn get<T: Packed<Raw: RawWords>>(raw: RawSig) -> T {
     let mut buf = <T::Raw as sealed::Buffer>::zeroed();
     raw.with(|k, slot| {
+        // A narrow slot of the handle's width: one lookup.
+        if let Some(value) = k.direct.read_if_width(slot, T::WIDTH) {
+            let [low, high] =
+                [value & 0xffff_ffff, value >> 32].map(|w| u32::try_from(w).unwrap_or(0));
+            if let [l, rest @ ..] = buf.as_mut() {
+                *l = low;
+                if let [h, ..] = rest {
+                    *h = high;
+                }
+            }
+            return;
+        }
         let width = k.widths[slot as usize];
         assert!(
             width == T::WIDTH && buf.as_ref().len() == words(width),

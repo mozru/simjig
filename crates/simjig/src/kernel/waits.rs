@@ -115,9 +115,10 @@ struct Group {
     primed: Option<u64>,
     /// The slot's word count.
     words: usize,
-    /// The slot's value when this group last looked at it (or when it was primed): here
-    /// for a slot of at most two words (as one word, the common case), else in `wide`.
-    narrow: u64,
+    /// While primed: the index of its [`Watch`] in `order`.
+    at: usize,
+    /// The slot's value when this group last looked at it (or when it was primed), for a
+    /// slot of more than two words; a narrower slot's is in its [`Watch`].
     wide: Vec<u32>,
     /// Its registrations, in registration order (so sorted by `seq`); empty while unprimed.
     /// A cancelled one stays, without its waker, until the group fires or most are
@@ -126,6 +127,23 @@ struct Group {
     /// The registrations in `waiters` not cancelled.
     live: usize,
 }
+
+/// One priming of a [`Group`], in `WaitTable::order`: what a walk step looks at, in one
+/// place, so that a step over a group that did not change touches no group.
+struct Watch {
+    /// The `seq` of the registration that primed the group.
+    primed: u64,
+    /// The group, or [`STALE`] once it was unprimed.
+    group: u32,
+    /// The group's slot.
+    slot: u32,
+    /// The slot's value when the group last looked at it, for a slot of at most two words
+    /// (as one word, low word first).
+    snapshot: u64,
+}
+
+/// [`Watch::group`] of a priming that was undone.
+const STALE: u32 = u32::MAX;
 
 /// One registration of a [`Group`]. Edge registrations live in their group, not in the
 /// table's slab: the group fires them all at once, in order, and a registration has fired
@@ -198,15 +216,15 @@ pub(crate) struct WaitTable {
     /// `group_of[slot][kind.index()]`: the index in `groups` of that slot's group of that
     /// kind, or [`NO_GROUP`].
     group_of: Vec<[u32; 3]>,
-    /// `(primed, group index)` of every priming, in priming order (`primed` only grows, so
-    /// this is sorted): a walk visits the primed groups in this order. Unpriming leaves its
-    /// entry behind, stale (the group's `primed` no longer matches); `stale` counts them.
+    /// Every priming, in priming order (`primed` only grows, so this is sorted): a walk
+    /// visits the primed groups in this order. Unpriming leaves its entry behind, marked
+    /// [`STALE`]; `stale` counts them.
     /// Stale entries at the front are skipped at once by moving `head` past them (the
     /// group that fires is usually the oldest), and dropped once they are most of the
     /// list; stale entries elsewhere are compacted away once they outnumber the live ones,
     /// so a walk seldom steps over one. Priming, firing and unpriming are O(1) amortized, and a walk finds
     /// its start by binary search.
-    order: Vec<(u64, u32)>,
+    order: Vec<Watch>,
     /// `order[..head]` is stale and skipped (dropping it from a `Vec` would move the rest).
     head: usize,
     stale: usize,
@@ -370,7 +388,7 @@ impl WaitTable {
                 edge,
                 primed: None,
                 words: words(model.slot_width(slot)),
-                narrow: 0,
+                at: 0,
                 wide: Vec::new(),
                 waiters: Vec::new(),
                 live: 0,
@@ -385,13 +403,20 @@ impl WaitTable {
             return EdgeKey { group, primed, seq };
         }
         g.primed = Some(seq);
-        if g.words <= 2 {
-            g.narrow = model.read_narrow(slot, g.words);
+        let snapshot = if g.words <= 2 {
+            model.read_narrow(slot, g.words)
         } else {
             g.wide.resize(g.words, 0);
             model.read(slot, &mut g.wide);
-        }
-        self.order.push((seq, group));
+            0
+        };
+        g.at = self.order.len();
+        self.order.push(Watch {
+            primed: seq,
+            group,
+            slot,
+            snapshot,
+        });
         EdgeKey {
             group,
             primed: seq,
@@ -446,10 +471,9 @@ impl WaitTable {
         g.primed = None;
         g.waiters.clear();
         g.live = 0;
+        self.order[g.at].group = STALE;
         self.stale += 1;
-        let groups = &self.groups;
-        let live = |&(seq, i): &(u64, u32)| groups[i as usize].primed == Some(seq);
-        while self.order.get(self.head).is_some_and(|e| !live(e)) {
+        while self.order.get(self.head).is_some_and(|w| w.group == STALE) {
             self.head += 1;
             self.stale -= 1;
         }
@@ -470,8 +494,6 @@ impl WaitTable {
 
     #[inline(never)]
     fn compact_now(&mut self, kept: usize) {
-        let groups = &self.groups;
-        let live = |&(seq, i): &(u64, u32)| groups[i as usize].primed == Some(seq);
         if self.head > 16 && self.head > kept {
             self.order.drain(..self.head);
             self.head = 0;
@@ -479,8 +501,14 @@ impl WaitTable {
         if self.stale > 4 && 2 * self.stale > kept {
             self.order.drain(..self.head);
             self.head = 0;
-            self.order.retain(live);
+            self.order.retain(|w| w.group != STALE);
             self.stale = 0;
+        }
+        // Entries moved: tell each primed group where its watch is now.
+        for (i, w) in self.order.iter().enumerate().skip(self.head) {
+            if w.group != STALE {
+                self.groups[w.group as usize].at = i;
+            }
         }
     }
 
@@ -647,34 +675,40 @@ impl WaitTable {
         at: &mut usize,
     ) -> Option<u32> {
         let mut i = (*at).max(self.head);
-        while let Some(&(primed, index)) = self.order.get(i) {
-            if primed > until {
+        while let Some(w) = self.order.get_mut(i) {
+            if w.primed > until {
                 break;
             }
             i += 1;
-            let g = &mut self.groups[index as usize];
-            if g.primed != Some(primed) {
-                continue; // stale: unprimed since
+            if w.group == STALE {
+                continue; // unprimed since
             }
-            let (old, new) = if g.words <= 2 {
-                let now = model.read_narrow(g.slot, g.words);
-                if now == g.narrow {
-                    continue;
+            let index = w.group;
+            let (old, new) = match model.direct_u64(w.slot) {
+                // The common case: a narrow slot with a direct way, no group looked at.
+                Some(now) if now == w.snapshot => continue,
+                Some(now) => (std::mem::replace(&mut w.snapshot, now) & 1, now & 1),
+                None => {
+                    let g = &mut self.groups[index as usize];
+                    if g.words <= 2 {
+                        let now = model.read_narrow(w.slot, g.words);
+                        if now == w.snapshot {
+                            continue;
+                        }
+                        (std::mem::replace(&mut w.snapshot, now) & 1, now & 1)
+                    } else {
+                        self.scratch.resize(g.words, 0);
+                        model.read(g.slot, &mut self.scratch);
+                        if self.scratch == g.wide {
+                            continue;
+                        }
+                        let old = u64::from(g.wide[0] & 1);
+                        g.wide.copy_from_slice(&self.scratch);
+                        (old, u64::from(self.scratch[0] & 1))
+                    }
                 }
-                let old = g.narrow & 1;
-                g.narrow = now;
-                (old, now & 1)
-            } else {
-                self.scratch.resize(g.words, 0);
-                model.read(g.slot, &mut self.scratch);
-                if self.scratch == g.wide {
-                    continue;
-                }
-                let old = u64::from(g.wide[0] & 1);
-                g.wide.copy_from_slice(&self.scratch);
-                (old, u64::from(self.scratch[0] & 1))
             };
-            let fires = match g.edge {
+            let fires = match self.groups[index as usize].edge {
                 EdgeKind::Changed => true,
                 EdgeKind::Rising => old == 0 && new == 1,
                 EdgeKind::Falling => old == 1 && new == 0,

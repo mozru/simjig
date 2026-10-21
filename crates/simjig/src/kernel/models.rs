@@ -206,6 +206,13 @@ impl Models {
         }
     }
 
+    /// The value of flat slot `flat` if it has a direct way (a narrow slot of a backend
+    /// that has one), as one word, low word first.
+    #[inline]
+    pub(crate) fn direct_u64(&self, flat: u32) -> Option<u64> {
+        self.direct.read_u64(flat)
+    }
+
     /// The value of flat slot `flat`, of `words` (one or two) words, as one word: low word
     /// first. Inlined, as [`read`](Self::read).
     #[inline]

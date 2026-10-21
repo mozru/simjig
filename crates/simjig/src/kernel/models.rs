@@ -96,6 +96,8 @@ pub(crate) struct Models {
     /// eval that did not report `Running` (only that can change it while held).
     held_eval: Option<HeldEval>,
     held_settles: bool,
+    /// While held with a [`HeldEval`]: the last time set, not yet given to the backend.
+    held_time: Option<SimTime>,
     /// Whether any model can have events of its own ([`ModelBackend::schedules_events`]).
     schedules: bool,
 }
@@ -142,6 +144,7 @@ impl Models {
             held: false,
             held_eval: None,
             held_settles: false,
+            held_time: None,
             schedules,
         })
     }
@@ -275,6 +278,12 @@ impl Models {
     }
 
     pub(crate) fn set_time(&mut self, time: SimTime) {
+        // A held eval sets the time itself (`HeldEval::call`): the backend learns it when
+        // the hold ends (`sync_end`), in case no eval followed.
+        if self.held_eval.is_some() {
+            self.held_time = Some(time);
+            return;
+        }
         for backend in &mut self.backends {
             backend.set_time(time);
         }
@@ -373,6 +382,9 @@ impl Models {
     pub(crate) fn sync_end(&mut self) {
         self.held = false;
         self.held_eval = None;
+        if let Some(time) = self.held_time.take() {
+            self.backends[0].set_time(time);
+        }
         for backend in &mut self.backends {
             backend.sync_end();
         }

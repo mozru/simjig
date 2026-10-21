@@ -391,3 +391,96 @@ reported the same pushes, pops and hash (402910, 402901, 3888034673).
 The default costs 25.8 ns per cycle (9.5%): the evals that open each timestep and close
 each delta loop now run (and the walks after them find nothing). The bench keeps both as
 separately labelled flows (`bench.py --flows simjig,simjig_elide`).
+
+# The default async run: the trace hash, the walk, writes and the held model
+
+Goal: the default async flow (no opt-ins) at least 30% faster in throughput on the
+benchmark's full FIFO testbench (C), with the observable behaviour unchanged except the
+trace hash's values. Result: C is 31% faster (299.4 to 228.6 ns per cycle in the final
+interleaved session; 1.31x the throughput); the clock alone (A) and the monitor (B) are
+29% faster; the mid-size design, where Verilator's eval dominates, 5%.
+
+## Before and after
+Bench binary (`bench/simjig`, profile `bench`, unchanged: one codegen unit, thin LTO),
+default flow, `fifo` at 1M cycles and `mid` at 100k; 5 interleaved runs per build, each
+idle-gated (1-minute load < 2.5, no cargo, rustc, clang, verilator or nextest process);
+median ns per cycle, one session (loads 1.67 to 1.94). Instructions per simulated cycle:
+`/usr/bin/time -l`, the difference of a 2M-cycle and a 1k-cycle run (mid: 200k and 1k),
+divided by the difference in cycles. Every run reported the same pushes, pops and hashes
+(fifo C: 402910, 402901, 3888034673; B: 1594171392; mid C: 48611, 48594, 4276890249).
+
+| | before (fffbbd6) | after | throughput |
+|---|---:|---:|---:|
+| fifo A (clock only) | 159.0 | 123.2 | 1.29x |
+| fifo B (monitor) | 172.6 | 133.4 | 1.29x |
+| fifo C (full) | 299.4 | 228.6 | 1.31x |
+| mid C (full) | 1515.3 | 1441.4 | 1.05x |
+| fifo C, instructions per cycle | 10535 | 8231 | |
+| fifo A / B, instructions per cycle | 5865 / 6350 | 4626 / 5002 | |
+| mid C, instructions per cycle | 35194 | 32917 | |
+
+Absolute times move by a few percent between sessions on this machine (C after: 223.7 to
+228.6 across eight sessions); builds compared in one session move together. Each commit's
+message gives its own measurement against the one before.
+
+All of it is code: the build profile is the same. Fat LTO was measured on the result (C
+1.5 to 2.4 ns faster, A, B and mid unchanged) and not adopted, since it would slow every
+user's test build (the bench's profile is the one the guide recommends) for 1%.
+
+## What changed
+- **The trace hash** (`kernel::recorder::TraceHash`): two folded 128-bit multiplies per
+  record and a three-instruction chain, instead of FNV-1a over each record's 40 bytes.
+  The hash costs C 3.5 ns per cycle now (225.6 with it, 222.1 with
+  `trace_hash = false`), 35 ns before (297.2 and 262.0). The time and task half of a
+  record's digest is kept for the timestep's records without a task, and the constants
+  are data (a 64-bit constant in the code is four instructions at every record).
+- **The ring keeps 32-byte records** (task and argument in 32 bits, with a flag for
+  "none"): 128 KiB instead of 160, which the L1 cache feels (2 ns on C).
+- **The value-change walk** steps over a list of watches holding each priming's slot and
+  snapshot (one word for a narrow slot), so a step over a group that did not change reads
+  the slot through its direct way and touches no group; a walk begins (lends out its wake
+  buffer, marks the table walking, compacts it after) only when a group fires, which most
+  walks never do.
+- **Edge waits** keep this simulation's own tasks as (index, generation), not as cloned
+  wakers.
+- **Writes**: a narrow write is one word, masked with the mask the `Direct` keeps, from
+  the log into the model and into the record; a typed read of a narrow slot is one table
+  lookup; a first-model handle's slot is its flat slot.
+- **The held model** (a lone model without waves or DPI-C imports): every eval calls the
+  held C entry point directly, the time is given to the backend only when the hold ends
+  (every held eval sets it), and models without `--timing` are never asked for events.
+- **Polls**: one slab lookup per wake, the poll context set rather than swapped, no
+  thread-local access per poll for the panic location (the hook counts panics on the
+  kernel), and the ready queue's length outside its borrow.
+
+## What it touched
+Only the trace hash's values (CHANGELOG, Breaking): a hash recorded before no longer
+matches a rerun. Seeds, random streams and failure signatures still use FNV-1a of names.
+The 33 conformance goldens reproduce, every kernel, model and harness test passes, and the
+differential corpus reproduces with every digest that leaves out the trace hash unchanged;
+it was re-blessed once for the new hash values, after checking that each scheduler mutant
+of `docs/notes/sched.md` (m1 to m7: group wake order reversed, Timers fired together,
+groups fired together, a join reordering its group, a quiet ReadWrite round ignoring the
+log, no walk after an eval, no waker refresh) changes exactly the same seeds as before
+(1923, 222, 414, a panic, 1129, 271 and 1561 of 8192). New `unsafe`, all under existing
+contracts: reads and writes through a `Direct` in `kernel::cell` (one word, and a typed
+read checked by its mask), and one block in `kernel::models` (the held eval's call, as
+`SyncClock` already makes it); `cargo xtask miri` passes.
+
+## Measured, not kept
+Each was below the noise or slower, so left out:
+- reading the thread's kernel entry from a pthread key's TSD slot instead of the
+  thread-local (`_tlv_get_addr` on macOS): 72 fewer instructions, no faster;
+- a 24-byte ring record (a write's value in the task's place): slower than 32;
+- forcing the write path inline, a typed `get` inlined, the poll's waker not dropped,
+  `HeldEval` holding the C entry point instead of a trampoline, failure paths moved out of
+  line, the first walk step under the borrow that reads the models' counters (8 ns
+  slower: code generation is that sensitive).
+
+## Where a cycle of C goes now
+About 8200 instructions: Verilator's five evals with its runtime's mutexes and message
+queues and simjig's shim about 2300 (fixed by the semantics and by Verilator), the walks
+and the log's application about 1300, the timestep loop about 600, three awaits about
+700, three polls about 400, seven typed reads about 330, three writes about 400, the 17
+records about 500, thread-local lookups about 300, and the testbench's own code about
+400. No part dominates; the next steps would each give about 1%.

@@ -27,9 +27,9 @@ mod test_attr;
 ///   time (`simjig::__private::DEFAULT_TIMEOUT_MS`, rounded up to a whole tick), and the
 ///   `TimeLimit` report says it was the default; `timeout = "none"` removes the limit.
 /// - `init = zero` or `init = random`: the model's initial values (see `simjig::InitValues`).
-/// - `trace_hash = false`: the run keeps no trace hash, which costs a dependent
-///   multiplication per byte of every kernel event (about a sixth of a busy clocked
-///   testbench's time). Everything else is the same: the same events happen and are counted
+/// - `trace_hash = false`: the run keeps no trace hash, which costs two multiplications
+///   per kernel event (about 2% of a busy clocked testbench's time). Everything else is
+///   the same: the same events happen and are counted
 ///   and kept in the recent-events window, but the report, `summary.json` and the
 ///   outcome carry no hash, so two runs cannot be compared by it, and a waves replay
 ///   checks only that it ended the same way, not that it took the same path.

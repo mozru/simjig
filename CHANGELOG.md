@@ -4,6 +4,10 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- The default async run is faster: 1.31x the throughput on the benchmark's full FIFO
+  testbench (299 to 229 ns per cycle), 1.29x with a clock alone or a monitor, 1.05x on the
+  mid-size design (`docs/notes/perf.md`). Nothing observable changes but the trace hash's
+  values (next entry).
 - **Breaking: trace hash values changed.** The trace hash (`Sim::trace_hash`, the
   outcome's and `summary.json`'s hash, the replay check) is no longer FNV-1a over each
   record's 40 bytes but a word-wise hash (`kernel::recorder::TraceHash`: two 128-bit

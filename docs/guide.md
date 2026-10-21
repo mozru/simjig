@@ -408,11 +408,11 @@ lists every known difference with its test. The ones that change how you write a
   `CXXFLAGS=-mcpu=native` is opt-in; it gained nothing measurable on the benchmark.
 - While a model writes waves, every eval is sampled. Waves on failure write them only in
   the replay.
-- The trace hash costs about a sixth of a busy testbench's time.
+- The trace hash costs about 2% of a busy testbench's time.
   `#[simjig::test(trace_hash = false)]` turns it off; the report then has no hash to
   compare runs by.
 - `#[simjig::test(elide_evals)]` skips an eval when nothing was written since the last
-  one, about 9% on the benchmark FIFO. It is off by default because it is not always
+  one, about 11% on the benchmark FIFO. It is off by default because it is not always
   safe: it can miss a `$display`, `$urandom` draw, `$time` read or DPI-C call in logic fed
   by an input the design writes itself (`ASSIGNIN` waived) or by `$sampled`. If your
   design does neither, it is safe. When unsure, leave it off.

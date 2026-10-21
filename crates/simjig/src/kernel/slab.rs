@@ -87,13 +87,19 @@ impl<T> Slab<T> {
         }
     }
 
-    /// The key of the live entry at `index`, if any.
-    pub(crate) fn key_at(&self, index: u32) -> Option<Key> {
-        let slot = self.slots.get(index as usize)?;
-        slot.value.as_ref().map(|_| Key {
-            index,
-            gen_: slot.gen_,
-        })
+    /// The key and the live entry at `index`, if there is one and `gen_ok` accepts its
+    /// generation: one lookup for a wake, which carries the index and part of the
+    /// generation.
+    #[inline]
+    pub(crate) fn at_mut(
+        &mut self,
+        index: u32,
+        gen_ok: impl FnOnce(u32) -> bool,
+    ) -> Option<(Key, &mut T)> {
+        let slot = self.slots.get_mut(index as usize)?;
+        let gen_ = slot.gen_;
+        let value = slot.value.as_mut()?;
+        gen_ok(gen_).then_some((Key { index, gen_ }, value))
     }
 
     pub(crate) fn len(&self) -> usize {

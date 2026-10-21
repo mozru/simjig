@@ -199,10 +199,6 @@ impl TaskTable {
     pub(crate) fn keys(&self) -> Vec<Key> {
         self.tasks().map(|(k, _)| k).collect()
     }
-
-    fn by_wake(&self, index: u32, gen16_: u16) -> Option<Key> {
-        self.slab.key_at(index).filter(|k| gen16(k.gen_) == gen16_)
-    }
 }
 
 impl fmt::Debug for TaskTable {
@@ -816,16 +812,19 @@ fn poll_task(k: &Kernel, index: u32, gen16_: u16) {
     let (key, route, future) = {
         let mut tasks = k.tasks.borrow_mut();
         // A wake for a slot reused since (another generation) is dropped.
-        let Some(woken) = tasks.by_wake(index, gen16_) else {
+        let Some((woken, found)) = tasks.slab.at_mut(index, |g| gen16(g) == gen16_) else {
             return;
         };
-        let (key, route) = match tasks.helper(woken) {
-            Some(h) if h.state == HelperState::Done => return,
-            Some(h) => (h.root, Some(woken)),
-            None => (woken, None),
-        };
-        let Some(entry) = tasks.get_mut(key) else {
-            return;
+        let (key, route, entry) = match found {
+            Entry::Task(entry) => (woken, None, entry),
+            Entry::Helper(h) if h.state == HelperState::Done => return,
+            Entry::Helper(h) => {
+                let root = h.root;
+                let Some(entry) = tasks.get_mut(root) else {
+                    return;
+                };
+                (root, Some(woken), entry)
+            }
         };
         if entry.state != TaskState::Pending {
             return;

@@ -658,6 +658,8 @@ impl WaitTable {
     /// from place `*at` of `order` on, oldest first, until one fires. Each group whose slot
     /// differs from its snapshot takes the new value. Returns the first group whose edge
     /// that is, for [`fire_group`](Self::fire_group); `*at` is where the next step resumes.
+    /// It changes nothing but snapshots, so a walk's first step may come before the walk
+    /// begins ([`begin_walk`](Self::begin_walk)).
     ///
     /// Edges compare bit 0 of the old and new value. Edge triggers exist only on 1-bit
     /// signals (`trigger::edge` rejects wider ones, as cocotb's `rising_edge` raises

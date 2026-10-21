@@ -50,7 +50,7 @@ use super::slab::Key;
 use super::state::{Kernel, Phase};
 use super::tasks::run_ready;
 use super::time::SimTime;
-use super::waits::{WaitOn, WaitTable, fire_and_wake, wake_sorted};
+use super::waits::{WaitOn, WaitTable, Wake, fire_and_wake, wake_sorted};
 
 /// Evals allowed between two `ReadWrite` rounds of one timestep (or before the first)
 /// before the run fails with `DeltaLimit`.
@@ -396,25 +396,33 @@ fn fire_value_changes(k: &Kernel) {
         return;
     }
     let until = k.waits.borrow().newest();
-    let mut wakes = k.waits.borrow_mut().begin_walk();
+    // The walk begins (`begin_walk`) when its first group fires: a step that only finds
+    // groups unchanged, or changed without their edge, changes nothing but snapshots, and
+    // most walks are that.
+    let mut walk: Option<Vec<Wake>> = None;
     let mut at = 0;
     while !stopped(k) {
         let fired = {
             let mut waits = k.waits.borrow_mut();
             let model = k.models.borrow();
             let group = waits.next_change(&model, until, &mut at);
-            group.inspect(|&g| waits.fire_group(g, &k.ready, &mut wakes))
+            group.map(|g| {
+                let wakes = walk.get_or_insert_with(|| waits.begin_walk());
+                waits.fire_group(g, &k.ready, wakes);
+            })
         };
         if fired.is_none() {
             break;
         }
         // Foreign wakers are woken outside every borrow: they may run any code.
-        if !wakes.is_empty() {
-            wake_sorted(k, &mut wakes);
+        if let Some(wakes) = walk.as_mut().filter(|w| !w.is_empty()) {
+            wake_sorted(k, wakes);
         }
         run_ready(k);
     }
-    k.waits.borrow_mut().end_walk(wakes);
+    if let Some(wakes) = walk {
+        k.waits.borrow_mut().end_walk(wakes);
+    }
 }
 
 /// The next timestep, or `None` if nothing is scheduled. A model that reports a next

@@ -74,6 +74,8 @@ pub(crate) struct Kernel {
     pub(crate) names: Rc<[Box<str>]>,
     /// Each model's first flat slot, then the total; also shared with the registry.
     pub(crate) starts: Rc<[u32]>,
+    /// The first model's slot count (`starts[1]`): its handles' slots are flat slots.
+    pub(crate) first_slots: u32,
     pub(crate) widths: Box<[u32]>,
     pub(crate) models: RefCell<Models>,
     /// The models' direct ways to their narrow slots ([`DirectTable`]), outside the
@@ -237,6 +239,7 @@ impl Kernel {
             log: RefCell::new(WriteLog::new(count as usize)),
             clocks: RefCell::new(Vec::new()),
             names,
+            first_slots: starts[1],
             starts,
             widths,
             // SAFETY: `models` moves into this kernel next to the copy, and the kernel uses

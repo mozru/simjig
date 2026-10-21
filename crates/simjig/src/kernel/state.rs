@@ -117,6 +117,10 @@ pub(crate) struct Kernel {
     steps: Cell<u64>,
     evals: Cell<u64>,
     polls: Cell<u64>,
+    /// Panics the panic hook saw on this kernel's thread while it was installed
+    /// ([`count_panic`]): a task poll asks whether this changed, rather than clearing the
+    /// hook's thread-local location before every poll (`tasks::poll_task`).
+    pub(crate) panics_seen: Cell<u64>,
     /// The run's time limit, for a synchronous run (`kernel::sync_clock`); an async run checks
     /// `Sim`'s own.
     pub(crate) time_limit: Cell<Option<SimTime>>,
@@ -204,6 +208,22 @@ fn refuse_in_dpi_call(what: &str, import: &str) -> ! {
     );
 }
 
+/// Counts a panic on this thread for the installed kernel, if any; for the panic hook
+/// (`panics`), which may run while thread-locals are being destroyed.
+#[expect(unsafe_code, reason = "the installed kernel's address (`Entry`)")]
+pub(crate) fn count_panic() {
+    // An error only means ENTRY is already destroyed: no kernel to count for.
+    ENTRY
+        .try_with(|e| {
+            // SAFETY: as in `with_entry`: a non-null address is the kernel `CURRENT` holds,
+            // alive while `Sim::run` is on this thread's stack; the reference ends here.
+            if let Some(k) = unsafe { e.kernel.get().as_ref() } {
+                k.panics_seen.set(k.panics_seen.get() + 1);
+            }
+        })
+        .ok();
+}
+
 /// Runs `f` on the installed kernel (if any) and the DPI-C import running (if any).
 #[expect(unsafe_code, reason = "the installed kernel's address (`Entry`)")]
 fn with_entry<R>(f: impl FnOnce(Option<&Kernel>, Option<&'static str>) -> R) -> R {
@@ -263,6 +283,7 @@ impl Kernel {
             steps: Cell::new(0),
             evals: Cell::new(0),
             polls: Cell::new(0),
+            panics_seen: Cell::new(0),
             walked: Cell::new((u64::MAX, u64::MAX)),
             sync_cycles: Cell::new(None),
             time_limit: Cell::new(None),

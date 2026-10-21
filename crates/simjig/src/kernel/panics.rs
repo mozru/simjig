@@ -49,6 +49,7 @@ fn install_hook() {
                 let interned = SourceLocation::intern(location);
                 // An error only means LAST is already destroyed: nothing to record into.
                 LAST.try_with(|l| l.set(Some(interned))).ok();
+                super::state::count_panic();
             }
             previous(info);
         }));

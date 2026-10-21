@@ -841,17 +841,26 @@ fn poll_task(k: &Kernel, index: u32, gen16_: u16) {
     let previous = k.current.replace(Some(key));
     let context = k.context.replace(Some(key));
     let previous_route = k.route.replace(route);
-    panics::forget();
+    // Instead of `panics::forget` (a thread-local access per poll): a location is taken
+    // only if the hook saw a panic during this poll, which is what forgetting first gives.
+    let seen = k.panics_seen.get();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
     k.current.set(previous);
     k.context.set(context);
     k.route.set(previous_route);
-    finish_poll(k, key, future, outcome);
+    finish_poll(k, key, future, outcome, seen);
     settle_unrun_drops(k, Some(key));
 }
 
 /// Stores, completes or fails the task `key` after a poll returned `outcome`.
-fn finish_poll(k: &Kernel, key: Key, future: BoxFuture, outcome: std::thread::Result<Poll<()>>) {
+/// `seen` is [`Kernel::panics_seen`] before the poll.
+fn finish_poll(
+    k: &Kernel,
+    key: Key,
+    future: BoxFuture,
+    outcome: std::thread::Result<Poll<()>>,
+    seen: u64,
+) {
     match outcome {
         Ok(Poll::Ready(())) => complete_task(k, key, future),
         Ok(Poll::Pending) => {
@@ -869,7 +878,11 @@ fn finish_poll(k: &Kernel, key: Key, future: BoxFuture, outcome: std::thread::Re
             }
         }
         Err(payload) => {
-            let location = panics::take();
+            let location = if k.panics_seen.get() == seen {
+                None
+            } else {
+                panics::take()
+            };
             // Keep the future: it is dropped with the rest when the run ends.
             if let Some(entry) = k.tasks.borrow_mut().get_mut(key) {
                 entry.future = Some(future);

@@ -192,13 +192,18 @@ impl RawSig {
         let location = Location::caller();
         self.with(|k, slot| {
             let width = k.widths[slot as usize];
-            let name = &k.names[slot as usize];
             let n = words(width);
-            assert_eq!(value.len(), n, "signal `{name}` takes {n} words");
+            assert_eq!(
+                value.len(),
+                n,
+                "signal `{}` takes {n} words",
+                k.names[slot as usize]
+            );
             let spare = n * 32 - width as usize;
             assert!(
                 spare == 0 || value[n - 1] >> (32 - spare) == 0,
-                "value does not fit signal `{name}` ({width} bits)"
+                "value does not fit signal `{}` ({width} bits)",
+                k.names[slot as usize]
             );
             write(k, slot, value, Writer::current(k), Some(location));
         });

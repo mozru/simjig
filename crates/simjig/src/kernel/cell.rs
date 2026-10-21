@@ -37,7 +37,7 @@ pub(crate) enum Narrow {
 }
 
 /// Mask of the bits a `width`-bit value may use in its lowest 64 bits.
-fn mask(width: u32) -> u64 {
+const fn mask(width: u32) -> u64 {
     if width >= 64 {
         u64::MAX
     } else {
@@ -73,13 +73,22 @@ pub(crate) unsafe fn read_narrow(cell: Narrow) -> u64 {
 /// # Safety
 /// As for [`read_narrow`], with `ACCESS_WRITE`, and `width` is the row's width.
 #[inline]
+pub(crate) unsafe fn write_narrow(cell: Narrow, width: u32, value: u64) {
+    // SAFETY: the caller's promise; masked to the width, the value fits the storage.
+    unsafe { store_narrow(cell, value & mask(width)) }
+}
+
+/// Stores `v`, which fits `cell`'s storage type (masked to the slot's width).
+///
+/// # Safety
+/// As for [`write_narrow`].
+#[inline]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the value is masked to the width, which fits the storage"
 )]
-pub(crate) unsafe fn write_narrow(cell: Narrow, width: u32, value: u64) {
-    let v = value & mask(width);
-    // As in read_narrow; after masking, `v` fits the storage type, so the casts lose nothing.
+unsafe fn store_narrow(cell: Narrow, v: u64) {
+    // As in read_narrow; `v` fits the storage type, so the casts lose nothing.
     match cell {
         // SAFETY: a live, writable CData (u8).
         Narrow::C(p) => unsafe { p.write(v as u8) },
@@ -99,7 +108,8 @@ pub(crate) unsafe fn write_narrow(cell: Narrow, width: u32, value: u64) {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Direct {
     cell: Narrow,
-    width: u32,
+    /// The bits the slot's width allows ([`mask`]), applied to every write.
+    mask: u64,
     writable: bool,
 }
 
@@ -111,7 +121,7 @@ impl Direct {
     pub(crate) const unsafe fn new(cell: Narrow, width: u32, writable: bool) -> Self {
         Self {
             cell,
-            width,
+            mask: mask(width),
             writable,
         }
     }
@@ -140,7 +150,7 @@ impl Direct {
     pub(crate) unsafe fn write(self, value: u64) {
         debug_assert!(self.writable, "invariant: only writable slots are written");
         // SAFETY: as in `read`, and the caller checked that the row has `ACCESS_WRITE`.
-        unsafe { write_narrow(self.cell, self.width, value) }
+        unsafe { store_narrow(self.cell, value & self.mask) }
     }
 }
 
@@ -213,16 +223,25 @@ impl DirectTable {
     /// has a writable `Direct`; returns whether it did.
     #[inline]
     pub(crate) fn write(&self, flat: u32, value: &[u32]) -> bool {
-        let Some(Some(d)) = self.slots.get(flat as usize) else {
-            return false;
-        };
-        if !d.writable() || value.len() > 2 {
-            return false;
+        match *value {
+            [w] => self.write_u64(flat, u64::from(w)),
+            [w0, w1] => self.write_u64(flat, u64::from(w1) << 32 | u64::from(w0)),
+            _ => false,
         }
-        let high = value.get(1).map_or(0, |&w| u64::from(w));
-        // SAFETY: as in `read`, and the slot is writable.
-        unsafe { d.write(high << 32 | u64::from(value[0])) };
-        true
+    }
+
+    /// Writes `value` to flat slot `flat`, masked to its width, if it has a writable
+    /// `Direct`; returns whether it did.
+    #[inline]
+    pub(crate) fn write_u64(&self, flat: u32, value: u64) -> bool {
+        match self.slots.get(flat as usize) {
+            Some(Some(d)) if d.writable() => {
+                // SAFETY: as in `read`, and the slot is writable.
+                unsafe { d.write(value) };
+                true
+            }
+            _ => false,
+        }
     }
 }
 

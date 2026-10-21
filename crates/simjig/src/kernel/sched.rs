@@ -355,12 +355,17 @@ fn apply(k: &Kernel) -> bool {
     }
     let mut model = k.models.borrow_mut();
     for (slot, value) in log.iter() {
-        model.write(slot, value);
-        let low = value
-            .iter()
-            .take(2)
-            .rev()
-            .fold(0u64, |a, &w| a << 32 | u64::from(w));
+        // The record keeps the value's low 64 bits, which are all of a narrow value.
+        let low = match *value {
+            [w] => u64::from(w),
+            [w0, w1, ..] => u64::from(w1) << 32 | u64::from(w0),
+            [] => 0,
+        };
+        if value.len() <= 2 {
+            model.write_narrow(slot, value, low);
+        } else {
+            model.write(slot, value);
+        }
         k.record(TraceKind::Write, None, u64::from(slot), low);
     }
     log.clear();

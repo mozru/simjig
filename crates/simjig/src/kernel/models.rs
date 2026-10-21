@@ -243,6 +243,19 @@ impl Models {
         }
     }
 
+    /// [`write`](Self::write) of a value of one or two words, given also as one word
+    /// (`low`, low word first).
+    #[inline]
+    pub(crate) fn write_narrow(&mut self, flat: u32, value: &[u32], low: u64) {
+        let (model, slot) = self.owner[flat as usize];
+        self.settled[model] = false;
+        self.version += 1;
+        self.written += 1;
+        if !self.direct.write_u64(flat, low) {
+            self.write_backend(model, slot, value);
+        }
+    }
+
     #[inline(never)]
     fn write_backend(&mut self, model: usize, slot: u32, value: &[u32]) {
         self.backends[model].write(slot, value);

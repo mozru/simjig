@@ -58,6 +58,11 @@ pub(crate) struct VerilatorModel {
     now: SimTime,
     /// Held for a synchronous run (`sync_begin`): evals go through `eval_held`.
     held: bool,
+    /// Held, and `now` not yet given to the model: a held eval sets the time itself
+    /// (`eval_held`), so `set_time` only notes it, and `sync_end` gives it to the model if
+    /// no eval did. Only an eval reads the model's time while it is held (no waves, no
+    /// DPI-C), so the model sees the same time at every point it can look.
+    time_behind: bool,
     /// Whether an eval with nothing written since the last one is skipped: only when the
     /// user opted in (`elide_evals`) and the build allows it (`settles_by_build`).
     settles: bool,
@@ -144,6 +149,7 @@ impl VerilatorModel {
             tracer: None,
             now: SimTime::ZERO,
             held: false,
+            time_behind: false,
             settles: false,
         };
         if let Err(e) = model.outcome(status) {
@@ -316,6 +322,9 @@ impl ModelBackend for VerilatorModel {
     }
 
     fn sync_end(&mut self) {
+        if std::mem::take(&mut self.time_behind) {
+            self.raw.set_time(self.now.ticks());
+        }
         if std::mem::take(&mut self.held) {
             self.raw.release();
         }
@@ -337,6 +346,7 @@ impl ModelBackend for VerilatorModel {
             return result;
         }
         self.now = time;
+        self.time_behind = false;
         let status = self.raw.eval_held(time.ticks());
         if status == Status::Ok as i32 {
             return Ok(EvalStatus::Running);
@@ -350,6 +360,12 @@ impl ModelBackend for VerilatorModel {
     }
 
     fn set_time(&mut self, time: SimTime) {
+        if self.held {
+            // No waves while held; the next held eval sets the time (`time_behind`).
+            self.now = time;
+            self.time_behind = true;
+            return;
+        }
         // The kernel sets the time once per timestep, before applying any of its writes, so
         // the model still holds the previous timestep's final state (`model::trace`).
         if time != self.now
@@ -398,6 +414,10 @@ impl ModelBackend for VerilatorModel {
     // (`settles_by_build`); with waves on, every eval is sampled.
     fn settles(&self) -> bool {
         self.settles && self.tracer.is_none() && self.poisoned.is_none()
+    }
+
+    fn schedules_events(&self) -> bool {
+        self.raw.features() & FEATURE_TIMING != 0
     }
 
     fn events_pending(&self) -> bool {

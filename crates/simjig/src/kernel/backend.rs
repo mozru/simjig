@@ -190,6 +190,12 @@ pub(crate) trait ModelBackend {
     fn settles(&self) -> bool {
         false
     }
+    /// Whether the model can ever have scheduled events of its own; when no model of a
+    /// simulation can, the kernel never asks [`events_pending`](Self::events_pending).
+    /// Fixed for the backend's lifetime; `true` by default.
+    fn schedules_events(&self) -> bool {
+        true
+    }
     /// Whether the model has scheduled events of its own (`--timing` delays).
     fn events_pending(&self) -> bool;
     /// The time of the model's next scheduled event; only valid if `events_pending()`.

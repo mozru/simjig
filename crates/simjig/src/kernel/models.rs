@@ -91,6 +91,8 @@ pub(crate) struct Models {
     written: u64,
     /// Held for a synchronous run ([`sync_begin`](Self::sync_begin)).
     held: bool,
+    /// Whether any model can have events of its own ([`ModelBackend::schedules_events`]).
+    schedules: bool,
 }
 
 impl Models {
@@ -115,6 +117,7 @@ impl Models {
             owner.extend((0..count).map(|slot| (model, slot)));
         }
         let settled = vec![false; backends.len()];
+        let schedules = backends.iter().any(|b| b.schedules_events());
         let slots = owner
             .iter()
             .map(|&(model, slot)| backends[model].direct(slot))
@@ -132,6 +135,7 @@ impl Models {
             version: 0,
             written: 0,
             held: false,
+            schedules,
         })
     }
 
@@ -385,6 +389,9 @@ impl Models {
     /// The earliest pending model event and the first model that has it, asking only
     /// models with `events_pending()` for their `next_time_slot()`.
     pub(crate) fn next_event(&self) -> Option<(usize, SimTime)> {
+        if !self.schedules {
+            return None;
+        }
         let mut next: Option<(usize, SimTime)> = None;
         for (model, backend) in self.backends.iter().enumerate() {
             if !backend.events_pending() {

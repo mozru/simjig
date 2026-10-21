@@ -91,6 +91,11 @@ pub(crate) struct Models {
     written: u64,
     /// Held for a synchronous run ([`sync_begin`](Self::sync_begin)).
     held: bool,
+    /// While held: the held model's eval, called directly ([`ModelBackend::held_eval`]),
+    /// and whether the model [`settles`](ModelBackend::settles), asked again after any
+    /// eval that did not report `Running` (only that can change it while held).
+    held_eval: Option<HeldEval>,
+    held_settles: bool,
     /// Whether any model can have events of its own ([`ModelBackend::schedules_events`]).
     schedules: bool,
 }
@@ -135,6 +140,8 @@ impl Models {
             version: 0,
             written: 0,
             held: false,
+            held_eval: None,
+            held_settles: false,
             schedules,
         })
     }
@@ -277,18 +284,31 @@ impl Models {
         time: SimTime,
     ) -> Result<(), (usize, Result<EvalStatus, ModelError>)> {
         if self.held {
-            if self.settled[0] && self.backends[0].settles() {
+            if self.settled[0] && self.held_settles {
                 return Ok(());
             }
             self.version += 1;
             // No panic barrier: a held model runs no Rust code in its eval (`eval_at`).
-            return match self.backends[0].eval_at(time) {
-                Ok(EvalStatus::Running) => {
-                    self.settled[0] = true;
-                    Ok(())
+            let status = match self.held_eval {
+                Some(held) => {
+                    // SAFETY: `held_eval` is set only while the model is held, by its
+                    // backend, which this `Models` owns (`sync_begin`, `sync_end`).
+                    #[expect(unsafe_code, reason = "the held eval's contract, kept as stated")]
+                    let raw = unsafe { held.call(time.ticks()) };
+                    if raw == 0 {
+                        Ok(EvalStatus::Running)
+                    } else {
+                        self.backends[0].held_outcome(raw)
+                    }
                 }
-                other => Err((0, other)),
+                None => self.backends[0].eval_at(time),
             };
+            if let Ok(EvalStatus::Running) = status {
+                self.settled[0] = true;
+                return Ok(());
+            }
+            self.held_settles = self.backends[0].settles();
+            return Err((0, status));
         }
         for (model, backend) in self.backends.iter_mut().enumerate() {
             if self.settled[model] && backend.settles() {
@@ -322,12 +342,17 @@ impl Models {
     pub(crate) fn sync_begin(&mut self) {
         if let [backend] = self.backends.as_mut_slice() {
             self.held = backend.sync_begin();
+            if self.held {
+                self.held_eval = backend.held_eval();
+                self.held_settles = backend.settles();
+            }
         }
     }
 
     /// Ends [`sync_begin`](Self::sync_begin).
     pub(crate) fn sync_end(&mut self) {
         self.held = false;
+        self.held_eval = None;
         for backend in &mut self.backends {
             backend.sync_end();
         }

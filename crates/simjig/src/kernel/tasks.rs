@@ -30,6 +30,7 @@
 //! protocol. They are not counted as tasks and never appear in failure reports.
 
 use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
@@ -210,29 +211,24 @@ impl fmt::Debug for TaskTable {
 }
 
 /// FIFO queue of tasks to poll, deduplicated per task.
+///
+/// Interior-mutable, with its length outside the borrow: the scheduler asks whether it is
+/// empty after every region, eval and fired group, mostly finding it so.
 #[derive(Debug, Default)]
 pub(crate) struct ReadyQueue {
+    inner: RefCell<Queued>,
+    /// `inner.queue.len()`, kept by every push and pop.
+    len: Cell<usize>,
+}
+
+#[derive(Debug, Default)]
+struct Queued {
     queue: VecDeque<(u32, u16)>,
     /// `queued[index]` is the generation queued for that slot, or `None`.
     queued: Vec<Option<u16>>,
 }
 
-impl ReadyQueue {
-    /// Queues at the back (cocotb `EventLoop.schedule`); a no-op if already queued.
-    pub(crate) fn push(&mut self, index: u32, gen16_: u16) {
-        if self.mark(index, gen16_) {
-            self.queue.push_back((index, gen16_));
-        }
-    }
-
-    /// Queues at the front (cocotb `EventLoop.schedule_left`, used by `Task._start_next`);
-    /// a no-op if already queued.
-    fn push_front(&mut self, index: u32, gen16_: u16) {
-        if self.mark(index, gen16_) {
-            self.queue.push_front((index, gen16_));
-        }
-    }
-
+impl Queued {
     /// Records `index` as queued; returns `false` if it already was.
     fn mark(&mut self, index: u32, gen16_: u16) -> bool {
         let i = index as usize;
@@ -245,15 +241,39 @@ impl ReadyQueue {
         self.queued[i] = Some(gen16_);
         true
     }
+}
 
-    fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+impl ReadyQueue {
+    /// Queues at the back (cocotb `EventLoop.schedule`); a no-op if already queued.
+    pub(crate) fn push(&self, index: u32, gen16_: u16) {
+        let mut q = self.inner.borrow_mut();
+        if q.mark(index, gen16_) {
+            q.queue.push_back((index, gen16_));
+            self.len.set(q.queue.len());
+        }
     }
 
-    fn pop(&mut self) -> Option<(u32, u16)> {
-        let (index, g) = self.queue.pop_front()?;
-        if self.queued[index as usize] == Some(g) {
-            self.queued[index as usize] = None;
+    /// Queues at the front (cocotb `EventLoop.schedule_left`, used by `Task._start_next`);
+    /// a no-op if already queued.
+    fn push_front(&self, index: u32, gen16_: u16) {
+        let mut q = self.inner.borrow_mut();
+        if q.mark(index, gen16_) {
+            q.queue.push_front((index, gen16_));
+            self.len.set(q.queue.len());
+        }
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.len.get() == 0
+    }
+
+    fn pop(&self) -> Option<(u32, u16)> {
+        let mut q = self.inner.borrow_mut();
+        let (index, g) = q.queue.pop_front()?;
+        self.len.set(q.queue.len());
+        if q.queued[index as usize] == Some(g) {
+            q.queued[index as usize] = None;
         }
         Some((index, g))
     }
@@ -365,7 +385,7 @@ pub(crate) fn spawn_in<T: 'static>(
     );
     let parent_arg = parent.map_or(u64::MAX, |p| u64::from(p.index));
     k.record(TraceKind::Spawn, Some(key), parent_arg, 0);
-    k.ready.borrow_mut().push(key.index, gen16(key.gen_));
+    k.ready.push(key.index, gen16(key.gen_));
     Task {
         sim_gen: k.sim_gen,
         key: Some(key),
@@ -907,7 +927,7 @@ fn finish_poll(
 pub(crate) fn run_ready(k: &Kernel) {
     // The scheduler asks after every region and every group it fires, mostly finding the
     // queue empty: answered here, without the poll loop's frame.
-    if k.ready.borrow().is_empty() {
+    if k.ready.is_empty() {
         return;
     }
     run_queued(k);
@@ -917,7 +937,7 @@ pub(crate) fn run_ready(k: &Kernel) {
 #[inline(never)]
 fn run_queued(k: &Kernel) {
     while !k.failed() && !k.main_done.get() {
-        let Some((index, g)) = k.ready.borrow_mut().pop() else {
+        let Some((index, g)) = k.ready.pop() else {
             return;
         };
         poll_task(k, index, g);
@@ -951,14 +971,13 @@ pub(crate) fn start_helpers<const N: usize>(k: &Kernel) -> (Key, [Key; N]) {
         o.live_forks += 1;
     }
     drop(tasks);
-    let mut ready = k.ready.borrow_mut();
     for key in keys.iter().rev() {
         assert!(
             key.index <= MAX_TASK_INDEX,
             "more than {} tasks and combinator operands alive at once",
             MAX_TASK_INDEX + 1
         );
-        ready.push_front(key.index, gen16(key.gen_));
+        k.ready.push_front(key.index, gen16(key.gen_));
     }
     (owner, keys)
 }
@@ -1016,7 +1035,7 @@ pub(crate) fn cancel_helper(k: &Kernel, key: Key) -> bool {
         h.state = HelperState::Cancelling;
         h.live_forks == 0
     };
-    k.ready.borrow_mut().push(key.index, gen16(key.gen_));
+    k.ready.push(key.index, gen16(key.gen_));
     drop_now
 }
 
@@ -1042,7 +1061,7 @@ pub(crate) fn has_live_forks(k: &Kernel, key: Key) -> bool {
 
 /// Queues `key` at the back again (cocotb awaiting `NullTrigger`).
 pub(crate) fn requeue(k: &Kernel, key: Key) {
-    k.ready.borrow_mut().push(key.index, gen16(key.gen_));
+    k.ready.push(key.index, gen16(key.gen_));
 }
 
 pub(crate) fn finish_helper(k: &Kernel, key: Key) {
@@ -1073,7 +1092,7 @@ pub(crate) fn fork_complete(k: &Kernel, owner: Key) {
             return;
         }
     }
-    k.ready.borrow_mut().push(owner.index, gen16(owner.gen_));
+    k.ready.push(owner.index, gen16(owner.gen_));
 }
 
 /// Removes a combinator's helpers; `live` if some had not finished.

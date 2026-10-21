@@ -85,7 +85,7 @@ pub(crate) struct Kernel {
     pub(crate) now: Cell<SimTime>,
     pub(crate) phase: Cell<Phase>,
     pub(crate) tasks: RefCell<TaskTable>,
-    pub(crate) ready: RefCell<ReadyQueue>,
+    pub(crate) ready: ReadyQueue,
     /// The task being polled or dropped, which owns writes, spawns and registrations.
     pub(crate) current: Cell<Option<Key>>,
     /// Whose code is running inside `current`'s poll: `current` itself, or the
@@ -269,7 +269,7 @@ impl Kernel {
             now: Cell::new(SimTime::ZERO),
             phase: Cell::new(Phase::Active),
             tasks: RefCell::new(TaskTable::default()),
-            ready: RefCell::new(ReadyQueue::default()),
+            ready: ReadyQueue::default(),
             current: Cell::new(None),
             context: Cell::new(None),
             route: Cell::new(None),
@@ -532,7 +532,7 @@ impl Drop for InstallGuard {
 /// If the simulation is alive on another thread: the kernel is single-threaded, and a
 /// waker sent across threads would race with it.
 pub(crate) fn wake_task(sim_gen: u32, index: u32, gen16: u16) {
-    let queued = with_sim(sim_gen, |k| k.ready.borrow_mut().push(index, gen16));
+    let queued = with_sim(sim_gen, |k| k.ready.push(index, gen16));
     if queued.is_some() {
         return;
     }

@@ -692,7 +692,7 @@ impl WaitTable {
     /// waiters that are this simulation's tasks are queued in `ready`, in order, when all
     /// of them are; otherwise every waker goes to `out`, for [`wake_sorted`] to wake in
     /// order.
-    pub(crate) fn fire_group(&mut self, index: u32, ready: &mut ReadyQueue, out: &mut Vec<Wake>) {
+    pub(crate) fn fire_group(&mut self, index: u32, ready: &ReadyQueue, out: &mut Vec<Wake>) {
         debug_assert!(self.walking, "invariant: a group fires inside a walk");
         let sim_gen = self.sim_gen;
         let g = &mut self.groups[index as usize];
@@ -859,7 +859,7 @@ pub(crate) fn wake_sorted(k: &Kernel, wakes: &mut Vec<Wake>) {
         // do (`state::wake_task` finds `k` current); any other waker is woken.
         match waker::own_task(&waker) {
             Some((sim_gen, index, gen16)) if sim_gen == k.sim_gen => {
-                k.ready.borrow_mut().push(index, gen16);
+                k.ready.push(index, gen16);
             }
             _ => waker.wake(),
         }

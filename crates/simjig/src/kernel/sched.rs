@@ -397,9 +397,8 @@ fn fire_value_changes(k: &Kernel) {
         let fired = {
             let mut waits = k.waits.borrow_mut();
             let model = k.models.borrow();
-            let mut ready = k.ready.borrow_mut();
             let group = waits.next_change(&model, until, &mut at);
-            group.inspect(|&g| waits.fire_group(g, &mut ready, &mut wakes))
+            group.inspect(|&g| waits.fire_group(g, &k.ready, &mut wakes))
         };
         if fired.is_none() {
             break;

@@ -433,7 +433,12 @@ user's test build (the bench's profile is the one the guide recommends) for 1%.
   The hash costs C 3.5 ns per cycle now (225.6 with it, 222.1 with
   `trace_hash = false`), 35 ns before (297.2 and 262.0). The time and task half of a
   record's digest is kept for the timestep's records without a task, and the constants
-  are data (a 64-bit constant in the code is four instructions at every record).
+  are data (a 64-bit constant in the code is four instructions at every record). The
+  kind is xored into the digest outside the second multiply, not into its value operand
+  (whose multiplier, for a value of 0, was the kind tag alone, under which an argument and
+  its complement collided: a `Spawn` by `main` against one with no parent); that costs
+  7.6 instructions per cycle (8232.8 to 8240.4) and no measurable time (C 224.0 to 224.6,
+  5 interleaved idle-gated runs, within the noise).
 - **The ring keeps 32-byte records** (task and argument in 32 bits, with a flag for
   "none"): 128 KiB instead of 160, which the L1 cache feels (2 ns on C).
 - **The value-change walk** steps over a list of watches holding each priming's slot and
@@ -458,7 +463,9 @@ Only the trace hash's values (CHANGELOG, Breaking): a hash recorded before no lo
 matches a rerun. Seeds, random streams and failure signatures still use FNV-1a of names.
 The 33 conformance goldens reproduce, every kernel, model and harness test passes, and the
 differential corpus reproduces with every digest that leaves out the trace hash unchanged;
-it was re-blessed once for the new hash values, after checking that each scheduler mutant
+it was re-blessed for the new hash values (twice: once more when the kind moved out of the
+second multiply, after checking that m1, m2 and m5 still change 1923, 222 and 1129
+seeds), after checking that each scheduler mutant
 of `docs/notes/sched.md` (m1 to m7: group wake order reversed, Timers fired together,
 groups fired together, a join reordering its group, a quiet ReadWrite round ignoring the
 log, no walk after an eval, no waker refresh) changes exactly the same seeds as before

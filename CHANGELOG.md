@@ -12,7 +12,9 @@ the public API, the generated code or simulation semantics.
   outcome's and `summary.json`'s hash, the replay check) is no longer FNV-1a over each
   record's 40 bytes but a word-wise hash (`kernel::recorder::TraceHash`: two 128-bit
   folded multiplies per record and a three-instruction chain), about 25 ns faster per
-  cycle of the benchmark's FIFO testbench. Its purpose is the same: a per-run determinism
+  cycle of the benchmark's FIFO testbench. A record's kind enters its digest outside the
+  multiplies, so no two records differing in their argument, value or kind hash alike by
+  the hash's shape (a fuzz of 831k one-word changes found no collision). Its purpose is the same: a per-run determinism
   fingerprint, equal for two runs of the same test with the same seed. A hash recorded
   by an earlier version (a run directory's `summary.json`) no longer matches a rerun.
   Seeds, random streams and failure signatures still use FNV-1a of names and are

@@ -247,17 +247,17 @@ cocotb's trigger classes are snake_case functions here: `Timer(...)` becomes `ti
 ## Performance
 
 These numbers are for the full testbench: reset, a producer, a consumer and a checking
-monitor. Async simjig is about 27x faster than cocotb on a tiny FIFO, where the scheduler
-dominates, and 7.4x on a mid-size design, where Verilator's eval does. Lighter testbenches
-(a clock alone, or a clock and a monitor) are 8.5-21x faster than cocotb on the tiny FIFO.
-Async is slower than a hand-written C++ loop: about 8.6x on the tiny FIFO and 1.2x on the
-mid-size design. Sync mode is within 1.2x of the C++ loop. Median ns per cycle, 1M cycles,
-Apple M6:
+monitor. Async simjig is about 36x faster than cocotb on a tiny FIFO, where the scheduler
+dominates, and 7.8x on a mid-size design, where Verilator's eval does. Lighter testbenches
+(a clock alone, or a clock and a monitor) are 11-27x faster than cocotb on the tiny FIFO.
+Async is slower than a hand-written C++ loop: about 6.5x on the tiny FIFO and 1.2x on the
+mid-size design. Sync mode is within 1.2x of the C++ loop. Median ns per cycle, 1M cycles
+(100k for the mid-size async run), Apple M6:
 
 | design | simjig | simjig sync | C++ | cocotb |
 |---|---:|---:|---:|---:|
-| tiny FIFO | 298 | 42 | 35 | 8,166 |
-| mid-size pipeline | 1,508 | 1,247 | 1,240 | 11,205 |
+| tiny FIFO | 226 | 42 | 35 | 8,166 |
+| mid-size pipeline | 1,440 | 1,247 | 1,240 | 11,205 |
 
 Method, caveats and numbers for Marlin (another Rust Verilator binding):
 [`bench/README.md`](bench/README.md).

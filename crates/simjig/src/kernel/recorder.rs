@@ -137,11 +137,25 @@ const fn fold(a: u64, b: u64) -> u64 {
 const K0: u64 = 0xa076_1d64_78bd_642f;
 const K1: u64 = 0xe703_7ed1_a0b4_28db;
 
-/// The word a record's kind is xored into its value with: `kind + 1` in the top byte, one
-/// instruction to materialise. A value equal to it would zero the second [`fold`]'s
-/// operand, so the argument is also xored into the digest directly.
+/// The word a record's kind is xored into its digest with: `kind + 1` in the top byte,
+/// one instruction to materialise.
 const fn kind_tag(kind: TraceKind) -> u64 {
     (kind as u64 + 1) << 56
+}
+
+/// The second half of a record's digest: `fold(arg ^ K1, value ^ K0) ^ arg ^ kind_tag`
+/// (`k0`, `k1` are [`K0`], [`K1`]).
+///
+/// The kind is xored in outside the fold, not into the value: xored into the value, two
+/// records whose values differ by their kinds' tags hashed alike, and with a value of 0
+/// the multiplier was the tag alone, under which an argument and its complement hashed
+/// alike (a `Spawn` by `main`, parent 0, against one with no parent, `u64::MAX`). Keyed
+/// with `K0`, the multiplier is zero only for the value `K0`, and then the argument and
+/// kind are still in the digest. The other operand is zero only for an argument of `K1`,
+/// which no record has: an argument is below 2^32 or `u64::MAX` ([`Kept`]).
+#[inline]
+const fn second_half(tag: u64, arg: u64, value: u64, k0: u64, k1: u64) -> u64 {
+    fold(arg ^ k1, value ^ k0) ^ arg ^ tag
 }
 
 /// The trace hash: a running hash of every [`TraceRecord`], in order (DECISION §2 row 4:
@@ -149,10 +163,10 @@ const fn kind_tag(kind: TraceKind) -> u64 {
 /// platforms and releases: integer arithmetic on the records' words only.
 ///
 /// Each record's five words are first reduced to one *digest*, independent of the running
-/// state: `fold(time ^ K0, task ^ K1) ^ fold(arg ^ K1, value ^ kind_tag(kind)) ^ arg`. The
-/// state then takes it as `(h ^ digest).rotate_left(23) * K0` (wrapping), a bijection of
-/// the state for each digest; it starts at the FNV-1a offset basis. So
-/// the serial dependency from one record to the next is three instructions, and the
+/// state: `fold(time ^ K0, task ^ K1) ^ fold(arg ^ K1, value ^ K0) ^ arg ^ kind_tag(kind)`
+/// ([`second_half`]). The state then takes it as `(h ^ digest).rotate_left(23) * K0`
+/// (wrapping), a bijection of the state for each digest; it starts at the FNV-1a offset
+/// basis. So the serial dependency from one record to the next is three instructions, and the
 /// digest's work overlaps the rest of the scheduler.
 ///
 /// Why not FNV-1a over the records' bytes, as before: that is 40 dependent byte steps per
@@ -280,8 +294,8 @@ pub(crate) struct Recorder {
 struct Keys {
     k0: u64,
     k1: u64,
-    /// The second half of the digest (`fold(arg ^ K1, value ^ kind_tag(kind)) ^ arg`) of
-    /// each [`Fixed`] record, in its order.
+    /// The second half of the digest ([`second_half`]) of each [`Fixed`] record, in its
+    /// order.
     fixed: [u64; FIXED],
 }
 
@@ -327,7 +341,7 @@ impl Default for Keys {
             .chain((0..FIXED_EVALS).map(Fixed::Eval))
         {
             let (kind, arg) = f.words();
-            fixed[f.index()] = fold(arg ^ K1, kind_tag(kind)) ^ arg;
+            fixed[f.index()] = second_half(kind_tag(kind), arg, 0, K0, K1);
         }
         Self {
             k0: K0,
@@ -381,7 +395,8 @@ impl Recorder {
             } else {
                 fold(time ^ k0, record.task ^ k1)
             };
-            let second = fold(record.arg ^ k1, record.value ^ kind_tag(record.kind)) ^ record.arg;
+            let tag = kind_tag(record.kind);
+            let second = second_half(tag, record.arg, record.value, k0, k1);
             self.add(first ^ second);
         }
         self.store(record);
@@ -501,7 +516,7 @@ mod tests {
 
     /// [`TraceHash`] of the records below, computed independently (Python, from the
     /// definition in its docs).
-    const STABLE_HASH: u64 = 0x463d_2eed_6aa0_93a1;
+    const STABLE_HASH: u64 = 0xf7ff_8eab_73a2_7236;
 
     /// The trace hash of a fixed record sequence: replays compare such values across
     /// processes and versions, so a change of the hash must be deliberate.
@@ -613,6 +628,49 @@ mod tests {
             }
         }
         assert_eq!(r.recent(), given);
+    }
+
+    /// A `Spawn` by `main` (parent index 0) and one with no parent (`u64::MAX`) are
+    /// different runs: with value 0 the second fold's multiplier was once the kind tag
+    /// alone, under which an argument and its complement hashed alike.
+    #[test]
+    fn an_argument_and_its_complement_hash_apart() {
+        let hash = |arg: u64| {
+            let r = Recorder::default();
+            r.record(TraceRecord {
+                time: SimTime(0),
+                kind: TraceKind::Spawn,
+                task: 1 << 16 | 1,
+                arg,
+                value: 0,
+            });
+            r.hash()
+        };
+        assert_ne!(hash(0), hash(u64::MAX), "parent main vs no parent");
+    }
+
+    /// A record's kind and its value are separate words: two records whose values differ
+    /// by exactly their kinds' tags (a `Write` of the `Write` tag itself against a `Poll`
+    /// of the `Poll` tag, say) are different runs.
+    #[test]
+    fn a_kind_and_a_value_hash_apart() {
+        let hash = |kind: TraceKind, value: u64| {
+            let r = Recorder::default();
+            r.record(TraceRecord {
+                time: SimTime(5000),
+                kind,
+                task: 3 << 16 | 1,
+                arg: 2,
+                value,
+            });
+            r.hash()
+        };
+        let (write, poll) = (kind_tag(TraceKind::Write), kind_tag(TraceKind::Poll));
+        assert_ne!(hash(TraceKind::Write, write), hash(TraceKind::Poll, poll));
+        assert_ne!(
+            hash(TraceKind::Write, 0),
+            hash(TraceKind::Poll, write ^ poll)
+        );
     }
 
     #[test]

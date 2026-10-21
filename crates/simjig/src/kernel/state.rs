@@ -119,8 +119,8 @@ pub(crate) struct Kernel {
     /// `Sim`'s own.
     pub(crate) time_limit: Cell<Option<SimTime>>,
     /// [`Models::version`] and [`Models::written`] when the last value-change walk began
-    /// (`sched`).
-    pub(crate) walked: Cell<Option<(u64, u64)>>,
+    /// (`sched`); `(u64::MAX, u64::MAX)`, which neither counter reaches, before the first.
+    pub(crate) walked: Cell<(u64, u64)>,
     /// The rising edges of a synchronous run's [`SyncClock`](crate::SyncClock) (its only
     /// one); `None` until it is made.
     pub(crate) sync_cycles: Cell<Option<u64>>,
@@ -260,7 +260,7 @@ impl Kernel {
             steps: Cell::new(0),
             evals: Cell::new(0),
             polls: Cell::new(0),
-            walked: Cell::new(None),
+            walked: Cell::new((u64::MAX, u64::MAX)),
             sync_cycles: Cell::new(None),
             time_limit: Cell::new(None),
         }

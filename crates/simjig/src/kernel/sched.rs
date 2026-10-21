@@ -373,7 +373,7 @@ fn apply(k: &Kernel) -> bool {
 /// event loop inside each. A task woken by one group that waits on a younger group not yet
 /// reached in this walk joins it; groups primed during the walk wait for the next change.
 /// That follows from their snapshot, not from the walk's `until` bound, which is only an
-/// optimisation (`WaitTable::fire_next_change`).
+/// optimisation (`WaitTable::next_change`).
 ///
 /// A walk when no model changed since the previous walk began is skipped: every group
 /// primed before that walk took the value then, every group primed since took it when
@@ -386,20 +386,22 @@ fn fire_value_changes(k: &Kernel) {
         let models = k.models.borrow();
         (models.version(), models.written())
     };
-    let last = k.walked.replace(Some(now));
-    if last == Some(now) {
+    let last = k.walked.replace(now);
+    if last == now {
         return;
     }
-    let (until, mut wakes) = k.waits.borrow_mut().begin_walk();
+    let until = k.waits.borrow().newest();
+    let mut wakes = k.waits.borrow_mut().begin_walk();
     let mut at = 0;
     while !stopped(k) {
         let fired = {
             let mut waits = k.waits.borrow_mut();
             let model = k.models.borrow();
             let mut ready = k.ready.borrow_mut();
-            waits.fire_next_change(&model, until, &mut at, &mut ready, &mut wakes)
+            let group = waits.next_change(&model, until, &mut at);
+            group.inspect(|&g| waits.fire_group(g, &mut ready, &mut wakes))
         };
-        if !fired {
+        if fired.is_none() {
             break;
         }
         // Foreign wakers are woken outside every borrow: they may run any code.

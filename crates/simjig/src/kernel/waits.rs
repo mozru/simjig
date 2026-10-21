@@ -43,7 +43,7 @@ use super::OrInvariant;
 use super::backend::words;
 use super::models::Models;
 use super::slab::{Key, Slab};
-use super::state::{self, Kernel};
+use super::state::{self, Kernel, Phase};
 use super::tasks::ReadyQueue;
 use super::time::{Precision, SimTime};
 use super::waker;
@@ -1059,7 +1059,8 @@ impl EdgeRegistration {
     /// Registers the current task as waiting on an edge of `slot`, to be woken through
     /// `cx`'s waker.
     pub(crate) fn new(k: &Kernel, slot: u32, edge: EdgeKind, cx: &Context<'_>) -> Self {
-        k.refuse_in_sync("awaiting a trigger");
+        // Made only by an edge's first poll, which refuses a synchronous test itself.
+        debug_assert!(k.phase.get() != Phase::Sync, "invariant: not in a sync run");
         let model = k.models.borrow();
         let key = k
             .waits

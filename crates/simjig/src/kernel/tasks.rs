@@ -858,16 +858,21 @@ fn poll_task(k: &Kernel, index: u32, gen16_: u16) {
     k.count_poll();
     let waker = waker::task_waker(k.sim_gen, key.index, gen16(key.gen_));
     let mut cx = Context::from_waker(&waker);
-    let previous = k.current.replace(Some(key));
-    let context = k.context.replace(Some(key));
-    let previous_route = k.route.replace(route);
+    // The scheduler polls a task only between polls (`run_ready`), with no task current.
+    debug_assert!(
+        k.current.get().is_none() && k.context.get().is_none() && k.route.get().is_none(),
+        "invariant: no poll is under way"
+    );
+    k.current.set(Some(key));
+    k.context.set(Some(key));
+    k.route.set(route);
     // Instead of `panics::forget` (a thread-local access per poll): a location is taken
     // only if the hook saw a panic during this poll, which is what forgetting first gives.
     let seen = k.panics_seen.get();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
-    k.current.set(previous);
-    k.context.set(context);
-    k.route.set(previous_route);
+    k.current.set(None);
+    k.context.set(None);
+    k.route.set(None);
     finish_poll(k, key, future, outcome, seen);
     settle_unrun_drops(k, Some(key));
 }

@@ -4,6 +4,17 @@ All notable changes to simjig. Constitution rule 4 requires an entry for every c
 the public API, the generated code or simulation semantics.
 
 ## Unreleased
+- **Breaking: trace hash values changed.** The trace hash (`Sim::trace_hash`, the
+  outcome's and `summary.json`'s hash, the replay check) is no longer FNV-1a over each
+  record's 40 bytes but a word-wise hash (`kernel::recorder::TraceHash`: two 128-bit
+  folded multiplies per record and a three-instruction chain), about 25 ns faster per
+  cycle of the benchmark's FIFO testbench. Its purpose is the same: a per-run determinism
+  fingerprint, equal for two runs of the same test with the same seed. A hash recorded
+  by an earlier version (a run directory's `summary.json`) no longer matches a rerun.
+  Seeds, random streams and failure signatures still use FNV-1a of names and are
+  unchanged; an empty trace still hashes to `0xcbf29ce484222325`. The differential
+  corpus was re-blessed for it: its digests without the trace hash are identical, and
+  the scheduler mutants of `docs/notes/sched.md` change exactly the same seeds as before.
 - Generated code: the `@generated` header of an interface DUT's flat-port wrapper no longer
   cites an internal design note (snapshots reviewed).
 - **Breaking: triggers are functions.** `Timer::new(d)`, `ReadOnly::new()`,

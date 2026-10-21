@@ -17,8 +17,10 @@
 //! wording, not scheduling, so rewording one leaves the corpus as it is. The
 //! digests in `corpus.txt` were produced by the scheduler before the fast paths
 //! (`SIMJIG_CORPUS_BLESS=1`); every later scheduler must reproduce them. They were blessed
-//! once more when the digest stopped hashing the failure's text, after checking that the
-//! scheduler mutants of `docs/notes/sched.md` change exactly the same seeds as before.
+//! once more when the digest stopped hashing the failure's text, and once more when the
+//! trace hash's algorithm changed (`recorder::TraceHash`), each time after checking that
+//! the scheduler mutants of `docs/notes/sched.md` change exactly the same seeds as before
+//! (and, for the hash, that the digests without the trace hash are unchanged).
 //! Bless again only for a deliberate change of semantics, which then needs its own review.
 //!
 //! Operations added later are appended: only seeds from [`FIRST_SEEDS`] on draw them, so

@@ -27,9 +27,7 @@ use super::cell::DirectTable;
 use super::clock::ClockEntry;
 use super::failure::{Failure, FailureKind, SourceLocation};
 use super::models::Models;
-use super::recorder::{
-    EVAL_TAILS, FixedTail, READ_ONLY_TAIL, Recorder, STEP_TAIL, TraceKind, TraceRecord,
-};
+use super::recorder::{Recorder, TraceKind, TraceRecord};
 use super::signal::WriteLog;
 use super::slab::Key;
 use super::tasks::{ReadyQueue, TaskTable, UnrunDrop, gen16};
@@ -271,40 +269,23 @@ impl Kernel {
     /// Records the start of a timestep (`Step`).
     #[inline]
     pub(crate) fn record_step(&self) {
-        self.record_fixed(TraceKind::Step, 0, &STEP_TAIL);
+        self.record(TraceKind::Step, None, 0, 0);
     }
 
     /// Records the start of the `ReadOnly` region.
     #[inline]
     pub(crate) fn record_read_only(&self) {
-        self.record_fixed(TraceKind::ReadOnly, 0, &READ_ONLY_TAIL);
+        self.record(TraceKind::ReadOnly, None, 0, 0);
     }
 
     /// Records eval number `delta` of the timestep.
     #[inline]
     pub(crate) fn record_eval(&self, delta: u32) {
-        match EVAL_TAILS.get(delta as usize) {
-            Some(tail) => self.record_fixed(TraceKind::Eval, u64::from(delta), tail),
-            None => self.record(TraceKind::Eval, None, u64::from(delta), 0),
-        }
+        self.record(TraceKind::Eval, None, u64::from(delta), 0);
     }
 
-    /// A record of `kind` with no task, argument `arg` and value 0, whose tail is `tail`.
+    /// Records an event.
     #[inline]
-    fn record_fixed(&self, kind: TraceKind, arg: u64, tail: &FixedTail) {
-        let record = TraceRecord {
-            time: self.now.get(),
-            kind,
-            task: u64::MAX,
-            arg,
-            value: 0,
-        };
-        self.recorder.record_fixed(record, tail);
-    }
-
-    /// Records an event; the timestep's fixed records have their own entry points
-    /// ([`record_step`](Self::record_step), [`record_eval`](Self::record_eval),
-    /// [`record_read_only`](Self::record_read_only)), which hash to the same values.
     pub(crate) fn record(&self, kind: TraceKind, task: Option<Key>, arg: u64, value: u64) {
         let task = task.map_or(u64::MAX, |k| {
             u64::from(k.index) << 16 | u64::from(gen16(k.gen_))

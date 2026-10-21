@@ -169,19 +169,11 @@ impl Default for TraceHash {
     }
 }
 
-/// The first half of a record's digest: its time and task.
-#[inline]
-const fn time_task(time: u64, task: u64) -> u64 {
-    fold(time ^ K0, task ^ K1)
-}
-
 impl TraceHash {
-    /// Takes `record` into the state, given `time_task(record.time, record.task)`.
+    /// Takes a record's digest into the state; `k0` is [`K0`].
     #[inline]
-    fn add(&mut self, time_task: u64, record: &TraceRecord) {
-        let digest =
-            time_task ^ fold(record.arg ^ K1, record.value ^ kind_tag(record.kind)) ^ record.arg;
-        self.0 = (self.0 ^ digest).rotate_left(23).wrapping_mul(K0);
+    fn add(&mut self, digest: u64, k0: u64) {
+        self.0 = (self.0 ^ digest).rotate_left(23).wrapping_mul(k0);
     }
 
     pub(crate) const fn finish(self) -> u64 {
@@ -210,9 +202,74 @@ pub(crate) struct Recorder {
     /// trace hash (`#[simjig::test(trace_hash = false)]`).
     hashing: Cell<bool>,
     count: Cell<u64>,
-    /// A time and its `time_task` with no task: most records have no task (a timestep's
-    /// `Step`, `Eval`s, `ReadOnly` and `Write`s), and all of a timestep's share its time.
+    /// A time and the first half of its digest with no task (`fold(time ^ K0, task ^ K1)`):
+    /// most records have no task (a timestep's `Step`, `Eval`s, `ReadOnly` and `Write`s),
+    /// and all of a timestep's share its time.
     untasked: Cell<(u64, u64)>,
+    keys: Keys,
+}
+
+/// The trace hash's constants, kept as data: a 64-bit constant written into the code
+/// takes four instructions at every record, a load from here one. Never changed.
+#[derive(Debug)]
+struct Keys {
+    k0: u64,
+    k1: u64,
+    /// The second half of the digest (`fold(arg ^ K1, value ^ kind_tag(kind)) ^ arg`) of
+    /// each [`Fixed`] record, in its order.
+    fixed: [u64; FIXED],
+}
+
+/// A record whose words after its time are always the same: the timestep's `Step`,
+/// `ReadOnly` and first evals ([`Recorder::record_fixed`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Fixed {
+    Step,
+    ReadOnly,
+    /// Eval number `n` of the timestep, for `n` below [`FIXED_EVALS`].
+    Eval(u8),
+}
+
+/// The evals of a timestep that are [`Fixed`] records.
+pub(crate) const FIXED_EVALS: u8 = 4;
+
+const FIXED: usize = 2 + FIXED_EVALS as usize;
+
+impl Fixed {
+    /// The record's kind and argument (its task is none and its value 0).
+    const fn words(self) -> (TraceKind, u64) {
+        match self {
+            Self::Step => (TraceKind::Step, 0),
+            Self::ReadOnly => (TraceKind::ReadOnly, 0),
+            Self::Eval(n) => (TraceKind::Eval, n as u64),
+        }
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Step => 0,
+            Self::ReadOnly => 1,
+            Self::Eval(n) => 2 + n as usize,
+        }
+    }
+}
+
+impl Default for Keys {
+    fn default() -> Self {
+        let mut fixed = [0; FIXED];
+        for f in [Fixed::Step, Fixed::ReadOnly]
+            .into_iter()
+            .chain((0..FIXED_EVALS).map(Fixed::Eval))
+        {
+            let (kind, arg) = f.words();
+            fixed[f.index()] = fold(arg ^ K1, kind_tag(kind)) ^ arg;
+        }
+        Self {
+            k0: K0,
+            k1: K1,
+            fixed,
+        }
+    }
 }
 
 const _: () = assert!(
@@ -238,7 +295,8 @@ impl Default for Recorder {
             hash: Cell::new(TraceHash::default()),
             hashing: Cell::new(true),
             count: Cell::new(0),
-            untasked: Cell::new((0, time_task(0, u64::MAX))),
+            untasked: Cell::new((0, fold(K0, u64::MAX ^ K1))),
+            keys: Keys::default(),
         }
     }
 }
@@ -250,24 +308,55 @@ impl Recorder {
     #[inline]
     pub(crate) fn record(&self, record: TraceRecord) {
         if self.hashing.get() {
+            let Keys { k0, k1, .. } = self.keys;
             let time = record.time.0;
             let first = if record.task == u64::MAX {
-                let (at, cached) = self.untasked.get();
-                if at == time {
-                    cached
-                } else {
-                    let first = time_task(time, u64::MAX);
-                    self.untasked.set((time, first));
-                    first
-                }
+                self.untasked(time)
             } else {
-                time_task(time, record.task)
+                fold(time ^ k0, record.task ^ k1)
             };
-            let mut hash = self.hash.get();
-            hash.add(first, &record);
-            self.hash.set(hash);
+            let second = fold(record.arg ^ k1, record.value ^ kind_tag(record.kind)) ^ record.arg;
+            self.add(first ^ second);
         }
         self.store(record);
+    }
+
+    /// Records the [`Fixed`] record `fixed` at `time`: the same hash as
+    /// [`record`](Self::record), with the second half of its digest looked up.
+    #[inline]
+    pub(crate) fn record_fixed(&self, time: SimTime, fixed: Fixed) {
+        if self.hashing.get() {
+            let second = self.keys.fixed[fixed.index()];
+            self.add(self.untasked(time.0) ^ second);
+        }
+        let (kind, arg) = fixed.words();
+        self.store(TraceRecord {
+            time,
+            kind,
+            task: u64::MAX,
+            arg,
+            value: 0,
+        });
+    }
+
+    /// The first half of the digest of a record at `time` with no task.
+    #[inline]
+    fn untasked(&self, time: u64) -> u64 {
+        let (at, cached) = self.untasked.get();
+        if at == time {
+            return cached;
+        }
+        let first = fold(time ^ self.keys.k0, u64::MAX ^ self.keys.k1);
+        self.untasked.set((time, first));
+        first
+    }
+
+    /// Takes a record's digest into the hash.
+    #[inline]
+    fn add(&self, digest: u64) {
+        let mut hash = self.hash.get();
+        hash.add(digest, self.keys.k0);
+        self.hash.set(hash);
     }
 
     /// Stops hashing: later records are kept in the ring and counted, not hashed.
@@ -407,6 +496,30 @@ mod tests {
             assert_ne!(hash(&[base, v]), hash(&[v, base]), "order of {v:?}");
         }
         assert_eq!(hash(&[]), OFFSET_BASIS, "nothing recorded");
+    }
+
+    /// A fixed record hashes and keeps exactly what the same record given in full does.
+    #[test]
+    fn a_fixed_record_is_the_record_it_stands_for() {
+        let fixed = [Fixed::Step, Fixed::ReadOnly]
+            .into_iter()
+            .chain((0..FIXED_EVALS).map(Fixed::Eval));
+        for f in fixed {
+            let (plain, short) = (Recorder::default(), Recorder::default());
+            for (i, t) in [0u64, 0, 5000, 5000, 7, 10_000].into_iter().enumerate() {
+                let (kind, arg) = f.words();
+                plain.record(TraceRecord {
+                    time: SimTime(t),
+                    kind,
+                    task: u64::MAX,
+                    arg,
+                    value: 0,
+                });
+                short.record_fixed(SimTime(t), f);
+                assert_eq!(short.hash(), plain.hash(), "{f:?} record {i}");
+            }
+            assert_eq!(short.recent(), plain.recent(), "{f:?}");
+        }
     }
 
     #[test]

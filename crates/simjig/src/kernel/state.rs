@@ -27,7 +27,7 @@ use super::cell::DirectTable;
 use super::clock::ClockEntry;
 use super::failure::{Failure, FailureKind, SourceLocation};
 use super::models::Models;
-use super::recorder::{Recorder, TraceKind, TraceRecord};
+use super::recorder::{FIXED_EVALS, Fixed, Recorder, TraceKind, TraceRecord};
 use super::signal::WriteLog;
 use super::slab::Key;
 use super::tasks::{ReadyQueue, TaskTable, UnrunDrop, gen16};
@@ -293,19 +293,22 @@ impl Kernel {
     /// Records the start of a timestep (`Step`).
     #[inline]
     pub(crate) fn record_step(&self) {
-        self.record(TraceKind::Step, None, 0, 0);
+        self.recorder.record_fixed(self.now.get(), Fixed::Step);
     }
 
     /// Records the start of the `ReadOnly` region.
     #[inline]
     pub(crate) fn record_read_only(&self) {
-        self.record(TraceKind::ReadOnly, None, 0, 0);
+        self.recorder.record_fixed(self.now.get(), Fixed::ReadOnly);
     }
 
     /// Records eval number `delta` of the timestep.
     #[inline]
     pub(crate) fn record_eval(&self, delta: u32) {
-        self.record(TraceKind::Eval, None, u64::from(delta), 0);
+        match u8::try_from(delta) {
+            Ok(n) if n < FIXED_EVALS => self.recorder.record_fixed(self.now.get(), Fixed::Eval(n)),
+            _ => self.record(TraceKind::Eval, None, u64::from(delta), 0),
+        }
     }
 
     /// Records an event.

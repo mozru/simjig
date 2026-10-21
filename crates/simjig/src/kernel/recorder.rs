@@ -169,13 +169,18 @@ impl Default for TraceHash {
     }
 }
 
+/// The first half of a record's digest: its time and task.
+#[inline]
+const fn time_task(time: u64, task: u64) -> u64 {
+    fold(time ^ K0, task ^ K1)
+}
+
 impl TraceHash {
-    /// Takes `record` into the state.
+    /// Takes `record` into the state, given `time_task(record.time, record.task)`.
     #[inline]
-    pub(crate) fn add(&mut self, record: &TraceRecord) {
-        let digest = fold(record.time.0 ^ K0, record.task ^ K1)
-            ^ fold(record.arg ^ K1, record.value ^ kind_tag(record.kind))
-            ^ record.arg;
+    fn add(&mut self, time_task: u64, record: &TraceRecord) {
+        let digest =
+            time_task ^ fold(record.arg ^ K1, record.value ^ kind_tag(record.kind)) ^ record.arg;
         self.0 = (self.0 ^ digest).rotate_left(23).wrapping_mul(K0);
     }
 
@@ -205,6 +210,9 @@ pub(crate) struct Recorder {
     /// trace hash (`#[simjig::test(trace_hash = false)]`).
     hashing: Cell<bool>,
     count: Cell<u64>,
+    /// A time and its `time_task` with no task: most records have no task (a timestep's
+    /// `Step`, `Eval`s, `ReadOnly` and `Write`s), and all of a timestep's share its time.
+    untasked: Cell<(u64, u64)>,
 }
 
 const _: () = assert!(
@@ -230,6 +238,7 @@ impl Default for Recorder {
             hash: Cell::new(TraceHash::default()),
             hashing: Cell::new(true),
             count: Cell::new(0),
+            untasked: Cell::new((0, time_task(0, u64::MAX))),
         }
     }
 }
@@ -241,8 +250,21 @@ impl Recorder {
     #[inline]
     pub(crate) fn record(&self, record: TraceRecord) {
         if self.hashing.get() {
+            let time = record.time.0;
+            let first = if record.task == u64::MAX {
+                let (at, cached) = self.untasked.get();
+                if at == time {
+                    cached
+                } else {
+                    let first = time_task(time, u64::MAX);
+                    self.untasked.set((time, first));
+                    first
+                }
+            } else {
+                time_task(time, record.task)
+            };
             let mut hash = self.hash.get();
-            hash.add(&record);
+            hash.add(first, &record);
             self.hash.set(hash);
         }
         self.store(record);

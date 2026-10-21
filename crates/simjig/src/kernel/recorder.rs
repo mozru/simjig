@@ -186,6 +186,71 @@ const _: () = assert!(
     "every kind has its own tag byte"
 );
 
+/// A [`TraceRecord`] as the ring keeps it: 32 bytes, not 40, so the ring (written on every
+/// record, read only for a report) takes less of the cache. A record's task and argument
+/// are below 2^32 or `u64::MAX` ("none"): a task is `index << 16 | generation` with an
+/// index below 2^16, an argument a slot, a delta, a task index or a flag. Each is kept in
+/// 32 bits, with a bit of `none` for `u64::MAX`.
+#[derive(Clone, Copy, Debug)]
+struct Kept {
+    time: SimTime,
+    value: u64,
+    task: u32,
+    arg: u32,
+    kind: TraceKind,
+    /// Bit 0: the task is `u64::MAX`; bit 1: the argument is.
+    none: u8,
+}
+
+/// `word`'s low 32 bits, and whether it is `u64::MAX` ([`Kept`]).
+#[inline]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a record's task and argument fit 32 bits (`Kept`)"
+)]
+fn narrow(word: u64) -> (u32, bool) {
+    debug_assert!(
+        word == u64::MAX || u32::try_from(word).is_ok(),
+        "invariant: a record's task or argument fits 32 bits"
+    );
+    (word as u32, word == u64::MAX)
+}
+
+/// [`narrow`] undone.
+fn widen(word: u32, none: bool) -> u64 {
+    if none { u64::MAX } else { u64::from(word) }
+}
+
+impl From<TraceRecord> for Kept {
+    #[inline]
+    fn from(r: TraceRecord) -> Self {
+        let (task, no_task) = narrow(r.task);
+        let (arg, no_arg) = narrow(r.arg);
+        Self {
+            time: r.time,
+            value: r.value,
+            task,
+            arg,
+            kind: r.kind,
+            none: u8::from(no_task) | u8::from(no_arg) << 1,
+        }
+    }
+}
+
+impl From<Kept> for TraceRecord {
+    fn from(k: Kept) -> Self {
+        Self {
+            time: k.time,
+            kind: k.kind,
+            task: widen(k.task, k.none & 1 != 0),
+            arg: widen(k.arg, k.none & 2 != 0),
+            value: k.value,
+        }
+    }
+}
+
+const _: () = assert!(size_of::<Kept>() == 32, "a kept record is 32 bytes");
+
 /// A fixed ring of [`RECORDER_CAPACITY`] records: record `i` (counting from 0) is at
 /// `ring[i % RECORDER_CAPACITY]`, so a record is one store and a count, with no length
 /// bookkeeping.
@@ -196,7 +261,7 @@ const _: () = assert!(
 /// with another.
 #[derive(Debug)]
 pub(crate) struct Recorder {
-    ring: Box<[Cell<TraceRecord>; RECORDER_CAPACITY]>,
+    ring: Box<[Cell<Kept>; RECORDER_CAPACITY]>,
     hash: Cell<TraceHash>,
     /// Whether records are hashed (the default); off only for a run that asked to keep no
     /// trace hash (`#[simjig::test(trace_hash = false)]`).
@@ -286,8 +351,9 @@ impl Default for Recorder {
             arg: 0,
             value: 0,
         };
-        let ring: Box<[Cell<TraceRecord>]> =
-            (0..RECORDER_CAPACITY).map(|_| Cell::new(blank)).collect();
+        let ring: Box<[Cell<Kept>]> = (0..RECORDER_CAPACITY)
+            .map(|_| Cell::new(Kept::from(blank)))
+            .collect();
         Self {
             ring: ring
                 .try_into()
@@ -377,7 +443,7 @@ impl Recorder {
             reason = "the index is masked to the ring's size"
         )]
         let at = count as usize & (RECORDER_CAPACITY - 1);
-        self.ring[at].set(record);
+        self.ring[at].set(Kept::from(record));
         self.count.set(count + 1);
     }
 
@@ -398,7 +464,11 @@ impl Recorder {
         } else {
             (&self.ring[..next], &self.ring[..0])
         };
-        older.iter().chain(newer).map(Cell::get).collect()
+        older
+            .iter()
+            .chain(newer)
+            .map(|k| TraceRecord::from(k.get()))
+            .collect()
     }
 }
 
@@ -520,6 +590,29 @@ mod tests {
             }
             assert_eq!(short.recent(), plain.recent(), "{f:?}");
         }
+    }
+
+    /// The ring gives back every record as it was given, at the edges of the 32-bit
+    /// fields it keeps tasks and arguments in.
+    #[test]
+    fn the_ring_keeps_tasks_and_arguments_exactly() {
+        let words = [0, 1, 0xffff, 0xffff_fffe, u64::from(u32::MAX), u64::MAX];
+        let r = Recorder::default();
+        let mut given = Vec::new();
+        for (i, &task) in words.iter().enumerate() {
+            for &arg in &words {
+                let record = TraceRecord {
+                    time: SimTime(i as u64),
+                    kind: TraceKind::Spawn,
+                    task,
+                    arg,
+                    value: u64::MAX - arg,
+                };
+                r.record(record);
+                given.push(record);
+            }
+        }
+        assert_eq!(r.recent(), given);
     }
 
     #[test]

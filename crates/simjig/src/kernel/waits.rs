@@ -116,9 +116,8 @@ struct Group {
     /// The slot's word count.
     words: usize,
     /// The slot's value when this group last looked at it (or when it was primed): here
-    /// for a slot of at most two words (compared as one array, the common case), else in
-    /// `wide`.
-    narrow: [u32; 2],
+    /// for a slot of at most two words (as one word, the common case), else in `wide`.
+    narrow: u64,
     wide: Vec<u32>,
     /// Its registrations, in registration order (so sorted by `seq`); empty while unprimed.
     /// A cancelled one stays, without its waker, until the group fires or most are
@@ -333,7 +332,7 @@ impl WaitTable {
                 edge,
                 primed: None,
                 words: words(model.slot_width(slot)),
-                narrow: [0; 2],
+                narrow: 0,
                 wide: Vec::new(),
                 waiters: Vec::new(),
                 live: 0,
@@ -353,8 +352,7 @@ impl WaitTable {
         }
         g.primed = Some(seq);
         if g.words <= 2 {
-            g.narrow = [0; 2];
-            model.read(slot, &mut g.narrow[..g.words]);
+            g.narrow = model.read_narrow(slot, g.words);
         } else {
             g.wide.resize(g.words, 0);
             model.read(slot, &mut g.wide);
@@ -423,11 +421,20 @@ impl WaitTable {
         }
     }
 
-    /// Drops the stale entries of `order` once they are most of it (see `order`).
+    /// Drops the stale entries of `order` once they are most of it (see `order`). After
+    /// every walk and unpriming, and seldom with anything to do: the test is inlined.
+    #[inline]
     fn compact(&mut self) {
+        let kept = self.order.len() - self.head;
+        if (self.head > 16 && self.head > kept) || (self.stale > 4 && 2 * self.stale > kept) {
+            self.compact_now(kept);
+        }
+    }
+
+    #[inline(never)]
+    fn compact_now(&mut self, kept: usize) {
         let groups = &self.groups;
         let live = |&(seq, i): &(u64, u32)| groups[i as usize].primed == Some(seq);
-        let kept = self.order.len() - self.head;
         if self.head > 16 && self.head > kept {
             self.order.drain(..self.head);
             self.head = 0;
@@ -615,23 +622,22 @@ impl WaitTable {
                 continue; // stale: unprimed since
             }
             let (old, new) = if g.words <= 2 {
-                let mut now = [0; 2];
-                model.read(g.slot, &mut now[..g.words]);
+                let now = model.read_narrow(g.slot, g.words);
                 if now == g.narrow {
                     continue;
                 }
-                let old = g.narrow[0] & 1;
+                let old = g.narrow & 1;
                 g.narrow = now;
-                (old, now[0] & 1)
+                (old, now & 1)
             } else {
                 self.scratch.resize(g.words, 0);
                 model.read(g.slot, &mut self.scratch);
                 if self.scratch == g.wide {
                     continue;
                 }
-                let old = g.wide[0] & 1;
+                let old = u64::from(g.wide[0] & 1);
                 g.wide.copy_from_slice(&self.scratch);
-                (old, self.scratch[0] & 1)
+                (old, u64::from(self.scratch[0] & 1))
             };
             let fires = match g.edge {
                 EdgeKind::Changed => true,

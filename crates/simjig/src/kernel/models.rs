@@ -186,22 +186,48 @@ impl Models {
         backend.slot_width(slot)
     }
 
+    /// Reads flat slot `flat` into `out`. Inlined: a narrow slot is a load through its
+    /// [`Direct`](super::cell::Direct); other slots take the backend's call.
+    #[inline]
     pub(crate) fn read(&self, flat: u32, out: &mut [u32]) {
-        if self.direct.read(flat, out) {
-            return;
+        if !self.direct.read(flat, out) {
+            self.read_backend(flat, out);
         }
+    }
+
+    /// The value of flat slot `flat`, of `words` (one or two) words, as one word: low word
+    /// first. Inlined, as [`read`](Self::read).
+    #[inline]
+    pub(crate) fn read_narrow(&self, flat: u32, words: usize) -> u64 {
+        if let Some(value) = self.direct.read_u64(flat) {
+            return value;
+        }
+        let mut buf = [0u32; 2];
+        self.read_backend(flat, &mut buf[..words]);
+        u64::from(buf[1]) << 32 | u64::from(buf[0])
+    }
+
+    #[inline(never)]
+    fn read_backend(&self, flat: u32, out: &mut [u32]) {
         let (backend, slot) = self.owner(flat);
         backend.read(slot, out);
     }
 
+    /// Writes `value` to flat slot `flat`. Inlined, as [`read`](Self::read).
+    #[inline]
     pub(crate) fn write(&mut self, flat: u32, value: &[u32]) {
         let (model, slot) = self.owner[flat as usize];
         self.settled[model] = false;
         self.version += 1;
         self.written += 1;
         if !self.direct.write(flat, value) {
-            self.backends[model].write(slot, value);
+            self.write_backend(model, slot, value);
         }
+    }
+
+    #[inline(never)]
+    fn write_backend(&mut self, model: usize, slot: u32, value: &[u32]) {
+        self.backends[model].write(slot, value);
     }
 
     /// A copy of the slots' direct ways, for the kernel's signal handles.

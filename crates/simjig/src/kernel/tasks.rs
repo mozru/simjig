@@ -643,10 +643,17 @@ fn dropped_unpolled(k: &Kernel, key: Key, spawned_at: &'static Location<'static>
 /// and lets a panic or another failure of the same poll win. Dropping stays the one
 /// cancellation mechanism (DECISION §1): [`Task::cancel`] drops the future the same way,
 /// and says it is deliberate. The trace record keeps every event in run directories.
+#[inline]
 pub(crate) fn settle_unrun_drops(k: &Kernel, key: Option<Key>) {
-    if k.unrun_drops.borrow().is_empty() {
-        return;
+    // After every poll, and almost never with anything to settle.
+    if !k.unrun_drops.borrow().is_empty() {
+        settle_dropped(k, key);
     }
+}
+
+#[cold]
+#[inline(never)]
+fn settle_dropped(k: &Kernel, key: Option<Key>) {
     let drops = std::mem::take(&mut *k.unrun_drops.borrow_mut());
     let Some(first) = drops.first() else { return };
     if key.is_some() && k.main.get() == key && k.main_done.get() {

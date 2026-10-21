@@ -178,6 +178,14 @@ impl DirectTable {
         self.slots.get(flat as usize).copied().flatten()
     }
 
+    /// The value of flat slot `flat`, if it has a `Direct`.
+    #[inline]
+    pub(crate) fn read_u64(&self, flat: u32) -> Option<u64> {
+        let d = self.slots.get(flat as usize)?.as_ref()?;
+        // SAFETY: the table's contract (`new`): the backend is alive and idle.
+        Some(unsafe { d.read() })
+    }
+
     /// Reads flat slot `flat` into `out` (one or two words) if it has a `Direct`; returns
     /// whether it did.
     #[inline]
